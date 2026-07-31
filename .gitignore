@@ -1,0 +1,9 @@
+/vault-workspace/target/
+/vault-workspace/**/target/
+Cargo.lock
+
+# mobile
+/vault-workspace/mobile-signer-ffi/app/node_modules/
+/vault-workspace/mobile-signer-ffi/app/build/
+
+.DS_Store

@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+  "vault-core",
+  "custody-service",
+  "mobile-signer-ffi/rust",
+  "lender-signer-cli",
+  "monitor-service",
+]
+
+# Shared version pins go here once dependencies are uncommented in each crate's
+# Cargo.toml, e.g.:
+# [workspace.dependencies]
+# bitcoin = "0.32"
+# miniscript = "12"
+# tokio = { version = "1", features = ["full"] }

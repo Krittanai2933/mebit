@@ -1,0 +1,168 @@
+/* ============================================================
+   MAPBOSS — Colors & Type foundations
+   บริษัท แมพบอส จำกัด — Corporate Identity
+   "Unleashing data with the leading location-based platform."
+   ============================================================ */
+
+/* ---- Fonts ----------------------------------------------------
+   FC Vision (Fontcraft) — the official Mapboss typeface, used for
+   EVERYTHING: display, headings, body and labels. Covers Latin + Thai.
+   Files in /fonts. Weights mapped: Light 300, Regular 400, Medium 500,
+   SemiBold 600, Bold 700, ExtraBold 800 (+ Italic 400).
+--------------------------------------------------------------- */
+@font-face { font-family:'FC Vision'; font-weight:300; font-style:normal;
+  src:url('fonts/FCVision-Light.otf') format('opentype'); font-display:swap; }
+@font-face { font-family:'FC Vision'; font-weight:400; font-style:normal;
+  src:url('fonts/FCVision-Regular.otf') format('opentype'); font-display:swap; }
+@font-face { font-family:'FC Vision'; font-weight:400; font-style:italic;
+  src:url('fonts/FCVision-Italic.otf') format('opentype'); font-display:swap; }
+@font-face { font-family:'FC Vision'; font-weight:500; font-style:normal;
+  src:url('fonts/FCVision-Medium.otf') format('opentype'); font-display:swap; }
+@font-face { font-family:'FC Vision'; font-weight:600; font-style:normal;
+  src:url('fonts/FCVision-SemiBold.otf') format('opentype'); font-display:swap; }
+@font-face { font-family:'FC Vision'; font-weight:700; font-style:normal;
+  src:url('fonts/FCVision-Bold.otf') format('opentype'); font-display:swap; }
+@font-face { font-family:'FC Vision'; font-weight:800; font-style:normal;
+  src:url('fonts/FCVision-ExtraBold.otf') format('opentype'); font-display:swap; }
+
+:root {
+  /* ---------- Brand greens ---------- */
+  --mb-teal:        #007368;  /* PRIMARY — headings, logo body, key UI       */
+  --mb-teal-deep:   #003E38;  /* deep teal — pressed / dense surfaces        */
+  --mb-green:       #009B68;  /* bright accent green — logo leg, highlights  */
+  --mb-green-leaf:  #4DB848;  /* leaf green — card accent bars, "positive"   */
+  --mb-mint-accent: #00A191;  /* mid teal — secondary headings on light      */
+
+  /* ---------- Dark backgrounds ---------- */
+  --mb-green-900:   #06312D;  /* darkest — title / hero slides               */
+  --mb-green-850:   #0A3632;  /* dark content slides                         */
+  --mb-green-800:   #0E3A35;
+
+  /* ---------- Accent ---------- */
+  --mb-yellow:      #FCC330;  /* the dot — single warm accent. Use sparingly */
+  --mb-orange:      #F8981C;  /* secondary warm (icons / data viz only)      */
+
+  /* ---------- Neutrals ---------- */
+  --mb-ink:         #1E1E1E;  /* primary text on light                       */
+  --mb-gray-700:    #4B4B4B;  /* body text on light                          */
+  --mb-gray-500:    #545454;  /* muted / captions                            */
+  --mb-gray-400:    #7A7A7A;
+  --mb-gray-300:    #C4C4C4;  /* disabled / hairline on light                */
+  --mb-gray-200:    #DFDFDF;  /* borders                                     */
+  --mb-gray-100:    #E9EEED;  /* subtle fills                                */
+  --mb-off-white:   #F8F8F8;  /* light slide / page background               */
+  --mb-mint-tint:   #F2F8F7;  /* faint teal wash background                  */
+  --mb-white:       #FFFFFF;
+
+  /* ---------- Semantic surface tokens ---------- */
+  --bg-dark:        var(--mb-green-900);
+  --bg-dark-2:      var(--mb-green-850);
+  --bg-light:       var(--mb-off-white);
+  --bg-wash:        var(--mb-mint-tint);
+  --surface-card:   var(--mb-white);
+
+  --fg-on-dark:     var(--mb-white);
+  --fg-on-dark-2:   rgba(255,255,255,0.72);
+  --fg-on-light:    var(--mb-ink);
+  --fg-on-light-2:  var(--mb-gray-700);
+  --accent:         var(--mb-teal);
+  --accent-bright:  var(--mb-green);
+  --dot:            var(--mb-yellow);
+
+  --hairline:       var(--mb-gray-200);
+  --hairline-dark:  rgba(255,255,255,0.14);
+
+  /* ---------- Type families (all FC Vision — the official typeface) ---------- */
+  --font-display:   'FC Vision', system-ui, sans-serif;
+  --font-body:      'FC Vision', system-ui, sans-serif;
+  --font-label:     'FC Vision', system-ui, sans-serif;
+
+  /* ---------- Radii ---------- */
+  --radius-sm:   8px;
+  --radius-md:   16px;
+  --radius-lg:   28px;   /* the signature soft card corner on dark slides */
+  --radius-pill: 999px;
+
+  /* ---------- Shadows / elevation ---------- */
+  --shadow-card:   0 18px 50px -24px rgba(0,62,56,0.28);
+  --shadow-soft:   0 8px 24px -12px rgba(0,62,56,0.20);
+  --shadow-float:  0 30px 70px -30px rgba(0,0,0,0.35);
+
+  /* ---------- Motion ---------- */
+  --ease-out:   cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out:cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast:   160ms;
+  --dur:        320ms;
+  --dur-slow:   620ms;
+}
+
+/* ============================================================
+   Base type styles  (sizes tuned for 1920×1080 slide canvas;
+   scale down with rem/clamp for screen UI)
+   ============================================================ */
+
+.mb-display {            /* hero title — FC Vision, big & airy           */
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 128px;
+  line-height: 0.98;
+  letter-spacing: -0.01em;
+}
+.mb-h1 {                 /* slide title (all-caps usage common)         */
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 96px;
+  line-height: 1.0;
+  letter-spacing: 0;
+}
+.mb-h2 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 64px;
+  line-height: 1.05;
+}
+.mb-h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 40px;
+  line-height: 1.1;
+}
+.mb-eyebrow {            /* small geometric label — FC Vision           */
+  font-family: var(--font-label);
+  font-weight: 600;
+  font-size: 22px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.mb-card-title {
+  font-family: var(--font-label);
+  font-weight: 700;
+  font-size: 24px;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+.mb-lead {               /* large body — vision / intro paragraphs      */
+  font-family: var(--font-body);
+  font-weight: 300;
+  font-size: 36px;
+  line-height: 1.45;
+}
+.mb-body {
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: 24px;
+  line-height: 1.5;
+}
+.mb-caption {
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: 20px;
+  line-height: 1.4;
+}
+.mb-stat {               /* big numeric stat                            */
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 96px;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}

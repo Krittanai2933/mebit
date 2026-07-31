@@ -1,0 +1,14 @@
+[package]
+name = "mobile-signer-ffi"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+vault-core = { path = "../../vault-core" }
+# uniffi = "0.28"          # add once the exported API surface is settled
+
+[build-dependencies]
+# uniffi = { version = "0.28", features = ["build"] }

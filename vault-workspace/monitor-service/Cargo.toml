@@ -1,0 +1,12 @@
+[package]
+name = "monitor-service"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rand = "0.10.2"
+# vault-core dependency is optional early on (LTV math doesn't need Bitcoin script
+# logic) — add it once liquidation PSBT construction starts, per docs/00-capstone-brief.md §4
+# vault-core = { path = "../vault-core" }
+# tokio = { version = "1", features = ["full"] }
+# reqwest = { version = "0.12", features = ["json"] }
