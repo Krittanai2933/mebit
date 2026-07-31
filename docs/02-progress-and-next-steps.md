@@ -49,12 +49,12 @@
 ## 3. mobile-signer-ffi (คนที่ 4)
 
 **สถานะปัจจุบัน**
-- `rust/` ยังเป็น lib เปล่า รอ UniFFI interface — ยังไม่ได้เริ่ม
+- `rust/` มี skeleton จริงแล้ว: 3 ฟังก์ชัน (`derive_borrower_pubkey`, `compute_vault_address`, `sign_psbt`) ต่อกับ mock type ของ `vault-core` โดยตรง มี 5 test ผ่าน — **ยังไม่ได้ใช้ `uniffi` crate/macro จริง** (ตั้งใจรอจนกว่า `vault-core` จะนิ่งก่อน ตามหลักการเดียวกับที่ไม่ implement Bitcoin จริงใน vault-core ตอนนี้)
 - `app/` เป็น Expo React Native app ที่ **รันได้จริง** (เว็บ/iOS/Android ผ่าน simulator) ครบ 12 หน้าจอตาม design ล่าสุด รองรับโมเดลหลายสัญญาเงินกู้พร้อมกัน (multi-loan) แล้ว
-- ข้อมูลทั้งหมดยังเป็น **mock ล้วน** (`mockVault.ts`) ไม่ได้เชื่อม native module หรือ backend จริงใดๆ
+- ข้อมูลทั้งหมดใน `app/` ยังเป็น **mock ล้วน** (`mockVault.ts`, TypeScript) — ยังไม่ได้เชื่อมกับ `rust/` เลย (คนละภาษา ยังไม่มี native module bridge)
 
 **สิ่งที่ต้องทำทั้งหมด**
-- [ ] ออกแบบและ implement UniFFI interface จริงใน `rust/` เมื่อ `vault-core` นิ่งแล้ว (derive key, sign PSBT)
+- [ ] เมื่อ `vault-core` นิ่งแล้ว: เพิ่ม `uniffi` dependency จริง, ใส่ `#[uniffi::export]` ให้ 3 ฟังก์ชันที่มีอยู่ (หรือฟังก์ชันใหม่ตามอินเทอร์เฟซจริง), generate binding ไป Kotlin/Swift
 - [ ] เชื่อม UI เข้ากับ native binding จริงแทน `mockVault.ts` ทีละฟังก์ชัน
 - [ ] ทำ verification/challenge-response flow ตอนเปิด loan (ตรวจจับ pubkey derive ผิด) — **ยังไม่มีเลยตอนนี้**
 - [ ] เชื่อม UI margin-call/liquidation กับข้อมูลจริงจาก `monitor-service`/`custody-service` แทน mock

@@ -25,8 +25,10 @@ mobile-signer-ffi/
 
 `rust/`:
 ```
-cargo build -p mobile-signer-ffi
+cargo test -p mobile-signer-ffi
 ```
+
+Has 3 functions already — `derive_borrower_pubkey`, `compute_vault_address`, `sign_psbt` — wired to `vault-core`'s mock descriptor/derivation/PSBT types, with 5 passing tests. Deliberately **not** using the `uniffi` crate/macros yet (same "don't build the binding tooling speculatively" reasoning as elsewhere in this project) — plain Rust functions with FFI-friendly signatures so the shape is already right. Annotate with `#[uniffi::export]` and uncomment the `uniffi` dependency in `Cargo.toml` once `vault-core`'s real interface lands.
 
 `app/` is an Expo (React Native + TypeScript) app — chosen so the team has something to run and click through immediately instead of starting from a blank project:
 ```
