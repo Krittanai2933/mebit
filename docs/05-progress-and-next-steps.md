@@ -1,6 +1,6 @@
 # สถานะความคืบหน้าและสิ่งที่ต้องทำต่อ
 
-> อัปเดตล่าสุด: 2026-07-31 — เอกสารนี้เป็น living document ทีมควรอัปเดตทุกครั้งที่มี milestone ใหม่ อย่าปล่อยให้ล้าสมัยจนไม่ตรงกับโค้ดจริง (ตรวจสอบกับ `git log`/โค้ดจริงก่อนเชื่อว่าสถานะยังถูกต้อง)
+> อัปเดตล่าสุด: 2026-08-04 — เอกสารนี้เป็น living document ทีมควรอัปเดตทุกครั้งที่มี milestone ใหม่ อย่าปล่อยให้ล้าสมัยจนไม่ตรงกับโค้ดจริง (ตรวจสอบกับ `git log`/โค้ดจริงก่อนเชื่อว่าสถานะยังถูกต้อง)
 
 ภาพรวม ณ ตอนนี้: ทุกโมดูลมี **skeleton ที่ compile ผ่าน มี test ผ่าน และรันได้จริง** แต่ยังเป็นระบบจำลอง (mock) แทบทั้งหมด — ยังไม่มีการเชื่อมต่อ Bitcoin จริง, testnet จริง, หรือการเชื่อมต่อระหว่าง service แบบครบวงจร นี่คือจุดเริ่มต้นสำหรับทีม capstone ให้เข้ามาต่อยอดตาม timeline ใน [`00-capstone-brief.md`](00-capstone-brief.md) §4
 
@@ -26,7 +26,7 @@
 
 ---
 
-## 2. custody-service (คนที่ 3)
+## 2. custody-service (คนที่ 3 — ร่วมกับ lender-signer-cli + monitor-service)
 
 **สถานะปัจจุบัน**
 - มี REST server จริงด้วย axum รันได้จริงที่ `127.0.0.1:8080` (ทดสอบด้วย curl แล้วใช้งานได้)
@@ -67,7 +67,7 @@
 
 ---
 
-## 4. lender-signer-cli (คนที่ 5)
+## 4. lender-signer-cli (คนที่ 3 — ร่วมกับ custody-service + monitor-service)
 
 **สถานะปัจจุบัน**
 - มี CLI จริงด้วย `clap`: `fetch` (ดึงข้อมูลจาก custody-service ผ่าน HTTP จริง — ทดสอบแล้วใช้ได้), `inspect` (อ่านไฟล์ PSBT JSON), `sign` (เขียนไฟล์ signed PSBT)
@@ -82,7 +82,7 @@
 
 ---
 
-## 5. monitor-service (คนที่ 5)
+## 5. monitor-service (คนที่ 3 — ร่วมกับ custody-service + lender-signer-cli)
 
 **สถานะปัจจุบัน**
 - มี `PriceFeed` trait + สูตร LTV/liquidation ที่ตรงกับฝั่ง mobile app เป๊ะ (ทดสอบแล้วเลข liquidation price ตรงกัน)

@@ -3,7 +3,7 @@
 > เอกสารต้นฉบับที่ใช้เสนอเป็นโจทย์ capstone project ระดับปริญญาตรี — เก็บไว้ที่นี่แบบคำต่อคำเพื่อเป็น source of truth เดียว เอกสารอื่นใน `docs/` เป็นฉบับย่อย/ใช้งานที่อ้างอิงกลับมาที่ไฟล์นี้ **ฉบับนี้ปรับปรุงจากฉบับแรก (ก.ค. 2026)** หลังได้ไฟล์ดีไซน์แอป "mebit" มา — ดูรายละเอียดที่เปลี่ยนใน [`04-open-items.md`](04-open-items.md) และดีไซน์เต็มใน [`design-notes.md`](design-notes.md)
 
 **ขอบเขต**: 1 ทีม ครอบคลุมทั้งระบบ (end-to-end)
-**ทีม**: นักศึกษาวิศวกรรมคอมพิวเตอร์ 5 คน ระยะเวลา 2 เทอม
+**ทีม**: นักศึกษาวิศวกรรมคอมพิวเตอร์ 4 คน ระยะเวลา 2 เทอม
 
 ---
 
@@ -99,47 +99,46 @@ vault-workspace/
 
 เทคโนโลยี: Rust, cron/scheduler, HTTP client
 
-### 3.6 โครงสร้างทีมและการแบ่งงาน (5 คน)
+### 3.6 โครงสร้างทีมและการแบ่งงาน (4 คน)
 
-5 โมดูลพอดีกับทีม 5 คน แบ่งเป็นเจ้าของโมดูลคนละ 1 ส่วน แต่ทุกคนต้องอ่านโค้ด `vault-core` ให้เข้าใจ เพราะทุกโมดูลพึ่งพามันเป็น dependency หลัก:
+ทีมนี้มี 4 คน ไม่ใช่ 5 — 3 โมดูลที่เล็กกว่า (`custody-service`, `lender-signer-cli`, `monitor-service`) รวมอยู่ในความรับผิดชอบของคนเดียว (คนที่ 3) ส่วน `vault-core` ยังคงแบ่ง 2 คนเหมือนเดิมเพราะ policy engine ต้องมีคนรีวิวกันเอง และ `mobile-signer-ffi` ยังคงเป็นของคนเดียว (คนที่ 4) แม้ขอบเขตจะใหญ่ขึ้นมากแล้วก็ตาม (ดู 3.3) ทุกคนต้องอ่านโค้ด `vault-core` ให้เข้าใจ เพราะทุกโมดูลพึ่งพามันเป็น dependency หลัก:
 
 | คน | โมดูลหลัก | หมายเหตุ |
 |---|---|---|
 | คนที่ 1 (หัวหน้าทีมเทคนิค) | vault-core: descriptor + key derivation | ควรเป็นคนที่แข็ง Rust ที่สุดในทีม เพราะโมดูลนี้เป็น dependency ของทุกคน ต้องเสร็จก่อนคนอื่นเริ่มงานจริงได้ |
-| คนที่ 2 | vault-core: PSBT + policy engine | ทำงานคู่กับคนที่ 1 ในโมดูลเดียวกัน เพราะ policy engine เป็นจุดเสี่ยงสูงสุด ควรมี 2 คนช่วยกันรีวิวโค้ดกันเอง |
-| คนที่ 3 | custody-service | ต้องรอ interface เบื้องต้นของ vault-core (สัปดาห์ 3-4) ถึงเริ่มต่อได้เต็มที่ ระหว่างนั้นออกแบบ API spec และ state machine ล่วงหน้าได้ |
-| คนที่ 4 | mobile-signer-ffi (mebit wallet 12 หน้าจอ) | **ขอบเขตใหญ่ที่สุดในทีมหลังนับรวม hot wallet เต็มรูปแบบ** — เริ่มออกแบบ UI/UX และ mock UniFFI interface ได้ตั้งแต่เทอม 1 โดยไม่ต้องรอ vault-core เสร็จสมบูรณ์ ควรโฟกัส MVP screens ก่อน (ดู 3.3) และรับความช่วยเหลือจากคนที่ 3/5 ในเทอม 2 |
-| คนที่ 5 | lender-signer-cli + monitor-service | สองโมดูลนี้เล็กกว่าโมดูลอื่น จึงมอบให้คนเดียวดูแลทั้งคู่ได้ เริ่ม monitor-service (ดึงราคา, คำนวณ LTV) ได้ตั้งแต่ต้นเทอม 1 เพราะไม่ต้องพึ่ง vault-core มาก |
+| คนที่ 2 | vault-core: PSBT + policy engine | ทำงานคู่กับคนที่ 1 ในโมดูลเดียวกัน เพราะ policy engine เป็นจุดเสี่ยงสูงสุด ควรมี 2 คนช่วยกันรีวิวโค้ดกันเอง — **นี่คือสิ่งเดียวที่ตั้งใจไม่รวบเข้ากับใครแม้ทีมจะเหลือ 4 คน** |
+| คนที่ 3 | custody-service + lender-signer-cli + monitor-service | รวม 3 โมดูลไว้คนเดียวเพราะ `lender-signer-cli`/`monitor-service` เล็กและไม่ต้องพึ่ง `vault-core` มากตั้งแต่แรก จังหวะงานพอดีกัน: เริ่ม `monitor-service`/`lender-signer-cli` ได้ทันทีตั้งแต่สัปดาห์ 1 ระหว่างรอ `vault-core` interface (สัปดาห์ 3-4) แล้วค่อยขยับไปทำ `custody-service` เมื่อ interface พร้อม — **ข้อควรระวัง**: คนนี้ context-switch ระหว่าง 3 โมดูลบ่อย ควรเช็คความคืบหน้ากับเขาถี่กว่าคนอื่นในช่วงที่งานซ้อนกัน |
+| คนที่ 4 | mobile-signer-ffi (mebit wallet: hot wallet + vault signer, 12 หน้าจอ) | **ขอบเขตใหญ่ที่สุดในทีม** หลังนับรวม hot wallet เต็มรูปแบบ (แนะนำใช้ `bdk`) บวกกับ vault signer เดิม — เริ่มออกแบบ UI/UX และ mock interface ได้ตั้งแต่เทอม 1 โดยไม่ต้องรอ vault-core เสร็จสมบูรณ์ ควรโฟกัส MVP screens ก่อน (ดู 3.3) และรับความช่วยเหลือจากคนที่ 3 ในเทอม 2 เมื่อโมดูลของเขานิ่งแล้ว |
 
 **หลักการแบ่งงาน**:
-- สัปดาห์ 1-2 (ปูพื้นฐาน) ทำร่วมกันทั้งทีม 5 คน — อ่าน Bitcoin script/PSBT/BIP-32 ด้วยกัน ป้องกันไม่ให้มีใครตามไม่ทันตอนโค้ดเริ่มแยกกันทำ
+- สัปดาห์ 1-2 (ปูพื้นฐาน) ทำร่วมกันทั้งทีม 4 คน — อ่าน Bitcoin script/PSBT/BIP-32 ด้วยกัน ป้องกันไม่ให้มีใครตามไม่ทันตอนโค้ดเริ่มแยกกันทำ
 - vault-core (คนที่ 1-2) เป็น critical path ของทั้งโปรเจกต์ ต้องมี milestone ภายในย่อยชัดเจน และรายงานความคืบหน้าบ่อยกว่าโมดูลอื่น เพราะถ้าช้า จะไปกระทบ custody-service และ mobile-signer-ffi ที่ต้องพึ่ง interface ของมัน
 - ทุกสัปดาห์ควรมี stand-up สั้นๆ ร่วมกันทั้งทีม เพราะโมดูลเชื่อมกันผ่าน interface ที่ต้องตกลงร่วมกัน (เช่น รูปแบบ PSBT, error type)
-- เทอม 2 เมื่อโมดูลหลักของแต่ละคนเริ่มนิ่ง ให้สลับกันช่วยกัน integration test แบบ end-to-end แทนที่จะแยกกันทำจนจบ
+- เทอม 2 เมื่อโมดูลหลักของแต่ละคนเริ่มนิ่ง ให้สลับกันช่วยกัน integration test แบบ end-to-end แทนที่จะแยกกันทำจนจบ โดยเฉพาะคนที่ 3 ที่ควรเข้าไปช่วยคนที่ 4 กับ stretch-goal screens (activity/portfolio/settings) หรือ hot wallet layer ถ้าโมดูลตัวเองนิ่งแล้ว
 
 ---
 
-## 4. Timeline ที่เสนอ (ภาคการศึกษา ~ 2 เทอม, ทีม 5 คน)
+## 4. Timeline ที่เสนอ (ภาคการศึกษา ~ 2 เทอม, ทีม 4 คน)
 
 **เทอม 1 — ปูพื้นฐานและ core logic**
 
-| ช่วง | คนที่ 1-2 (vault-core) | คนที่ 3 (custody-service) | คนที่ 4 (mobile-signer-ffi) | คนที่ 5 (lender-cli + monitor) |
-|---|---|---|---|---|
-| สัปดาห์ 1-2 | ศึกษา Bitcoin script/PSBT/BIP-32-48 ร่วมกันทั้งทีม + เขียน design doc ของ policy engine | (ร่วมทั้งทีม) | (ร่วมทั้งทีม) | (ร่วมทั้งทีม) |
-| สัปดาห์ 3-6 | descriptor generation + key derivation + unit test | ออกแบบ API spec + state machine (ยังไม่ต่อ vault-core จริง) | ออกแบบหน้าจอตาม design mebit ทั้ง 12 หน้า (UI/UX) + mock UniFFI interface + เริ่ม hot wallet layer (address/UTXO ด้วย `bdk`) | monitor-service: ดึงราคาผ่าน Esplora API, คำนวณ LTV เบื้องต้น |
-| สัปดาห์ 7-10 | PSBT construction/parsing + policy engine (จุดยากที่สุด) | ต่อ custody-service เข้ากับ vault-core interface จริง | สร้าง MVP screens: onboarding, seed backup, Face ID, home, receive + เริ่มต่อ UniFFI binding จริงกับ vault-core | lender-signer-cli: ดึง PSBT + เซ็น offline เบื้องต้น |
-| สัปดาห์ 11-14 | ช่วย custody-service integration test + แก้ bug จาก policy engine | state machine เต็มรูปแบบ, integration test กับ vault-core บน testnet | MVP screens ต่อ: borrow (พร้อม risk preset 25/50/70%) + loan dashboard + เปิด loan จริงบน testnet | monitor-service: trigger margin call เบื้องต้น |
-| สัปดาห์ 15 | Demo กลางเทอม (ทั้งทีมร่วมสาธิต): เปิด loan → คืนหลักประกัน แบบ end-to-end บน testnet | | | |
+| ช่วง | คนที่ 1-2 (vault-core) | คนที่ 3 (custody-service + lender-cli + monitor) | คนที่ 4 (mobile-signer-ffi) |
+|---|---|---|---|
+| สัปดาห์ 1-2 | ศึกษา Bitcoin script/PSBT/BIP-32-48 ร่วมกันทั้งทีม + เขียน design doc ของ policy engine | (ร่วมทั้งทีม) | (ร่วมทั้งทีม) |
+| สัปดาห์ 3-6 | descriptor generation + key derivation + unit test | ออกแบบ API spec + state machine ของ custody-service (ยังไม่ต่อ vault-core จริง) ควบคู่กับเริ่ม monitor-service: ดึงราคาผ่าน Esplora API, คำนวณ LTV เบื้องต้น (ไม่ต้องพึ่ง vault-core) | ออกแบบหน้าจอตาม design mebit ทั้ง 12 หน้า (UI/UX) + mock UniFFI interface + เริ่ม hot wallet layer (address/UTXO ด้วย `bdk`) |
+| สัปดาห์ 7-10 | PSBT construction/parsing + policy engine (จุดยากที่สุด) | ต่อ custody-service เข้ากับ vault-core interface จริง + เริ่ม lender-signer-cli: ดึง PSBT + เซ็น offline เบื้องต้น | สร้าง MVP screens: onboarding, seed backup, Face ID, home, receive + เริ่มต่อ UniFFI binding จริงกับ vault-core |
+| สัปดาห์ 11-14 | ช่วย custody-service integration test + แก้ bug จาก policy engine | state machine เต็มรูปแบบ, integration test กับ vault-core บน testnet + monitor-service: trigger margin call เบื้องต้น | MVP screens ต่อ: borrow (พร้อม risk preset 25/50/70%) + loan dashboard + เปิด loan จริงบน testnet |
+| สัปดาห์ 15 | Demo กลางเทอม (ทั้งทีมร่วมสาธิต): เปิด loan → คืนหลักประกัน แบบ end-to-end บน testnet | | |
 
 **เทอม 2 — ระบบครบวงจรและ liquidation**
 
-| ช่วง | คนที่ 1-2 (vault-core) | คนที่ 3 (custody-service) | คนที่ 4 (mobile-signer-ffi) | คนที่ 5 (lender-cli + monitor) |
-|---|---|---|---|---|
-| สัปดาห์ 1-4 | รองรับ PSBT ของ liquidation flow (partial spend + change) | ต่อ state machine รองรับ liquidation state | repay + success (ปิด MVP flow ครบ 9 หน้าตาม tappable prototype) + verification flow (challenge-response) | monitor-service: threshold margin call/liquidate เต็มรูปแบบ |
-| สัปดาห์ 5-8 | รีวิว policy engine ร่วมกับคนที่ 5 สำหรับกรณี liquidation | ต่อ custody-service กับ monitor-service (trigger liquidation) | activity (merge on-chain + loan events) + margin call/liquidation status บน UI, portfolio ถ้าเวลาเหลือ (stretch) | lender-signer-cli: เซ็น PSBT liquidation แบบ offline เต็มรูปแบบ |
-| สัปดาห์ 9-12 | Liquidation flow แบบเต็ม (คำนวณจำนวนขายบางส่วน, รวมลายเซ็น, broadcast) — ทำร่วมกันทั้งทีม | | | |
-| สัปดาห์ 13-14 | Security review: adversarial testing ต่อ policy engine ร่วมกันทั้งทีม (พยายาม "แฮ็ก" ให้เซ็นผิดวัตถุประสงค์) | | | |
-| สัปดาห์ 15 | Demo จบโครงการ (ทั้งทีมร่วมสาธิต): สาธิตทั้ง 3 โฟลว์ (repayment, liquidation, fallback) บน testnet ต่อหน้าอาจารย์และทีมบริษัท | | | |
+| ช่วง | คนที่ 1-2 (vault-core) | คนที่ 3 (custody-service + lender-cli + monitor) | คนที่ 4 (mobile-signer-ffi) |
+|---|---|---|---|
+| สัปดาห์ 1-4 | รองรับ PSBT ของ liquidation flow (partial spend + change) | ต่อ state machine รองรับ liquidation state + monitor-service: threshold margin call/liquidate เต็มรูปแบบ | repay + success (ปิด MVP flow ครบ 9 หน้าตาม tappable prototype) + verification flow (challenge-response) |
+| สัปดาห์ 5-8 | รีวิวภายในคู่ (คนที่ 1-2) สำหรับ policy engine กรณี liquidation | ต่อ custody-service กับ monitor-service (trigger liquidation) + lender-signer-cli: เซ็น PSBT liquidation แบบ offline เต็มรูปแบบ | activity (merge on-chain + loan events) + margin call/liquidation status บน UI, portfolio ถ้าเวลาเหลือ (stretch) — คนที่ 3 เริ่มเข้าช่วยตรงนี้ได้เมื่อโมดูลตัวเองนิ่งแล้ว |
+| สัปดาห์ 9-12 | Liquidation flow แบบเต็ม (คำนวณจำนวนขายบางส่วน, รวมลายเซ็น, broadcast) — ทำร่วมกันทั้งทีม | | |
+| สัปดาห์ 13-14 | Security review: adversarial testing ต่อ policy engine ร่วมกันทั้งทีม (พยายาม "แฮ็ก" ให้เซ็นผิดวัตถุประสงค์) | | |
+| สัปดาห์ 15 | Demo จบโครงการ (ทั้งทีมร่วมสาธิต): สาธิตทั้ง 3 โฟลว์ (repayment, liquidation, fallback) บน testnet ต่อหน้าอาจารย์และทีมบริษัท | | |
 
 ---
 

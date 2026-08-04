@@ -34,17 +34,16 @@ mebit/
 
 ## ใครทำโมดูลไหน
 
-ดูรายละเอียดเหตุผลเต็มๆ ที่ `docs/00-capstone-brief.md` §3.6 (**หมายเหตุ: กำลังอยู่ระหว่างปรับให้ตรงกับจำนวนทีมจริง — เช็คกับหัวหน้าทีมก่อนยึดตามตารางนี้**):
+ทีมนี้มี **4 คน** — ดูรายละเอียดเหตุผลเต็มๆ ที่ `docs/00-capstone-brief.md` §3.6:
 
 | โมดูล | คนดูแล |
 |---|---|
 | `vault-core` (descriptor + derivation) | คนที่ 1 |
 | `vault-core` (PSBT + policy engine) | คนที่ 2 |
-| `custody-service` | คนที่ 3 |
-| `mobile-signer-ffi` | คนที่ 4 |
-| `lender-signer-cli` + `monitor-service` | คนที่ 5 |
+| `custody-service` + `lender-signer-cli` + `monitor-service` | คนที่ 3 |
+| `mobile-signer-ffi` (hot wallet + vault signer — ขอบเขตใหญ่ที่สุดในทีม) | คนที่ 4 |
 
-`vault-core` เป็นจุดวิกฤต — ทุกโมดูลอื่นพึ่งพามันโดยตรงหรือผ่าน invariant ที่มันกำหนด ส่วน `policy` module ข้างในคือโค้ดที่เสี่ยงที่สุดในทั้งโปรเจกต์ (อ่าน `.claude/skills/policy-engine-review/SKILL.md` ก่อนแก้)
+`vault-core` เป็นจุดวิกฤต — ทุกโมดูลอื่นพึ่งพามันโดยตรงหรือผ่าน invariant ที่มันกำหนด ส่วน `policy` module ข้างในคือโค้ดที่เสี่ยงที่สุดในทั้งโปรเจกต์ (อ่าน `.claude/skills/policy-engine-review/SKILL.md` ก่อนแก้) — เป็นเหตุผลที่ยังคงให้ 2 คนดูแลแยกกันแม้ทีมจะเหลือ 4 คน คนที่ 3 ดูแล 3 โมดูลพร้อมกัน แต่จังหวะงานถูกออกแบบให้ทยอยทำทีละโมดูล ไม่ใช่พร้อมกันหมด (ดู `.claude/agents/platform-services.md`)
 
 ## เริ่มรันโค้ดยังไง
 
@@ -65,7 +64,7 @@ npm start        # กด w สำหรับเว็บ, i สำหรับ
 ## ทำงานกับ Claude Code
 
 ในโฟลเดอร์นี้มี Claude Code agent และ skill เตรียมไว้ให้แล้ว:
-- `.claude/agents/` — 1 agent ต่อโมดูล (`vault-core-descriptor`, `vault-core-policy`, `custody-service`, `mobile-signer`, `lender-monitor`) ใช้ agent ที่ตรงกับโมดูลที่กำลังทำ
+- `.claude/agents/` — 1 agent ต่อคน/ขอบเขตงาน (`vault-core-descriptor`, `vault-core-policy`, `platform-services`, `mobile-signer`) ใช้ agent ที่ตรงกับโมดูลที่กำลังทำ
 - `.claude/skills/` — ความรู้ร่วม: `bitcoin-fundamentals` (พื้นฐาน Bitcoin), `policy-engine-review` (checklist รีวิว policy engine), `testnet-workflow` (วิธีทดสอบบน testnet), `design-tokens` (ดีไซน์ระบบของแอป)
 
 ## กฎที่ต้องรู้ก่อนเริ่ม

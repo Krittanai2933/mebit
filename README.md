@@ -1,6 +1,6 @@
 # mebit — Bitcoin self-custody lending, capstone workspace
 
-A 2-of-3 multisig Bitcoin-collateralized lending system: a borrower deposits BTC, draws a THB loan against it, and no single party (borrower, platform, or lender) can move the collateral alone. Built as a university capstone project — 5 students, 2 semesters, one team owning the system end-to-end.
+A 2-of-3 multisig Bitcoin-collateralized lending system: a borrower deposits BTC, draws a THB loan against it, and no single party (borrower, platform, or lender) can move the collateral alone. Built as a university capstone project — 4 students, 2 semesters, one team owning the system end-to-end.
 
 Start here:
 
@@ -18,7 +18,7 @@ Start here:
 mebit/
 ├── docs/                 # brief, architecture, design notes — read these first
 ├── design-reference/     # mebit/Mapboss design tokens + logos for the mobile app
-├── vault-workspace/      # the actual system — 5 Rust crates, one per module/owner
+├── vault-workspace/      # the actual system — 5 Rust crates (some modules share an owner, see Team split)
 │   ├── vault-core/           # descriptor, key derivation, PSBT, policy engine — the critical path
 │   ├── custody-service/      # platform-side gRPC/REST + signing-request state machine
 │   ├── mobile-signer-ffi/    # borrower app: hot wallet (bdk) + UniFFI vault signer, two layers in one
@@ -34,21 +34,20 @@ Every crate under `vault-workspace/` has its own `README.md` with its owner, dep
 
 ## Team split
 
-5 modules, 5 people. See `docs/00-capstone-brief.md` §3.6 for the full reasoning and `docs/00-capstone-brief.md` §4 for the two-semester timeline. Short version:
+5 modules, **4 people** — `custody-service`, `lender-signer-cli`, and `monitor-service` are bundled onto one person since the latter two are small and don't need `vault-core` early; `vault-core` keeps its 2-person split on purpose (see below). See `docs/00-capstone-brief.md` §3.6 for the full reasoning and `docs/00-capstone-brief.md` §4 for the two-semester timeline. Short version:
 
 | Module | Owner |
 |---|---|
 | `vault-core` (descriptor + derivation) | person 1 |
 | `vault-core` (PSBT + policy engine) | person 2 |
-| `custody-service` | person 3 |
+| `custody-service` + `lender-signer-cli` + `monitor-service` | person 3 |
 | `mobile-signer-ffi` (hot wallet + vault signer — the largest single scope in the team) | person 4 |
-| `lender-signer-cli` + `monitor-service` | person 5 |
 
-`vault-core` is the critical path — every other module depends on it. Its policy engine is the single highest-risk piece of code in the project (see `.claude/skills/policy-engine-review/SKILL.md`). `mobile-signer-ffi` carries the most work of any single module now that its scope includes a full `bdk`-based hot wallet on top of the multisig vault signer — see `docs/01-architecture.md` and `docs/00-capstone-brief.md` §3.3 for why, and lean on the MVP-vs-stretch screen split there if the team is short on time.
+`vault-core` is the critical path — every other module depends on it. Its policy engine is the single highest-risk piece of code in the project, which is why it kept a dedicated second owner even when the team shrank from 5 to 4 (see `.claude/skills/policy-engine-review/SKILL.md`). `mobile-signer-ffi` carries the most work of any single module now that its scope includes a full `bdk`-based hot wallet on top of the multisig vault signer — see `docs/01-architecture.md` and `docs/00-capstone-brief.md` §3.3 for why, and lean on the MVP-vs-stretch screen split there if the team is short on time. Person 3 juggles three modules — timed to stagger rather than overlap (see the `platform-services` agent), but worth checking in on more often than the others.
 
 ## Working with Claude Code on this project
 
-`.claude/agents/` has one subagent per module, each scoped to that module's responsibilities, dependencies, and testing bar. Use the one matching what you're working on — e.g. from the `vault-core` directory, or by asking for "the vault-core agent." `.claude/skills/` has knowledge shared across modules (Bitcoin fundamentals, the policy-engine adversarial review checklist, the testnet workflow, and the mebit design tokens).
+`.claude/agents/` has one subagent per person/scope: `vault-core-descriptor`, `vault-core-policy`, `platform-services` (custody-service + lender-signer-cli + monitor-service), and `mobile-signer`. Use the one matching what you're working on — e.g. from the `vault-core` directory, or by asking for "the vault-core agent." `.claude/skills/` has knowledge shared across modules (Bitcoin fundamentals, the policy-engine adversarial review checklist, the testnet workflow, and the mebit design tokens).
 
 ## Explicitly out of scope
 
