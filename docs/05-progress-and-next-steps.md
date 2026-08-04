@@ -49,17 +49,21 @@
 ## 3. mobile-signer-ffi (คนที่ 4)
 
 **สถานะปัจจุบัน**
-- `rust/` มี skeleton จริงแล้ว: 3 ฟังก์ชัน (`derive_borrower_pubkey`, `compute_vault_address`, `sign_psbt`) ต่อกับ mock type ของ `vault-core` โดยตรง มี 5 test ผ่าน — **ยังไม่ได้ใช้ `uniffi` crate/macro จริง** (ตั้งใจรอจนกว่า `vault-core` จะนิ่งก่อน ตามหลักการเดียวกับที่ไม่ implement Bitcoin จริงใน vault-core ตอนนี้)
+- **ขอบเขตขยายใหญ่ขึ้นจากเดิม**: ตามดีไซน์ล่าสุด (ดู `01-architecture.md`'s "mobile-signer-ffi is two wallets in one app" และ `04-open-items.md` ข้อ 2/9) โมดูลนี้ต้องเป็นทั้ง (ก) hot wallet single-sig จริงสำหรับ BTC ที่ยัง free — แนะนำใช้ `bdk` Rust core และ (ข) vault signer multisig ที่ห่อ vault-core (ของเดิม) **ตอนนี้มีแค่ (ข) เท่านั้น (ก) ยังไม่เริ่มเลยแม้แต่บรรทัดเดียว**
+- `rust/` มี skeleton จริงแล้วสำหรับฝั่ง vault signer เท่านั้น: 3 ฟังก์ชัน (`derive_borrower_pubkey`, `compute_vault_address`, `sign_psbt`) ต่อกับ mock type ของ `vault-core` โดยตรง มี 5 test ผ่าน — **ยังไม่ได้ใช้ `uniffi` crate/macro จริง** (ตั้งใจรอจนกว่า `vault-core` จะนิ่งก่อน) **และยังไม่มี `bdk` dependency หรือ hot-wallet code ใดๆ**
 - `app/` เป็น Expo React Native app ที่ **รันได้จริง** (เว็บ/iOS/Android ผ่าน simulator) ครบ 12 หน้าจอตาม design ล่าสุด รองรับโมเดลหลายสัญญาเงินกู้พร้อมกัน (multi-loan) แล้ว
-- ข้อมูลทั้งหมดใน `app/` ยังเป็น **mock ล้วน** (`mockVault.ts`, TypeScript) — ยังไม่ได้เชื่อมกับ `rust/` เลย (คนละภาษา ยังไม่มี native module bridge)
+- ข้อมูลทั้งหมดใน `app/` ยังเป็น **mock ล้วน** (`mockVault.ts`, TypeScript) — ยังไม่ได้เชื่อมกับ `rust/` เลย (คนละภาษา ยังไม่มี native module bridge) — รวมถึงยังไม่มี concept ของ UTXO/fee/node connectivity จริงใน mock เลย เพราะตอนสร้าง mock ยังไม่รู้ว่าต้องมี hot-wallet layer
 
 **สิ่งที่ต้องทำทั้งหมด**
-- [ ] เมื่อ `vault-core` นิ่งแล้ว: เพิ่ม `uniffi` dependency จริง, ใส่ `#[uniffi::export]` ให้ 3 ฟังก์ชันที่มีอยู่ (หรือฟังก์ชันใหม่ตามอินเทอร์เฟซจริง), generate binding ไป Kotlin/Swift
-- [ ] เชื่อม UI เข้ากับ native binding จริงแทน `mockVault.ts` ทีละฟังก์ชัน
+- [ ] **ตัดสินใจ**: ใช้ `bdk` Rust core สำหรับเลเยอร์ hot wallet ตามที่เอกสารแนะนำ หรือ implement เอง (ดู `04-open-items.md` ข้อ 2) — ยังไม่ได้ตัดสินใจเป็นมติ
+- [ ] เริ่มเลเยอร์ hot wallet (single-sig): address generation, UTXO tracking, fee estimation, ส่ง/รับ BTC, เชื่อมต่อ Electrum/Esplora, สร้าง PSBT แบบ watch-only — **ยังไม่มีโค้ดแม้แต่บรรทัดเดียว**
+- [ ] เมื่อ `vault-core` นิ่งแล้ว: เพิ่ม `uniffi` dependency จริง, ใส่ `#[uniffi::export]` ให้ฟังก์ชันฝั่ง vault signer ที่มีอยู่ (หรือฟังก์ชันใหม่ตามอินเทอร์เฟซจริง), generate binding ไป Kotlin/Swift
+- [ ] เชื่อม UI เข้ากับ native binding จริงแทน `mockVault.ts` ทีละฟังก์ชัน (ทั้งฝั่ง hot wallet และ vault signer)
 - [ ] ทำ verification/challenge-response flow ตอนเปิด loan (ตรวจจับ pubkey derive ผิด) — **ยังไม่มีเลยตอนนี้**
 - [ ] เชื่อม UI margin-call/liquidation กับข้อมูลจริงจาก `monitor-service`/`custody-service` แทน mock
-- [ ] เชื่อม Receive/Borrow flow กับ testnet จริง
+- [ ] เชื่อม Receive/Borrow/Send flow กับ testnet จริงผ่าน node connectivity ของแอปเอง (ไม่ผ่าน backend) — ตรงกับ Definition of Done ข้อ 6 ใน `00-capstone-brief.md`
 - [ ] (ถ้าจำเป็น) เปลี่ยนจาก state-switch ง่ายๆ ใน `App.tsx` เป็น react-navigation เมื่อโครงสร้างซับซ้อนขึ้น
+- [ ] ถ้าเวลาไม่พอ: ใช้แนวทาง MVP-screens-ก่อน ตาม `00-capstone-brief.md` §3.3 (onboarding→success ก่อน, activity/portfolio/settings เป็น stretch goal)
 
 ---
 
@@ -96,6 +100,7 @@
 
 ## ภาพรวม: สิ่งที่ยังไม่ได้แตะเลยทั้งระบบ
 
+- **mobile-signer-ffi ยังไม่มีเลเยอร์ hot wallet เลย** — ขอบเขตขยายเป็นสองเลเยอร์ (hot wallet + vault signer) ตามดีไซน์ล่าสุด แต่โค้ดตอนนี้มีแค่ฝั่ง vault signer เท่านั้น ดูรายละเอียดในหัวข้อ 3 ด้านบน — เป็นช่องว่างที่ใหญ่ที่สุดในระบบตอนนี้
 - **Bitcoin testnet จริง** — ทุกอย่างตอนนี้เป็น mock/in-memory ล้วน ยังไม่มีการทดสอบบน testnet จริงแม้แต่ครั้งเดียว (เป็นเกณฑ์ข้อ 1 ใน Definition of Done ของ [`00-capstone-brief.md`](00-capstone-brief.md) §5)
 - **การเชื่อมต่อระหว่าง service จริง** — custody-service ↔ monitor-service ↔ lender-signer-cli ↔ mobile app ยังไม่มีเส้นเชื่อมไหนที่เป็นของจริงเลยนอกจาก lender-signer-cli fetch จาก custody-service ได้
 - **Auth/security ระหว่าง service** — ยังไม่มีเลย

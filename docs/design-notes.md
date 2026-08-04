@@ -1,6 +1,6 @@
 # mebit borrower app — design reference
 
-Source: Claude Design project **"Mebit mobile app design"** (`mebit App.dc.html` / `AppScreen.dc.html`), imported 2026-07-31, revised 2026-07-31 to add multi-loan support and three new screens. This is the UI/UX starting point for the `mobile-signer-ffi` demo app (capstone brief §3.3) — the team should adapt it rather than redesign from scratch. Design tokens live in [`../design-reference/`](../design-reference/); this file captures the screens, flows, and product reasoning behind them.
+Source: Claude Design project **"Mebit mobile app design"** (`mebit App.dc.html` / `AppScreen.dc.html`), imported 2026-07-31, revised 2026-07-31 to add multi-loan support and three new screens, then again to add the hot-wallet requirement below. This is the UI/UX starting point for the `mobile-signer-ffi` demo app (capstone brief §3.3) — the team should adapt it rather than redesign from scratch. Design tokens live in [`../design-reference/`](../design-reference/); this file captures the screens, flows, and product reasoning behind them.
 
 ## Product framing
 
@@ -19,6 +19,22 @@ The single-loan model from the first design pass is gone. A borrower can now hol
 - **Borrow** now pledges from free BTC specifically, and opening a loan is really "creating a new contract" — confirming routes to Portfolio, not straight to one Loan Dashboard, since the borrower now has more than one loan to look at.
 
 This maps cleanly onto the real system: each contract is its own on-chain vault (its own 2-of-3 multisig descriptor per `vault-core`), so "isolated, not cross-collateralized" isn't just a UI framing — it's the actual custody model in `docs/00-capstone-brief.md` §3.1, just made visible for the first time in the mobile UI once there's more than one loan to show.
+
+## This app is a full Bitcoin wallet, not just a PSBT-signing screen (new)
+
+The original scope for `mobile-signer-ffi` was "wrap vault-core's key derivation and PSBT signing." That's too narrow once you look at what the design actually asks for: the borrower's BTC is always in one of two states — **free** (not pledged to any loan) or **pledged** (locked in a specific loan's multisig vault) — and the app has to be a real wallet for the free portion, not just a display of a number:
+
+1. **Transaction construction** — coin selection from the UTXO set, fee calculation, assembling ordinary (non-vault) transactions
+2. **Send** — build, sign (single-sig, for the free portion), and broadcast
+3. **Receive** — generate a new address per the descriptor, track incoming deposits, confirm on-chain
+4. **Node connectivity** — an Electrum/Esplora client (or full node later) to sync UTXOs, balance, history, and fee estimates *from the app itself*, not only through the backend — this is what makes "self-custody" actually true: the borrower can see and move their own free BTC even if the backend is down
+5. **Watch-only PSBT construction** — a device holding only the public descriptor/xpub (no private key) builds an unsigned PSBT that a different device with the real key signs separately — the same air-gapped pattern `lender-signer-cli` already uses, and useful later if a borrower wants their own cold-storage/hardware-wallet backup
+
+**Recommendation: build this on `bdk` (Bitcoin Dev Kit) Rust core**, not `bdk-rn`/`bdk-dart` wrappers (those were still integration-testing-only as of July 2026) and not a hand-rolled wallet layer. `bdk` supports all 5 items above natively — a wallet bound to a descriptor, a swappable blockchain backend (Electrum/Esplora), coin selection, PSBT-native everywhere including watch-only mode. Reinventing this would burn time that should go toward the policy engine and multisig vault, which are the actual points of technical risk in this project.
+
+The vault-signer half (wrapping `vault-core` for pledged BTC) is unchanged from the original scope. Both halves need to read as one balance on Home and Portfolio, but the key/signing logic underneath stays clearly separated — free BTC is single-sig (a weaker security model, by design, since it isn't loan collateral), pledged BTC is multisig.
+
+**Scope reality check**: 12 full screens *plus* a real hot wallet is more than one person can finish solo in two terms. Split into **MVP screens** (onboarding → seed backup → Face ID → home → receive → borrow → loan dashboard → repay → success — this is the tappable prototype's actual path, and matches the midterm/final demo) and **stretch goals** (activity, portfolio, settings — nice to have if time allows, or picked up by teammates in term 2 once their own modules stabilize).
 
 ## Screens (12)
 

@@ -6,8 +6,11 @@
 
 1. [`docs/00-capstone-brief.md`](docs/00-capstone-brief.md) — โจทย์ต้นฉบับฉบับเต็ม (ภาษาไทย) **อ่านอันนี้ก่อนทุกอย่าง**
 2. [`docs/01-architecture.md`](docs/01-architecture.md) — สรุปสถาปัตยกรรมแบบย่อ (อังกฤษ)
-3. [`docs/design-notes.md`](docs/design-notes.md) — ดีไซน์แอปฝั่งผู้กู้ (ถ้าอยู่ทีม mobile-signer-ffi ต้องอ่าน)
-4. [`docs/02-progress-and-next-steps.md`](docs/02-progress-and-next-steps.md) — **สถานะปัจจุบันจริงๆ ของแต่ละโมดูล และสิ่งที่ต้องทำต่อ** เช็คอันนี้ก่อนเริ่มงานทุกครั้งเพื่อไม่ให้ทำซ้ำกับที่มีอยู่แล้ว
+3. [`docs/02-roles-and-responsibilities.md`](docs/02-roles-and-responsibilities.md) — ใครถือคีย์ไหน เซ็นคู่กับใครตอนไหน
+4. [`docs/03-flows.md`](docs/03-flows.md) — โฟลว์แบบละเอียด: onboarding, เปิด loan, คืนหลักประกัน, liquidation, fallback
+5. [`docs/04-open-items.md`](docs/04-open-items.md) — สิ่งที่ยังไม่ได้ตัดสินใจ — เช็คก่อนเชื่อว่าตัวเลข/กติกาไหนล็อกแล้ว
+6. [`docs/design-notes.md`](docs/design-notes.md) — ดีไซน์แอปฝั่งผู้กู้ (ถ้าอยู่ทีม mobile-signer-ffi ต้องอ่าน)
+7. [`docs/05-progress-and-next-steps.md`](docs/05-progress-and-next-steps.md) — **สถานะปัจจุบันจริงๆ ของแต่ละโมดูล และสิ่งที่ต้องทำต่อ** เช็คอันนี้ก่อนเริ่มงานทุกครั้งเพื่อไม่ให้ทำซ้ำกับที่มีอยู่แล้ว
 
 ## โครงสร้าง repo
 
@@ -74,4 +77,4 @@ npm start        # กด w สำหรับเว็บ, i สำหรับ
 
 ## ติดขัดตรงไหน
 
-เช็ค `docs/02-progress-and-next-steps.md` ก่อนว่ามีคนทำหรือวางแผนไว้แล้วหรือยัง ถ้าไม่แน่ใจเรื่อง scope หรือ ownership ถามในทีมก่อนเริ่มลงมือ
+เช็ค `docs/05-progress-and-next-steps.md` ก่อนว่ามีคนทำหรือวางแผนไว้แล้วหรือยัง ถ้าไม่แน่ใจเรื่อง scope หรือ ownership ถามในทีมก่อนเริ่มลงมือ

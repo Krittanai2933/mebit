@@ -1,0 +1,13 @@
+# สิ่งที่ยังไม่ได้ทำ / ต้องกลับมาคุยต่อ
+
+> ดูสถานะโค้ดจริงล่าสุด (ทำไปแล้วแค่ไหน) ที่ [`05-progress-and-next-steps.md`](05-progress-and-next-steps.md) — เอกสารนี้คือสิ่งที่ยัง "ไม่ตัดสินใจ" ในเชิงออกแบบ/ธุรกิจ ไม่ใช่ backlog เชิงโค้ด
+
+1. **custody-service ตัวจริง** — gRPC/REST + state machine ของ signing request ที่ track ว่า PSBT รอเซ็นจากใครอยู่ **สถานะ**: มี REST skeleton จริงแล้ว (axum, in-memory state machine, idempotent) แต่ยังไม่มี Postgres, ยังไม่เชื่อม HSM/KMS จริง — ดูรายละเอียดใน `05-progress-and-next-steps.md`
+2. **mobile-signer-ffi** — รายละเอียด UniFFI binding และการ derive key ให้ตรงกับฝั่ง backend ยังไม่ได้ทำ ตอนนี้ขอบเขตขยายเป็น full hot wallet ตามดีไซน์ "mebit" แล้ว (ดู `design-notes.md`) **ยังต้องตัดสินใจ**: ใช้ `bdk` Rust core จริงตามที่แนะนำ หรือ implement wallet layer เอง — แนะนำ `bdk` เพราะรองรับ coin selection/UTXO/watch-only PSBT แบบ built-in แต่ทีมยังไม่ได้ล็อกเป็นมติ **สถานะโค้ด**: ยังไม่มี hot-wallet layer เลย มีแค่ 3 ฟังก์ชัน mock ฝั่ง vault-signer (`derive_borrower_pubkey`, `compute_vault_address`, `sign_psbt`)
+3. **Fund/NAV Ledger ของฝั่งผู้ให้กู้** — ถูกตัดออกจากการคุยรอบนี้ตามคำขอ แต่ต้องทำก่อนขึ้น production เพราะกระทบ liquidation flow โดยตรง
+4. **ประเด็นกฎหมาย (ก.ล.ต./ธปท.)** — ถูกตัดออกเช่นกัน แต่สำคัญมาก ควรปรึกษาที่ปรึกษากฎหมายคู่ขนานไปกับการพัฒนา โดยเฉพาะประเด็นกองทุนรวมหลายนักลงทุนที่อาจเข้าข่ายหลักทรัพย์
+5. **Threshold ของ LTV** (margin call / liquidation %) — ดีไซน์ "mebit" เสนอค่าที่เป็นรูปธรรมกว่าเดิม คือแจ้งเตือนที่ 65%/72% และบังคับขายที่ 80% (พร้อม borrow preset 25/50/70%) **แต่ยังเป็นข้อเสนอจากฝั่งดีไซน์ ไม่ใช่มติจากทีมความเสี่ยง/ธุรกิจ ต้อง sign-off อย่างเป็นทางการก่อนใช้จริง** **สถานะโค้ด**: `mobile-signer-ffi`/`monitor-service` implement เป็น 3 โซน (ปลอดภัย <50%, เฝ้าระวัง 50–65%, เสี่ยงสูง ≥65%, บังคับขาย 80%) — ยังไม่ได้แยกจุดแจ้งเตือนสองจุด (65% และ 72%) เป็น alert คนละจุดตามดีไซน์ ตอนนี้มีแค่เส้นแบ่งโซนเดียวที่ 65%
+6. **ความเป็นอิสระของตัวแทนกองทุน** ผู้ถือคีย์ที่สาม — ต้องกำหนดให้ชัดว่าไม่ใช่คนของแพลตฟอร์มเอง ไม่เช่นนั้น multisig 2-of-3 จะเสียความหมายในทางปฏิบัติ
+7. **Policy-constrained auto co-signer** สำหรับฝั่งผู้ให้กู้ (ลด operational latency ตอน liquidation) — ยังไม่ตัดสินใจว่าจะทำหรือไม่
+8. **Icon set ของแบรนด์ Mapboss/mebit** — ดีไซน์ปัจจุบันใช้ minimal line icon เป็น placeholder เพราะยังไม่มี icon set จริงของ Mapboss CI ต้องตามงานกับทีม brand
+9. **Wallet layer แยกจาก vault layer** — ดีไซน์ทำให้เห็นว่าแอปต้องดูแล BTC สองแบบ (ที่ pledge แล้ว vs ที่ยัง free) ต้องออกแบบให้ชัดว่า UTXO ที่ "free" อยู่ในกระเป๋าแบบ single-sig ธรรมดาของผู้กู้เอง ไม่ใช่ multisig — มีนัยต่อ security model ที่ต้องคิดเพิ่ม (single-sig ส่วนนี้ปลอดภัยน้อยกว่า vault แบบ 2-of-3) **สถานะ**: บันทึกไว้ใน `01-architecture.md` แล้ว แต่ยังไม่มีการ implement จริง (ดูข้อ 2)

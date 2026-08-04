@@ -1,6 +1,6 @@
 # โครงการ Capstone: ระบบปล่อยกู้ค้ำด้วย Bitcoin แบบ Self-Custody
 
-> เอกสารต้นฉบับที่ใช้เสนอเป็นโจทย์ capstone project ระดับปริญญาตรี — เก็บไว้ที่นี่แบบคำต่อคำเพื่อเป็น source of truth เดียว เอกสารอื่นใน `docs/` เป็นฉบับย่อย/ใช้งานที่อ้างอิงกลับมาที่ไฟล์นี้
+> เอกสารต้นฉบับที่ใช้เสนอเป็นโจทย์ capstone project ระดับปริญญาตรี — เก็บไว้ที่นี่แบบคำต่อคำเพื่อเป็น source of truth เดียว เอกสารอื่นใน `docs/` เป็นฉบับย่อย/ใช้งานที่อ้างอิงกลับมาที่ไฟล์นี้ **ฉบับนี้ปรับปรุงจากฉบับแรก (ก.ค. 2026)** หลังได้ไฟล์ดีไซน์แอป "mebit" มา — ดูรายละเอียดที่เปลี่ยนใน [`04-open-items.md`](04-open-items.md) และดีไซน์เต็มใน [`design-notes.md`](design-notes.md)
 
 **ขอบเขต**: 1 ทีม ครอบคลุมทั้งระบบ (end-to-end)
 **ทีม**: นักศึกษาวิศวกรรมคอมพิวเตอร์ 5 คน ระยะเวลา 2 เทอม
@@ -28,7 +28,7 @@
 2. ลูกค้าตรวจสอบเงินของตัวเองบนบล็อกเชนได้ตลอดเวลา โดยไม่ต้องเชื่อใจแพลตฟอร์ม
 3. ระบบต้องรองรับสถานการณ์ liquidation อัตโนมัติเมื่อราคาตกและ LTV เกินเกณฑ์ ภายในเวลาที่ปลอดภัยพอ
 
-สามฝ่ายที่เกี่ยวข้อง: ผู้กู้ (ถือคีย์บนมือถือ), แพลตฟอร์ม (ถือคีย์ใน HSM/KMS), ผู้ให้กู้/ตัวแทนกองทุน (ถือคีย์แยกต่างหาก) — รายละเอียดบทบาทดูใน `02-roles-and-responsibilities.md` และโฟลว์แบบละเอียดใน `03-flows.md` ของชุดเอกสารนี้ (เอกสารทั้งสองฉบับยังไม่ได้ถูกส่งมอบมาพร้อมโจทย์นี้ — ให้ทีมสอบถามบริษัทเมื่อเริ่มสัปดาห์ 1)
+สามฝ่ายที่เกี่ยวข้อง: ผู้กู้ (ถือคีย์บนมือถือ), แพลตฟอร์ม (ถือคีย์ใน HSM/KMS), ผู้ให้กู้/ตัวแทนกองทุน (ถือคีย์แยกต่างหาก) — รายละเอียดบทบาทดูใน [`02-roles-and-responsibilities.md`](02-roles-and-responsibilities.md) และโฟลว์แบบละเอียดใน [`03-flows.md`](03-flows.md)
 
 ---
 
@@ -63,17 +63,23 @@ vault-workspace/
 - เก็บ mapping ระหว่าง loan และ vault descriptor
 - เชื่อมกับ HSM/KMS (หรือ mock สำหรับ capstone) สำหรับคีย์ฝั่งแพลตฟอร์ม
 
-เทคโนโลยี: Rust (tonic สำหรับ gRPC หรือ axum สำหรับ REST), PostgreSQL
+เทคโนโลยี: Rust (tonic สำหรับ gRPC หรือ axum สำหรับ REST), PostgreSQL — ดูร่าง schema ใน [`01-architecture.md`](01-architecture.md)
 
-### 3.3 mobile-signer-ffi — Binding สำหรับแอปมือถือ
+### 3.3 mobile-signer-ffi — "mebit" Bitcoin hot wallet เต็มรูปแบบ
+
+**อัปเดตขอบเขต**: อิงตามไฟล์ design ที่ได้มา (สรุปเต็มใน [`design-notes.md`](design-notes.md)) แอปนี้ไม่ใช่แค่หน้าจอเซ็น PSBT ไม่กี่หน้าอีกต่อไป แต่เป็น Bitcoin hot wallet ที่มีครบ 12 หน้าจอ: onboarding/seed backup, Face ID, home, receive, borrow, loan dashboard, repay, success, activity, portfolio, settings
 
 หน้าที่:
-- ห่อ logic การ derive key และเซ็น PSBT จาก vault-core ให้เรียกจาก Kotlin/Swift ได้ผ่าน UniFFI
-- ตัวอย่างแอป demo (เลือก React Native หรือ Flutter ได้ตามถนัด เพราะ core logic อยู่ใน Rust อยู่แล้ว) ที่แสดง: onboarding (generate/import seed), เปิด loan ใหม่, ตรวจสอบ vault บนบล็อกเชน, เซ็นคืนหลักประกัน
+- **เลเยอร์ hot wallet (single-sig)**: ดูแล BTC ส่วนที่ยังไม่ pledge ค้ำ loan ใด ต้องทำทุกอย่างที่ Bitcoin wallet จริงทำได้ครบ ไม่ใช่แค่โชว์ยอด: สร้างธุรกรรม (coin selection + fee), ส่ง BTC, รับ BTC (address generation), เชื่อมต่อโหนด (Electrum/Esplora client สำหรับ sync UTXO/fee/history), และสร้าง PSBT แบบ watch-only (อุปกรณ์ที่มีแค่ public descriptor สร้าง PSBT ให้อุปกรณ์ที่มี private key เซ็นแยก) — แนะนำใช้ `bdk` (Bitcoin Dev Kit) เวอร์ชัน Rust core เป็นฐาน เพราะรองรับทุกข้อนี้แบบ built-in อยู่แล้ว
+- **เลเยอร์ vault signer (multisig)**: ห่อ logic การ derive key และเซ็น PSBT จาก vault-core ให้เรียกจาก Kotlin/Swift ได้ผ่าน UniFFI สำหรับ BTC ส่วนที่ pledge เข้า loan แล้ว
+- **Portfolio**: รวมยอด BTC ข้ามหลาย vault address (หลาย loan พร้อมกัน แยกอิสระไม่ cross-collateralise) + ส่วน free ที่ยังไม่ผูก loan ใด เป็นยอดเดียวบนหน้า Home
+- **Activity**: merge on-chain BTC movement (จาก monitor-service) กับ loan events (จาก custody-service) เป็น ledger เดียว พร้อมแสดงผลกระทบต่อ LTV ต่อแถว
+- **Risk visualization บน Loan Dashboard**: แจ้งเตือนที่ LTV 65% และ 72%, บังคับขายบางส่วนที่ 80% (ทีมสามารถ derive ราคาบังคับขายจากตัวเลขนี้ได้ ไม่ต้อง hardcode)
+- **Borrow**: ให้เลือกได้ทั้ง preset ระดับความเสี่ยง (ระมัดระวัง 25% / สมดุล 50% / สูงสุด 70% LTV) และกรอกจำนวนเอง
 
-เทคโนโลยี: UniFFI, Kotlin/Swift, React Native หรือ Flutter
+เทคโนโลยี: UniFFI, Kotlin/Swift, React Native หรือ Flutter, `bdk` (Bitcoin Dev Kit) Rust core สำหรับเลเยอร์ wallet ทั่วไป
 
-> ดู `docs/design-notes.md` — มี UI/flow reference ของแอปฝั่งผู้กู้ (ชื่อโปรเจกต์ออกแบบ "mebit") ที่ทีมนี้ควรใช้เป็นจุดตั้งต้นของ demo app แทนการออกแบบใหม่ตั้งแต่ศูนย์
+**หมายเหตุขอบเขต**: 12 หน้าจอเต็มรูปแบบถือว่าใหญ่กว่าที่คนเดียว (คนที่ 4) จะทำไหวคนเดียวใน 2 เทอม แนะนำให้กำหนด "MVP screens" ที่ต้องทำให้จบก่อน (onboarding, home, receive, borrow, loan dashboard, repay, success — ตรงกับ demo กลางเทอม/ท้ายเทอม) ส่วน activity, portfolio, settings เป็น stretch goal ที่ทำได้ถ้าเวลาเหลือ หรือขอความช่วยเหลือจากคนที่ 3/5 ในเทอม 2 ตอนโมดูลหลักของแต่ละคนนิ่งแล้ว (ดู 3.6)
 
 ### 3.4 lender-signer-cli — เครื่องมือฝั่งผู้ให้กู้
 
@@ -88,7 +94,7 @@ vault-workspace/
 หน้าที่:
 - ดึงราคาผ่าน public Esplora API (MVP) หรือ price oracle
 - คำนวณ LTV ของทุก loan ที่ active ต่อเนื่อง
-- Trigger margin call / liquidation ตาม threshold (ตัวอย่าง: init 50% / margin call 70% / liquidate 80% — ทีมสามารถเสนอปรับปรุงพร้อมเหตุผลได้)
+- Trigger margin call / liquidation ตาม threshold — **แจ้งเตือนที่ 65% และ 72%, บังคับขายที่ 80%** (ตัวเลขจากดีไซน์ ทีมควรใช้เป็นฐาน แต่ยังต้องรอ sign-off จากทีมความเสี่ยง/ธุรกิจอย่างเป็นทางการ — ดู [`04-open-items.md`](04-open-items.md) ข้อ 5)
 - ออกแบบให้ swap data provider ได้ง่าย (เช่น เปลี่ยนจาก public API เป็น self-hosted Electrs ภายหลัง)
 
 เทคโนโลยี: Rust, cron/scheduler, HTTP client
@@ -102,7 +108,7 @@ vault-workspace/
 | คนที่ 1 (หัวหน้าทีมเทคนิค) | vault-core: descriptor + key derivation | ควรเป็นคนที่แข็ง Rust ที่สุดในทีม เพราะโมดูลนี้เป็น dependency ของทุกคน ต้องเสร็จก่อนคนอื่นเริ่มงานจริงได้ |
 | คนที่ 2 | vault-core: PSBT + policy engine | ทำงานคู่กับคนที่ 1 ในโมดูลเดียวกัน เพราะ policy engine เป็นจุดเสี่ยงสูงสุด ควรมี 2 คนช่วยกันรีวิวโค้ดกันเอง |
 | คนที่ 3 | custody-service | ต้องรอ interface เบื้องต้นของ vault-core (สัปดาห์ 3-4) ถึงเริ่มต่อได้เต็มที่ ระหว่างนั้นออกแบบ API spec และ state machine ล่วงหน้าได้ |
-| คนที่ 4 | mobile-signer-ffi + demo app | เริ่มออกแบบ UI/UX และ mock UniFFI interface ได้ตั้งแต่เทอม 1 โดยไม่ต้องรอ vault-core เสร็จสมบูรณ์ |
+| คนที่ 4 | mobile-signer-ffi (mebit wallet 12 หน้าจอ) | **ขอบเขตใหญ่ที่สุดในทีมหลังนับรวม hot wallet เต็มรูปแบบ** — เริ่มออกแบบ UI/UX และ mock UniFFI interface ได้ตั้งแต่เทอม 1 โดยไม่ต้องรอ vault-core เสร็จสมบูรณ์ ควรโฟกัส MVP screens ก่อน (ดู 3.3) และรับความช่วยเหลือจากคนที่ 3/5 ในเทอม 2 |
 | คนที่ 5 | lender-signer-cli + monitor-service | สองโมดูลนี้เล็กกว่าโมดูลอื่น จึงมอบให้คนเดียวดูแลทั้งคู่ได้ เริ่ม monitor-service (ดึงราคา, คำนวณ LTV) ได้ตั้งแต่ต้นเทอม 1 เพราะไม่ต้องพึ่ง vault-core มาก |
 
 **หลักการแบ่งงาน**:
@@ -120,17 +126,17 @@ vault-workspace/
 | ช่วง | คนที่ 1-2 (vault-core) | คนที่ 3 (custody-service) | คนที่ 4 (mobile-signer-ffi) | คนที่ 5 (lender-cli + monitor) |
 |---|---|---|---|---|
 | สัปดาห์ 1-2 | ศึกษา Bitcoin script/PSBT/BIP-32-48 ร่วมกันทั้งทีม + เขียน design doc ของ policy engine | (ร่วมทั้งทีม) | (ร่วมทั้งทีม) | (ร่วมทั้งทีม) |
-| สัปดาห์ 3-6 | descriptor generation + key derivation + unit test | ออกแบบ API spec + state machine (ยังไม่ต่อ vault-core จริง) | ออกแบบ UI/UX + mock UniFFI interface | monitor-service: ดึงราคาผ่าน Esplora API, คำนวณ LTV เบื้องต้น |
-| สัปดาห์ 7-10 | PSBT construction/parsing + policy engine (จุดยากที่สุด) | ต่อ custody-service เข้ากับ vault-core interface จริง | เริ่มต่อ UniFFI binding จริงกับ vault-core | lender-signer-cli: ดึง PSBT + เซ็น offline เบื้องต้น |
-| สัปดาห์ 11-14 | ช่วย custody-service integration test + แก้ bug จาก policy engine | state machine เต็มรูปแบบ, integration test กับ vault-core บน testnet | demo app: onboarding + เปิด loan บน testnet | monitor-service: trigger margin call เบื้องต้น |
+| สัปดาห์ 3-6 | descriptor generation + key derivation + unit test | ออกแบบ API spec + state machine (ยังไม่ต่อ vault-core จริง) | ออกแบบหน้าจอตาม design mebit ทั้ง 12 หน้า (UI/UX) + mock UniFFI interface + เริ่ม hot wallet layer (address/UTXO ด้วย `bdk`) | monitor-service: ดึงราคาผ่าน Esplora API, คำนวณ LTV เบื้องต้น |
+| สัปดาห์ 7-10 | PSBT construction/parsing + policy engine (จุดยากที่สุด) | ต่อ custody-service เข้ากับ vault-core interface จริง | สร้าง MVP screens: onboarding, seed backup, Face ID, home, receive + เริ่มต่อ UniFFI binding จริงกับ vault-core | lender-signer-cli: ดึง PSBT + เซ็น offline เบื้องต้น |
+| สัปดาห์ 11-14 | ช่วย custody-service integration test + แก้ bug จาก policy engine | state machine เต็มรูปแบบ, integration test กับ vault-core บน testnet | MVP screens ต่อ: borrow (พร้อม risk preset 25/50/70%) + loan dashboard + เปิด loan จริงบน testnet | monitor-service: trigger margin call เบื้องต้น |
 | สัปดาห์ 15 | Demo กลางเทอม (ทั้งทีมร่วมสาธิต): เปิด loan → คืนหลักประกัน แบบ end-to-end บน testnet | | | |
 
 **เทอม 2 — ระบบครบวงจรและ liquidation**
 
 | ช่วง | คนที่ 1-2 (vault-core) | คนที่ 3 (custody-service) | คนที่ 4 (mobile-signer-ffi) | คนที่ 5 (lender-cli + monitor) |
 |---|---|---|---|---|
-| สัปดาห์ 1-4 | รองรับ PSBT ของ liquidation flow (partial spend + change) | ต่อ state machine รองรับ liquidation state | demo app: verification flow (challenge-response) + ตรวจสอบ vault บนบล็อกเชน | monitor-service: threshold margin call/liquidate เต็มรูปแบบ |
-| สัปดาห์ 5-8 | รีวิว policy engine ร่วมกับคนที่ 5 สำหรับกรณี liquidation | ต่อ custody-service กับ monitor-service (trigger liquidation) | เพิ่ม UI สำหรับดู margin call / liquidation status | lender-signer-cli: เซ็น PSBT liquidation แบบ offline เต็มรูปแบบ |
+| สัปดาห์ 1-4 | รองรับ PSBT ของ liquidation flow (partial spend + change) | ต่อ state machine รองรับ liquidation state | repay + success (ปิด MVP flow ครบ 9 หน้าตาม tappable prototype) + verification flow (challenge-response) | monitor-service: threshold margin call/liquidate เต็มรูปแบบ |
+| สัปดาห์ 5-8 | รีวิว policy engine ร่วมกับคนที่ 5 สำหรับกรณี liquidation | ต่อ custody-service กับ monitor-service (trigger liquidation) | activity (merge on-chain + loan events) + margin call/liquidation status บน UI, portfolio ถ้าเวลาเหลือ (stretch) | lender-signer-cli: เซ็น PSBT liquidation แบบ offline เต็มรูปแบบ |
 | สัปดาห์ 9-12 | Liquidation flow แบบเต็ม (คำนวณจำนวนขายบางส่วน, รวมลายเซ็น, broadcast) — ทำร่วมกันทั้งทีม | | | |
 | สัปดาห์ 13-14 | Security review: adversarial testing ต่อ policy engine ร่วมกันทั้งทีม (พยายาม "แฮ็ก" ให้เซ็นผิดวัตถุประสงค์) | | | |
 | สัปดาห์ 15 | Demo จบโครงการ (ทั้งทีมร่วมสาธิต): สาธิตทั้ง 3 โฟลว์ (repayment, liquidation, fallback) บน testnet ต่อหน้าอาจารย์และทีมบริษัท | | | |
@@ -143,7 +149,9 @@ vault-workspace/
 2. Policy engine ปฏิเสธ PSBT ที่ output ไม่ตรงกับเหตุผลที่อนุญาตได้ 100% ในชุดทดสอบ adversarial ที่ทีมหรือบริษัทออกแบบ
 3. Verification flow (challenge-response ตอนเปิด loan) ทำงานถูกต้อง ตรวจจับ pubkey ที่ derive ผิดได้
 4. Liquidation flow คำนวณจำนวน BTC ที่ต้องขายได้แม่นยำ (พอดีหนี้+buffer เท่านั้น ไม่ขายเกิน)
-5. เอกสารประกอบ: architecture doc, API spec, threat model สั้นๆ ของ policy engine
+5. แอปมือถือครบ MVP screens ตามดีไซน์ mebit อย่างน้อย: onboarding/seed backup, Face ID, home, receive, borrow (พร้อม risk preset), loan dashboard, repay, success — ทำงานจบ flow บน testnet จริง (ไม่ใช่ mockup นิ่งๆ)
+6. แอปมือถือส่ง/รับ/สร้างธุรกรรม BTC ทั่วไปได้จริงบน testnet ผ่าน node connectivity ของตัวเอง (ไม่ผ่าน backend) และสร้าง PSBT แบบ watch-only ได้อย่างน้อย 1 เคสสาธิต
+7. เอกสารประกอบ: architecture doc, API spec, threat model สั้นๆ ของ policy engine
 
 ---
 
