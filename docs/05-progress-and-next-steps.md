@@ -1,6 +1,6 @@
 # สถานะความคืบหน้าและสิ่งที่ต้องทำต่อ
 
-> อัปเดตล่าสุด: 2026-08-04 — เอกสารนี้เป็น living document ทีมควรอัปเดตทุกครั้งที่มี milestone ใหม่ อย่าปล่อยให้ล้าสมัยจนไม่ตรงกับโค้ดจริง (ตรวจสอบกับ `git log`/โค้ดจริงก่อนเชื่อว่าสถานะยังถูกต้อง)
+> อัปเดตล่าสุด: 2026-08-25 — เอกสารนี้เป็น living document ทีมควรอัปเดตทุกครั้งที่มี milestone ใหม่ อย่าปล่อยให้ล้าสมัยจนไม่ตรงกับโค้ดจริง (ตรวจสอบกับ `git log`/โค้ดจริงก่อนเชื่อว่าสถานะยังถูกต้อง)
 
 ภาพรวม ณ ตอนนี้: ทุกโมดูลมี **skeleton ที่ compile ผ่าน มี test ผ่าน และรันได้จริง** แต่ยังเป็นระบบจำลอง (mock) แทบทั้งหมด — ยังไม่มีการเชื่อมต่อ Bitcoin จริง, testnet จริง, หรือการเชื่อมต่อระหว่าง service แบบครบวงจร นี่คือจุดเริ่มต้นสำหรับทีม capstone ให้เข้ามาต่อยอดตาม timeline ใน [`00-capstone-brief.md`](00-capstone-brief.md) §4
 
@@ -9,13 +9,16 @@
 ## 1. vault-core (คนที่ 1-2) — จุดวิกฤตของโปรเจกต์
 
 **สถานะปัจจุบัน**
-- มี skeleton ครบ 4 ส่วน (`descriptor`, `derivation`, `psbt`, `policy`) เขียนด้วย Rust ล้วน **ยังไม่ได้ใช้ `bitcoin`/`miniscript` crate จริง** — ใช้ String/struct จำลองแทน pubkey, descriptor, PSBT
+- มี skeleton ครบ 4 ส่วน (`descriptor`, `derivation`, `psbt`, `policy`) เขียนด้วย Rust ล้วน — **ภายในยังเป็น String/struct จำลอง** แทน pubkey, descriptor, PSBT (ยังไม่ได้เปลี่ยนมาใช้ type จริงจาก `bitcoin`/`miniscript`)
 - `policy::PolicyEngine` เป็นส่วนที่ "จริง" ที่สุดในตอนนี้: บังคับ default-deny, ตรวจ address/amount/loan ตรงกันเป๊ะ มี unit test แบบ adversarial ผ่านครบ (ปฏิเสธ output ผิด, จำนวนผิด, loan ผิด, และเคสที่มี output ถูกต้องปนกับ output แอบขโมยมูลค่า)
-- รวม 11 test ผ่านหมด, compile สะอาด
+- **2026-08-25 — ก้าวแรกของ wallet-first pivot (M-of-N ใครก็ได้ แทน 2-of-3 role คงที่)**: เปิดใช้ `bitcoin = "0.32"` / `miniscript = "12"` ใน `Cargo.toml` แล้ว และเพิ่ม 2 module ใหม่คู่กับของเดิมโดย**ไม่แตะ logic เดิมเลย** — `keys` (data model กลาง: `VaultKey`, `KeySourceType`, `HwVendor` ใช้ `bitcoin::bip32::{Fingerprint, Xpub}` ของจริง) และ `hw` (placeholder เปล่า รอ Jade/Trezor client)
+- รวม 12 test ผ่านหมด (11 เดิม + 1 ใหม่ใน `keys`), compile สะอาด ไม่มี warning
 
 **สิ่งที่ต้องทำทั้งหมด**
 - [ ] ทีมอ่าน Bitcoin fundamentals (BIP-32/48, PSBT, multisig script) ให้จบก่อน — สัปดาห์ 1-2 (`.claude/skills/bitcoin-fundamentals/SKILL.md`)
-- [ ] เปิดใช้ `bitcoin`/`miniscript` crate จริง (คอมเมนต์ไว้ใน `Cargo.toml` แล้ว)
+- [x] เปิดใช้ `bitcoin`/`miniscript` crate จริงใน `Cargo.toml` (2026-08-25 — ยังใช้จริงแค่ใน `keys`)
+- [ ] `keys`: เพิ่มฟังก์ชัน derive จริง (ตอนนี้มีแค่ type) + ตัดสินใจว่า `derivation_path` ควรเป็น `String` หรือ `bitcoin::bip32::DerivationPath` — **รอ @munich** (เอกสาร `08-multisig-wallet-spec.md` ยังไม่อยู่ใน repo)
+- [ ] `hw`: Jade (QR) / Trezor Safe 7 (BLE) client — งานของ No.4/No.5
 - [ ] `descriptor`: สร้าง P2WSH 2-of-3 multisig descriptor จริงจาก pubkey จริงของ 3 ฝ่าย
 - [ ] `derivation`: derive child pubkey จริงตาม BIP-48 (`m/48'/0'/0'/2'`) จาก account xpub
 - [ ] `psbt`: สร้าง/parse PSBT จริงด้วย `bitcoin::Psbt`

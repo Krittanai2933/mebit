@@ -5,6 +5,6 @@ edition = "2024"
 
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
-# bitcoin = "0.32"        # rust-bitcoin — script, PSBT, key types
-# miniscript = "12"       # descriptor parsing/compilation, policy compilation
+bitcoin = "0.32"        # rust-bitcoin — script, PSBT, key types
+miniscript = "12"       # descriptor parsing/compilation, policy compilation
 # thiserror = "2"         # error types shared across the workspace

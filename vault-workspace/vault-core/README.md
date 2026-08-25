@@ -10,6 +10,8 @@
 - `derivation` — BIP-48 child pubkey derivation (`m/48'/0'/0'/2'`) from an account xpub
 - `psbt` — PSBT construction and validation
 - `policy` — verifies a PSBT's outputs match the reason it was submitted for signing, before any key signs it
+- `keys` — shared key data model (`VaultKey`/`KeySourceType`/`HwVendor`) for the M-of-N wallet-first pivot; real `bitcoin::bip32` types, no derivation logic yet
+- `hw` — empty placeholder for the Jade/Trezor hardware-wallet clients
 
 ## Why this is the critical path
 
@@ -27,4 +29,4 @@ cargo test -p vault-core
 
 Every module is a **simplified skeleton** right now: plain strings/structs stand in for real Bitcoin types (no actual script, keys, or signatures), but the public shapes and the policy engine's authorization logic are the real thing — `PolicyEngine::authorize` already enforces default-deny with adversarial tests for wrong address, wrong amount, wrong loan, and a legit output plus a siphoned extra output. `custody-service` and `lender-signer-cli` already depend on `psbt::UnsignedPsbt` and `policy::SigningReason` as their shared interchange format.
 
-Uncomment the `bitcoin` / `miniscript` dependencies in `Cargo.toml` once the team has read through `../../.claude/skills/bitcoin-fundamentals/SKILL.md` and picked exact crate versions, then swap the mock internals in `descriptor`/`derivation`/`psbt` for real ones — the function signatures shouldn't need to change much, and `policy`'s tests should keep passing against the real `Psbt` type with minimal edits.
+`bitcoin = "0.32"` / `miniscript = "12"` are enabled now, but only `keys` uses them — the next step is swapping the mock internals in `descriptor`/`derivation`/`psbt` for real ones — the function signatures shouldn't need to change much, and `policy`'s tests should keep passing against the real `Psbt` type with minimal edits.
