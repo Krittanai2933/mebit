@@ -10,7 +10,8 @@ export type Screen =
   | 'success'
   | 'activity'
   | 'portfolio'
-  | 'settings';
+  | 'settings'
+  | 'walletPlayground';
 
 export interface SuccessInfo {
   title: string;

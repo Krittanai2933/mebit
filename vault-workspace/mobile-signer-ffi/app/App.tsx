@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaView, StyleSheet } from 'react-native';
+import { Pressable, SafeAreaView, StyleSheet, Text } from 'react-native';
 
 import { Screen, SuccessInfo } from './src/types';
 import {
@@ -25,6 +25,7 @@ import { SuccessScreen } from './src/screens/SuccessScreen';
 import { ActivityScreen } from './src/screens/ActivityScreen';
 import { PortfolioScreen } from './src/screens/PortfolioScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
+import { ComponentPlaygroundScreen } from './src/screens/wallet/ComponentPlaygroundScreen';
 
 const NEW_CONTRACT_COLORS = ['#FCC330', '#4DB848', '#009B68', '#F8981C'];
 
@@ -32,8 +33,13 @@ const NEW_CONTRACT_COLORS = ['#FCC330', '#4DB848', '#009B68', '#F8981C'];
 // mirrors the tiny state machine the original mebit Claude Design prototype
 // used, see docs/design-notes.md. Good enough for a skeleton that's meant to
 // be played with, not shipped; swap in real navigation once screens multiply.
+// Temporarily defaulting to the wallet-first component playground for
+// design QA against the new Penpot mock — switch back to 'onboarding' once
+// the new screens replace the lending flow above.
+const INITIAL_SCREEN: Screen = 'walletPlayground';
+
 export default function App() {
-  const [screen, setScreen] = useState<Screen>('onboarding');
+  const [screen, setScreen] = useState<Screen>(INITIAL_SCREEN);
   const [vault, setVault] = useState<VaultState>(initialVaultState);
   const [selectedContractId, setSelectedContractId] = useState(initialVaultState.contracts[0].id);
   const [success, setSuccess] = useState<SuccessInfo | null>(null);
@@ -118,10 +124,33 @@ export default function App() {
         <PortfolioScreen vault={vault} onNavigate={setScreen} onSelectContract={setSelectedContractId} />
       )}
       {screen === 'settings' && <SettingsScreen onNavigate={setScreen} />}
+      {screen === 'walletPlayground' && (
+        <ComponentPlaygroundScreen onBack={() => setScreen('onboarding')} />
+      )}
+
+      {/* TEMPORARY: quick jump back into the wallet component playground from
+          any screen during design QA — remove once the playground is no
+          longer needed or is reachable some other way. */}
+      {screen !== 'walletPlayground' && (
+        <Pressable style={styles.playgroundFab} onPress={() => setScreen('walletPlayground')}>
+          <Text style={styles.playgroundFabLabel}>Playground</Text>
+        </Pressable>
+      )}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.mintTint },
+  playgroundFab: {
+    position: 'absolute',
+    right: 16,
+    bottom: 16,
+    backgroundColor: colors.green900,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    opacity: 0.85,
+  },
+  playgroundFabLabel: { color: colors.white, fontSize: 12, fontWeight: '700' },
 });
