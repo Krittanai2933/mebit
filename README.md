@@ -1,13 +1,17 @@
-# mebit — Bitcoin self-custody lending, capstone workspace
+# mebit — Bitcoin self-custody, capstone workspace
 
-A 2-of-3 multisig Bitcoin-collateralized lending system: a borrower deposits BTC, draws a THB loan against it, and no single party (borrower, platform, or lender) can move the collateral alone. Built as a university capstone project — 4 students, 2 semesters, one team owning the system end-to-end.
+A Bitcoin self-custody product for Thai users. Originally scoped as a 2-of-3 multisig lending system (borrower deposits BTC, draws a THB loan against it, no single party can move the collateral alone) — as of 2026-08-25 the priority flipped to **wallet-first**: ship general self-custody (M-of-N, any key holder) before buy-sell and lending. Lending is still a real leg of the product, layered on top of the wallet once it's proven. Built as a university capstone project — 4 students, 2 semesters, one team owning the system end-to-end.
 
 Start here:
 
-- **[`docs/00-capstone-brief.md`](docs/00-capstone-brief.md)** — the original, authoritative project brief (Thai). Read this first.
-- **[`docs/01-architecture.md`](docs/01-architecture.md)** — distilled English architecture reference.
-- **[`docs/02-roles-and-responsibilities.md`](docs/02-roles-and-responsibilities.md)** — who holds which key, who co-signs with whom and when (Thai).
-- **[`docs/03-flows.md`](docs/03-flows.md)** — step-by-step: onboarding, open loan, repayment, liquidation, fallback (Thai).
+- **[`docs/00-README.md`](docs/00-README.md)** — index of the full doc set, and what's current vs. lending-specific.
+- **[`docs/07-product-vision-mebit.md`](docs/07-product-vision-mebit.md)** — north star: the 3-leg product structure (wallet, buy-sell, lending), key model, app flow.
+- **[`docs/08-multisig-wallet-spec.md`](docs/08-multisig-wallet-spec.md)** — technical spec for the wallet: key-first data model, script types, hardware wallet support.
+- **[`docs/09-wallet-mvp-buildplan.md`](docs/09-wallet-mvp-buildplan.md)** — what's actually being built right now: stack decisions, phase 0-3.
+- **[`docs/00-capstone-brief.md`](docs/00-capstone-brief.md)** — the original, authoritative *lending-leg* brief (Thai).
+- **[`docs/01-architecture.md`](docs/01-architecture.md)** — distilled English architecture reference for the lending leg.
+- **[`docs/02-roles-and-responsibilities.md`](docs/02-roles-and-responsibilities.md)** — who holds which key, who co-signs with whom and when (Thai, lending leg).
+- **[`docs/03-flows.md`](docs/03-flows.md)** — step-by-step: onboarding, open loan, repayment, liquidation, fallback (Thai, lending leg).
 - **[`docs/04-open-items.md`](docs/04-open-items.md)** — design/business decisions not yet finalized — check before assuming a number or rule is locked in (Thai).
 - **[`docs/design-notes.md`](docs/design-notes.md)** — the borrower app's UI/flow reference (from the `mebit` mobile app design), for the `mobile-signer-ffi` team.
 - **[`docs/05-progress-and-next-steps.md`](docs/05-progress-and-next-steps.md)** — current status and full to-do list per module (Thai). Update this as milestones land — it's a living document, not a snapshot.
@@ -19,7 +23,7 @@ mebit/
 ├── docs/                 # brief, architecture, design notes — read these first
 ├── design-reference/     # mebit/Mapboss design tokens + logos for the mobile app
 ├── vault-workspace/      # the actual system — 5 Rust crates (some modules share an owner, see Team split)
-│   ├── vault-core/           # descriptor, key derivation, PSBT, policy engine — the critical path
+│   ├── vault-core/           # descriptor, key derivation, PSBT, policy engine, + keys/hw (wallet-first pivot) — the critical path
 │   ├── custody-service/      # platform-side gRPC/REST + signing-request state machine
 │   ├── mobile-signer-ffi/    # borrower app: hot wallet (bdk) + UniFFI vault signer, two layers in one
 │   ├── lender-signer-cli/    # offline signing CLI for the lender/fund rep
