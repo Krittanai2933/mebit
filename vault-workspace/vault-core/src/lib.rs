@@ -11,6 +11,8 @@
 //! has been through `.claude/skills/bitcoin-fundamentals/SKILL.md`, without
 //! needing to change these public signatures much.
 
+pub mod error;
+
 pub mod descriptor {
     //! Builds the P2WSH 2-of-3 multisig output descriptor from the borrower,
     //! platform, and lender pubkeys. See `docs/00-capstone-brief.md` §3.1.
@@ -43,7 +45,10 @@ pub mod descriptor {
             parties.borrower, parties.platform, parties.lender
         );
         let address = format!("tb1q{:x}", mock_hash(&descriptor));
-        VaultDescriptor { descriptor, address }
+        VaultDescriptor {
+            descriptor,
+            address,
+        }
     }
 
     fn mock_hash(s: &str) -> u64 {
@@ -146,8 +151,16 @@ pub mod psbt {
         pub outputs: Vec<PsbtOutput>,
     }
 
-    pub fn build_psbt(loan_id: impl Into<String>, inputs: Vec<String>, outputs: Vec<PsbtOutput>) -> UnsignedPsbt {
-        UnsignedPsbt { loan_id: loan_id.into(), inputs, outputs }
+    pub fn build_psbt(
+        loan_id: impl Into<String>,
+        inputs: Vec<String>,
+        outputs: Vec<PsbtOutput>,
+    ) -> UnsignedPsbt {
+        UnsignedPsbt {
+            loan_id: loan_id.into(),
+            inputs,
+            outputs,
+        }
     }
 
     #[cfg(test)]
@@ -159,7 +172,10 @@ pub mod psbt {
             let psbt = build_psbt(
                 "loan-1",
                 vec!["utxo:0".into()],
-                vec![PsbtOutput { address: "tb1qborrower".into(), amount_sats: 100_000 }],
+                vec![PsbtOutput {
+                    address: "tb1qborrower".into(),
+                    amount_sats: 100_000,
+                }],
             );
             assert_eq!(psbt.loan_id, "loan-1");
             assert_eq!(psbt.outputs.len(), 1);
@@ -220,7 +236,10 @@ pub mod policy {
         /// Authorizes `psbt` against `context`. Default-deny: anything that
         /// isn't *exactly* one output paying the expected address the
         /// expected amount, for the expected loan, is rejected.
-        pub fn authorize(psbt: &UnsignedPsbt, context: &LoanContext) -> Result<(), PolicyViolation> {
+        pub fn authorize(
+            psbt: &UnsignedPsbt,
+            context: &LoanContext,
+        ) -> Result<(), PolicyViolation> {
             if psbt.loan_id != context.loan_id {
                 return Err(PolicyViolation::WrongLoan);
             }
@@ -229,7 +248,9 @@ pub mod policy {
                 [out] if out.address != context.expected_output_address => {
                     Err(PolicyViolation::WrongOutputAddress)
                 }
-                [out] if out.amount_sats != context.expected_amount_sats => Err(PolicyViolation::WrongAmount),
+                [out] if out.amount_sats != context.expected_amount_sats => {
+                    Err(PolicyViolation::WrongAmount)
+                }
                 [_out] => Ok(()),
                 _ => Err(PolicyViolation::UnexpectedExtraOutput),
             }
@@ -251,14 +272,21 @@ pub mod policy {
         }
 
         fn psbt_with_outputs(loan_id: &str, outputs: Vec<PsbtOutput>) -> UnsignedPsbt {
-            UnsignedPsbt { loan_id: loan_id.into(), inputs: vec!["utxo:0".into()], outputs }
+            UnsignedPsbt {
+                loan_id: loan_id.into(),
+                inputs: vec!["utxo:0".into()],
+                outputs,
+            }
         }
 
         #[test]
         fn authorizes_exact_match() {
             let psbt = psbt_with_outputs(
                 "loan-1",
-                vec![PsbtOutput { address: "tb1qborrower".into(), amount_sats: 100_000 }],
+                vec![PsbtOutput {
+                    address: "tb1qborrower".into(),
+                    amount_sats: 100_000,
+                }],
             );
             assert_eq!(PolicyEngine::authorize(&psbt, &context()), Ok(()));
         }
@@ -267,7 +295,10 @@ pub mod policy {
         fn rejects_wrong_output_address() {
             let psbt = psbt_with_outputs(
                 "loan-1",
-                vec![PsbtOutput { address: "tb1qattacker".into(), amount_sats: 100_000 }],
+                vec![PsbtOutput {
+                    address: "tb1qattacker".into(),
+                    amount_sats: 100_000,
+                }],
             );
             assert_eq!(
                 PolicyEngine::authorize(&psbt, &context()),
@@ -279,18 +310,30 @@ pub mod policy {
         fn rejects_wrong_amount() {
             let psbt = psbt_with_outputs(
                 "loan-1",
-                vec![PsbtOutput { address: "tb1qborrower".into(), amount_sats: 999_999 }],
+                vec![PsbtOutput {
+                    address: "tb1qborrower".into(),
+                    amount_sats: 999_999,
+                }],
             );
-            assert_eq!(PolicyEngine::authorize(&psbt, &context()), Err(PolicyViolation::WrongAmount));
+            assert_eq!(
+                PolicyEngine::authorize(&psbt, &context()),
+                Err(PolicyViolation::WrongAmount)
+            );
         }
 
         #[test]
         fn rejects_wrong_loan() {
             let psbt = psbt_with_outputs(
                 "loan-2",
-                vec![PsbtOutput { address: "tb1qborrower".into(), amount_sats: 100_000 }],
+                vec![PsbtOutput {
+                    address: "tb1qborrower".into(),
+                    amount_sats: 100_000,
+                }],
             );
-            assert_eq!(PolicyEngine::authorize(&psbt, &context()), Err(PolicyViolation::WrongLoan));
+            assert_eq!(
+                PolicyEngine::authorize(&psbt, &context()),
+                Err(PolicyViolation::WrongLoan)
+            );
         }
 
         #[test]
@@ -298,8 +341,14 @@ pub mod policy {
             let psbt = psbt_with_outputs(
                 "loan-1",
                 vec![
-                    PsbtOutput { address: "tb1qborrower".into(), amount_sats: 100_000 },
-                    PsbtOutput { address: "tb1qattacker".into(), amount_sats: 50_000 },
+                    PsbtOutput {
+                        address: "tb1qborrower".into(),
+                        amount_sats: 100_000,
+                    },
+                    PsbtOutput {
+                        address: "tb1qattacker".into(),
+                        amount_sats: 50_000,
+                    },
                 ],
             );
             assert_eq!(
