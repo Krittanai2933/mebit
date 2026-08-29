@@ -34,6 +34,7 @@ pub enum SeedGenerationError {
     SeedFailure,
 }
 
+#[derive(Debug)]
 pub enum DerivedError {
     DerivedPath,
     DerivedXprivError,
@@ -57,7 +58,7 @@ pub fn generate_seed(
     mnemonic: &Mnemonic,
     passphrase: &str,
 ) -> Result<[u8; 64], SeedGenerationError> {
-    // Entropy -> Mnemonic
+    // Mnemonic + Passphrase -> Seed
     Ok(mnemonic.to_seed(passphrase))
 }
 
@@ -66,6 +67,10 @@ fn coin_type(network: Network) -> ChildNumber {
         Network::Bitcoin => ChildNumber::from_hardened_idx(0).unwrap(), // mainnet
         _ => ChildNumber::from_hardened_idx(1).unwrap(),                // testnet/signet/regtest
     }
+}
+
+pub fn generate_master_xpriv(network: Network, seed: &[u8; 64]) -> Result<Xpriv, DerivedError> {
+    Ok(Xpriv::new_master(network, seed).map_err(|_| DerivedError::DerivedXprivError)?)
 }
 
 /// แปลง mnemonic (+ passphrase optional) เป็น master seed แล้ว derive account-level xpub
@@ -86,7 +91,7 @@ pub fn account_xpub_from_mnemonic(
     ]);
 
     let master_xpriv =
-        Xpriv::new_master(network, &seed).map_err(|_| DerivedError::DerivedXprivError)?;
+        generate_master_xpriv(network, &seed).map_err(|_| DerivedError::DerivedXprivError)?;
     let account_xpriv = master_xpriv
         .derive_priv(&secp, &path)
         .map_err(|_| DerivedError::DerivedXprivError)?;
@@ -180,7 +185,7 @@ mod tests {
 
             let mnemonic = generate_mnemonic(&entropy).unwrap();
             let seed = generate_seed(&mnemonic, "TREZOR").unwrap();
-            let xprv = Xpriv::new_master(Network::Bitcoin, &seed).unwrap();
+            let xprv = generate_master_xpriv(Network::Bitcoin, &seed).unwrap();
 
             assert_eq!(
                 mnemonic.to_string(),
