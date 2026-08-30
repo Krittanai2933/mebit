@@ -1,3 +1,31 @@
+//! Key generation and BIP-48 account derivation.
+//!
+//! # Memory hygiene — what the zeroize work here does and does not buy
+//!
+//! It buys: the entropy and seed this module *owns* are wiped on drop, and
+//! bip39's `zeroize` feature gives `Mnemonic` `ZeroizeOnDrop`. The master
+//! `Xpriv` this module holds is volatile-erased once it has been derived from.
+//!
+//! Three copy sites remain that cannot be closed from here:
+//!
+//! 1. `Mnemonic` and `to_seed` both return by value. A Rust move is a memcpy and
+//!    copy elision is an optimization, not a guarantee, so a source copy may
+//!    survive un-wiped.
+//! 2. `Xpriv` is `#[derive(Copy)]` in rust-bitcoin, and `derive_priv` copies it
+//!    once per path level. The private keys themselves are therefore duplicated
+//!    inside a crate we do not control, and no `Drop` impl can catch that. Those
+//!    copies all live in callee frames that are popped and clobbered by the next
+//!    call at that depth, which is why the one binding we own is worth erasing
+//!    and they are not reachable.
+//! 3. zeroize's own docs note that stack spilling may leave temporaries anyway.
+//!
+//! So treat this as defense in depth, not a guarantee. It defends against reads
+//! *after* the fact — a core dump, swap, a memory-disclosure bug — never against
+//! an attacker reading memory while these functions run. The boundary that
+//! actually matters next is UniFFI (No.8): crossing it serializes secrets into
+//! buffers that are never zeroized, so onboarding should cross it once, not once
+//! per step.
+
 use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, Xpub};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -22,33 +50,13 @@ pub struct VaultKey {
     pub derivation_path: String, // เช่น "m/48'/1'/0'/2'"
 }
 
-// vault-workspace/vault-core/src/keys.rs (เพิ่มเข้าไปในไฟล์เดิมจาก No.1)
-use bip39::Mnemonic; // เพิ่ม dependency ใหม่ใน Cargo.toml — ยังไม่มีในนี้ตอนนี้
+use bip39::Mnemonic;
 use bitcoin::Network;
 use bitcoin::bip32::Xpriv;
 
 use zeroize::Zeroizing;
 
 use crate::error::VaultCoreError;
-
-// Memory hygiene — what the zeroize work below does and does not buy.
-//
-// It buys: the entropy and seed this module *owns* are wiped on drop, and
-// bip39's `zeroize` feature gives `Mnemonic` `ZeroizeOnDrop`.
-//
-// Three copy sites remain that cannot be closed from here:
-//
-// 1. `Mnemonic` and `to_seed` both return by value. A Rust move is a memcpy and
-//    copy elision is an optimization, not a guarantee, so a source copy may
-//    survive un-wiped.
-// 2. `Xpriv` is `#[derive(Copy)]` in rust-bitcoin, and `derive_priv` copies it
-//    once per path level. The private keys themselves are therefore duplicated
-//    inside a crate we do not control, and no `Drop` impl can catch that.
-// 3. zeroize's own docs note that stack spilling may leave temporaries anyway.
-//
-// So treat this as defense in depth, not a guarantee. The boundary that actually
-// matters next is UniFFI (No.8): crossing it serializes secrets into buffers that
-// are never zeroized, so onboarding should cross it once, not once per step.
 
 /// สร้าง mnemonic ใหม่จาก entropy ที่ปลอดภัย (OS CSPRNG) — ผู้เรียกต้องแสดงให้ผู้ใช้ backup
 /// แล้วทำลายทิ้งจาก memory ทันทีหลังส่งต่อให้ secure storage (No.9.5) เก็บ ไม่ค้างไว้ใน state นานๆ
@@ -83,6 +91,10 @@ fn coin_type(network: Network) -> ChildNumber {
     }
 }
 
+/// **Caller contract:** this returns the *master* key — strictly more sensitive than
+/// an account key, since it reconstructs every account on every network. Erase it with
+/// `.private_key.non_secure_erase()` as soon as you have derived what you need, the way
+/// `account_xpub_from_mnemonic` does. `Xpriv` is `Copy`, so nothing enforces this.
 pub fn generate_master_xpriv(network: Network, seed: &[u8; 64]) -> Result<Xpriv, VaultCoreError> {
     Ok(Xpriv::new_master(network, seed)?)
 }
@@ -94,7 +106,7 @@ pub fn generate_master_xpriv(network: Network, seed: &[u8; 64]) -> Result<Xpriv,
 /// and drop it immediately. This crate cannot wipe it for you — `Xpriv` is
 /// `#[derive(Copy)]` in rust-bitcoin, so it is duplicated implicitly on every move
 /// and no `Drop` impl can catch those copies. Documentation, not enforcement.
-/// The intermediate seed *is* wiped here.
+/// The intermediate seed and master `Xpriv` *are* wiped here.
 pub fn account_xpub_from_mnemonic(
     mnemonic: &Mnemonic,
     passphrase: &str,
@@ -110,8 +122,14 @@ pub fn account_xpub_from_mnemonic(
         ChildNumber::from_hardened_idx(account)?,
     ]);
 
-    let master_xpriv = generate_master_xpriv(network, &seed)?;
+    let mut master_xpriv = generate_master_xpriv(network, &seed)?;
     let account_xpriv = master_xpriv.derive_priv(&secp, &path)?;
+    // Best effort: a volatile write over the one master-key copy we own, and the only
+    // one that outlives this frame — the copies inside new_master/derive_priv/ckd_priv
+    // sit in callee frames that are popped and clobbered by the next call. Skipped on
+    // the `?` above; derive_priv only fails on a negligible tweak failure here, since
+    // both indices are already known-valid hardened numbers.
+    master_xpriv.private_key.non_secure_erase();
 
     let account_xpub = Xpub::from_priv(&secp, &account_xpriv);
 
@@ -126,6 +144,15 @@ mod tests {
 
     use super::*;
 
+    /// Provenance, per column: entropy / mnemonic / seed / master xprv are the
+    /// canonical BIP-39 English vectors with passphrase "TREZOR". The account xpub
+    /// is not — no published vector set covers m/48'/0'/0' — so each one was produced
+    /// by importing that row's master xprv into Sparrow, setting the path to
+    /// m/48'/0'/0', and copying the xpub back out.
+    ///
+    /// That makes this a cross-implementation check, not a snapshot of our own output:
+    /// Sparrow derives with drongo, we derive with rust-bitcoin. Regenerate the same
+    /// way if a row ever needs to change — never by pasting what this code prints.
     #[test]
     fn bip39_and_bip48_account_vectors() {
         let vectors = [
