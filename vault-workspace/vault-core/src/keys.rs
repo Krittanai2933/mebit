@@ -27,14 +27,38 @@ use bip39::Mnemonic; // เพิ่ม dependency ใหม่ใน Cargo.toml
 use bitcoin::Network;
 use bitcoin::bip32::Xpriv;
 
+use zeroize::Zeroizing;
+
 use crate::error::VaultCoreError;
+
+// Memory hygiene — what the zeroize work below does and does not buy.
+//
+// It buys: the entropy and seed this module *owns* are wiped on drop, and
+// bip39's `zeroize` feature gives `Mnemonic` `ZeroizeOnDrop`.
+//
+// Three copy sites remain that cannot be closed from here:
+//
+// 1. `Mnemonic` and `to_seed` both return by value. A Rust move is a memcpy and
+//    copy elision is an optimization, not a guarantee, so a source copy may
+//    survive un-wiped.
+// 2. `Xpriv` is `#[derive(Copy)]` in rust-bitcoin, and `derive_priv` copies it
+//    once per path level. The private keys themselves are therefore duplicated
+//    inside a crate we do not control, and no `Drop` impl can catch that.
+// 3. zeroize's own docs note that stack spilling may leave temporaries anyway.
+//
+// So treat this as defense in depth, not a guarantee. The boundary that actually
+// matters next is UniFFI (No.8): crossing it serializes secrets into buffers that
+// are never zeroized, so onboarding should cross it once, not once per step.
 
 /// สร้าง mnemonic ใหม่จาก entropy ที่ปลอดภัย (OS CSPRNG) — ผู้เรียกต้องแสดงให้ผู้ใช้ backup
 /// แล้วทำลายทิ้งจาก memory ทันทีหลังส่งต่อให้ secure storage (No.9.5) เก็บ ไม่ค้างไว้ใน state นานๆ
-pub fn generate_entropy() -> Result<[u8; 32], VaultCoreError> {
+///
+/// `Zeroizing` wipes the bytes when the caller drops them. Note that `Zeroizing`
+/// derives `Debug` and prints what it wraps, so never Debug-print one of these.
+pub fn generate_entropy() -> Result<Zeroizing<[u8; 32]>, VaultCoreError> {
     // create entropy
-    let mut entropy = [0u8; 32];
-    getrandom::fill(&mut entropy)?;
+    let mut entropy = Zeroizing::new([0u8; 32]);
+    getrandom::fill(&mut *entropy)?;
     Ok(entropy)
 }
 
@@ -45,8 +69,11 @@ pub fn generate_mnemonic(entropy: &[u8; 32]) -> Result<Mnemonic, VaultCoreError>
 
 /// Mnemonic + Passphrase -> Seed. Infallible: `to_seed` is just PBKDF2 over an
 /// already-validated `Mnemonic`, so there is nothing left to reject here.
-pub fn generate_seed(mnemonic: &Mnemonic, passphrase: &str) -> [u8; 64] {
-    mnemonic.to_seed(passphrase)
+///
+/// Wiped on drop, with one gap we can't close: `to_seed` hands back a `[u8; 64]`
+/// by value, so the temporary this wraps is itself an un-wiped copy.
+pub fn generate_seed(mnemonic: &Mnemonic, passphrase: &str) -> Zeroizing<[u8; 64]> {
+    Zeroizing::new(mnemonic.to_seed(passphrase))
 }
 
 fn coin_type(network: Network) -> ChildNumber {
@@ -62,6 +89,12 @@ pub fn generate_master_xpriv(network: Network, seed: &[u8; 64]) -> Result<Xpriv,
 
 /// แปลง mnemonic (+ passphrase optional) เป็น master seed แล้ว derive account-level xpub
 /// ที่ path m/48'/coin_type'/account' (3 hardened element แรกตาม BIP-48 ก่อนถึง script_type ที่ No.2 จะ derive ต่อ)
+///
+/// **Caller contract for the returned `Xpriv`:** hand it to secure storage (No.9.5)
+/// and drop it immediately. This crate cannot wipe it for you — `Xpriv` is
+/// `#[derive(Copy)]` in rust-bitcoin, so it is duplicated implicitly on every move
+/// and no `Drop` impl can catch those copies. Documentation, not enforcement.
+/// The intermediate seed *is* wiped here.
 pub fn account_xpub_from_mnemonic(
     mnemonic: &Mnemonic,
     passphrase: &str,
@@ -193,7 +226,7 @@ mod tests {
                 expected_mnemonic,
                 "entropy: {entropy_hex}"
             );
-            assert_eq!(seed, expected_seed, "entropy: {entropy_hex}");
+            assert_eq!(*seed, expected_seed, "entropy: {entropy_hex}");
             assert_eq!(xprv.to_string(), expected_xprv, "entropy: {entropy_hex}");
 
             let (account_xpriv, account_xpub) =

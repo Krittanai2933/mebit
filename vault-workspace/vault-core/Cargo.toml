@@ -7,6 +7,7 @@ edition = "2024"
 serde = { version = "1.0.229", features = ["derive"] }
 bitcoin = "0.32"        # rust-bitcoin — script, PSBT, key types
 miniscript = "12"       # descriptor parsing/compilation, policy compilation
-bip39 = "2.2.2"
+bip39 = { version = "2.2.2", features = ["zeroize"] }
 getrandom = "0.4.3"
+zeroize = "1"           # wipe entropy/seed on drop — see keys.rs
 thiserror = "2"         # error types shared across the workspace
