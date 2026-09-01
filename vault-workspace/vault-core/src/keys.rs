@@ -170,7 +170,7 @@ impl ScriptType {
     }
 }
 
-pub fn account_mutisig_xpub_from_mnemonic(
+pub fn account_multisig_xpub_from_mnemonic(
     mnemonic: &Mnemonic,
     passphrase: &str,
     network: Network,
@@ -356,7 +356,7 @@ mod tests {
         }
 
         let path = "m/48'/0'/0'/2'";
-        let (account_xpriv, account_xpub) = account_mutisig_xpub_from_mnemonic(
+        let (account_xpriv, account_xpub) = account_multisig_xpub_from_mnemonic(
             &mnemonic,
             "TREZOR",
             Network::Bitcoin,
