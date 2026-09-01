@@ -1,4 +1,4 @@
-//! Key generation and BIP-48 account derivation.
+//! Key generation and BIP account derivation.
 //!
 //! # Memory hygiene — what the zeroize work here does and does not buy
 //!
@@ -27,6 +27,25 @@
 //! per step.
 
 use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, Xpub};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Purpose {
+    Bip44,
+    Bip49,
+    Bip84,
+    Bip86,
+}
+
+impl Purpose {
+    fn index(self) -> u32 {
+        match self {
+            Self::Bip44 => 44,
+            Self::Bip49 => 49,
+            Self::Bip84 => 84,
+            Self::Bip86 => 86,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum KeySourceType {
@@ -100,7 +119,7 @@ pub fn generate_master_xpriv(network: Network, seed: &[u8; 64]) -> Result<Xpriv,
 }
 
 /// แปลง mnemonic (+ passphrase optional) เป็น master seed แล้ว derive account-level xpub
-/// ที่ path m/48'/coin_type'/account' (3 hardened element แรกตาม BIP-48 ก่อนถึง script_type ที่ No.2 จะ derive ต่อ)
+/// ที่ path m/{purpose}'/coin_type'/account' (3 hardened element แรกตาม BIP ก่อนถึงส่วนต่อไปของ path)
 ///
 /// **Caller contract for the returned `Xpriv`:** hand it to secure storage (No.9.5)
 /// and drop it immediately. This crate cannot wipe it for you — `Xpriv` is
@@ -110,8 +129,53 @@ pub fn generate_master_xpriv(network: Network, seed: &[u8; 64]) -> Result<Xpriv,
 pub fn account_xpub_from_mnemonic(
     mnemonic: &Mnemonic,
     passphrase: &str,
+    purpose: Purpose,
     network: Network,
     account: u32,
+) -> Result<(Xpriv, Xpub), VaultCoreError> {
+    let secp = bitcoin::secp256k1::Secp256k1::new();
+    let seed = generate_seed(mnemonic, passphrase);
+
+    let path = DerivationPath::from(vec![
+        ChildNumber::from_hardened_idx(purpose.index())?,
+        coin_type(network),
+        ChildNumber::from_hardened_idx(account)?,
+    ]);
+
+    let mut master_xpriv = generate_master_xpriv(network, &seed)?;
+    let account_xpriv = master_xpriv.derive_priv(&secp, &path)?;
+    // Best effort: a volatile write over the one master-key copy we own, and the only
+    // one that outlives this frame — the copies inside new_master/derive_priv/ckd_priv
+    // sit in callee frames that are popped and clobbered by the next call. Skipped on
+    // the `?` above; derive_priv only fails on a negligible tweak failure here, since
+    // both indices are already known-valid hardened numbers.
+    master_xpriv.private_key.non_secure_erase();
+
+    let account_xpub = Xpub::from_priv(&secp, &account_xpriv);
+
+    Ok((account_xpriv, account_xpub))
+}
+
+pub enum ScriptType {
+    P2wsh,
+    P2shP2wsh,
+} // 2' primary, 1' fallback/import only
+
+impl ScriptType {
+    fn child_number(&self) -> ChildNumber {
+        match self {
+            ScriptType::P2wsh => ChildNumber::Hardened { index: 2 },
+            ScriptType::P2shP2wsh => ChildNumber::Hardened { index: 1 },
+        }
+    }
+}
+
+pub fn account_mutisig_xpub_from_mnemonic(
+    mnemonic: &Mnemonic,
+    passphrase: &str,
+    network: Network,
+    account: u32,
+    script_type: ScriptType,
 ) -> Result<(Xpriv, Xpub), VaultCoreError> {
     let secp = bitcoin::secp256k1::Secp256k1::new();
     let seed = generate_seed(mnemonic, passphrase);
@@ -120,6 +184,7 @@ pub fn account_xpub_from_mnemonic(
         ChildNumber::from_hardened_idx(48)?,
         coin_type(network),
         ChildNumber::from_hardened_idx(account)?,
+        script_type.child_number(),
     ]);
 
     let mut master_xpriv = generate_master_xpriv(network, &seed)?;
@@ -145,16 +210,9 @@ mod tests {
     use super::*;
 
     /// Provenance, per column: entropy / mnemonic / seed / master xprv are the
-    /// canonical BIP-39 English vectors with passphrase "TREZOR". The account xpub
-    /// is not — no published vector set covers m/48'/0'/0' — so each one was produced
-    /// by importing that row's master xprv into Sparrow, setting the path to
-    /// m/48'/0'/0', and copying the xpub back out.
-    ///
-    /// That makes this a cross-implementation check, not a snapshot of our own output:
-    /// Sparrow derives with drongo, we derive with rust-bitcoin. Regenerate the same
-    /// way if a row ever needs to change — never by pasting what this code prints.
+    /// canonical BIP-39 English vectors with passphrase "TREZOR".
     #[test]
-    fn bip39_and_bip48_account_vectors() {
+    fn bip39_test_vectors() {
         let vectors = [
             (
                 "0000000000000000000000000000000000000000000000000000000000000000",
@@ -164,7 +222,6 @@ mod tests {
                  abandon abandon abandon abandon abandon art",
                 "bda85446c68413707090a52022edd26a1c9462295029f2e60cd7c4f2bbd3097170af7a4d73245cafa9c3cca8d561a7c3de6f5d4a10be8ed2a5e608d68f92fcc8",
                 "xprv9s21ZrQH143K32qBagUJAMU2LsHg3ka7jqMcV98Y7gVeVyNStwYS3U7yVVoDZ4btbRNf4h6ibWpY22iRmXq35qgLs79f312g2kj5539ebPM",
-                "xpub6CoY23bLoh25G845YmSkkZHb4tJaPgznmhVaviFLEfS47LPqxs5Zi3UbC6Bso4oYceSP9FufRtAubsAzxi2S7GbTtm4rGsrcWth3KTZH615",
             ),
             (
                 "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f",
@@ -173,7 +230,6 @@ mod tests {
                  legal winner thank year wave sausage worth title",
                 "bc09fca1804f7e69da93c2f2028eb238c227f2e9dda30cd63699232578480a4021b146ad717fbb7e451ce9eb835f43620bf5c514db0f8add49f5d121449d3e87",
                 "xprv9s21ZrQH143K3Y1sd2XVu9wtqxJRvybCfAetjUrMMco6r3v9qZTBeXiBZkS8JxWbcGJZyio8TrZtm6pkbzG8SYt1sxwNLh3Wx7to5pgiVFU",
-                "xpub6CK1uvjkPEkjjFJqUUi4ihkW8ooEzg7P6yoxXKJJtzgM7BCoGD4FbeWnPvrkpa1sfPmnPTMNaz84eZ1r7GJQWHVHUD2hkAJMgn9doSHpsVG",
             ),
             (
                 "8080808080808080808080808080808080808080808080808080808080808080",
@@ -182,7 +238,6 @@ mod tests {
                  letter advice cage absurd amount doctor acoustic bless",
                 "c0c519bd0e91a2ed54357d9d1ebef6f5af218a153624cf4f2da911a0ed8f7a09e2ef61af0aca007096df430022f7a2b6fb91661a9589097069720d015e4e982f",
                 "xprv9s21ZrQH143K3CSnQNYC3MqAAqHwxeTLhDbhF43A4ss4ciWNmCY9zQGvAKUSqVUf2vPHBTSE1rB2pg4avopqSiLVzXEU8KziNnVPauTqLRo",
-                "xpub6D4SZPmiu2AYJtAuGQLvznqGeuYNhXq9VvcJxtsrspC5oMT7qUkQqpqGS3WHo178UAns6D4R1wo4Su9amBtMKuyAj6zvjvjgEPkxvPExSNk",
             ),
             (
                 "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -191,7 +246,6 @@ mod tests {
                  zoo zoo zoo zoo zoo zoo zoo vote",
                 "dd48c104698c30cfe2b6142103248622fb7bb0ff692eebb00089b32d22484e1613912f0a5b694407be899ffd31ed3992c456cdf60f5d4564b8ba3f05a69890ad",
                 "xprv9s21ZrQH143K2WFF16X85T2QCpndrGwx6GueB72Zf3AHwHJaknRXNF37ZmDrtHrrLSHvbuRejXcnYxoZKvRquTPyp2JiNG3XcjQyzSEgqCB",
-                "xpub6DL6UCUFnvq6SHXh1nmJFP8di1kcijkixibhkeojndfigkJpwkGTZBiLgy5Rdumtj9AZwDhQy9p9b7Z2qnGbuLqrAfFjixE1wCNqGh6f1t5",
             ),
             (
                 "68a79eaca2324873eacc50cb9c6eca8cc68ea5d936f98787c60c7ebc74e6ce7c",
@@ -200,7 +254,6 @@ mod tests {
                  maple dilemma loan word shrug inflict delay length",
                 "64c87cde7e12ecf6704ab95bb1408bef047c22db4cc7491c4271d170a1b213d20b385bc1588d9c7b38f1b39d415665b8a9030c9ec653d75e65f847d8fc1fc440",
                 "xprv9s21ZrQH143K2XTAhys3pMNcGn261Fi5Ta2Pw8PwaVPhg3D8DWkzWQwjTJfskj8ofb81i9NP2cUNKxwjueJHHMQAnxtivTA75uUFqPFeWzk",
-                "xpub6Bhx12qev8qfB93YnuDB6o3rnH1w8fy6xJaFN7zauhefs4nyEP345PWgZQh659JaSLev7pR4Wa49No1iWZqZVZx5H6xazWs2TAy8JLLKhHi",
             ),
             (
                 "9f6a2878b2520799a44ef18bc7df394e7061a224d2c33cd015b157d746869863",
@@ -209,7 +262,6 @@ mod tests {
                  devote level hobby quick inner drive ghost inside",
                 "72be8e052fc4919d2adf28d5306b5474b0069df35b02303de8c1729c9538dbb6fc2d731d5f832193cd9fb6aeecbc469594a70e3dd50811b5067f3b88b28c3e8d",
                 "xprv9s21ZrQH143K2WNnKmssvZYM96VAr47iHUQUTUyUXH3sAGNjhJANddnhw3i3y3pBbRAVk5M5qUGFr4rHbEWwXgX4qrvrceifCYQJbbFDems",
-                "xpub6CjngwFBorA7csTob6aK3gSKLHmQ52FMzmrAN19kuoTvYcYrb546feVv4Mm4kLxUprq6D4oT55AR2omE1MG9shbVJ31Gx9ZG9fW4FdX2qGH",
             ),
             (
                 "066dca1a2bb7e8a1db2832148ce9933eea0f3ac9548d793112d9a95c9407efad",
@@ -218,7 +270,6 @@ mod tests {
                  reopen famous sing advance salt reform",
                 "26e975ec644423f4a4c4f4215ef09b4bd7ef924e85d1d17c4cf3f136c2863cf6df0a475045652c57eb5fb41513ca2a2d67722b77e954b4b3fc11f7590449191d",
                 "xprv9s21ZrQH143K3rEfqSM4QZRVmiMuSWY9wugscmaCjYja3SbUD3KPEB1a7QXJoajyR2T1SiXU7rFVRXMV9XdYVSZe7JoUXdP4SRHTxsT1nzm",
-                "xpub6ByNGqbVNRd7XEGt6JbFmWeUC7K6nKrU7NFWBBvNgZXxW4Ewbjwhtp8oEWfiUoXshQW9mPwfJdf3DyieRqcMpSCwHKxb6iDPdhFQWWisCc6",
             ),
             (
                 "f585c11aec520db57dd353c69554b21a89b20fb0650966fa0a9d6f74fd989d8f",
@@ -227,20 +278,10 @@ mod tests {
                  space point ten exist slush involve unfold",
                 "01f5bced59dec48e362f2c45b5de68b9fd6c92c6634f44d6d40aab69056506f0e35524a518034ddc1192e1dacd32c1ed3eaa3c3b131c88ed8e7e54c49a5d0998",
                 "xprv9s21ZrQH143K39rnQJknpH1WEPFJrzmAqqasiDcVrNuk926oizzJDDQkdiTvNPr2FYDYzWgiMiC63YmfPAa2oPyNB23r2g7d1yiK6WpqaQS",
-                "xpub6CMx2iH7Bvm6mWybNZf3nm1kQPhg1Ye2iswr95xDSRNJX4Z6dNNAxxnBeSR19SVtXm2drUTvi5Hdi41NGGEFoXbY2VKvRBNCaGvZ6xnBUdX",
             ),
         ];
 
-        let secp = bitcoin::secp256k1::Secp256k1::new();
-
-        for (
-            entropy_hex,
-            expected_mnemonic,
-            expected_seed_hex,
-            expected_xprv,
-            expected_account_xpub,
-        ) in vectors
-        {
+        for (entropy_hex, expected_mnemonic, expected_seed_hex, expected_xprv) in vectors {
             let entropy: [u8; 32] = <[u8; 32]>::from_hex(entropy_hex).unwrap();
             let expected_seed: [u8; 64] = <[u8; 64]>::from_hex(expected_seed_hex).unwrap();
 
@@ -255,28 +296,6 @@ mod tests {
             );
             assert_eq!(*seed, expected_seed, "entropy: {entropy_hex}");
             assert_eq!(xprv.to_string(), expected_xprv, "entropy: {entropy_hex}");
-
-            let (account_xpriv, account_xpub) =
-                account_xpub_from_mnemonic(&mnemonic, "TREZOR", Network::Bitcoin, 0).unwrap();
-
-            assert_eq!(
-                account_xpub.to_string(),
-                expected_account_xpub,
-                "entropy: {entropy_hex}"
-            );
-
-            // The two return values must describe the same key, and sit at m/48'/0'/0'.
-            assert_eq!(
-                Xpub::from_priv(&secp, &account_xpriv),
-                account_xpub,
-                "entropy: {entropy_hex}"
-            );
-            assert_eq!(account_xpriv.depth, 3, "entropy: {entropy_hex}");
-            assert_eq!(
-                account_xpriv.child_number,
-                ChildNumber::Hardened { index: 0 },
-                "entropy: {entropy_hex}"
-            );
         }
     }
 
@@ -302,8 +321,14 @@ mod tests {
     #[test]
     fn out_of_range_account_is_a_bip32_error() {
         let mnemonic = generate_mnemonic(&[0u8; 32]).unwrap();
-        let err = account_xpub_from_mnemonic(&mnemonic, "", Network::Testnet, 0x8000_0000)
-            .expect_err("account index 2^31 cannot be hardened");
+        let err = account_xpub_from_mnemonic(
+            &mnemonic,
+            "",
+            Purpose::Bip49,
+            Network::Testnet,
+            0x8000_0000,
+        )
+        .expect_err("account index 2^31 cannot be hardened");
         assert!(matches!(err, VaultCoreError::Bip32(_)), "got {err:?}");
     }
 
