@@ -299,6 +299,84 @@ mod tests {
         }
     }
 
+    /// Uses the first canonical BIP-39 mnemonic above with passphrase "TREZOR".
+    /// The expected account keys are independently derived and use standard
+    /// BIP-32 xprv/xpub version bytes.
+    #[test]
+    fn account_derivation_functions_match_bip_vectors() {
+        let mnemonic = Mnemonic::from_str(
+            "abandon abandon abandon abandon abandon abandon \
+             abandon abandon abandon abandon abandon abandon \
+             abandon abandon abandon abandon abandon abandon \
+             abandon abandon abandon abandon abandon art",
+        )
+        .unwrap();
+        let vectors = [
+            (
+                Purpose::Bip44,
+                "m/44'/0'/0'",
+                "xprv9zRCqLPie7vUnPYfwoDE7tyA5djgC9RESmQJyob34Br2d1RufZpArD6BT5cSehpCWUh5XrUdHGjaBm89pj3uHjzv5utZ8WCrkxmwJpVfqeQ",
+                "xpub6DQZEqvcUVUmzsd93pkEV2utdfaAbc95ozKunBzecXP1Vom4D78RQ1QfJPF9cLG5jawrpaopqg1PqTUEPwgkTLQ2H6WjFZ4hB9NBe2RG6Rx",
+            ),
+            (
+                Purpose::Bip49,
+                "m/49'/0'/0'",
+                "xprv9xoF3hZStMxrXBDEDgwYNztdqq7YuiYV5JfDCVWAY8RW5AuFPqMi7XFn2VJYPHdC24GeJ9r89mzU3oXxkPRbdAnBPqmzWJ31RAqHDs93tGW",
+                "xpub6BnbTD6LijX9jfHhKiUYk8qNPrx3KBGLSXaozsun6TxUwyEPwNfxfKaFsnRypS5H6UWwvSGGqp3YCVpboYfbXGoKKf33bDzZYHwJmXvT5pD",
+            ),
+            (
+                Purpose::Bip84,
+                "m/84'/0'/0'",
+                "xprv9yUzThscUmTBgpV1qs6rbohKdrVVZ9XoUygFxWgh1i5JCEyEKk3uhfAe3HFe6BQvkqg51mx34hWbhKCAL593KAF2CfoY4dgUii1cvMSXnAi",
+                "xpub6CULsDQWK91UuJZUwtdrxwe4BtKyxcFerCbrku6Ja3cH53JNsHNAFTV7tWzRhKnWqjmFz3x2sHqBu2rvGKEjDYxYf7MbQn2LE66NN17vZV6",
+            ),
+            (
+                Purpose::Bip86,
+                "m/86'/0'/0'",
+                "xprv9zDGHfAoEomyADQ2n8ueQAU5zCqT7znLqhYUKznNm9F35xC6w7yzjja5t57qX1sLfnkGFbG2o7tFuSG96ykW7iZsFF3rNfQW9VdANSeeU3S",
+                "xpub6DCchAhh5BLGNhUVtASemJQpYEfwXTWCCvU58PBzKUn1xkXFUfJFHXtZjMBqctFSAKDYoAHB94UwC5p9v8rcPoTQJYeZ6Xid6NEqpifeqWR",
+            ),
+        ];
+
+        for (purpose, path, expected_account_xpriv, expected_account_xpub) in vectors {
+            let (account_xpriv, account_xpub) =
+                account_xpub_from_mnemonic(&mnemonic, "TREZOR", purpose, Network::Bitcoin, 0)
+                    .unwrap();
+
+            assert_eq!(
+                account_xpriv.to_string(),
+                expected_account_xpriv,
+                "path: {path}"
+            );
+            assert_eq!(
+                account_xpub.to_string(),
+                expected_account_xpub,
+                "path: {path}"
+            );
+        }
+
+        let path = "m/48'/0'/0'/2'";
+        let (account_xpriv, account_xpub) = account_mutisig_xpub_from_mnemonic(
+            &mnemonic,
+            "TREZOR",
+            Network::Bitcoin,
+            0,
+            ScriptType::P2wsh,
+        )
+        .unwrap();
+
+        assert_eq!(
+            account_xpriv.to_string(),
+            "xprvA1frCZ7tJodAiMTf9EB41VzbBQLdrfNJxLeFhiDfgdaMabiWyXWXwxae4dZu2nvruG3Y7iVBeQHeow9LEFaBWHwbNxEigsbWvFZCwqa84oc",
+            "path: {path}"
+        );
+        assert_eq!(
+            account_xpub.to_string(),
+            "xpub6EfCc4en9BBTvqY8FFi4NdwKjSB8G86AKZZrW6dHEy7LTQ3fX4pnVku7urz5FMqyMSwJjwxV2jHwifdanGWK2Amk34G4YnGtVFZrEdZuu31",
+            "path: {path}"
+        );
+    }
+
     /// Two consecutive generations must differ — this is what separates a real
     /// CSPRNG from a fixed or mocked entropy source. The vector test above can't
     /// catch it, because it supplies the entropy itself.
