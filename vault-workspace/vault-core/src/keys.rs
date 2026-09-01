@@ -170,7 +170,7 @@ impl ScriptType {
     }
 }
 
-pub fn account_mutisig_xpub_from_mnemonic(
+pub fn account_multisig_xpub_from_mnemonic(
     mnemonic: &Mnemonic,
     passphrase: &str,
     network: Network,
@@ -299,9 +299,20 @@ mod tests {
         }
     }
 
-    /// Uses the first canonical BIP-39 mnemonic above with passphrase "TREZOR".
-    /// The expected account keys are independently derived and use standard
-    /// BIP-32 xprv/xpub version bytes.
+    /// Uses the first canonical BIP-39 mnemonic above with passphrase "TREZOR",
+    /// with standard BIP-32 xprv/xpub version bytes.
+    ///
+    /// Provenance: unlike `bip39_test_vectors` above, the expected account keys here
+    /// are *this implementation's own output* — a regression lock, not an oracle. No
+    /// BIP publishes account keys for this 24-word mnemonic with passphrase "TREZOR",
+    /// so there is nothing external to compare them to. This test therefore catches a
+    /// *change* in our derivation, never a systematic error in it.
+    ///
+    /// To re-derive these independently: run BIP-32 CKDpriv over the seed in the first
+    /// row of `bip39_test_vectors` for each path below, using any implementation other
+    /// than this one. Nothing in-tree does that. For a test whose expected values this
+    /// crate never produced, see
+    /// `derivation::tests::derive_account_xpub_matches_bip32_vector_1`.
     #[test]
     fn account_derivation_functions_match_bip_vectors() {
         let mnemonic = Mnemonic::from_str(
@@ -356,7 +367,7 @@ mod tests {
         }
 
         let path = "m/48'/0'/0'/2'";
-        let (account_xpriv, account_xpub) = account_mutisig_xpub_from_mnemonic(
+        let (account_xpriv, account_xpub) = account_multisig_xpub_from_mnemonic(
             &mnemonic,
             "TREZOR",
             Network::Bitcoin,
