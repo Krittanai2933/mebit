@@ -14,6 +14,15 @@ pub enum VaultCoreError {
     #[error("BIP-32 key error: {0}")]
     Bip32(#[from] bitcoin::bip32::Error),
 
+    #[error("descriptor error: {0}")]
+    Miniscript(#[from] miniscript::Error),
+
+    #[error("invalid multisig threshold: {0}")]
+    Threshold(#[from] miniscript::ThresholdError),
+
+    #[error("descriptor cannot be derived at the requested index: {0}")]
+    NonDefiniteDescriptorKey(#[from] miniscript::descriptor::NonDefiniteKeyError),
+
     // Wrapped explicitly via `.map_err(VaultCoreError::Policy)`, not `#[from]`,
     // so the conversion stays visible at the security boundary.
     //
