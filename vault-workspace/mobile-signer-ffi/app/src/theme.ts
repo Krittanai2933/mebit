@@ -68,3 +68,23 @@ export const shadow = {
 export const font = {
   display: undefined, // system default until FC Vision is wired up
 };
+
+// New "wallet-first" screens (Add Key / Pair Device / Keyring / Policy / ...,
+// see Penpot "Page 1") use IBM Plex Sans Thai instead of FC Vision — a real,
+// redistributable typeface with proper Thai support, picked for this design
+// pass. Not bundled yet (no @expo-google-fonts/ibm-plex-sans-thai + expo-font
+// wiring), so this falls back to the system sans-serif the same way
+// `font.display` does above until someone loads it.
+export const walletFont = 'IBM Plex Sans Thai';
+
+// Corner radii used by the wallet-first component set, kept separate from
+// `radii` above so existing screens' arithmetic (radii.lg - 4, etc.) doesn't
+// shift if these ever need to diverge.
+export const walletRadii = {
+  checkbox: 7,
+  chip: 12,
+  icon: 14,
+  card: 18,
+  cardLg: 20,
+  pill: 999,
+} as const;
