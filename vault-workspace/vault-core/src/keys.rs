@@ -143,13 +143,13 @@ pub fn account_xpub_from_mnemonic(
     ]);
 
     let mut master_xpriv = generate_master_xpriv(network, &seed)?;
-    let account_xpriv = master_xpriv.derive_priv(&secp, &path)?;
+    let derived = master_xpriv.derive_priv(&secp, &path);
     // Best effort: a volatile write over the one master-key copy we own, and the only
     // one that outlives this frame — the copies inside new_master/derive_priv/ckd_priv
-    // sit in callee frames that are popped and clobbered by the next call. Skipped on
-    // the `?` above; derive_priv only fails on a negligible tweak failure here, since
-    // both indices are already known-valid hardened numbers.
+    // sit in callee frames that are popped and clobbered by the next call. Run before
+    // propagating a derive_priv error so a CKD tweak failure can't skip the erase.
     master_xpriv.private_key.non_secure_erase();
+    let account_xpriv = derived?;
 
     let account_xpub = Xpub::from_priv(&secp, &account_xpriv);
 
@@ -188,13 +188,13 @@ pub fn account_multisig_xpub_from_mnemonic(
     ]);
 
     let mut master_xpriv = generate_master_xpriv(network, &seed)?;
-    let account_xpriv = master_xpriv.derive_priv(&secp, &path)?;
+    let derived = master_xpriv.derive_priv(&secp, &path);
     // Best effort: a volatile write over the one master-key copy we own, and the only
     // one that outlives this frame — the copies inside new_master/derive_priv/ckd_priv
-    // sit in callee frames that are popped and clobbered by the next call. Skipped on
-    // the `?` above; derive_priv only fails on a negligible tweak failure here, since
-    // both indices are already known-valid hardened numbers.
+    // sit in callee frames that are popped and clobbered by the next call. Run before
+    // propagating a derive_priv error so a CKD tweak failure can't skip the erase.
     master_xpriv.private_key.non_secure_erase();
+    let account_xpriv = derived?;
 
     let account_xpub = Xpub::from_priv(&secp, &account_xpriv);
 
