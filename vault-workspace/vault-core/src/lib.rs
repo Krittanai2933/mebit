@@ -17,6 +17,7 @@ pub mod descriptor {
     //! Builds the P2WSH 2-of-3 multisig output descriptor from the borrower,
     //! platform, and lender pubkeys. See `docs/00-capstone-brief.md` §3.1.
 
+    use crate::error::VaultCoreError;
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +52,52 @@ pub mod descriptor {
         }
     }
 
+    use bitcoin::bip32::{ChildNumber, DerivationPath, Xpub};
+    use miniscript::{
+        DescriptorPublicKey, Threshold,
+        descriptor::{Descriptor, DescriptorXKey, Wildcard},
+    };
+
+    pub fn build_multisig_descriptor(
+        xpubs: &[Xpub],
+        threshold: usize,
+    ) -> Result<Descriptor<DescriptorPublicKey>, VaultCoreError> {
+        let receive_path = DerivationPath::from(vec![ChildNumber::Normal { index: 0 }]);
+
+        let keys = xpubs
+            .iter()
+            .cloned()
+            .map(|xkey| {
+                DescriptorPublicKey::XPub(DescriptorXKey {
+                    origin: None,
+                    xkey,
+                    derivation_path: receive_path.clone(),
+                    wildcard: Wildcard::Unhardened,
+                })
+            })
+            .collect();
+
+        let threshold = Threshold::new(threshold, keys)?;
+
+        Ok(Descriptor::new_wsh_sortedmulti(threshold)?)
+    }
+
+    /// Derives `descriptor` at `index` and returns its real Bitcoin address.
+    ///
+    /// A ranged descriptor contains `/*` after its xpub derivation path. For a
+    /// non-ranged descriptor, Miniscript accepts the index but derives no child.
+    pub fn derive_address_at(
+        descriptor: &Descriptor<DescriptorPublicKey>,
+        index: u32,
+        network: bitcoin::Network,
+    ) -> Result<bitcoin::Address, VaultCoreError> {
+        let secp = bitcoin::secp256k1::Secp256k1::verification_only();
+        let definite_descriptor = descriptor.at_derivation_index(index)?;
+        let derived_descriptor = definite_descriptor.derived_descriptor(&secp);
+
+        Ok(derived_descriptor.address(network)?)
+    }
+
     fn mock_hash(s: &str) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -61,6 +108,32 @@ pub mod descriptor {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use bitcoin::{
+            Network, NetworkKind,
+            bip32::{ChainCode, ChildNumber, Fingerprint, Xpub},
+            secp256k1::PublicKey,
+        };
+        use miniscript::descriptor::WshInner;
+        use std::str::FromStr;
+
+        fn test_xpubs() -> Vec<Xpub> {
+            [
+                "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+                "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+                "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, key)| Xpub {
+                network: NetworkKind::Test,
+                depth: 0,
+                parent_fingerprint: Fingerprint::default(),
+                child_number: ChildNumber::Normal { index: 0 },
+                public_key: PublicKey::from_str(key).expect("valid compressed public key"),
+                chain_code: ChainCode::from([(index + 1) as u8; 32]),
+            })
+            .collect()
+        }
 
         fn parties() -> PartyPubkeys {
             PartyPubkeys {
@@ -84,6 +157,86 @@ pub mod descriptor {
             other.lender = "different_lender_pk".into();
             let b = build_descriptor(&other);
             assert_ne!(a.address, b.address);
+        }
+
+        #[test]
+        fn generic_multisig_descriptor_round_trips() {
+            let descriptor =
+                build_multisig_descriptor(&test_xpubs(), 2).expect("valid 2-of-3 descriptor");
+            let encoded = descriptor.to_string();
+
+            assert!(encoded.starts_with("wsh(sortedmulti(2,"));
+            assert_eq!(encoded.matches("/0/*").count(), 3);
+            assert!(descriptor.has_wildcard());
+
+            let parsed = Descriptor::<DescriptorPublicKey>::from_str(&encoded)
+                .expect("generated descriptor parses");
+
+            assert_eq!(parsed, descriptor);
+
+            let Descriptor::Wsh(wsh) = &parsed else {
+                panic!("expected P2WSH descriptor");
+            };
+            let WshInner::SortedMulti(sortedmulti) = wsh.as_inner() else {
+                panic!("expected sortedmulti descriptor");
+            };
+
+            assert_eq!(sortedmulti.k(), 2);
+            assert_eq!(sortedmulti.n(), 3);
+            assert_eq!(sortedmulti.pks().len(), 3);
+        }
+
+        #[test]
+        fn generic_multisig_descriptor_has_real_addresses() {
+            let descriptor =
+                build_multisig_descriptor(&test_xpubs(), 2).expect("valid 2-of-3 descriptor");
+
+            let testnet_address = derive_address_at(&descriptor, 0, Network::Testnet)
+                .expect("real testnet P2WSH address");
+            let mainnet_address = derive_address_at(&descriptor, 0, Network::Bitcoin)
+                .expect("real mainnet P2WSH address");
+            let next_testnet_address = derive_address_at(&descriptor, 1, Network::Testnet)
+                .expect("real next testnet P2WSH address");
+
+            assert!(testnet_address.to_string().starts_with("tb1q"));
+            assert!(mainnet_address.to_string().starts_with("bc1q"));
+            assert_ne!(testnet_address, mainnet_address);
+            assert_ne!(testnet_address, next_testnet_address);
+        }
+
+        #[test]
+        fn sortedmulti_address_is_independent_of_input_order() {
+            let xpubs = test_xpubs();
+            let descriptor = build_multisig_descriptor(&xpubs, 2).expect("valid 2-of-3 descriptor");
+
+            let mut reordered_xpubs = xpubs;
+            reordered_xpubs.rotate_left(1);
+            let reordered_descriptor = build_multisig_descriptor(&reordered_xpubs, 2)
+                .expect("valid reordered 2-of-3 descriptor");
+
+            let address =
+                derive_address_at(&descriptor, 0, Network::Testnet).expect("testnet P2WSH address");
+            let reordered_address = derive_address_at(&reordered_descriptor, 0, Network::Testnet)
+                .expect("reordered testnet P2WSH address");
+
+            assert_eq!(address, reordered_address);
+        }
+
+        #[test]
+        fn rejects_threshold_greater_than_key_count() {
+            let err = build_multisig_descriptor(&test_xpubs(), 4).unwrap_err();
+            assert!(matches!(err, VaultCoreError::Threshold(_)), "got {err:?}");
+        }
+
+        #[test]
+        fn wraps_invalid_derivation_indices_in_vault_core_error() {
+            let descriptor = build_multisig_descriptor(&test_xpubs(), 2).unwrap();
+            let err = derive_address_at(&descriptor, 1 << 31, Network::Testnet).unwrap_err();
+
+            assert!(
+                matches!(err, VaultCoreError::NonDefiniteDescriptorKey(_)),
+                "got {err:?}"
+            );
         }
     }
 }
