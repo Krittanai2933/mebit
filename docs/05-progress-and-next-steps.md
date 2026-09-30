@@ -1,6 +1,6 @@
 # สถานะความคืบหน้าและสิ่งที่ต้องทำต่อ
 
-> อัปเดตล่าสุด: 2026-08-25 — เอกสารนี้เป็น living document ทีมควรอัปเดตทุกครั้งที่มี milestone ใหม่ อย่าปล่อยให้ล้าสมัยจนไม่ตรงกับโค้ดจริง (ตรวจสอบกับ `git log`/โค้ดจริงก่อนเชื่อว่าสถานะยังถูกต้อง)
+> อัปเดตล่าสุด: 2026-09-30 — เอกสารนี้เป็น living document ทีมควรอัปเดตทุกครั้งที่มี milestone ใหม่ อย่าปล่อยให้ล้าสมัยจนไม่ตรงกับโค้ดจริง (ตรวจสอบกับ `git log`/โค้ดจริงก่อนเชื่อว่าสถานะยังถูกต้อง)
 
 ภาพรวม ณ ตอนนี้: ทุกโมดูลมี **skeleton ที่ compile ผ่าน มี test ผ่าน และรันได้จริง** แต่ยังเป็นระบบจำลอง (mock) แทบทั้งหมด — ยังไม่มีการเชื่อมต่อ Bitcoin จริง, testnet จริง, หรือการเชื่อมต่อระหว่าง service แบบครบวงจร นี่คือจุดเริ่มต้นสำหรับทีม capstone ให้เข้ามาต่อยอดตาม timeline ใน [`00-capstone-brief.md`](00-capstone-brief.md) §4
 
@@ -12,13 +12,15 @@
 - มี skeleton ครบ 4 ส่วน (`descriptor`, `derivation`, `psbt`, `policy`) เขียนด้วย Rust ล้วน — **ภายในยังเป็น String/struct จำลอง** แทน pubkey, descriptor, PSBT (ยังไม่ได้เปลี่ยนมาใช้ type จริงจาก `bitcoin`/`miniscript`)
 - `policy::PolicyEngine` เป็นส่วนที่ "จริง" ที่สุดในตอนนี้: บังคับ default-deny, ตรวจ address/amount/loan ตรงกันเป๊ะ มี unit test แบบ adversarial ผ่านครบ (ปฏิเสธ output ผิด, จำนวนผิด, loan ผิด, และเคสที่มี output ถูกต้องปนกับ output แอบขโมยมูลค่า)
 - **2026-08-25 — ก้าวแรกของ wallet-first pivot (M-of-N ใครก็ได้ แทน 2-of-3 role คงที่)**: เปิดใช้ `bitcoin = "0.32"` / `miniscript = "12"` ใน `Cargo.toml` แล้ว และเพิ่ม 2 module ใหม่คู่กับของเดิมโดย**ไม่แตะ logic เดิมเลย** — `keys` (data model กลาง: `VaultKey`, `KeySourceType`, `HwVendor` ใช้ `bitcoin::bip32::{Fingerprint, Xpub}` ของจริง) และ `hw` (placeholder เปล่า รอ Jade/Trezor client)
-- รวม 12 test ผ่านหมด (11 เดิม + 1 ใหม่ใน `keys`), compile สะอาด ไม่มี warning
+- **2026-09-30 — Jade ผ่าน BLE (No.4) เสร็จ** (เจ้าของ: **@phoovich** — งานของ wallet-first pivot ที่ไม่อยู่ในแผนแบ่งงาน 4 คนเดิม): `hw::jade::JadeSession` คือ protocol CBOR-RPC ของ Jade ล้วนๆ ไม่มี I/O — ทำ request/reply, ประกอบ reply ที่มาเป็นท่อนๆ, ขอ PSBT ที่เซ็นแล้วทีละท่อนด้วย `get_extended_data`, ส่งต่อ pinserver และตรวจว่า PSBT ที่ได้กลับมาเพิ่มแค่ลายเซ็นที่ถูกต้องของ Jade — ส่วน BLE อยู่ใน crate ใหม่ `jade-ble` (ใช้ `btleplug`) ทดสอบด้วย fake Jade ที่ทำตามกฎ firmware และกับเครื่องจริง (ดูบันทึกด้านล่าง)
+- รวม 48 test ของ `vault-core` ผ่านหมด ณ 2026-10-01 (23 ใน `hw::jade`) + 6 ใน `jade-ble` — compile, clippy (`-D warnings`), rustdoc และ `cargo fmt` ของสอง crate นี้สะอาด
 
 **สิ่งที่ต้องทำทั้งหมด**
 - [ ] ทีมอ่าน Bitcoin fundamentals (BIP-32/48, PSBT, multisig script) ให้จบก่อน — สัปดาห์ 1-2 (`.claude/skills/bitcoin-fundamentals/SKILL.md`)
 - [x] เปิดใช้ `bitcoin`/`miniscript` crate จริงใน `Cargo.toml` (2026-08-25 — ยังใช้จริงแค่ใน `keys`)
 - [ ] `keys`: เพิ่มฟังก์ชัน derive จริง (ตอนนี้มีแค่ type) + ตัดสินใจว่า `derivation_path` ควรเป็น `String` หรือ `bitcoin::bip32::DerivationPath` — **รอ @munich** (เอกสาร `08-multisig-wallet-spec.md` ยังไม่อยู่ใน repo)
-- [ ] `hw`: Jade (QR) / Trezor Safe 7 (BLE) client — งานของ No.4/No.5
+- [x] `hw`: Jade client ผ่าน **BLE** (ไม่ใช่ QR — Jade Core ไม่มีกล้อง) — No.4, เจ้าของ @phoovich (2026-09-30)
+- [ ] `hw`: Trezor Safe 7 (BLE) client — No.5
 - [ ] `descriptor`: สร้าง P2WSH 2-of-3 multisig descriptor จริงจาก pubkey จริงของ 3 ฝ่าย
 - [ ] `derivation`: derive child pubkey จริงตาม BIP-48 (`m/48'/0'/0'/2'`) จาก account xpub
 - [ ] `psbt`: สร้าง/parse PSBT จริงด้วย `bitcoin::Psbt`
@@ -26,6 +28,36 @@
 - [ ] เพิ่ม adversarial test เพิ่มสำหรับ PSBT จริง: fee manipulation, replay, partial-spend สำหรับ liquidation
 - [ ] เทอม 2: รองรับ liquidation flow แบบเต็ม (ขายบางส่วน + คำนวณ change)
 - [ ] เทอม 2 สัปดาห์ 13-14: security review แบบ adversarial ร่วมกันทั้งทีม
+
+### บันทึกการทดสอบกับ Jade Core จริง (2026-09-30)
+
+เครื่อง: Jade Core `Jade BE0184` (board `JADE_V2C`, firmware 1.0.41) · host: macOS + `btleplug` 0.11.8 · รันด้วย `cargo run -p jade-ble --example jade-hw-test -- …` (checklist เต็มอยู่ใน `vault-workspace/jade-ble/README.md`)
+
+| # | ทดสอบ | ผล |
+|---|---|---|
+| HW-1 | scan → connect → GATT → `get_version_info` | ✅ ก่อน reset: state `LOCKED`, networks `MAIN` — ยืนยันว่า wallet เดิมผูกกับ mainnet |
+| HW-2 | factory reset → restore test phrase → ตั้ง PIN ผ่าน BLE + pinserver → `get_xpub` | ✅ fingerprint `73c5da0a` และ xpub ที่ `m/48'/1'/0'/2'` ตรงกับที่ `keys::account_multisig_xpub_from_mnemonic` derive เองจาก phrase (ปักไว้เป็น test `hw::jade::device_vectors`) |
+| HW-3 | `roundtrip` vault 2-of-3 P2WSH: 2 / 16 / 100 inputs | ✅ ทุกครั้ง: Jade เซ็นครบทุก input, PSBT ที่ได้กลับเปลี่ยนแค่ลายเซ็นของ Jade, ลายเซ็น verify ผ่าน และ finalize 2-of-3 ได้ (100 inputs: request ~49 KB = 97 writes, PSBT ที่เซ็นแล้วกลับมาราว 20 ท่อน, 28.8 วินาทีรวมเวลากดยืนยัน) |
+| HW-4 | ไม่เจอ Jade (Jade ไม่ได้ advertise) | ✅ error บอกให้เช็ค Bluetooth/ไฟของ Jade |
+| HW-4 | ปฏิเสธบน Jade | ✅ `Jade: declined on the device` |
+| HW-4 | ถอดสาย USB ขณะรอ Jade | ✅ `the Jade disconnected` ทันที (ทดสอบตอนรอใส่ PIN — code path เดียวกับตอนรอยืนยันการเซ็น) |
+| HW-4 | เชื่อมใหม่หลังหลุด | ✅ run ถัดไปเชื่อมได้เลย |
+| HW-4 | ขอ mainnet กับ wallet ที่ผูก testnet | ✅ ปฏิเสธก่อนที่ Jade จะถาม PIN |
+| ยังไม่ได้ทดสอบบนเครื่อง | Jade ไม่มี input ให้เซ็น, ปฏิเสธการจับคู่ BLE, มี Jade หลายเครื่อง | logic มี unit test ครอบแล้ว ขั้นตอนทดสอบด้วยมืออยู่ใน README ของ `jade-ble` |
+
+ข้อสังเกต: `roundtrip` ใช้ input สังเคราะห์ (ไม่ได้ broadcast) — การเซ็นด้วย UTXO testnet จริงแล้ว broadcast ยังเป็นงานของเกณฑ์ผ่าน Phase 0 (`09-wallet-mvp-buildplan.md` §5)
+
+### ตรวจซ้ำก่อนเปิด PR (2026-10-01)
+
+รีวิวแบบ adversarial ก่อนเปิด PR: เทียบ protocol กับ source ของ firmware 1.0.41 แล้วทดสอบกับเครื่องเดิมทั้งก่อนและหลังแก้ (ข้อที่แก้อยู่ใน `vault-core::hw::jade` และ `jade-ble`)
+
+| # | ทดสอบ | ก่อนแก้ | หลังแก้ |
+|---|---|---|---|
+| HW-5 | pinserver ติดต่อไม่ได้ (บังคับด้วย `ALL_PROXY=http://127.0.0.1:9`) | Jade ค้างที่ "Checking…" จน host ตัดการเชื่อมต่อ แล้วขึ้น "Network or server error" ให้กด | host ส่ง `cancel` แทนคำตอบของ pinserver — `unlock()` ครั้งถัดไปบน connection เดิมผ่าน |
+| HW-6 | BIP39 passphrase (Always Ask) รอราว 30 วินาทีก่อนยืนยัน | timeout 15 วินาทีหลัง relay pinserver (2 ครั้ง) | unlock ผ่าน และ xpub ตรงกับ test vector |
+| HW-7 | ขอ version info ตอนที่จอ Jade รอผู้ใช้ (จอ passphrase) | timeout 15 วินาที | ขอแบบ `nonblocking` ซึ่ง firmware ตอบจาก task ของ BLE เอง — `info` ตอบปกติ |
+| HW-8 | reply ค้างจาก connection ก่อนหน้า | reply id `"3"` ของ session เก่ามาถึง connection ใหม่ (id เริ่มที่ 1 ทุก session จึงชนกันได้) | id เริ่มแบบสุ่มต่อ session แบบเดียวกับ jadepy และ reply ที่ id ไม่ตรงถูกปฏิเสธ |
+| ซ้ำ | `info`, `xpub --verify-against`, `roundtrip` 2/16/100, ปฏิเสธบนเครื่อง, ใส่ PIN ผิดแล้วลองใหม่ทันที | — | ✅ ทั้งหมด — PSBT 100 inputs (ตอบกลับ 20 ท่อน) ตรวจซ้ำแบบอิสระด้วย rust-bitcoin + miniscript โดยไม่ผ่าน `verify_signed_psbt` |
 
 ---
 

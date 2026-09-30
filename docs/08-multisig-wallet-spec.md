@@ -99,17 +99,28 @@ or(
 
 | ยี่ห้อ | รุ่นที่รองรับ | ช่องทาง |
 |---|---|---|
-| **Jade** (Blockstream) | ทุกรุ่น | QR (มีกล้องในตัว) + BLE |
+| **Jade** (Blockstream) | Jade Classic / Jade Plus | QR (มีกล้องในตัว) + BLE |
+| **Jade** (Blockstream) | **Jade Core** | **BLE เท่านั้น** — ไม่มีกล้องและไม่มีแบตเตอรี่ (ต้องเสียบไฟ USB ตลอดที่ใช้งาน) |
 | **Trezor** | **เฉพาะ Safe 7** เท่านั้น | BLE เท่านั้น |
+
+**อัปเดต 2026-09-30**: เครื่องที่ทีมมีจริงคือ **Jade Core** ซึ่งไม่มีกล้อง (ใน firmware คือ board `JADE_V2C` — "no camera, no battery") จึงใช้ flow QR ไม่ได้เลย Phase 0 จึงพิสูจน์ Jade ผ่าน **BLE** แทน ซึ่งทำเสร็จและทดสอบกับเครื่องจริงแล้ว (ดู `05-progress-and-next-steps.md`) ส่วน Jade แบบ QR (รุ่นที่มีกล้อง) ยังไม่ได้ implement และยังไม่ได้ตัดสินใจว่าจะทำใน MVP หรือไม่
 
 **ข้อจำกัดสำคัญที่ต้องรู้และสื่อสารกับลูกค้า**: Trezor **ไม่มีกล้อง ไม่รองรับ QR-based air-gapped signing เลยสักรุ่น** (ยืนยันแล้วแม้ Safe 7 รุ่นล่าสุดก็ยังต้องต่อผ่าน USB-C หรือ BLE เท่านั้น) และมีแค่ **Safe 7** (ออกตุลาคม 2025) ที่มี Bluetooth — Trezor รุ่นอื่นทั้งหมด (One, T, Safe 3, Safe 5) มี USB อย่างเดียว จึง**ใช้กับ mebit ไม่ได้เลย**ภายใต้ MVP ที่ตัด USB ออก ต้องแจ้งลูกค้าให้ชัดว่ารองรับ Trezor รุ่นพรีเมียมล่าสุดเท่านั้น
 
 **Ledger, Coldcard, BitBox02** — เลื่อนออกจาก MVP ไปเฟสหลัง (เดิมอยู่ในสเปคเวอร์ชันแรก ตอนนี้ตัดออกเพื่อโฟกัส 2 ยี่ห้อที่ใช้ QR/BLE ได้จริงตาม MVP ที่ตัด USB)
 
 ### 5.1 Connection method
-- **QR / กล้อง** — สแกน PSBT ไป-กลับ ทางหลักสำหรับ Jade
-- **Bluetooth (BLE)** — สำหรับ Jade และ Trezor Safe 7 — ฝั่ง Phase 0 (Rust CLI validation) ใช้ `btleplug` ตรงๆ, ฝั่ง production mobile (React Native) ใช้ library เทียบเท่า เช่น `react-native-ble-plx`
+- **QR / กล้อง** — สแกน PSBT ไป-กลับ สำหรับ Jade รุ่นที่มีกล้อง (ยังไม่ได้ implement — ดูหมายเหตุใต้ตารางข้างบน)
+- **Bluetooth (BLE)** — สำหรับ Jade และ Trezor Safe 7 — **อัปเดต 2026-09-30 (ตัดสินใจแล้ว)**: ฝั่ง Jade ให้ **Rust เป็นเจ้าของ BLE ทั้งหมด** ทั้ง Phase 0 และ production mobile — crate `jade-ble` (ใช้ `btleplug`) ขับ `vault-core::hw::jade::JadeSession` แล้วแอป RN เรียกผ่าน UniFFI (`unlock` / `xpub` / `signPsbt` แบบ async) **แทน**แผนเดิมที่จะใช้ `react-native-ble-plx` ฝั่ง RN เหตุผล: protocol และ BLE อยู่ในที่เดียว ทดสอบได้ใน Rust และไม่ต้องเขียน BLE ซ้ำต่อ platform — ต้นทุนที่ต้องรู้: `btleplug` บน Android ต้อง build แบบ Rust+Java (ดู `04-open-items.md` ข้อ 14) ส่วน Trezor Safe 7 บนมือถือยังไม่ได้ตัดสินใจ
 - **USB** — ไม่ทำใน MVP (ตัดออกทั้งหมดตามการตัดสินใจนี้)
+
+### 5.2 ข้อจำกัดของ Jade ผ่าน BLE (ยืนยันจาก source code ของ firmware 1.0.41 และจากเครื่องจริง)
+
+- **ไม่ใช่ air-gapped** — BLE คือการเชื่อมต่อทางวิทยุที่จับคู่ (pair) ไว้ การจับคู่ครั้งแรกเป็นแบบ numeric comparison: ตัวเลข 6 หลักขึ้นทั้งบน Jade และบนเครื่อง host ผู้ใช้ต้องดูว่าตรงกันแล้วกดยืนยันทั้งสองฝั่ง
+- **ปลดล็อกด้วย PIN ต้องออนไลน์** — host ต้อง relay ข้อมูลไป-กลับ pinserver ของ Blockstream ผ่าน HTTPS (ข้อมูลเข้ารหัสระหว่าง Jade กับ pinserver เอง host แค่ส่งต่อ)
+- **เครือข่ายถูกผูกกับ wallet** — การปลดล็อกครั้งแรกผูก wallet กับ mainnet หรือกับ testnet ถาวร และ Jade Core ไม่มีเมนูสลับกลับ (เมนูนี้มีเฉพาะใน QR mode ซึ่งต้องใช้กล้อง) ถ้าจะเปลี่ยนต้อง factory reset แล้ว restore ใหม่
+- **ปลดล็อกได้ครั้งละการเชื่อมต่อ** — wallet ที่มี PIN จะล็อกตัวเองทุกครั้งที่ BLE หลุด การเชื่อมต่อใหม่ต้องใส่ PIN ใหม่
+- **ไม่ต้อง register multisig เพื่อเซ็น** — แต่ถ้าไม่ register Jade จะแสดง change ของ vault เป็น output ธรรมดา ผู้ใช้จึงตรวจบนหน้าจอ Jade ไม่ได้ว่าเป็นของตัวเอง (ดู `04-open-items.md` ข้อ 13)
 
 ## 6. Format มาตรฐาน
 
@@ -138,7 +149,7 @@ or(
 
 | เฟส | สิ่งที่ทำ |
 |---|---|
-| Phase 0 (engine validation, Rust CLI + automated tests, ไม่มี GUI/desktop app) | vault-core ล้วนๆ: descriptor generation, plain multisig P2WSH, PSBT construction/signing จริงกับ Jade (QR) และ Trezor Safe 7 (BLE) บน testnet — ยังไม่มี mobile UI และไม่ทำ desktop app เลย |
+| Phase 0 (engine validation, Rust CLI + automated tests, ไม่มี GUI/desktop app) | vault-core ล้วนๆ: descriptor generation, plain multisig P2WSH, PSBT construction/signing จริงกับ Jade Core (BLE) และ Trezor Safe 7 (BLE) บน testnet — ยังไม่มี mobile UI และไม่ทำ desktop app เลย |
 | MVP (production mobile, React Native + UniFFI) | Key-first add-key flow (mebit multi-device ผ่าน QR + Jade + Trezor Safe 7 เท่านั้น, QR+BLE ไม่มี USB), P2WSH เท่านั้น, policy: plain multisig + timelock fallback (2 ระดับ) + decaying multisig (2 ระดับ), preset 2-of-3/3-of-5 + custom, กุญแจสำรอง mebit แบบ subscription, vault health check, backup/export ผ่าน BSMS |
 | Phase 2 (ทันทีหลัง MVP) | Taproot multisig (MuSig2/`multi_a`), decaying multisig หลายระดับ (3+ branch) ใช้ script leaf ของ Taproot, bulk-import vault ที่ config ไว้แล้วทั้งชุดจากที่อื่น |
 | ยังไม่กำหนดเวลา | รองรับ USB (เปิดทาง Trezor รุ่นอื่นที่ไม่ใช่ Safe 7 + Ledger/Coldcard/BitBox02), legacy P2SH import adapter (ถ้าจำเป็นจริง) |

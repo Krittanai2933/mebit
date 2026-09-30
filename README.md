@@ -22,8 +22,9 @@ Start here:
 mebit/
 ├── docs/                 # brief, architecture, design notes — read these first
 ├── design-reference/     # mebit/Mapboss design tokens + logos for the mobile app
-├── vault-workspace/      # the actual system — 5 Rust crates (some modules share an owner, see Team split)
+├── vault-workspace/      # the actual system — 6 Rust crates (some modules share an owner, see Team split)
 │   ├── vault-core/           # descriptor, key derivation, PSBT, policy engine, + keys/hw (wallet-first pivot) — the critical path
+│   ├── jade-ble/             # Blockstream Jade over Bluetooth LE (wallet-first pivot) — not a default member, build with -p
 │   ├── custody-service/      # platform-side gRPC/REST + signing-request state machine
 │   ├── mobile-signer-ffi/    # borrower app: hot wallet (bdk) + UniFFI vault signer, two layers in one
 │   ├── lender-signer-cli/    # offline signing CLI for the lender/fund rep
@@ -46,6 +47,7 @@ Every crate under `vault-workspace/` has its own `README.md` with its owner, dep
 | `vault-core` (PSBT + policy engine) | person 2 |
 | `custody-service` + `lender-signer-cli` + `monitor-service` | person 3 |
 | `mobile-signer-ffi` (hot wallet + vault signer — the largest single scope in the team) | person 4 |
+| `jade-ble` + `vault-core::hw::jade` (Jade over BLE — wallet-first pivot work, outside the 4-way split above) | @phoovich |
 
 `vault-core` is the critical path — every other module depends on it. Its policy engine is the single highest-risk piece of code in the project, which is why it kept a dedicated second owner even when the team shrank from 5 to 4 (see `.claude/skills/policy-engine-review/SKILL.md`). `mobile-signer-ffi` carries the most work of any single module now that its scope includes a full `bdk`-based hot wallet on top of the multisig vault signer — see `docs/01-architecture.md` and `docs/00-capstone-brief.md` §3.3 for why, and lean on the MVP-vs-stretch screen split there if the team is short on time. Person 3 juggles three modules — timed to stagger rather than overlap (see the `platform-services` agent), but worth checking in on more often than the others.
 
