@@ -27,12 +27,18 @@
 
     **มติ (2026-10-01)**: ใช้ crate ระดับล่างของ Trezor เอง (`trezor-thp`) กับ generated protobuf bindings ของ Trezor แล้วเขียน client แบบไม่มี I/O เอง (`vault-core::hw::trezor`) คู่กับ crate `trezor-ble` ตามแบบของ Jade — แก้ `09` ให้ตรงแล้ว
 17. **Trezor มีรุ่นที่สองที่มี BLE แล้ว คือ `T3T2`** — ใน firmware มี `MODEL_BLE_CODE 7` และ trezorlib ระบุ `ble_capable=True` ข้อความ "มีแค่ Safe 7 ที่มี Bluetooth" ใน `08` §5 จึงใช้แยกรุ่นไม่ได้อีกต่อไป client จึงตรวจรุ่นแบบตรงตัว (`T3W1` / "Safe 7") สองชั้นทุกครั้งที่เชื่อมต่อ และไม่อิงชื่อหรือ advertisement
-18. **btleplug สองเวอร์ชันอยู่ในแอป Android ตัวเดียวไม่ได้** (ต้องแก้ก่อน Phase 1 บน Android)
-    - `trezor-ble` ต้องใช้ btleplug 0.13 เพราะ 0.11.8 ไม่ขอขยาย MTU บน Android: MTU ค้างที่ 23 จึงส่ง packet ขนาด 244 ไบต์ของ Safe 7 ไม่ได้
-    - `jade-ble` pin ไว้ที่ 0.11.8 ซึ่งเป็นเวอร์ชันที่ทดสอบกับ Jade Core แล้ว
-    - แอป Android หนึ่งตัวรวม droidplug (ฝั่ง Java) ได้ชุดเดียว
+18. **btleplug สองเวอร์ชันอยู่ในแอป Android ตัวเดียวไม่ได้** (แก้แล้ว 2026-10-01 — ยังไม่ได้ทดสอบบน Android จริง)
+    - `trezor-ble` ต้องใช้ btleplug 0.13 เพราะ 0.11.8 ไม่ขอขยาย MTU บน Android: MTU ค้างที่ 23 จึงส่ง packet ขนาด 244 ไบต์ของ Safe 7 ไม่ได้ — audit (2026-10-01) ยืนยันจาก source แล้วว่า btleplug 0.11.8 ไม่มี MTU API เลย และ firmware ของ Safe 7 (`nordic/.../connection.c`) ไม่เริ่มแลก MTU เอง
+    - เดิม `jade-ble` pin ไว้ที่ 0.11.8 ซึ่งเป็นเวอร์ชันที่ผ่าน hardware checklist ของ Jade Core
+    - แอป Android หนึ่งตัวรวม droidplug (ฝั่ง Java) ได้ชุดเดียว: class Java ทั้ง 27 ตัวของ 0.11.8 (droidplug + `jni-utils` 0.1.1) ชื่อซ้ำกับ class ของ 0.13.3 ทุกตัว
 
-    **ต้องทำ**: ย้าย `jade-ble` ไปใช้ 0.13 แล้วรัน hardware checklist ของ Jade ซ้ำบนเครื่องจริง — audit (2026-10-01) ยืนยันจาก source แล้วว่า btleplug 0.11.8 ไม่มี MTU API เลย และ firmware ของ Safe 7 (`nordic/.../connection.c`) ไม่เริ่มแลก MTU เอง
+    **สถานะ (2026-10-01): แก้แล้ว — `jade-ble` ย้ายไป 0.13 และรัน hardware checklist ของ Jade ซ้ำบน 0.13.3 ผ่านทุกข้อที่เคยผ่านบน 0.11.8**
+    - `jade-ble` ใช้ btleplug 0.13 แล้วโดยไม่ต้องแก้โค้ด เพราะ API ทุกตัวที่ใช้ไม่เปลี่ยน ณ วันนี้ resolve เป็น 0.13.3 ตัวเดียวกับ `trezor-ble` (`Cargo.lock` ไม่อยู่ใน git จึงต้องจดเวอร์ชันไว้กับผลทดสอบทุกครั้ง)
+    - `cargo tree` ยืนยันว่าทั้ง workspace เหลือ btleplug ตัวเดียว (0.13.3 ← `jade-ble`, `trezor-ble`) ไม่มี btleplug 0.11.8, `jni-utils` หรือ `jni` 0.19 แล้ว แอป Phase 1 จึงต้อง bundle Java ของ droidplug ชุดเดียวคือของ 0.13.3 — ยังตรวจกับ APK จริงไม่ได้เพราะยังไม่มีแอป และยังไม่เคยรันบน Android จริง
+    - test ทั้ง workspace 122 ตัวผ่าน (เท่าเดิม), clippy (`-D warnings`) สะอาด และ `cargo check` ผ่านทั้ง `aarch64-apple-ios` และ `aarch64-linux-android` — แต่ test ของ `jade-ble` เป็น logic ล้วน (เลือกเครื่อง, หา characteristic) จึงจับ regression ของ BLE ไม่ได้
+    - **ผล hardware เดิมทั้งหมดได้จาก 0.11.8 ใช้ยืนยัน 0.13.3 ไม่ได้** — อ่าน source ของทั้งสองเวอร์ชันแล้ว backend CoreBluetooth เปลี่ยนพฤติกรรมในจุดที่ Jade ใช้: `connect()` ไม่ discover services เองแล้ว (ย้ายไปอยู่ใน `discover_services()` ซึ่งใน 0.11.8 ไม่ทำอะไรเลย), การเขียนหรือ subscribe ที่ล้มเหลว และการเรียกใช้ peripheral ที่หลุดไปแล้วได้ผลทันทีแทนที่จะค้างจนหมดเวลา และชื่อเครื่องใช้ชื่อจาก advertisement ก่อนชื่อ GAP — ส่วนที่ไม่เปลี่ยน: notification stream ยังไม่จบเมื่อหลุด (จึงยังต้องดู `DeviceDisconnected`) และ consumer ที่ตามไม่ทันยังทำข้อมูลหายเงียบๆ
+    - ✅ รันซ้ำบนเครื่องจริงด้วย 0.13.3 แล้ว (2026-10-01 — ผลเต็มใน `05-progress-and-next-steps.md`): HW-1 ถึง HW-8 (HW-5 เทียบแบบ A/B กับ harness ที่ build จาก btleplug 0.11.8 ได้จอเหมือนกัน; HW-8 รอบที่สี่: reply ของ session เก่ามาถึง connection ใหม่และถูกปฏิเสธ), ใส่ PIN ผิดแล้วลองใหม่ทันที, การจับคู่ใหม่ (รอ 20 วินาทีก่อนยืนยันก็ไม่ timeout) และการปฏิเสธการจับคู่ ผ่านทั้งหมด ไม่พบ regression
+    - ที่ยังเหลือแต่อยู่นอกข้อนี้: รันบน Android จริงต้องรอแอป Phase 1 (ข้อ 14) และข้อสังเกตที่พบระหว่างรันซ้ำแต่ไม่ได้มาจาก btleplug (Jade ยัง unlock อยู่หลัง host หลุด) แยกไปเป็นข้อ 25
 19. **ยังไม่ได้ตรวจความแท้ของ Trezor** — การตรวจรุ่นสองชั้นกันรุ่นอื่นออกได้ แต่กันอุปกรณ์ปลอมที่อ้างว่าเป็น `T3W1` ไม่ได้ ทางเดียวที่ทำได้คือ `AuthenticateDevice` ของ Trezor: Safe 7 ส่ง certificate chain จาก secure element (Optiga และ Tropic) มาให้ host ตรวจกับ root CA ของ Trezor ซึ่งต้องเพิ่มโค้ด verify X.509 **มติ (2026-10-01 หลัง audit)**: ต้องทำก่อนใช้กับเงินจริง เพราะอุปกรณ์ปลอมส่ง xpub ของตัวเองให้ตอนสร้าง vault ได้ (key substitution) — ระหว่างนี้ใช้ Safe 7 กับ testnet และ phrase ทดสอบเท่านั้น
 20. **ที่เก็บ pairing credential ของ Trezor บนมือถือ** — credential มี static private key ของ host อยู่ข้างใน จึงเป็นความลับ ชั้น UniFFI ของ Phase 1 ต้องเก็บใน Keychain/Keystore ห้ามเก็บในไฟล์ธรรมดาหรือ AsyncStorage (harness เก็บไว้ใต้ `target/` เฉพาะตอนทดสอบเท่านั้น)
 21. **Elligator2 ที่ใช้ตอน pairing กับ Trezor เป็นโค้ด crypto ที่เขียนเอง** — ยังไม่มี crate ที่ผ่านการตรวจสอบแล้วตัวไหนเปิดให้ใช้ Elligator2 แบบที่ THP ต้องการ (curve25519-dalek เก็บไว้เป็น `pub(crate)`)
@@ -53,3 +59,9 @@
     - test ที่ยังขาด (mutation ยังรอด): check เชิง defense-in-depth ใน `Multisig::resolve` และ change, message ที่มาผิด session, เพดาน retransmission, MTU check, `Canceller` ของ `trezor-ble`
     - `trezor-ble`: code ที่พิมพ์ผิดรูปแบบตัดการเชื่อมต่อแทนที่จะให้พิมพ์ใหม่ และ deadline รอ reply ถูกต่อทุกครั้งที่มี packet ใดๆ เข้ามา
     - เล็กน้อย: `as_shown` แบบ SLIP-132 ยังไม่ถูกตรวจกับ node, `trezor_static_public_key` ใน credential ยังไม่ถูกผูกกับ handshake, ยังไม่ตรวจ `fw_vendor`
+25. **Jade ยัง unlock อยู่ได้หลัง host หลุดระหว่างทำงาน** (พบครั้งเดียวระหว่างรัน checklist ของ Jade บน btleplug 0.13.3, 2026-10-01)
+    - kill harness ตอนจอขอยืนยันการเซ็น แล้วกดยืนยันบน Jade: `info` 21 และ 37 วินาทีหลังจากนั้นยังเห็น state `Ready` แล้วเป็น `Locked` ที่ 65 วินาที (บันทึกใน `05-progress-and-next-steps.md`)
+    - ขัดกับ README ของ `jade-ble` ที่ว่า PIN wallet lock เมื่อ BLE หลุด อย่างน้อยก็ไม่ใช่ทันที — host ที่เชื่อมใหม่ในช่วงนั้นจะเจอ Jade ที่ยัง unlock อยู่โดยไม่ต้องใส่ PIN
+    - ไม่ได้มาจาก btleplug: ทั้ง 0.11.8 และ 0.13.3 สร้าง `CBCentralManager` และเชื่อมต่อแบบเดียวกัน และ Ctrl-C ตัด process ก่อนโค้ดของ btleplug จะได้ทำงาน
+
+    **ยังต้องหาสาเหตุ**: เทียบกับ source ของ firmware 1.0.41 ว่า lock ถูกเลื่อนไปจนงานที่ค้างบนจอเสร็จหรือไม่ — มีผลต่อสมมติฐานของแอป Phase 1 ว่าเมื่อลิงก์หลุด Jade จะ lock เอง
