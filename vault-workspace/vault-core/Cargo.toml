@@ -13,3 +13,24 @@ zeroize = "1"           # wipe entropy/seed on drop — see keys.rs
 thiserror = "2"         # error types shared across the workspace
 ciborium = "0.2"        # CBOR — the Jade RPC wire format, see hw/jade.rs
 serde_json = "1"        # Jade pinserver payloads are relayed as JSON, see hw/jade.rs
+
+# Trezor Safe 7 (hw::trezor), behind the `trezor` feature. Versions follow what
+# the official noise backend already pulls in, so no curve or hash crate twice.
+trezor-thp = { version = "=0.1.1", features = ["use_std"], optional = true }  # Trezor's own THP (I/O-free)
+trezor-noise-rust-crypto = { version = "0.6.2", default-features = false, features = ["use-x25519", "use-aes-256-gcm", "use-sha2"], optional = true }
+protobuf = { version = "=3.7.2", optional = true }  # must match the vendored bindings, see hw/trezor/protos
+crypto-bigint = { version = "0.7", optional = true }  # constant-time field arithmetic for Elligator2
+sha2 = { version = "0.10", optional = true }
+x25519-dalek = { version = "2", optional = true }
+
+[features]
+# Off by default: ~1.5 MB of generated protobuf code plus the THP stack, which
+# only trezor-ble (and later mobile-signer-ffi) need.
+trezor = [
+  "dep:trezor-thp",
+  "dep:trezor-noise-rust-crypto",
+  "dep:protobuf",
+  "dep:crypto-bigint",
+  "dep:sha2",
+  "dep:x25519-dalek",
+]

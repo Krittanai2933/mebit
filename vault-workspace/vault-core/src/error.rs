@@ -36,6 +36,10 @@ pub enum VaultCoreError {
 
     #[error("Jade: {0}")]
     Jade(#[from] crate::hw::jade::JadeError),
+
+    #[cfg(feature = "trezor")]
+    #[error("Trezor: {0}")]
+    Trezor(#[from] crate::hw::trezor::TrezorError),
 }
 
 #[cfg(test)]
