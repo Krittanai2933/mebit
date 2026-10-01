@@ -7,10 +7,12 @@ members = [
   "lender-signer-cli",
   "monitor-service",
   "jade-ble",
+  "trezor-ble",
 ]
-# Everything but jade-ble: its btleplug dependency needs libdbus on Linux and
-# pulls WinRT in on Windows, and nothing depends on it until mobile-signer-ffi
-# wraps it (Phase 1). Build/test it explicitly with `-p jade-ble`.
+# Everything but jade-ble and trezor-ble: btleplug needs libdbus on Linux and
+# pulls WinRT in on Windows, and nothing depends on them until
+# mobile-signer-ffi wraps them (Phase 1). Build/test them explicitly with
+# `-p jade-ble` / `-p trezor-ble`.
 default-members = [
   "vault-core",
   "custody-service",

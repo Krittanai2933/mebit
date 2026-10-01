@@ -1,0 +1,24 @@
+[package]
+name = "trezor-ble"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+vault-core = { path = "../vault-core", features = ["trezor"] }
+bitcoin = "0.32"
+btleplug = "0.13"       # 0.11 never asks Android for a larger MTU, which the Safe 7's 244-byte packets need
+tokio = { version = "1", features = ["rt", "time", "macros", "sync"] }
+futures-util = "0.3"
+thiserror = "2"
+
+[dev-dependencies]
+# examples/trezor-hw-test only — none of this reaches the library's users
+bitcoin = { version = "0.32", features = ["base64"] }
+bip39 = "2.2.2"
+clap = { version = "4.6.4", features = ["derive"] }
+miniscript = "13"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "signal"] }
+
+[[example]]
+name = "trezor-hw-test"
+test = true             # the roundtrip fixture has tests of its own
