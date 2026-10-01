@@ -14,13 +14,27 @@
 - **2026-08-25 — ก้าวแรกของ wallet-first pivot (M-of-N ใครก็ได้ แทน 2-of-3 role คงที่)**: เปิดใช้ `bitcoin = "0.32"` / `miniscript = "12"` ใน `Cargo.toml` แล้ว และเพิ่ม 2 module ใหม่คู่กับของเดิมโดย**ไม่แตะ logic เดิมเลย** — `keys` (data model กลาง: `VaultKey`, `KeySourceType`, `HwVendor` ใช้ `bitcoin::bip32::{Fingerprint, Xpub}` ของจริง) และ `hw` (placeholder เปล่า รอ Jade/Trezor client)
 - **2026-09-30 — Jade ผ่าน BLE (No.4) เสร็จ** (เจ้าของ: **@phoovich** — งานของ wallet-first pivot ที่ไม่อยู่ในแผนแบ่งงาน 4 คนเดิม): `hw::jade::JadeSession` คือ protocol CBOR-RPC ของ Jade ล้วนๆ ไม่มี I/O — ทำ request/reply, ประกอบ reply ที่มาเป็นท่อนๆ, ขอ PSBT ที่เซ็นแล้วทีละท่อนด้วย `get_extended_data`, ส่งต่อ pinserver และตรวจว่า PSBT ที่ได้กลับมาเพิ่มแค่ลายเซ็นที่ถูกต้องของ Jade — ส่วน BLE อยู่ใน crate ใหม่ `jade-ble` (ใช้ `btleplug`) ทดสอบด้วย fake Jade ที่ทำตามกฎ firmware และกับเครื่องจริง (ดูบันทึกด้านล่าง)
 - รวม 48 test ของ `vault-core` ผ่านหมด ณ 2026-10-01 (23 ใน `hw::jade`) + 6 ใน `jade-ble` — compile, clippy (`-D warnings`), rustdoc และ `cargo fmt` ของสอง crate นี้สะอาด
+- **2026-10-01 — Trezor Safe 7 ผ่าน BLE (No.5): โค้ดและ test เสร็จแล้ว และผ่าน hardware checklist กับเครื่องจริงเกือบครบ** (เจ้าของ @phoovich — บันทึกการทดสอบอยู่ด้านล่าง)
+  - `hw::trezor::TrezorSession` (feature `trezor`, ปิดไว้เป็นค่าเริ่มต้น) คือ Trezor-Host Protocol แบบไม่มี I/O
+    - ใช้ crate `trezor-thp` และ protobuf bindings ของ Trezor เอง
+    - ทำ code-entry pairing (CPace) และ pairing credential
+    - ตรวจว่าเป็น Safe 7 (`T3W1`) สองชั้นทุกครั้งที่เชื่อมต่อ
+    - เซ็นได้เฉพาะ PSBT ของ vault แบบ P2WSH `sortedmulti` และตรวจลายเซ็นที่ได้กลับมาด้วย `hw::psbt_check` (แยกออกมาจาก `hw::jade` ให้ใช้ร่วมกัน)
+  - crate ใหม่ `trezor-ble` (btleplug 0.13) ทำหน้าที่ส่ง byte อย่างเดียว ส่วน `examples/trezor-hw-test` คือ harness สำหรับทดสอบกับเครื่องจริง
+  - test ทั้ง workspace 114 ตัวผ่าน
+    - `vault-core` ตอนเปิด feature `trezor`: 88 ตัว — 40 ตัวใหม่ รวม end-to-end กับ Safe 7 จำลองที่ใช้ device role ของ `trezor-thp` ของจริง
+    - `trezor-ble`: 7 ตัว และ harness 2 ตัว
+  - **mutation pass**: จงใจทำ check ด้านความปลอดภัยพังทีละจุด 33 จุด และสถานะ "รอผู้ใช้" อีก 3 จุด ทุกจุดมี test จับได้
+  - `cargo check` ผ่านทั้ง `aarch64-apple-ios` และ `aarch64-linux-android` (Android ต้องใช้ clang ของ NDK สำหรับ `secp256k1-sys` ซึ่งเป็นเงื่อนไขเดิมของ `bitcoin`)
+  - ใน dependency ของ `trezor-ble` ไม่มี crate USB/HID เลย
+  - รายละเอียดอยู่ใน README ของ `trezor-ble` ส่วนข้อที่ยังเปิดอยู่คือ `04-open-items.md` ข้อ 16–22
 
 **สิ่งที่ต้องทำทั้งหมด**
 - [ ] ทีมอ่าน Bitcoin fundamentals (BIP-32/48, PSBT, multisig script) ให้จบก่อน — สัปดาห์ 1-2 (`.claude/skills/bitcoin-fundamentals/SKILL.md`)
 - [x] เปิดใช้ `bitcoin`/`miniscript` crate จริงใน `Cargo.toml` (2026-08-25 — ยังใช้จริงแค่ใน `keys`)
 - [ ] `keys`: เพิ่มฟังก์ชัน derive จริง (ตอนนี้มีแค่ type) + ตัดสินใจว่า `derivation_path` ควรเป็น `String` หรือ `bitcoin::bip32::DerivationPath` — **รอ @munich** (เอกสาร `08-multisig-wallet-spec.md` ยังไม่อยู่ใน repo)
 - [x] `hw`: Jade client ผ่าน **BLE** (ไม่ใช่ QR — Jade Core ไม่มีกล้อง) — No.4, เจ้าของ @phoovich (2026-09-30)
-- [ ] `hw`: Trezor Safe 7 (BLE) client — No.5
+- [ ] `hw`: Trezor Safe 7 (BLE) client — No.5: โค้ดและ test เสร็จ และผ่าน hardware checklist แล้ว (2026-10-01) เหลือแค่จอยืนยันการเชื่อมต่อหลัง restart (HW-13 ยังสรุปไม่ได้) — ดู README ของ `trezor-ble`
 - [ ] `descriptor`: สร้าง P2WSH 2-of-3 multisig descriptor จริงจาก pubkey จริงของ 3 ฝ่าย
 - [ ] `derivation`: derive child pubkey จริงตาม BIP-48 (`m/48'/0'/0'/2'`) จาก account xpub
 - [ ] `psbt`: สร้าง/parse PSBT จริงด้วย `bitcoin::Psbt`
@@ -58,6 +72,35 @@
 | HW-7 | ขอ version info ตอนที่จอ Jade รอผู้ใช้ (จอ passphrase) | timeout 15 วินาที | ขอแบบ `nonblocking` ซึ่ง firmware ตอบจาก task ของ BLE เอง — `info` ตอบปกติ |
 | HW-8 | reply ค้างจาก connection ก่อนหน้า | reply id `"3"` ของ session เก่ามาถึง connection ใหม่ (id เริ่มที่ 1 ทุก session จึงชนกันได้) | id เริ่มแบบสุ่มต่อ session แบบเดียวกับ jadepy และ reply ที่ id ไม่ตรงถูกปฏิเสธ |
 | ซ้ำ | `info`, `xpub --verify-against`, `roundtrip` 2/16/100, ปฏิเสธบนเครื่อง, ใส่ PIN ผิดแล้วลองใหม่ทันที | — | ✅ ทั้งหมด — PSBT 100 inputs (ตอบกลับ 20 ท่อน) ตรวจซ้ำแบบอิสระด้วย rust-bitcoin + miniscript โดยไม่ผ่าน `verify_signed_psbt` |
+
+### บันทึกการทดสอบกับ Trezor Safe 7 จริง (2026-10-01)
+
+เครื่อง: Trezor Safe 7 firmware 2.12.5 (restore test phrase แล้ว) · host: macOS 26.6.2, Rust 1.98.1, `btleplug` 0.13.3, `trezor-thp` 0.1.1 · รันด้วย `cargo run -p trezor-ble --example trezor-hw-test -- …` (checklist เต็มอยู่ใน `vault-workspace/trezor-ble/README.md`)
+
+| # | ทดสอบ | ผล |
+|---|---|---|
+| HW-1–3 | scan → GATT → จับคู่ครั้งแรก (Bluetooth ของ OS + code ของ THP) → `GetFeatures` | ✅ MTU 247, `T3W1` ผ่านทั้งสองชั้น, model `Safe 7`, firmware 2.12.5 และได้ credential — สำเร็จในครั้งที่ 3: ครั้งแรกเผลอแตะจอที่แสดง code (ปุ่มเดียวบนจอนั้นคือยกเลิกการจับคู่) ครั้งที่สอง Safe 7 อยู่หน้า lock แล้วไม่ตอบ channel allocation (ตอนนี้ขอซ้ำได้แล้ว) |
+| HW-4 | เชื่อมใหม่ด้วย credential | ✅ ไม่ถาม code และใช้ credential เดิมได้ทุก run หลังจากนั้น |
+| HW-5 | `xpub --verify-against` ที่ `m/48'/1'/0'/2'` | ✅ fingerprint `73c5da0a` และ xpub ตรงกับที่ vault-core derive เองจาก phrase และตรงกับของ Jade (`hw::jade::device_vectors`) |
+| HW-6 | `xpub` BIP-84 แบบ SLIP-132 | ✅ key ตรงกับ vault-core และ decode แล้ว `vpub` ที่ได้คือ key เดียวกัน — ยังไม่ได้เทียบกับจอของ Trezor Suite |
+| HW-7 | `roundtrip` 2 และ 16 inputs | ✅ ทั้งสองแบบ ลายเซ็น verify ผ่านและ finalize 2-of-3 ได้ (2 inputs: 18.0 วินาที, 16 inputs: 50.4 วินาที รวมเวลากดยืนยัน) |
+| HW-8 | ปฏิเสธบน Safe 7 | ✅ `cancelled on the Trezor` |
+| HW-9 | กด Ctrl-C (ส่ง Cancel) ระหว่าง Safe 7 รอยืนยัน | ✅ Safe 7 ตอบ `ActionCancelled` และ harness จบด้วย `cancelled on the Trezor` |
+| HW-10 | ปิด Bluetooth ของ Mac ระหว่างรอยืนยัน | ✅ `the Trezor disconnected` ภายในไม่กี่วินาที และ run ถัดไปเชื่อมได้ |
+| HW-11 | Safe 7 lock อยู่ (ปลุกให้ขึ้นหน้า lock) แล้วสั่ง `info` | ✅ Safe 7 ขอ PIN บนเครื่อง แล้วเชื่อมต่อได้ |
+| HW-12 | ลืม Safe 7 ใน Bluetooth settings ของ Mac | ✅ OS ขอจับคู่ใหม่ (numeric comparison) และ credential ของ THP ยังใช้ได้ ไม่ถาม code — run แรกจบด้วย `cancelled on the Trezor` โดยไม่ทราบสาเหตุ แต่ทำซ้ำแล้วเซ็นและ finalize ได้ |
+| HW-13 | ปิดแล้วเปิด Safe 7 ใหม่ ปลดล็อก แล้วสั่ง `info` | ❔ เชื่อมต่อได้โดยไม่มีจอ "Allow … to connect" — ยังสรุปไม่ได้ เพราะไม่แน่ใจว่าปิดเครื่องสนิท และ spec ไม่ได้บอกว่า channel cache อยู่รอดหลังปิดเครื่องหรือไม่ |
+| แก้ bug แล้ว | `roundtrip` โดยปล่อยจอให้ยืนยันไว้ 30 วินาทีก่อนกด | ✅ เซ็นและ finalize ได้ (54.7 วินาทีรวมเวลารอ) |
+
+สิ่งที่เจอจากเครื่องจริง:
+- **bug (แก้แล้ว):** driver ให้เวลาผู้ใช้กดยืนยันแค่ 15 วินาทีแทน 5 นาที เพราะ Safe 7 ส่ง ACK ของ ButtonAck มา*หลัง*ขึ้นจอให้ยืนยัน แล้ว driver นับเวลาใหม่จาก packet ล่าสุด (เจอใน run หลัง HW-10: `timed out waiting for the Trezor`) ตอนนี้ใช้ `TrezorSession::awaiting_user()` ตัดสินแทน และมี test ที่ทำให้เกิดอาการเดียวกันบน device role ของ `trezor-thp`
+- Safe 7 ที่หลับโดยไม่มี host เชื่อมต่ออยู่จะปิดวิทยุ Bluetooth (`ble_suspend` ใน firmware) จึงหาไม่เจอจนกว่าจะปลุกเครื่อง เจอแบบนี้ 2 ครั้ง แอปต้องบอกผู้ใช้ให้ปลุก Safe 7 ก่อน
+- ถ้า host หายไประหว่างรอยืนยัน (kill harness หรือปิด Bluetooth) Safe 7 ยังค้างจอนั้นไว้จนเครื่อง lock เอง (ราว 1 นาที) ถ้าต้องการให้จอนั้นหายไป ต้องส่ง Cancel ขณะที่ยังเชื่อมต่ออยู่
+- ชื่อที่ advertise เปลี่ยนเกือบทุกครั้งที่เชื่อมต่อ (12 จาก 13 ครั้ง: `(0R4)`, `(4B6)`, `(2G8)`…) จึงใช้ระบุเครื่องไม่ได้ เช่นเดียวกับ address
+
+- เชื่อมต่อใหม่ด้วย credential แล้ว Safe 7 ไม่ขึ้นจอให้ยืนยันการเชื่อมต่อเลย เพราะ firmware ทำ "channel replacement": ถ้ายังมี channel เปิดค้างของ host key เดิมอยู่ ก็ถือเป็น autoconnect และไม่ถาม แม้ credential ของเราจะไม่ใช่ autoconnect ก็ตาม (`core/embed/rust/src/thp/mod.rs`) จอ "Allow … to connect" ควรขึ้นเมื่อไม่มี channel นั้นแล้ว เช่นหลัง restart เครื่อง
+
+ยังไม่ได้ทดสอบบนเครื่อง: จอยืนยันการเชื่อมต่อ ("Allow … to connect") ซึ่งมีแต่ test กับ Safe 7 จำลอง และ `BondRemoved` (Safe 7 ลืม host แต่ host ยังจำ Safe 7)
 
 ---
 

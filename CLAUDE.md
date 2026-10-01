@@ -8,7 +8,7 @@ Start with [`docs/07-product-vision-mebit.md`](docs/07-product-vision-mebit.md) 
 
 - `docs/` — numbered doc set (`00`-`09`); see `docs/00-README.md` for what's current vs. lending-specific
 - `design-reference/` — mebit/Mapboss design tokens + logos (for `mobile-signer-ffi`)
-- `vault-workspace/` — the Rust workspace; `cargo build`/`cargo test` from here. Six crates (`vault-core`, `custody-service`, `lender-signer-cli`, `mobile-signer-ffi`, `monitor-service`, `jade-ble`), each with its own `README.md` with owner/deps/responsibilities. `jade-ble` sits outside `default-members` (btleplug needs libdbus on Linux): reach it with `-p jade-ble`. Don't run cargo commands from the repo root, there's no top-level `Cargo.toml`.
+- `vault-workspace/` — the Rust workspace; `cargo build`/`cargo test` from here. Seven crates (`vault-core`, `custody-service`, `lender-signer-cli`, `mobile-signer-ffi`, `monitor-service`, `jade-ble`, `trezor-ble`), each with its own `README.md` with owner/deps/responsibilities. `jade-ble` and `trezor-ble` sit outside `default-members` (btleplug needs libdbus on Linux): reach them with `-p jade-ble` / `-p trezor-ble`. vault-core's Trezor protocol is behind its non-default `trezor` feature (`cargo test -p vault-core --features trezor`). Don't run cargo commands from the repo root, there's no top-level `Cargo.toml`.
 - `.claude/agents/` — one subagent per module, split across the 4-person team: `vault-core-descriptor`, `vault-core-policy` (both work in `vault-core/src/lib.rs`), `platform-services` (`custody-service` + `lender-signer-cli` + `monitor-service`), `mobile-signer` (`mobile-signer-ffi`). Prefer the matching agent when working inside a specific module.
 - `.claude/skills/` — shared knowledge usable from any module: `bitcoin-fundamentals`, `policy-engine-review`, `testnet-workflow`, `design-tokens`.
 
@@ -16,7 +16,7 @@ Start with [`docs/07-product-vision-mebit.md`](docs/07-product-vision-mebit.md) 
 
 `vault-core` has no in-workspace dependencies and is depended on by everything else (directly, or via shared invariants for `monitor-service`). Treat changes to `vault-core`'s public interface (descriptor/PSBT/derivation signatures) as breaking changes — check who else in `vault-workspace/` calls them before changing signatures.
 
-`vault-core` also has `keys` (shared `VaultKey`/`KeySourceType`/`HwVendor` data model, using real `bitcoin::bip32` types) and `hw` (hardware-wallet clients: `hw::jade` is the Jade protocol with no I/O; its BLE transport is the `jade-ble` crate) — added 2026-08-25 as the first step of generalizing the crate from fixed 2-of-3 lending roles to M-of-N. These are additive and lower-risk than `descriptor`/`derivation`/`psbt`/`policy`; don't let work here bleed into changing those modules' existing logic.
+`vault-core` also has `keys` (shared `VaultKey`/`KeySourceType`/`HwVendor` data model, using real `bitcoin::bip32` types) and `hw` (hardware-wallet clients, each a protocol with no I/O: `hw::jade` for the Jade, transport crate `jade-ble`; `hw::trezor` for the Trezor Safe 7 and no other Trezor model, transport crate `trezor-ble`; `hw::psbt_check`, shared by both, checks what a device signed) — added 2026-08-25 as the first step of generalizing the crate from fixed 2-of-3 lending roles to M-of-N. These are additive and lower-risk than `descriptor`/`derivation`/`psbt`/`policy`; don't let work here bleed into changing those modules' existing logic.
 
 ## The policy engine is security-critical
 
