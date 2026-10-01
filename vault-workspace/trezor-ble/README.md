@@ -138,7 +138,7 @@ Its expected fingerprint is `73c5da0a`. Its BIP-48 testnet account xpub is the o
 
 Runs so far: 2026-10-01, Safe 7 firmware 2.12.5 with the test phrase, macOS 26.6.2, Rust 1.98.1, btleplug 0.13.3, trezor-thp 0.1.1.
 
-**Not yet re-run since the audit fixes of 2026-10-01** (pairing-state check, cancel, signing paths): repeat HW-2, HW-4 and HW-7 first. See `docs/04-open-items.md` item 23.
+**Re-run after the audit fixes of 2026-10-01** (pairing-state check, cancel, signing paths): HW-4 (reconnecting with the existing credential), HW-7 (2 inputs, finalized), and HW-2 (a fresh pairing into a new credential file) all passed again. See `docs/04-open-items.md` item 23.
 
 | # | Case | Expect | Last run |
 |---|---|---|---|

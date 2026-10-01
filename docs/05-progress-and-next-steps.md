@@ -38,14 +38,14 @@
     - ปฏิเสธ PSBT ที่ใช้ output เดียวกันซ้ำ
     - test ใหม่: คำตอบ xpub ที่ผิดห้าแบบ, `psbt_check` มี test ของตัวเอง, test ว่า `Debug` ไม่เผย key (ตัวเดิมไม่มีทางล้ม)
   - test ทั้ง workspace 122 ตัวผ่าน (`vault-core` ตอนเปิด `trezor`: 96 ตัว), clippy (`-D warnings`) และ `cargo fmt` สะอาด
-  - **ยังไม่ได้รันกับเครื่องจริงหลังแก้** — ดู `04` ข้อ 23 ส่วนข้อที่ยังไม่แก้อยู่ใน `04` ข้อ 24
+  - รันกับเครื่องจริงซ้ำหลังแก้แล้ว: HW-2, HW-4, HW-7 ผ่านทั้งหมด (`04` ข้อ 23) ส่วนข้อที่ยังไม่แก้อยู่ใน `04` ข้อ 24
 
 **สิ่งที่ต้องทำทั้งหมด**
 - [ ] ทีมอ่าน Bitcoin fundamentals (BIP-32/48, PSBT, multisig script) ให้จบก่อน — สัปดาห์ 1-2 (`.claude/skills/bitcoin-fundamentals/SKILL.md`)
 - [x] เปิดใช้ `bitcoin`/`miniscript` crate จริงใน `Cargo.toml` (2026-08-25 — ยังใช้จริงแค่ใน `keys`)
 - [ ] `keys`: เพิ่มฟังก์ชัน derive จริง (ตอนนี้มีแค่ type) + ตัดสินใจว่า `derivation_path` ควรเป็น `String` หรือ `bitcoin::bip32::DerivationPath` — **รอ @munich** (เอกสาร `08-multisig-wallet-spec.md` ยังไม่อยู่ใน repo)
 - [x] `hw`: Jade client ผ่าน **BLE** (ไม่ใช่ QR — Jade Core ไม่มีกล้อง) — No.4, เจ้าของ @phoovich (2026-09-30)
-- [ ] `hw`: Trezor Safe 7 (BLE) client — No.5: โค้ดและ test เสร็จ และผ่าน hardware checklist แล้ว (2026-10-01) เหลือแค่จอยืนยันการเชื่อมต่อหลัง restart (HW-13 ยังสรุปไม่ได้) และรัน HW-2/4/7 ซ้ำหลังแก้ตาม audit (`04` ข้อ 23) — ดู README ของ `trezor-ble`
+- [ ] `hw`: Trezor Safe 7 (BLE) client — No.5: โค้ดและ test เสร็จ และผ่าน hardware checklist แล้ว (2026-10-01) เหลือแค่จอยืนยันการเชื่อมต่อหลัง restart (HW-13 ยังสรุปไม่ได้) — ดู README ของ `trezor-ble`
 - [ ] `descriptor`: สร้าง P2WSH 2-of-3 multisig descriptor จริงจาก pubkey จริงของ 3 ฝ่าย
 - [ ] `derivation`: derive child pubkey จริงตาม BIP-48 (`m/48'/0'/0'/2'`) จาก account xpub
 - [ ] `psbt`: สร้าง/parse PSBT จริงด้วย `bitcoin::Psbt`
