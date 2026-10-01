@@ -178,7 +178,7 @@ Runs so far: 2026-10-01, Safe 7 firmware 2.12.5 with the test phrase, macOS 26.6
 - **Android.**
   - Permissions: `BLUETOOTH_SCAN` (`neverForLocation`) and `BLUETOOTH_CONNECT` on API 31+; location on API ≤ 30.
   - btleplug's droidplug needs its Java side bundled, `btleplug::platform::init(env)` called through JNI, and ProGuard rules (btleplug's README).
-  - btleplug 0.13 requests MTU 517 when connecting. **0.11 doesn't**, so the Safe 7 can't work on Android with `jade-ble`'s btleplug pin. One Android build can't carry two btleplug versions: see `docs/04-open-items.md`.
+  - btleplug 0.13 requests MTU 517 when connecting. **0.11 doesn't**, which is why `jade-ble` moved to 0.13 as well: one Android build can't carry two btleplug versions (`docs/04-open-items.md` item 18).
 - **Lifecycle.** A link may drop when the app goes to the background. Every call reports `Disconnected` or `Timeout`. Reconnect with the stored credential; the user then confirms on the Safe 7.
 
 ## Known issues

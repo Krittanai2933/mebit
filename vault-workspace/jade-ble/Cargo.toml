@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 vault-core = { path = "../vault-core" }
 bitcoin = "0.32"
-btleplug = "0.11"       # the version observed working with our Jade Core; see README
+btleplug = "0.13"       # trezor-ble's version: an Android app can bundle only one (docs/04-open-items.md item 18)
 tokio = { version = "1", features = ["rt", "time", "macros"] }
 futures-util = "0.3"
 ureq = "3.3"            # pinserver relay; rustls + bundled roots, so no platform glue on mobile
