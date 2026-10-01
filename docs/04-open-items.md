@@ -32,12 +32,24 @@
     - `jade-ble` pin ไว้ที่ 0.11.8 ซึ่งเป็นเวอร์ชันที่ทดสอบกับ Jade Core แล้ว
     - แอป Android หนึ่งตัวรวม droidplug (ฝั่ง Java) ได้ชุดเดียว
 
-    **ต้องทำ**: ย้าย `jade-ble` ไปใช้ 0.13 แล้วรัน hardware checklist ของ Jade ซ้ำบนเครื่องจริง
-19. **ยังไม่ได้ตรวจความแท้ของ Trezor** — การตรวจรุ่นสองชั้นกันรุ่นอื่นออกได้ แต่กันอุปกรณ์ปลอมที่อ้างว่าเป็น `T3W1` ไม่ได้ ทางเดียวที่ทำได้คือ `AuthenticateDevice` ของ Trezor: Safe 7 ส่ง certificate chain จาก secure element (Optiga และ Tropic) มาให้ host ตรวจกับ root CA ของ Trezor ซึ่งต้องเพิ่มโค้ด verify X.509 **ยังต้องตัดสินใจ**: จะทำใน Phase 1 หรือไม่
+    **ต้องทำ**: ย้าย `jade-ble` ไปใช้ 0.13 แล้วรัน hardware checklist ของ Jade ซ้ำบนเครื่องจริง — audit (2026-10-01) ยืนยันจาก source แล้วว่า btleplug 0.11.8 ไม่มี MTU API เลย และ firmware ของ Safe 7 (`nordic/.../connection.c`) ไม่เริ่มแลก MTU เอง
+19. **ยังไม่ได้ตรวจความแท้ของ Trezor** — การตรวจรุ่นสองชั้นกันรุ่นอื่นออกได้ แต่กันอุปกรณ์ปลอมที่อ้างว่าเป็น `T3W1` ไม่ได้ ทางเดียวที่ทำได้คือ `AuthenticateDevice` ของ Trezor: Safe 7 ส่ง certificate chain จาก secure element (Optiga และ Tropic) มาให้ host ตรวจกับ root CA ของ Trezor ซึ่งต้องเพิ่มโค้ด verify X.509 **มติ (2026-10-01 หลัง audit)**: ต้องทำก่อนใช้กับเงินจริง เพราะอุปกรณ์ปลอมส่ง xpub ของตัวเองให้ตอนสร้าง vault ได้ (key substitution) — ระหว่างนี้ใช้ Safe 7 กับ testnet และ phrase ทดสอบเท่านั้น
 20. **ที่เก็บ pairing credential ของ Trezor บนมือถือ** — credential มี static private key ของ host อยู่ข้างใน จึงเป็นความลับ ชั้น UniFFI ของ Phase 1 ต้องเก็บใน Keychain/Keystore ห้ามเก็บในไฟล์ธรรมดาหรือ AsyncStorage (harness เก็บไว้ใต้ `target/` เฉพาะตอนทดสอบเท่านั้น)
 21. **Elligator2 ที่ใช้ตอน pairing กับ Trezor เป็นโค้ด crypto ที่เขียนเอง** — ยังไม่มี crate ที่ผ่านการตรวจสอบแล้วตัวไหนเปิดให้ใช้ Elligator2 แบบที่ THP ต้องการ (curve25519-dalek เก็บไว้เป็น `pub(crate)`)
     - โค้ดราว 40 บรรทัดใน `vault-core/src/hw/trezor/cpace.rs` port มาจาก reference ของ Trezor (trezorlib) บน arithmetic แบบ constant-time ของ `crypto-bigint`
     - ผูกไว้กับ test vector ทางการ 10 ชุดและ vector ของ CPace จาก trezorlib
 
     **ขอ review จากเจ้าของ vault-core อีกคน**: ไม่ใช่ policy module แต่เป็นจุดที่เกี่ยวกับความปลอดภัย
+
+    audit อิสระ (2026-10-01) ตรวจซ้ำด้วย Elligator2 และ X25519 ที่เขียนใหม่เองจาก RFC 9380 และ RFC 7748: vector ทุกชุดตรง และ differential test 20,000 input ให้ผลตรงกันทุกตัว (ครอบทั้งสองกิ่งของ map) จึงยืนยันได้ว่าถูกต้องเชิงฟังก์ชัน แต่ไม่ได้วัด timing และไม่แทน review ของเจ้าของ vault-core อีกคน
 22. **License ของ protobuf ของ Trezor** — ไฟล์ `.proto` ใน trezor-firmware `common/` เป็น LGPL-3.0 จึงไม่ได้ copy มา ใช้ generated Rust bindings ของ Trezor เองแทน (มาจาก `trezor-client`, MIT OR Apache-2.0 รายละเอียดใน `vault-core/src/hw/trezor/protos/README.md`) — จดไว้เผื่อบริษัทต้องตรวจ license ของ dependency
+23. **Host เคยเชื่อว่า Trezor จับคู่แล้ว ทั้งที่ไม่ได้ส่ง credential ของเราไป** (พบจาก audit อิสระ 2026-10-01 — แก้ในโค้ดแล้ว)
+    - เดิม `TrezorSession` ข้ามการใส่ code ทุกครั้งที่อุปกรณ์ตอบว่า "paired" ขัดกับ THP spec ที่ `c33f815` (host state HH3 ข้อ 3: "Assert that trezor_state == STATE_UNPAIRED") อุปกรณ์ BLE ใดๆ จึงเชื่อมต่อได้โดยผู้ใช้ไม่ต้องทำอะไร และสวมรอยเป็น Safe 7 ที่เคยจับคู่ไว้ได้ แล้ว xpub ของมันก็ถูกรับ — trezorlib ทางการมีช่องเดียวกัน
+    - ตอนนี้ `thp.rs` จำไว้ว่า credential ที่เก็บไว้ตรงกับอุปกรณ์และถูกส่งไปหรือไม่ และ `session.rs::on_handshake_done` ตัดการเชื่อมต่อ (Protocol error) ถ้าอุปกรณ์อ้างว่า paired โดยที่เราไม่ได้ส่ง credential — มี regression test สามตัว
+    - **ต้องทำ**: รัน HW-2, HW-4, HW-7 ซ้ำกับเครื่องจริง เพื่อยืนยันว่าการเชื่อมต่อด้วย credential ของจริงยังผ่าน
+24. **ข้อที่ audit (2026-10-01) พบแต่ยังไม่ได้แก้**
+    - **ยังต้องตัดสินใจ**: เมื่อ credential ที่เก็บไว้ไม่ตรงกับเครื่องที่เจอ host ถอยไปจับคู่ใหม่เงียบๆ (`new_credential` เป็นสัญญาณเดียว) แอปจึงแยก "เครื่องใหม่" กับ "ไม่ใช่เครื่องที่ลงทะเบียนไว้" ไม่ได้ ควรมี flag ใน `Connected` หรือ option ให้ error แทน
+    - `sign_psbt` รับ PSBT ของ vault `sortedmulti` ใดก็ได้ที่มี key ของเครื่องนี้ โดยถือ global xpubs ใน PSBT เองเป็น "vault" ผู้เรียกจึงต้องเทียบกับ descriptor ของ vault ที่ลงทะเบียนไว้ และรัน `policy` ก่อนเซ็นทุกครั้ง (ตอนนี้ยังไม่มีผู้เรียก)
+    - test ที่ยังขาด (mutation ยังรอด): check เชิง defense-in-depth ใน `Multisig::resolve` และ change, message ที่มาผิด session, เพดาน retransmission, MTU check, `Canceller` ของ `trezor-ble`
+    - `trezor-ble`: code ที่พิมพ์ผิดรูปแบบตัดการเชื่อมต่อแทนที่จะให้พิมพ์ใหม่ และ deadline รอ reply ถูกต่อทุกครั้งที่มี packet ใดๆ เข้ามา
+    - เล็กน้อย: `as_shown` แบบ SLIP-132 ยังไม่ถูกตรวจกับ node, `trezor_static_public_key` ใน credential ยังไม่ถูกผูกกับ handshake, ยังไม่ตรวจ `fw_vendor`

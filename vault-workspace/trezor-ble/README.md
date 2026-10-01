@@ -60,6 +60,7 @@ The advertised name, and the model code in the advertisement, only narrow the sc
 Sources:
 - trezor-firmware `c33f81554a51` (2026-09-30): `nordic/trezor/trezor-ble/src/ble/{ble_internal.h, service.c, advertising.c, connection.c}`, the THP specification `docs/common/thp/specification.md`, and trezorlib `python/src/trezorlib/transport/ble.py` and `thp/`
 - trezor-suite `transport-bluetooth`, `transport-native-bluetooth`
+- `trezor-thp` 0.1.1 itself is published from trezor-firmware `7105338e`. Its THP message numbers match `c33f815`'s, except one value since removed.
 
 **GATT.** Service `8c000001-a59b-4d58-a9ad-073df69fa1b1`. Both characteristics require an encrypted link.
 - The host writes to `8c000002-…` (write, or write without response).
@@ -73,6 +74,7 @@ Sources:
 - The OS pairs the Bluetooth link: LE Secure Connections, numeric comparison. The same six digits show on the Safe 7 and on the host; confirm both.
 - Then THP pairs the app. The Safe 7 asks "Allow mebit on <host> to pair?" and shows a six-digit code, which the user types on the host. That code is not the PIN.
 - After that the host holds a **pairing credential**. It is a secret: it contains the host's static key. Keep it in Keychain or Keystore.
+- The Safe 7 may say it already knows this host only when this host presented a credential that Safe 7 issued: the handshake shows whether our stored credential matched the device. A peer that claims a pairing without one is refused (THP specification, host state HH3). Otherwise any peripheral could skip pairing, or pass for the paired Safe 7.
 - With the credential, a reconnection skips the code. Autoconnect credentials are never requested, so the Safe 7 asks "Allow … to connect with this Trezor?". The exception is when it still holds an open channel from this host's last connection: it then replaces that channel without asking. That is "channel replacement": THP specification, section of that name, and `core/embed/rust/src/thp/mod.rs`, `core/src/apps/thp/pairing.py`. Channels outlive a dropped link, so on 2026-10-01 no reconnection asked, not even one made just after turning the Safe 7 off and on (HW-13).
 
 **Advertising.** The service UUID and Trezor's company id `0x0F29` (followed by flags, color, and a model code: 6 for the Safe 7) sit in the **scan response**, so scanning is unfiltered.
@@ -91,15 +93,19 @@ Sources:
 
 ## Signing
 
-The PSBT must be what mebit builds: a P2WSH `sortedmulti` vault spend in which this Safe 7 holds exactly one key of every input. Anything else is refused before anything is sent. That includes:
+The PSBT must be what mebit builds: a P2WSH `sortedmulti` vault spend in which this Safe 7 holds exactly one key of every input, at a BIP-48 P2WSH vault path on the session's network (`m/48'/coin'/account'/2'/{0,1}/i`, coin 0 on mainnet and 1 elsewhere). Anything else is refused before anything is sent. That includes:
 - inputs from two vaults
+- one output spent twice
+- the Safe 7's key at another path, such as mainnet's coin type in a testnet session
 - a missing previous transaction or witness script
 - sighashes other than ALL
 - OP_RETURN outputs
 
+The client checks the PSBT's shape, not its intent: it takes the PSBT's own global xpubs as "the vault". Before signing, a caller must check the PSBT against the vault the user registered, and run `vault-core`'s `policy`.
+
 The vault's account xpubs must be in the PSBT as global xpubs (BIP-174 `PSBT_GLOBAL_XPUB`): Trezor needs them to rebuild each input's script.
 
-**Change.** Change back to the same vault, at the signer's own path, goes to the Safe 7 as change. The Safe 7 re-derives it and doesn't show it. Every other output is shown for the user to confirm.
+**Change.** Change back to the same vault, at the signer's own vault path (chain 0 or 1), goes to the Safe 7 as change. The Safe 7 re-derives it and doesn't show it. Every other output is shown for the user to confirm.
 
 **What comes back.** It is accepted only as the PSBT that was sent plus valid signatures from the signer's keys, verified against sighashes computed here (`vault-core::hw::psbt_check`, shared with the Jade).
 
@@ -131,6 +137,8 @@ Its expected fingerprint is `73c5da0a`. Its BIP-48 testnet account xpub is the o
 **Record each run.** Firmware, host OS, Rust toolchain, crate versions, and which confirmations the Safe 7 asked for.
 
 Runs so far: 2026-10-01, Safe 7 firmware 2.12.5 with the test phrase, macOS 26.6.2, Rust 1.98.1, btleplug 0.13.3, trezor-thp 0.1.1.
+
+**Not yet re-run since the audit fixes of 2026-10-01** (pairing-state check, cancel, signing paths): repeat HW-2, HW-4 and HW-7 first. See `docs/04-open-items.md` item 23.
 
 | # | Case | Expect | Last run |
 |---|---|---|---|
@@ -176,5 +184,5 @@ Runs so far: 2026-10-01, Safe 7 firmware 2.12.5 with the test phrase, macOS 26.6
 ## Known issues
 
 - **btleplug 0.13.3** is pinned for its CoreBluetooth fixes: `discover_services()` hangs, event-thread panics, operations that never resolve (#486–#489), and Android JNI crashes. It also requests MTU 517 on Android.
-- **Device authenticity is not checked.** A fake peripheral claiming to be a `T3W1` passes both model checks. Only Trezor's `AuthenticateDevice` (certificate chains from the device's secure elements) could tell. See `docs/04-open-items.md`.
+- **Device authenticity is not checked.** A fake peripheral claiming to be a `T3W1` passes both model checks, and could hand over its own xpub when a vault is set up. Only Trezor's `AuthenticateDevice` (certificate chains from the device's secure elements) could tell. It is required before real funds, so use the Safe 7 on test networks with the test phrase until then: `docs/04-open-items.md` item 19.
 - **Dropping a call's future midway** leaves the device out of step. The next call says so (`Abandoned`): reconnect.

@@ -11,7 +11,9 @@
 //!    starts over and lets the device ask for its PIN, as trezorlib does.
 //! 3. Code-entry pairing, or, with a credential from an earlier pairing, the
 //!    user's confirmation on the device. A credential is requested after
-//!    pairing, never an "autoconnect" one.
+//!    pairing, never an "autoconnect" one. The device's word that it knows
+//!    this host is taken only if this host presented a credential it issued
+//!    (the specification's host state HH3).
 //! 4. `GetFeatures` on the seedless session 0, and identity gate 2.
 //! 5. `ThpCreateNewSession` for the wallet on session 1, where every later
 //!    request runs.
@@ -324,7 +326,9 @@ impl TrezorSession {
 
     /// Asks the device to drop the prompt it shows, or the next one: the
     /// request then ends in [`TrezorError::UserCancelled`] and the connection
-    /// stays usable. Does nothing when no request can be waiting on the user.
+    /// stays usable. If the request ends before showing another prompt (say,
+    /// it was past its last confirmation), it ends normally and the cancel
+    /// lapses. Does nothing when no request can be waiting on the user.
     pub fn request_cancel(&mut self) -> Result<Vec<Vec<u8>>, VaultCoreError> {
         let cancellable = matches!(
             self.flow,
@@ -431,7 +435,7 @@ impl TrezorSession {
                 event: None,
             }),
             Arrival::DeviceLocked => Err(TrezorError::Locked),
-            Arrival::HandshakeDone(state) => self.on_handshake_done(state),
+            Arrival::HandshakeDone { state, presented } => self.on_handshake_done(state, presented),
             Arrival::Message {
                 session,
                 message_type,
@@ -459,8 +463,21 @@ impl TrezorSession {
         (send, Ok(event))
     }
 
-    fn on_handshake_done(&mut self, state: PairingState) -> Result<Step, TrezorError> {
+    fn on_handshake_done(
+        &mut self,
+        state: PairingState,
+        presented: bool,
+    ) -> Result<Step, TrezorError> {
         let send = if state.is_paired() {
+            // A device can only know this host by a credential the handshake
+            // carried. Without one, the specification has the host require
+            // "unpaired" (host state HH3); taking the claim would let any
+            // peer, or one posing as a paired Safe 7, skip pairing.
+            if !presented {
+                return Err(TrezorError::Protocol(
+                    "the Trezor claims a pairing this host has no credential for".into(),
+                ));
+            }
             // Known host: finish; the device may ask the user to confirm.
             self.flow = Flow::Connecting(Connect::Ending {
                 new_credential: None,
@@ -494,7 +511,7 @@ impl TrezorSession {
             Flow::Connecting(state) => self.connect_step(state, session, message_type, &payload),
             Flow::Xpub(request) => {
                 expect(session, WALLET, message_type, PUBLIC_KEY, "PublicKey")?;
-                self.flow = Flow::Ready;
+                self.become_ready();
                 let (xpub, master_fingerprint, as_shown) =
                     request.finish(decode::<PublicKey>(&payload)?)?;
                 Ok(Step {
@@ -518,7 +535,7 @@ impl TrezorSession {
                     }
                     Answer::Finished => {
                         // The exchange is over either way; the channel is in step.
-                        self.flow = Flow::Ready;
+                        self.become_ready();
                         let signed = signing.finish()?;
                         Ok(Step {
                             send: Vec::new(),
@@ -721,7 +738,7 @@ impl TrezorSession {
                 new_credential,
             } => {
                 expect(session, WALLET, message_type, SUCCESS, "Success")?;
-                self.flow = Flow::Ready;
+                self.become_ready();
                 return Ok(Step {
                     send: Vec::new(),
                     event: Some(TrezorEvent::Connected {
@@ -811,10 +828,16 @@ impl TrezorSession {
         // The device is back at its home screen; only a connection that was
         // still being set up is lost.
         if matches!(self.flow, Flow::Xpub(_) | Flow::Signing(_)) {
-            self.flow = Flow::Ready;
-            self.cancel_pending = false;
+            self.become_ready();
         }
         error
+    }
+
+    /// A request, or the connection, is over. A cancel still waiting for a
+    /// prompt lapses with it: the next request is not the one it was for.
+    fn become_ready(&mut self) {
+        self.flow = Flow::Ready;
+        self.cancel_pending = false;
     }
 
     fn after_error(&mut self, error: &TrezorError) {

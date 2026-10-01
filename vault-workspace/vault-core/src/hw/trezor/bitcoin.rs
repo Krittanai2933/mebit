@@ -16,7 +16,7 @@
 //! (`core/src/apps/bitcoin/multisig.py`). The account xpubs come from the
 //! PSBT's global xpubs (BIP-174 `PSBT_GLOBAL_XPUB`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bitcoin::bip32::{ChainCode, ChildNumber, DerivationPath, Fingerprint, KeySource, Xpub};
 use bitcoin::hashes::Hash;
@@ -72,17 +72,13 @@ impl XpubRequest {
         network: Network,
         options: XpubOptions,
     ) -> Result<(Self, GetPublicKey), TrezorError> {
-        let coin = u32::from(network != Network::Bitcoin);
         let hardened = |index| ChildNumber::Hardened { index };
         let allowed = match path.as_ref() {
-            [purpose, coin_type, account, script] => {
-                *purpose == hardened(48)
-                    && *coin_type == hardened(coin)
-                    && account.is_hardened()
-                    && *script == hardened(2)
-            }
+            account @ [_, _, _, _] => is_bip48_p2wsh_account(account, network),
             [purpose, coin_type, account] => {
-                *purpose == hardened(84) && *coin_type == hardened(coin) && account.is_hardened()
+                *purpose == hardened(84)
+                    && *coin_type == hardened(coin_type_of(network))
+                    && account.is_hardened()
             }
             _ => false,
         };
@@ -189,9 +185,13 @@ impl Signing {
         let mut inputs = Vec::with_capacity(tx.input.len());
         let mut signer_keys = Vec::with_capacity(tx.input.len());
         let mut previous = BTreeMap::new();
+        let mut spent = BTreeSet::new();
         for (index, (txin, input)) in tx.input.iter().zip(&psbt.inputs).enumerate() {
             let refuse_input = |why: &str| refuse(format!("input {index}: {why}"));
             let prevout = txin.previous_output;
+            if !spent.insert(prevout) {
+                return Err(refuse_input("spends the same output as an earlier input"));
+            }
             let prev_tx = input.non_witness_utxo.as_ref().ok_or_else(|| {
                 refuse_input("no previous transaction (Trezor checks amounts against it)")
             })?;
@@ -230,6 +230,13 @@ impl Signing {
                     .map_err(|why| refuse_input(&why))?;
             let (signer_key, signer_path) =
                 multisig.signer(signer).map_err(|why| refuse_input(&why))?;
+            // The device checks paths too, but only as its safety-check
+            // setting says; a testnet session must never sign at mainnet paths.
+            if !is_vault_key_path(&signer_path, network) {
+                return Err(refuse_input(&format!(
+                    "this device's key is at {signer_path}, not a BIP-48 P2WSH vault path on {network}"
+                )));
+            }
             match &vault {
                 None => vault = Some(multisig.clone()),
                 Some(first) if first.same_vault(&multisig) => {}
@@ -252,11 +259,12 @@ impl Signing {
 
         let mut outputs = Vec::with_capacity(tx.output.len());
         for (index, (txout, output)) in tx.output.iter().zip(&psbt.outputs).enumerate() {
-            let proto = match change_output(txout, output, &vault, signer, &psbt.xpub, &secp) {
-                Some(change) => change,
-                None => external_output(txout, network)
-                    .map_err(|why| refuse(format!("output {index}: {why}")))?,
-            };
+            let proto =
+                match change_output(txout, output, &vault, signer, network, &psbt.xpub, &secp) {
+                    Some(change) => change,
+                    None => external_output(txout, network)
+                        .map_err(|why| refuse(format!("output {index}: {why}")))?,
+                };
             outputs.push(proto);
         }
 
@@ -515,14 +523,16 @@ impl Multisig {
     }
 }
 
-/// An output goes to Trezor as change only if it is this same vault, at the
-/// signer's own path. Trezor then re-derives it and leaves it off the screen.
-/// Anything else is an external output, which the user confirms on the device.
+/// An output goes to Trezor as change only if it is this same vault, at a
+/// vault path of the signer's on this network. Trezor then re-derives it and
+/// leaves it off the screen. Anything else is an external output, which the
+/// user confirms on the device.
 fn change_output<C: Verification>(
     txout: &TxOut,
     output: &PsbtOutput,
     vault: &Multisig,
     signer: Fingerprint,
+    network: Network,
     xpubs: &BTreeMap<Xpub, KeySource>,
     secp: &Secp256k1<C>,
 ) -> Option<TxOutput> {
@@ -535,6 +545,9 @@ fn change_output<C: Verification>(
         return None;
     }
     let (_, signer_path) = multisig.signer(signer).ok()?;
+    if !is_vault_key_path(&signer_path, network) {
+        return None;
+    }
     let mut proto = TxOutput::new();
     proto.address_n = path_u32(&signer_path);
     proto.amount = Some(txout.value.to_sat());
@@ -635,6 +648,35 @@ fn xpub_of(node: &HDNodeType, network: Network) -> Result<Xpub, TrezorError> {
             .map_err(|_| protocol("an invalid public key"))?,
         chain_code: ChainCode::from(chain_code),
     })
+}
+
+/// BIP-44's coin type: 0 on mainnet, 1 on every test network.
+fn coin_type_of(network: Network) -> u32 {
+    u32::from(network != Network::Bitcoin)
+}
+
+/// `m/48'/coin'/account'/2'`: a BIP-48 P2WSH multisig account on `network`.
+fn is_bip48_p2wsh_account(path: &[ChildNumber], network: Network) -> bool {
+    let hardened = |index| ChildNumber::Hardened { index };
+    matches!(path, [purpose, coin, account, script]
+        if *purpose == hardened(48)
+            && *coin == hardened(coin_type_of(network))
+            && account.is_hardened()
+            && *script == hardened(2))
+}
+
+/// A vault key's whole path: a BIP-48 P2WSH account on `network`, then
+/// receive (0) or change (1), then an index. That is the shape mebit's
+/// descriptors give every key, and the one Trezor's own BIP-48 check expects.
+fn is_vault_key_path(path: &DerivationPath, network: Network) -> bool {
+    match path.as_ref() {
+        [account @ .., chain, index] => {
+            is_bip48_p2wsh_account(account, network)
+                && matches!(chain, ChildNumber::Normal { index: 0 | 1 })
+                && index.is_normal()
+        }
+        _ => false,
+    }
 }
 
 /// Trezor names transactions by txid in display byte order.

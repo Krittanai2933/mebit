@@ -28,13 +28,24 @@
   - `cargo check` ผ่านทั้ง `aarch64-apple-ios` และ `aarch64-linux-android` (Android ต้องใช้ clang ของ NDK สำหรับ `secp256k1-sys` ซึ่งเป็นเงื่อนไขเดิมของ `bitcoin`)
   - ใน dependency ของ `trezor-ble` ไม่มี crate USB/HID เลย
   - รายละเอียดอยู่ใน README ของ `trezor-ble` ส่วนข้อที่ยังเปิดอยู่คือ `04-open-items.md` ข้อ 16–22
+- **2026-10-01 — audit อิสระของ No.5 แล้วแก้ตามผล**
+  - ทำซ้ำได้จริง: test 114 ตัว, Elligator2 และ CPace (vector ทุกชุด + differential 20,000 input เทียบกับ implementation ที่เขียนใหม่จาก RFC), protobuf ที่ vendor มาตรงกับ upstream ที่ `c33f815` ทุกไบต์, xpub ใน log ของ hardware ตรงกับที่ derive เองจาก phrase ทดสอบ
+  - mutation pass เดิม: ใน `mutate.py` มี 34 จุด test จับได้ 33 อีก 1 จุด compile ไม่ผ่าน (ส่วน 3 จุด "รอผู้ใช้" ไม่พบใน artifact) — audit ทำเพิ่มอีก 30 จุด รอด 19
+  - แก้แล้ว:
+    - host เชื่อคำว่า "paired" ของอุปกรณ์เฉพาะเมื่อส่ง credential ไปจริงเท่านั้น (THP spec host state HH3 — `04` ข้อ 23)
+    - cancel ที่ไม่มีจอให้ตอบจะหมดไปพร้อม request นั้น ไม่ค้างไปยกเลิก request ถัดไป
+    - key ของเครื่องต้องอยู่บน path BIP-48 P2WSH ของ network ของ session (`m/48'/coin'/account'/2'/{0,1}/i`) ไม่อย่างนั้นไม่ส่งไปเซ็น ส่วน change ที่อยู่นอก path นี้จะแสดงเป็น payment ให้ผู้ใช้เห็น
+    - ปฏิเสธ PSBT ที่ใช้ output เดียวกันซ้ำ
+    - test ใหม่: คำตอบ xpub ที่ผิดห้าแบบ, `psbt_check` มี test ของตัวเอง, test ว่า `Debug` ไม่เผย key (ตัวเดิมไม่มีทางล้ม)
+  - test ทั้ง workspace 122 ตัวผ่าน (`vault-core` ตอนเปิด `trezor`: 96 ตัว), clippy (`-D warnings`) และ `cargo fmt` สะอาด
+  - **ยังไม่ได้รันกับเครื่องจริงหลังแก้** — ดู `04` ข้อ 23 ส่วนข้อที่ยังไม่แก้อยู่ใน `04` ข้อ 24
 
 **สิ่งที่ต้องทำทั้งหมด**
 - [ ] ทีมอ่าน Bitcoin fundamentals (BIP-32/48, PSBT, multisig script) ให้จบก่อน — สัปดาห์ 1-2 (`.claude/skills/bitcoin-fundamentals/SKILL.md`)
 - [x] เปิดใช้ `bitcoin`/`miniscript` crate จริงใน `Cargo.toml` (2026-08-25 — ยังใช้จริงแค่ใน `keys`)
 - [ ] `keys`: เพิ่มฟังก์ชัน derive จริง (ตอนนี้มีแค่ type) + ตัดสินใจว่า `derivation_path` ควรเป็น `String` หรือ `bitcoin::bip32::DerivationPath` — **รอ @munich** (เอกสาร `08-multisig-wallet-spec.md` ยังไม่อยู่ใน repo)
 - [x] `hw`: Jade client ผ่าน **BLE** (ไม่ใช่ QR — Jade Core ไม่มีกล้อง) — No.4, เจ้าของ @phoovich (2026-09-30)
-- [ ] `hw`: Trezor Safe 7 (BLE) client — No.5: โค้ดและ test เสร็จ และผ่าน hardware checklist แล้ว (2026-10-01) เหลือแค่จอยืนยันการเชื่อมต่อหลัง restart (HW-13 ยังสรุปไม่ได้) — ดู README ของ `trezor-ble`
+- [ ] `hw`: Trezor Safe 7 (BLE) client — No.5: โค้ดและ test เสร็จ และผ่าน hardware checklist แล้ว (2026-10-01) เหลือแค่จอยืนยันการเชื่อมต่อหลัง restart (HW-13 ยังสรุปไม่ได้) และรัน HW-2/4/7 ซ้ำหลังแก้ตาม audit (`04` ข้อ 23) — ดู README ของ `trezor-ble`
 - [ ] `descriptor`: สร้าง P2WSH 2-of-3 multisig descriptor จริงจาก pubkey จริงของ 3 ฝ่าย
 - [ ] `derivation`: derive child pubkey จริงตาม BIP-48 (`m/48'/0'/0'/2'`) จาก account xpub
 - [ ] `psbt`: สร้าง/parse PSBT จริงด้วย `bitcoin::Psbt`

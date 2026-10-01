@@ -4,6 +4,9 @@
 //! the fragmenting, CRCs, acknowledgements and retransmission; this module
 //! only holds its phases together and supplies the host's credentials.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use sha2::{Digest, Sha256};
 use trezor_thp::channel::buffered::{Buffered, ChannelExt};
 use trezor_thp::channel::host;
@@ -49,6 +52,10 @@ pub(super) struct HostCredentials {
     /// The device's static public key, and the handshake payload carrying the
     /// credential it issued (`ThpHandshakeCompletionReqNoisePayload`).
     stored: Option<([u8; 32], Zeroizing<Vec<u8>>)>,
+    /// Set by the handshake's lookup: whether the stored credential matched
+    /// the device and went into the handshake. [`Link::allocate`] gives each
+    /// channel a fresh one.
+    presented: Arc<AtomicBool>,
 }
 
 /// `MAX_CREDENTIAL_LEN` in `trezor-thp`.
@@ -64,6 +71,7 @@ impl HostCredentials {
             return Ok(Self {
                 static_key,
                 stored: None,
+                presented: Arc::default(),
             });
         };
         let mut payload = ThpHandshakeCompletionReqNoisePayload::new();
@@ -80,6 +88,7 @@ impl HostCredentials {
         Ok(Self {
             static_key: credential.host_static_key.clone(),
             stored: Some((credential.trezor_static_public_key, encoded)),
+            presented: Arc::default(),
         })
     }
 
@@ -99,14 +108,11 @@ impl CredentialStore for HostCredentials {
         masked_static_pubkey: &[u8],
         dest: &'a mut [u8],
     ) -> Option<FoundCredential<'a>> {
-        let payload: &[u8] = match &self.stored {
-            Some((trezor_key, payload))
-                if masks_to(trezor_key, ephemeral_pubkey, masked_static_pubkey) =>
-            {
-                payload
-            }
-            _ => &[],
-        };
+        let matched = self
+            .stored
+            .as_ref()
+            .filter(|(trezor_key, _)| masks_to(trezor_key, ephemeral_pubkey, masked_static_pubkey));
+        let payload: &[u8] = matched.map_or(&[][..], |(_, payload)| payload.as_slice());
         if dest.len() < 32 + payload.len() {
             return None;
         }
@@ -115,8 +121,10 @@ impl CredentialStore for HostCredentials {
         rest[..payload.len()].copy_from_slice(payload);
         let key: &'a [u8] = key;
         let rest: &'a [u8] = rest;
+        let local_static_privkey = key.try_into().ok()?;
+        self.presented.store(matched.is_some(), Ordering::SeqCst);
         Some(FoundCredential {
-            local_static_privkey: key.try_into().ok()?,
+            local_static_privkey,
             auth_credential: &rest[..payload.len()],
         })
     }
@@ -143,7 +151,11 @@ pub(super) enum Arrival {
     /// The device refused the handshake because it is locked.
     DeviceLocked,
     /// The handshake finished; the channel is open, in its pairing phase.
-    HandshakeDone(PairingState),
+    /// `presented` is whether our stored credential went into the handshake.
+    HandshakeDone {
+        state: PairingState,
+        presented: bool,
+    },
     /// A whole message.
     Message {
         session: u8,
@@ -162,6 +174,8 @@ pub(super) enum Link {
     Handshaking {
         open: Box<Buffered<host::ChannelOpen<HostCredentials, Crypto>>>,
         properties: DeviceProperties,
+        /// The flag the credentials, now inside `open`, report through.
+        presented: Arc<AtomicBool>,
     },
     Open {
         channel: Box<Buffered<host::Channel<Crypto>>>,
@@ -177,6 +191,11 @@ impl Link {
         credentials: HostCredentials,
         try_to_unlock: bool,
     ) -> (Self, Vec<Vec<u8>>) {
+        // A fresh flag, so no earlier handshake's lookup answers for this one.
+        let credentials = HostCredentials {
+            presented: Arc::default(),
+            ..credentials
+        };
         let mut mux = Box::new(host::Mux::<Crypto>::new().into_buffered());
         mux.set_packet_len(PACKET_LEN);
         mux.request_channel(try_to_unlock);
@@ -216,8 +235,8 @@ impl Link {
                 }
                 _ if open.handshake_done() => {
                     let packets = self.drain();
-                    let state = self.complete_handshake()?;
-                    return Ok((Arrival::HandshakeDone(state), packets));
+                    let (state, presented) = self.complete_handshake()?;
+                    return Ok((Arrival::HandshakeDone { state, presented }, packets));
                 }
                 _ => Arrival::Nothing,
             },
@@ -346,6 +365,7 @@ impl Link {
         let Self::Allocating { mux, credentials } = std::mem::replace(self, Self::Closed) else {
             unreachable!("only called while allocating")
         };
+        let presented = Arc::clone(&credentials.presented);
         let mut open = (*mux)
             .map(|mux| mux.complete(credentials))
             .map_err(|e| TrezorError::Protocol(format!("channel allocation: {}", describe(e))))?;
@@ -355,12 +375,19 @@ impl Link {
         *self = Self::Handshaking {
             open: Box::new(open),
             properties,
+            presented,
         };
         Ok(())
     }
 
-    fn complete_handshake(&mut self) -> Result<PairingState, TrezorError> {
-        let Self::Handshaking { open, properties } = std::mem::replace(self, Self::Closed) else {
+    /// The device's pairing state, and whether our credential was presented.
+    fn complete_handshake(&mut self) -> Result<(PairingState, bool), TrezorError> {
+        let Self::Handshaking {
+            open,
+            properties,
+            presented,
+        } = std::mem::replace(self, Self::Closed)
+        else {
             unreachable!("only called while handshaking")
         };
         let channel = (*open)
@@ -378,7 +405,7 @@ impl Link {
             channel: Box::new(channel),
             properties,
         };
-        Ok(state)
+        Ok((state, presented.load(Ordering::SeqCst)))
     }
 
     fn drain(&mut self) -> Vec<Vec<u8>> {

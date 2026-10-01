@@ -22,8 +22,8 @@ use bitcoin::psbt::Psbt;
 use bitcoin::secp256k1::{Message, Secp256k1};
 use bitcoin::sighash::{EcdsaSighashType, SighashCache};
 use bitcoin::{
-    Address, Amount, Network, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid,
-    Witness, absolute, transaction,
+    Address, Amount, Network, NetworkKind, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
+    Txid, Witness, absolute, transaction,
 };
 use miniscript::psbt::PsbtExt;
 use miniscript::{Descriptor, DescriptorPublicKey};
@@ -98,6 +98,28 @@ struct Behaviour {
     duplicate_messages: bool,
     /// Misses this many channel allocation requests, as a device waking up.
     miss_allocations: u8,
+    /// A cheating device: claims this pairing state whatever credential the
+    /// host presented, if any.
+    claimed_pairing: Option<PairingState>,
+    /// How `GetPublicKey` is answered.
+    xpub_answer: XpubAnswer,
+}
+
+/// A cheating device's answers to `GetPublicKey`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum XpubAnswer {
+    #[default]
+    Honest,
+    /// The key one level above the path asked for.
+    Parent,
+    /// The key next to the one asked for, on the path's last level.
+    Sibling,
+    /// The right key, encoded for mainnet.
+    MainnetString,
+    /// The right node, with the encoding of another key.
+    StringOfAnotherKey,
+    /// The right key, without the master fingerprint.
+    NoRootFingerprint,
 }
 
 impl Default for Behaviour {
@@ -118,6 +140,8 @@ impl Default for Behaviour {
             busy: false,
             duplicate_messages: false,
             miss_allocations: 0,
+            claimed_pairing: None,
+            xpub_answer: XpubAnswer::Honest,
         }
     }
 }
@@ -162,10 +186,15 @@ struct FakeSafe7 {
 #[derive(Clone)]
 struct Verifier {
     key: [u8; 32],
+    /// See [`Behaviour::claimed_pairing`].
+    claimed: Option<PairingState>,
 }
 
 impl CredentialVerifier for Verifier {
     fn verify(&self, remote_static_pubkey: &[u8], payload: &[u8]) -> PairingState {
+        if let Some(claimed) = self.claimed {
+            return claimed;
+        }
         let Ok(payload) = ThpHandshakeCompletionReqNoisePayload::parse_from_bytes(payload) else {
             return PairingState::Unpaired;
         };
@@ -252,6 +281,7 @@ impl FakeSafe7 {
                         self.channel_id,
                         Verifier {
                             key: self.credential_key,
+                            claimed: self.behaviour.claimed_pairing,
                         },
                     )
                     .unwrap()
@@ -571,7 +601,7 @@ impl FakeSafe7 {
             }
             PromptFor::Xpub => {
                 let request = self.xpub_request.take().unwrap();
-                let answer = public_key(&self.master, &request);
+                let answer = public_key(&self.master, &request, self.behaviour.xpub_answer);
                 self.send(session, mt(MessageType::MessageType_PublicKey), &answer)
             }
             PromptFor::Output | PromptFor::Total if self.behaviour.decline_signing => {
@@ -598,14 +628,36 @@ impl FakeSafe7 {
     }
 }
 
-fn public_key(master: &Xpriv, request: &GetPublicKey) -> PublicKey {
+fn public_key(master: &Xpriv, request: &GetPublicKey, how: XpubAnswer) -> PublicKey {
     let secp = Secp256k1::new();
-    let path: DerivationPath = request
+    let asked: Vec<ChildNumber> = request
         .address_n
         .iter()
         .map(|&n| ChildNumber::from(n))
         .collect();
-    let xpub = Xpub::from_priv(&secp, &master.derive_priv(&secp, &path).unwrap());
+    let at =
+        |path: &[ChildNumber]| Xpub::from_priv(&secp, &master.derive_priv(&secp, &path).unwrap());
+    let sibling = || {
+        let (last, parent) = asked.split_last().unwrap();
+        let next = match *last {
+            ChildNumber::Hardened { index } => ChildNumber::Hardened { index: index + 1 },
+            ChildNumber::Normal { index } => ChildNumber::Normal { index: index + 1 },
+        };
+        at(&[parent, &[next][..]].concat())
+    };
+    let xpub = match how {
+        XpubAnswer::Parent => at(&asked[..asked.len() - 1]),
+        XpubAnswer::Sibling => sibling(),
+        _ => at(&asked),
+    };
+    let shown = match how {
+        XpubAnswer::MainnetString => Xpub {
+            network: NetworkKind::Main,
+            ..xpub
+        },
+        XpubAnswer::StringOfAnotherKey => sibling(),
+        _ => xpub,
+    };
     let mut node = HDNodeType::new();
     node.depth = Some(u32::from(xpub.depth));
     node.fingerprint = Some(u32::from_be_bytes(xpub.parent_fingerprint.to_bytes()));
@@ -615,11 +667,12 @@ fn public_key(master: &Xpriv, request: &GetPublicKey) -> PublicKey {
     let mut answer = PublicKey::new();
     answer.node = MessageField::some(node);
     answer.xpub = Some(if request.ignore_xpub_magic() {
-        xpub.to_string()
+        shown.to_string()
     } else {
-        format!("slip132:{xpub}")
+        format!("slip132:{shown}")
     });
-    answer.root_fingerprint = Some(u32::from_be_bytes(master.fingerprint(&secp).to_bytes()));
+    answer.root_fingerprint = (how != XpubAnswer::NoRootFingerprint)
+        .then(|| u32::from_be_bytes(master.fingerprint(&secp).to_bytes()));
     answer
 }
 
@@ -1070,8 +1123,16 @@ struct Wire {
 
 impl Wire {
     fn new(behaviour: Behaviour, credential: Option<&PairingCredential>) -> Self {
+        Self::with_config(behaviour, config(), credential)
+    }
+
+    fn with_config(
+        behaviour: Behaviour,
+        config: SessionConfig,
+        credential: Option<&PairingCredential>,
+    ) -> Self {
         Self {
-            host: TrezorSession::new(config(), credential).unwrap(),
+            host: TrezorSession::new(config, credential).unwrap(),
             device: FakeSafe7::new(behaviour),
             to_device: VecDeque::new(),
             events: Vec::new(),
@@ -1243,6 +1304,83 @@ fn a_credential_another_device_issued_falls_back_to_pairing() {
             .iter()
             .any(|e| matches!(e, TrezorEvent::PairingCodeNeeded))
     );
+}
+
+/// A Safe 7 that no longer accepts the credential we present (it was wiped,
+/// or dropped this host) says "unpaired", and pairing starts afresh.
+#[test]
+fn a_credential_the_safe7_no_longer_accepts_leads_to_pairing() {
+    let mut first = Wire::new(Behaviour::default(), None);
+    let (_, credential) = first.connect().unwrap();
+
+    let mut again = Wire::new(Behaviour::default(), credential.as_ref());
+    again.device.static_key = first.device.static_key;
+    again.device.credential_key = [0x56; 32]; // forgot what it issued
+    let (_, fresh) = again.connect().unwrap();
+    assert!(fresh.is_some());
+    assert!(
+        again
+            .events
+            .iter()
+            .any(|e| matches!(e, TrezorEvent::PairingCodeNeeded))
+    );
+}
+
+/// The specification's host state HH3: a device may only say it knows this
+/// host if the handshake carried a credential it issued. A peer claiming a
+/// pairing anyway, either kind, is refused before anything reaches the user.
+#[test]
+fn a_claimed_pairing_without_our_credential_is_refused() {
+    for claimed in [PairingState::Paired, PairingState::PairedAutoconnect] {
+        let state = u8::from(claimed);
+        let mut wire = Wire::new(
+            Behaviour {
+                claimed_pairing: Some(claimed),
+                confirm_connection: false,
+                ..Behaviour::default()
+            },
+            None,
+        );
+        assert!(
+            matches!(trezor_error(wire.connect()), TrezorError::Protocol(_)),
+            "state {state}"
+        );
+        assert!(
+            wire.events.is_empty(),
+            "state {state}: nothing for the user"
+        );
+        assert!(
+            wire.device.received.is_empty(),
+            "state {state}: no message after the handshake"
+        );
+        assert!(matches!(
+            trezor_error(wire.host.request_xpub(&account(), XpubOptions::default())),
+            TrezorError::Protocol(_)
+        ));
+    }
+}
+
+/// A peer without the paired Safe 7's key can't pass for it by claiming the
+/// pairing: our credential never matched it, so it never went out.
+#[test]
+fn an_impostor_cannot_pass_for_the_paired_safe7() {
+    let mut first = Wire::new(Behaviour::default(), None);
+    let (_, credential) = first.connect().unwrap();
+
+    let mut impostor = Wire::new(
+        Behaviour {
+            claimed_pairing: Some(PairingState::Paired),
+            confirm_connection: false,
+            ..Behaviour::default()
+        },
+        credential.as_ref(),
+    );
+    impostor.device.static_key = [0x78; 32];
+    assert!(matches!(
+        trezor_error(impostor.connect()),
+        TrezorError::Protocol(_)
+    ));
+    assert!(impostor.device.received.is_empty());
 }
 
 #[test]
@@ -1579,6 +1717,43 @@ fn xpubs_come_from_the_device_key() {
     );
 }
 
+/// An xpub defines a vault, so the answer must be the key asked for: at the
+/// path, on the network, encoded as the key it is, with its master.
+#[test]
+fn xpub_answers_must_be_the_key_asked_for() {
+    type Expect = fn(&TrezorError) -> bool;
+    let cases: [(XpubAnswer, Expect); 5] = [
+        (XpubAnswer::Parent, |e| {
+            matches!(e, TrezorError::Protocol(_))
+        }),
+        (XpubAnswer::Sibling, |e| {
+            matches!(e, TrezorError::Protocol(_))
+        }),
+        (XpubAnswer::MainnetString, |e| {
+            matches!(e, TrezorError::NetworkMismatch(_))
+        }),
+        (XpubAnswer::StringOfAnotherKey, |e| {
+            matches!(e, TrezorError::Protocol(_))
+        }),
+        (XpubAnswer::NoRootFingerprint, |e| {
+            matches!(e, TrezorError::Protocol(_))
+        }),
+    ];
+    for (answer, expected) in cases {
+        let mut wire = connected(Behaviour {
+            xpub_answer: answer,
+            ..Behaviour::default()
+        });
+        let packets = wire
+            .host
+            .request_xpub(&account(), XpubOptions::default())
+            .unwrap();
+        wire.to_device.extend(packets);
+        let error = trezor_error(wire.run());
+        assert!(expected(&error), "{answer:?}: {error}");
+    }
+}
+
 #[test]
 fn only_account_paths_on_the_right_network_are_asked_for() {
     let mut wire = connected(Behaviour::default());
@@ -1629,23 +1804,34 @@ fn vault(device: &Xpriv, inputs: u32) -> Vault {
 }
 
 fn vault_with(device: &Xpriv, others: [Xpriv; 2], inputs: u32) -> Vault {
+    vault_at(device, others, &account(), 1, inputs)
+}
+
+/// [`vault_with`], with every key's account at `account_path` and the
+/// change on `change_chain` rather than 1.
+fn vault_at(
+    device: &Xpriv,
+    others: [Xpriv; 2],
+    account_path: &DerivationPath,
+    change_chain: u32,
+    inputs: u32,
+) -> Vault {
     let secp = Secp256k1::new();
-    let account_path = account();
     let mut keys = Vec::new();
     let mut cosigners = Vec::new();
     for master in [*device, others[0], others[1]] {
-        let xpub = Xpub::from_priv(&secp, &master.derive_priv(&secp, &account_path).unwrap());
+        let xpub = Xpub::from_priv(&secp, &master.derive_priv(&secp, account_path).unwrap());
         keys.push((master.fingerprint(&secp), xpub));
         cosigners.push(master);
     }
     let descriptor = |chain: u32| -> Descriptor<DescriptorPublicKey> {
         let keys: Vec<String> = keys
             .iter()
-            .map(|(fingerprint, xpub)| format!("[{fingerprint}/48'/1'/0'/2']{xpub}/{chain}/*"))
+            .map(|(fingerprint, xpub)| format!("[{fingerprint}/{account_path}]{xpub}/{chain}/*"))
             .collect();
         Descriptor::from_str(&format!("wsh(sortedmulti(2,{}))", keys.join(","))).unwrap()
     };
-    let (receive, change) = (descriptor(0), descriptor(1));
+    let (receive, change) = (descriptor(0), descriptor(change_chain));
     let previous: Vec<Transaction> = (0..inputs)
         .map(|index| Transaction {
             version: transaction::Version::TWO,
@@ -1879,6 +2065,55 @@ fn the_wait_for_the_user_outlasts_the_acknowledgement_after_a_prompt() {
     assert!(!wire.host.awaiting_user());
 }
 
+/// A cancel asked for when no prompt is left to answer lapses with its
+/// request, which ends normally, rather than cancelling the next request.
+#[test]
+fn a_cancel_no_prompt_answers_lapses_with_its_request() {
+    // During an xpub fetch that shows nothing on the device.
+    let mut wire = connected(Behaviour::default());
+    let packets = wire
+        .host
+        .request_xpub(&account(), XpubOptions::default())
+        .unwrap();
+    assert!(wire.host.request_cancel().unwrap().is_empty());
+    wire.to_device.extend(packets);
+    wire.run().unwrap();
+    assert!(matches!(wire.events.last(), Some(TrezorEvent::Xpub { .. })));
+    let spend = vault(&wire.device.master, 1);
+    sign(&mut wire, &spend.psbt, spend.device_fingerprint).unwrap();
+    assert!(matches!(
+        wire.events.last(),
+        Some(TrezorEvent::SignedPsbt(_))
+    ));
+
+    // After the user's last confirmation, while the device streams the inputs.
+    let mut wire = connected(Behaviour {
+        hold_prompts: true,
+        ..Behaviour::default()
+    });
+    let spend = vault(&wire.device.master, 2);
+    sign(&mut wire, &spend.psbt, spend.device_fingerprint).unwrap();
+    wire.user_confirms().unwrap(); // the payment
+    for packet in wire.device.user_confirms() {
+        wire.take(packet).unwrap(); // the total, then the device's next request
+    }
+    assert!(!wire.host.awaiting_user());
+    assert!(wire.host.request_cancel().unwrap().is_empty());
+    wire.run().unwrap();
+    assert!(matches!(
+        wire.events.last(),
+        Some(TrezorEvent::SignedPsbt(_))
+    ));
+    sign(&mut wire, &spend.psbt, spend.device_fingerprint).unwrap();
+    assert!(
+        matches!(
+            wire.events.last(),
+            Some(TrezorEvent::AwaitingUser(UserPrompt::Confirm))
+        ),
+        "the next signing asks the user, uncancelled"
+    );
+}
+
 #[test]
 fn a_second_signature_for_an_input_breaks_the_session() {
     let mut wire = connected(Behaviour {
@@ -1923,6 +2158,14 @@ fn refuses_psbts_it_should_not_send() {
         (
             "no previous transaction",
             Box::new(|p| p.inputs[0].non_witness_utxo = None),
+        ),
+        (
+            // Consensus-invalid, and Trezor would count the amount twice.
+            "the same output spent twice",
+            Box::new(|p| {
+                p.unsigned_tx.input[1] = p.unsigned_tx.input[0].clone();
+                p.inputs[1] = p.inputs[0].clone();
+            }),
         ),
         (
             "wrong previous transaction",
@@ -2059,6 +2302,61 @@ fn refuses_psbts_it_should_not_send() {
     );
 }
 
+/// The device's key must sit at a BIP-48 P2WSH vault path on the session's
+/// network: a testnet session never signs at mainnet paths, nor the reverse.
+/// The device checks paths too, but only as its safety checks are set.
+#[test]
+fn signs_only_at_vault_paths_on_the_sessions_network() {
+    let mut wire = connected(Behaviour::default());
+    let master = wire.device.master;
+    for account_path in [
+        "m/48'/0'/0'/2'", // mainnet coin type
+        "m/48'/1'/0'/1'", // P2SH-P2WSH
+        "m/48'/1'/0/2'",  // unhardened account
+        "m/45'/1'/0'/2'", // not BIP-48
+    ] {
+        let path = DerivationPath::from_str(account_path).unwrap();
+        let elsewhere = vault_at(&master, [master_key(2), master_key(3)], &path, 1, 1);
+        assert!(
+            matches!(
+                trezor_error(
+                    wire.host
+                        .request_sign_psbt(&elsewhere.psbt, elsewhere.device_fingerprint)
+                ),
+                TrezorError::InvalidRequest(_)
+            ),
+            "{account_path}"
+        );
+    }
+    assert!(wire.host.is_ready());
+    assert!(
+        !wire
+            .device
+            .received
+            .contains(&mt(MessageType::MessageType_SignTx)),
+        "nothing was sent"
+    );
+
+    let mut mainnet = Wire::with_config(
+        Behaviour::default(),
+        SessionConfig {
+            network: Network::Bitcoin,
+            ..config()
+        },
+        None,
+    );
+    mainnet.connect().unwrap();
+    let testnet_vault = vault(&mainnet.device.master, 1);
+    assert!(matches!(
+        trezor_error(
+            mainnet
+                .host
+                .request_sign_psbt(&testnet_vault.psbt, testnet_vault.device_fingerprint)
+        ),
+        TrezorError::InvalidRequest(_)
+    ));
+}
+
 /// Change that isn't exactly this vault goes to the device as an external
 /// output, which the user confirms, rather than being hidden.
 #[test]
@@ -2074,6 +2372,23 @@ fn change_must_be_this_vault_to_be_hidden() {
         .filter(|e| matches!(e, TrezorEvent::AwaitingUser(_)))
         .count();
     assert_eq!(prompts, 3, "payment, change shown as a payment, total");
+
+    // This vault's keys, but off its receive and change chains.
+    let off_chain = vault_at(
+        &wire.device.master,
+        [master_key(2), master_key(3)],
+        &account(),
+        2,
+        1,
+    );
+    wire.events.clear();
+    sign(&mut wire, &off_chain.psbt, off_chain.device_fingerprint).unwrap();
+    let prompts = wire
+        .events
+        .iter()
+        .filter(|e| matches!(e, TrezorEvent::AwaitingUser(_)))
+        .count();
+    assert_eq!(prompts, 3, "payment, change on chain 2 shown, total");
 
     wire.events.clear();
     sign(&mut wire, &vault.psbt, vault.device_fingerprint).unwrap();
@@ -2105,7 +2420,17 @@ fn credentials_round_trip_and_reject_garbage() {
         back.trezor_static_public_key(),
         credential.trezor_static_public_key()
     );
-    assert!(!format!("{back:?}").contains(&format!("{:02x}", back.host_static_key[0]).repeat(4)));
+    // No run of the host's private key in `Debug`, in hex or as a byte list.
+    let shown = format!("{back:?}");
+    for window in back.host_static_key.windows(4) {
+        let hex: String = window.iter().map(|byte| format!("{byte:02x}")).collect();
+        let list = window
+            .iter()
+            .map(u8::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert!(!shown.contains(&hex) && !shown.contains(&list), "{shown}");
+    }
     for garbage in [&[][..], &[2u8; 80][..], &bytes[..64], &[1u8; 300][..]] {
         assert!(matches!(
             PairingCredential::from_bytes(garbage),

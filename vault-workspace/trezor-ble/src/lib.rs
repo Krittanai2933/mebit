@@ -48,7 +48,8 @@ use vault_core::hw::trezor::{
 // The Safe 7's GATT interface: `ble_internal.h` and `service.c` in
 // trezor-firmware's `nordic/trezor/trezor-ble/src/ble/`; the same UUIDs in
 // trezorlib's `transport/ble.py` and Trezor Suite's BLE transports.
-// Both characteristics need an encrypted, authenticated link.
+// Both characteristics need an encrypted link (`BT_GATT_PERM_*_ENCRYPT`); what
+// authenticates the device to us is THP, not the Bluetooth bond.
 const SERVICE_UUID: &str = "8c000001-a59b-4d58-a9ad-073df69fa1b1";
 /// Host → Safe 7: write, or write without response.
 const WRITE_CHARACTERISTIC_UUID: &str = "8c000002-a59b-4d58-a9ad-073df69fa1b1";
