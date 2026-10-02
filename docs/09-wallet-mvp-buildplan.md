@@ -14,23 +14,23 @@
 |---|---|---|
 | **Phase 0 — engine validation** | Rust CLI + automated test suite (ไม่มี GUI, ไม่มี desktop app) | vault-core ล้วนๆ พิสูจน์ตัวเองบน testnet ผ่าน `cargo run`/`cargo test` เท่านั้น — ไม่ต้องมี glue code, ไม่ต้องมี UI framework ใดๆ |
 | **Production mobile** | React Native + UniFFI | vault-core (Rust) ผูกผ่าน UniFFI เข้ากับ RN — เลือก RN เพราะทีมมีพื้นจาก Next.js อยู่แล้ว เรียนรู้โค้ดฝั่ง UI ได้เร็วกว่า Flutter/Dart |
-| **Hardware wallet transport (มือถือ)** | Jade: Rust (`jade-ble` + `btleplug`) ห่อด้วย UniFFI — ไม่มี native module BLE ฝั่ง RN (ตัดสินใจ 2026-09-30) ส่วนกล้อง/QR ถ้าทำ ยังอยู่ฝั่ง RN | Trezor Safe 7: Rust (`vault-core::hw::trezor` + `trezor-ble`, btleplug 0.13) แบบเดียวกับ Jade (ตัดสินใจ 2026-10-01) |
+| **Hardware wallet transport (มือถือ)** | Jade: Rust (`jade-ble` + `btleplug`) ห่อด้วย UniFFI — ไม่มี native module BLE ฝั่ง RN (ตัดสินใจ 2026-09-30) ไม่มีกล้อง/QR ใน MVP (เลื่อนไปเฟสหลัง 2026-10-02) | Trezor Safe 7: Rust (`vault-core::hw::trezor` + `trezor-ble`, btleplug 0.13) แบบเดียวกับ Jade (ตัดสินใจ 2026-10-01) |
 
 **เหตุผลที่ไม่ใช้ Tauri**: เดิมเคยเสนอ Tauri desktop สำหรับ Phase 0 เพราะ Rust-native ไม่ต้องมี glue code — แต่ผู้ใช้ปฏิเสธชัดเจนว่าไม่ต้องการทำ desktop app เลย (ไม่ใช่แค่ production ไม่เอา แต่รวมถึงเครื่องมือ internal validation ด้วย) จึงตัด Tauri ออกทั้งหมด ใช้ Rust CLI ธรรมดาแทนสำหรับ Phase 0 ส่วน production mobile ยืนตาม React Native + UniFFI เหมือนเดิม (BLE ของ Jade อยู่ใน Rust ผ่าน `btleplug` แทน `react-native-ble-plx` ตั้งแต่ 2026-09-30 — ดู `08-multisig-wallet-spec.md` §5.1)
 
 ## 3. Hardware wallet scope (ตัดสินใจแล้ว — ล็อก)
 
-**รองรับแค่ QR และ Bluetooth เท่านั้น ไม่ทำ USB เลยใน MVP**
+**รองรับแค่ Bluetooth (BLE) เท่านั้นใน MVP — ไม่ทำ USB และ QR เลื่อนไปเฟสหลัง** (อัปเดต 2026-10-02: เดิมคือ QR + BLE แต่ตัด QR ออกจาก MVP ทั้งหมด รวมถึงการจับคู่ mebit ข้ามเครื่องผ่าน QR — ดู `08-multisig-wallet-spec.md` §5)
 
 | ยี่ห้อ | รุ่น | ช่องทาง |
 |---|---|---|
-| Jade (Blockstream) | Jade Classic / Jade Plus | QR + BLE |
+| Jade (Blockstream) | Jade Classic / Jade Plus | BLE (มี QR ด้วย แต่เลื่อนไปเฟสหลัง) |
 | Jade (Blockstream) | **Jade Core** (เครื่องที่ทีมมี) | **BLE เท่านั้น** (ไม่มีกล้อง) |
 | Trezor | **Safe 7 เท่านั้น** | BLE เท่านั้น |
 
 **ข้อจำกัดที่ต้องสื่อสารกับลูกค้าให้ชัด**: Trezor ไม่มีกล้อง ไม่รองรับ QR เลยสักรุ่น (ยืนยันแล้วว่า Safe 7 ก็ยังต้องต่อผ่าน USB-C หรือ BLE) และมีแค่ Safe 7 ที่มี Bluetooth ดังนั้น Trezor รุ่นอื่น (One, T, Safe 3, Safe 5) **ใช้กับ mebit ไม่ได้เลย** ในเวอร์ชันนี้ ต้องระบุในหน้า marketing/support ว่ารองรับ "Trezor Safe 7" เจาะจง ไม่ใช่ "Trezor" แบบกว้างๆ
 
-Ledger, Coldcard, BitBox02 และการรองรับ USB ทั้งหมด — เลื่อนไปเฟสหลัง (ดู `08-multisig-wallet-spec.md` หัวข้อ 10)
+Ledger, Coldcard, BitBox02, การรองรับ USB ทั้งหมด และ QR — เลื่อนไปเฟสหลัง (ดู `08-multisig-wallet-spec.md` หัวข้อ 10)
 
 ## 4. Library ที่เช็คสถานะไว้แล้ว
 
@@ -53,7 +53,7 @@ Ledger, Coldcard, BitBox02 และการรองรับ USB ทั้ง
 ### Phase 1 — thin slice ขึ้นมือถือ (React Native + UniFFI)
 
 1. ห่อ vault-core และ `jade-ble` ด้วย UniFFI — ฝั่ง Jade แอป RN แค่เรียก `unlock` / `xpub` / `signPsbt` แบบ async ไม่ต้องเขียน BLE เอง (บน Android ต้องตั้งค่า `btleplug` แบบ Rust+Java ก่อน — ดู `04-open-items.md` ข้อ 14)
-2. ห่อ `trezor-ble` ด้วย UniFFI เช่นเดียวกัน (Trezor ใช้แนวทางเดียวกับ Jade — ตัดสินใจ 2026-10-01; `jade-ble` ย้ายไป btleplug 0.13 แล้วเพื่อให้ Android ใช้ชุดเดียวกัน และผ่าน hardware checklist ของ Jade ซ้ำแล้ว — `04-open-items.md` ข้อ 18) ส่วนกล้อง/QR ถ้าจะทำ ยังอยู่ฝั่ง RN
+2. ห่อ `trezor-ble` ด้วย UniFFI เช่นเดียวกัน (Trezor ใช้แนวทางเดียวกับ Jade — ตัดสินใจ 2026-10-01; `jade-ble` ย้ายไป btleplug 0.13 แล้วเพื่อให้ Android ใช้ชุดเดียวกัน และผ่าน hardware checklist ของ Jade ซ้ำแล้ว — `04-open-items.md` ข้อ 18) — ไม่มีกล้อง/QR ใน MVP
 3. ทำ flow เดียวให้จบ: เพิ่มกุญแจ (เครื่องนี้) → เพิ่มกุญแจที่สอง (Jade หรือ Trezor Safe 7) → สร้าง vault → รับ/ส่ง BTC จริงบน testnet
 
 ### Phase 2 — ใส่ UI เต็มตามดีไซน์ที่ยืนยันแล้ว
