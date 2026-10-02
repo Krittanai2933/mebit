@@ -42,6 +42,7 @@ mebit/
 | `vault-core` (PSBT + policy engine) | คนที่ 2 |
 | `custody-service` + `lender-signer-cli` + `monitor-service` | คนที่ 3 |
 | `mobile-signer-ffi` (hot wallet + vault signer — ขอบเขตใหญ่ที่สุดในทีม) | คนที่ 4 |
+| `jade-ble` + `vault-core::hw::jade` (Jade ผ่าน BLE — งานของ wallet-first pivot นอกแผนแบ่งงาน 4 คนข้างบน) | @phoovich |
 
 `vault-core` เป็นจุดวิกฤต — ทุกโมดูลอื่นพึ่งพามันโดยตรงหรือผ่าน invariant ที่มันกำหนด ส่วน `policy` module ข้างในคือโค้ดที่เสี่ยงที่สุดในทั้งโปรเจกต์ (อ่าน `.claude/skills/policy-engine-review/SKILL.md` ก่อนแก้) — เป็นเหตุผลที่ยังคงให้ 2 คนดูแลแยกกันแม้ทีมจะเหลือ 4 คน คนที่ 3 ดูแล 3 โมดูลพร้อมกัน แต่จังหวะงานถูกออกแบบให้ทยอยทำทีละโมดูล ไม่ใช่พร้อมกันหมด (ดู `.claude/agents/platform-services.md`)
 
@@ -50,9 +51,11 @@ mebit/
 **Rust workspace** (`vault-core`, `custody-service`, `lender-signer-cli`, `monitor-service`):
 ```
 cd vault-workspace
-cargo build --workspace
-cargo test --workspace
+cargo build
+cargo test
 ```
+
+ไม่ใส่ `--workspace` โดยตั้งใจ: default build ครอบทุก crate ยกเว้น `jade-ble` (ไดรเวอร์ Jade ผ่าน Bluetooth) เพราะ `btleplug` ต้องใช้ `libdbus-1-dev` + `pkg-config` บน Linux — ถ้าจะ build/test ตัวนี้ใช้ `cargo test -p jade-ble` (ดู `vault-workspace/jade-ble/README.md`)
 
 **Mobile app** (Expo/React Native, รันได้จริงแล้ว มี mock data ครบ 12 หน้าจอ):
 ```

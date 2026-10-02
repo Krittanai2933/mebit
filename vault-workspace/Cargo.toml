@@ -6,6 +6,17 @@ members = [
   "mobile-signer-ffi/rust",
   "lender-signer-cli",
   "monitor-service",
+  "jade-ble",
+]
+# Everything but jade-ble: its btleplug dependency needs libdbus on Linux and
+# pulls WinRT in on Windows, and nothing depends on it until mobile-signer-ffi
+# wraps it (Phase 1). Build/test it explicitly with `-p jade-ble`.
+default-members = [
+  "vault-core",
+  "custody-service",
+  "mobile-signer-ffi/rust",
+  "lender-signer-cli",
+  "monitor-service",
 ]
 
 # Shared version pins go here once dependencies are uncommented in each crate's

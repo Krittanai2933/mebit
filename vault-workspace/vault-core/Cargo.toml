@@ -11,3 +11,5 @@ bip39 = { version = "2.2.2", features = ["zeroize"] }
 getrandom = "0.4.3"
 zeroize = "1"           # wipe entropy/seed on drop — see keys.rs
 thiserror = "2"         # error types shared across the workspace
+ciborium = "0.2"        # CBOR — the Jade RPC wire format, see hw/jade.rs
+serde_json = "1"        # Jade pinserver payloads are relayed as JSON, see hw/jade.rs

@@ -11,7 +11,7 @@
 - `psbt` — PSBT construction and validation
 - `policy` — verifies a PSBT's outputs match the reason it was submitted for signing, before any key signs it
 - `keys` — shared key data model (`VaultKey`/`KeySourceType`/`HwVendor`) for the M-of-N wallet-first pivot; real `bitcoin::bip32` types, no derivation logic yet
-- `hw` — empty placeholder for the Jade/Trezor hardware-wallet clients
+- `hw` — hardware-wallet clients. `hw::jade::JadeSession` is the Jade's CBOR-RPC protocol with no I/O inside, and checks every PSBT the Jade returns; its BLE transport is the `jade-ble` crate. Owner: @phoovich (wallet-first pivot work, outside the 4-way split). Trezor Safe 7 is not started.
 
 ## Why this is the critical path
 

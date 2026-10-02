@@ -33,6 +33,9 @@ pub enum VaultCoreError {
     // needs both vault-core owners' review (CLAUDE.md).
     #[error("policy check rejected the PSBT: {0:?}")]
     Policy(crate::policy::PolicyViolation),
+
+    #[error("Jade: {0}")]
+    Jade(#[from] crate::hw::jade::JadeError),
 }
 
 #[cfg(test)]
