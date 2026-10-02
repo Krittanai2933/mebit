@@ -53,7 +53,7 @@ Ledger, Coldcard, BitBox02 และการรองรับ USB ทั้ง
 ### Phase 1 — thin slice ขึ้นมือถือ (React Native + UniFFI)
 
 1. ห่อ vault-core และ `jade-ble` ด้วย UniFFI — ฝั่ง Jade แอป RN แค่เรียก `unlock` / `xpub` / `signPsbt` แบบ async ไม่ต้องเขียน BLE เอง (บน Android ต้องตั้งค่า `btleplug` แบบ Rust+Java ก่อน — ดู `04-open-items.md` ข้อ 14)
-2. ห่อ `trezor-ble` ด้วย UniFFI เช่นเดียวกัน (Trezor ใช้แนวทางเดียวกับ Jade — ตัดสินใจ 2026-10-01; ก่อนเริ่มบน Android ต้องย้าย `jade-ble` ไป btleplug 0.13 ตาม `04-open-items.md` ข้อ 18) ส่วนกล้อง/QR ถ้าจะทำ ยังอยู่ฝั่ง RN
+2. ห่อ `trezor-ble` ด้วย UniFFI เช่นเดียวกัน (Trezor ใช้แนวทางเดียวกับ Jade — ตัดสินใจ 2026-10-01; `jade-ble` ย้ายไป btleplug 0.13 แล้วเพื่อให้ Android ใช้ชุดเดียวกัน และผ่าน hardware checklist ของ Jade ซ้ำแล้ว — `04-open-items.md` ข้อ 18) ส่วนกล้อง/QR ถ้าจะทำ ยังอยู่ฝั่ง RN
 3. ทำ flow เดียวให้จบ: เพิ่มกุญแจ (เครื่องนี้) → เพิ่มกุญแจที่สอง (Jade หรือ Trezor Safe 7) → สร้าง vault → รับ/ส่ง BTC จริงบน testnet
 
 ### Phase 2 — ใส่ UI เต็มตามดีไซน์ที่ยืนยันแล้ว
