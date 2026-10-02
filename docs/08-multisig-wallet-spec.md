@@ -107,11 +107,18 @@ or(
 
 **ข้อจำกัดสำคัญที่ต้องรู้และสื่อสารกับลูกค้า**: Trezor **ไม่มีกล้อง ไม่รองรับ QR-based air-gapped signing เลยสักรุ่น** (ยืนยันแล้วแม้ Safe 7 รุ่นล่าสุดก็ยังต้องต่อผ่าน USB-C หรือ BLE เท่านั้น) และมีแค่ **Safe 7** (ออกตุลาคม 2025) ที่มี Bluetooth — Trezor รุ่นอื่นทั้งหมด (One, T, Safe 3, Safe 5) มี USB อย่างเดียว จึง**ใช้กับ mebit ไม่ได้เลย**ภายใต้ MVP ที่ตัด USB ออก ต้องแจ้งลูกค้าให้ชัดว่ารองรับ Trezor รุ่นพรีเมียมล่าสุดเท่านั้น
 
+**อัปเดต 2026-10-01**: ใน firmware ของ Trezor มีรุ่นที่สองที่มี BLE แล้ว คือ `T3T2` (`MODEL_BLE_CODE 7`) "เป็น Trezor ที่ต่อผ่าน Bluetooth" จึงไม่ได้แปลว่าเป็น Safe 7 อีกต่อไป
+- client ของ mebit รับเฉพาะ Safe 7 แบบตรงตัว (internal model `T3W1`, model "Safe 7")
+- ตรวจสองชั้นทุกครั้งที่เชื่อมต่อ: ชั้นแรกก่อน handshake ชั้นที่สองจาก `Features`
+- ไม่ใช้ชื่อหรือ advertisement เป็นหลักฐาน
+
+ดู `04-open-items.md` ข้อ 17 และ README ของ `trezor-ble`
+
 **Ledger, Coldcard, BitBox02** — เลื่อนออกจาก MVP ไปเฟสหลัง (เดิมอยู่ในสเปคเวอร์ชันแรก ตอนนี้ตัดออกเพื่อโฟกัส 2 ยี่ห้อที่ใช้ QR/BLE ได้จริงตาม MVP ที่ตัด USB)
 
 ### 5.1 Connection method
 - **QR / กล้อง** — สแกน PSBT ไป-กลับ สำหรับ Jade รุ่นที่มีกล้อง (ยังไม่ได้ implement — ดูหมายเหตุใต้ตารางข้างบน)
-- **Bluetooth (BLE)** — สำหรับ Jade และ Trezor Safe 7 — **อัปเดต 2026-09-30 (ตัดสินใจแล้ว)**: ฝั่ง Jade ให้ **Rust เป็นเจ้าของ BLE ทั้งหมด** ทั้ง Phase 0 และ production mobile — crate `jade-ble` (ใช้ `btleplug`) ขับ `vault-core::hw::jade::JadeSession` แล้วแอป RN เรียกผ่าน UniFFI (`unlock` / `xpub` / `signPsbt` แบบ async) **แทน**แผนเดิมที่จะใช้ `react-native-ble-plx` ฝั่ง RN เหตุผล: protocol และ BLE อยู่ในที่เดียว ทดสอบได้ใน Rust และไม่ต้องเขียน BLE ซ้ำต่อ platform — ต้นทุนที่ต้องรู้: `btleplug` บน Android ต้อง build แบบ Rust+Java (ดู `04-open-items.md` ข้อ 14) ส่วน Trezor Safe 7 บนมือถือยังไม่ได้ตัดสินใจ
+- **Bluetooth (BLE)** — สำหรับ Jade และ Trezor Safe 7 — **อัปเดต 2026-09-30 (ตัดสินใจแล้ว)**: ฝั่ง Jade ให้ **Rust เป็นเจ้าของ BLE ทั้งหมด** ทั้ง Phase 0 และ production mobile — crate `jade-ble` (ใช้ `btleplug`) ขับ `vault-core::hw::jade::JadeSession` แล้วแอป RN เรียกผ่าน UniFFI (`unlock` / `xpub` / `signPsbt` แบบ async) **แทน**แผนเดิมที่จะใช้ `react-native-ble-plx` ฝั่ง RN เหตุผล: protocol และ BLE อยู่ในที่เดียว ทดสอบได้ใน Rust และไม่ต้องเขียน BLE ซ้ำต่อ platform — ต้นทุนที่ต้องรู้: `btleplug` บน Android ต้อง build แบบ Rust+Java (ดู `04-open-items.md` ข้อ 14) **อัปเดต 2026-10-01 (ตัดสินใจแล้ว)**: Trezor Safe 7 ใช้แนวทางเดียวกัน คือ `vault-core::hw::trezor` (protocol ล้วน ไม่มี I/O บน crate `trezor-thp` ของ Trezor เอง) คู่กับ crate `trezor-ble` (btleplug 0.13) — ไม่ใช้ `trezor-client` ด้วยเหตุผลใน `04-open-items.md` ข้อ 16 — ต้นทุนที่ต้องรู้: ใน Android หนึ่งแอปต้องมี btleplug เวอร์ชันเดียว (ข้อ 18)
 - **USB** — ไม่ทำใน MVP (ตัดออกทั้งหมดตามการตัดสินใจนี้)
 
 ### 5.2 ข้อจำกัดของ Jade ผ่าน BLE (ยืนยันจาก source code ของ firmware 1.0.41 และจากเครื่องจริง)

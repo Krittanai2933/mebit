@@ -35,11 +35,10 @@ use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, Xpub};
-use bitcoin::secp256k1::Secp256k1;
-use bitcoin::sighash::SighashCache;
 use bitcoin::{Network, NetworkKind, Psbt};
 use ciborium::Value;
 
+use super::psbt_check::{self, SignatureCheckError};
 use crate::error::VaultCoreError;
 
 /// `MAX_INPUT_MSG_SIZE` on boards with PSRAM, which includes Jade Core and Jade
@@ -692,19 +691,13 @@ fn parse_xpub(result: Value, network: Network, path: &DerivationPath) -> Result<
 }
 
 /// Accepts the device's PSBT only if it is `unsigned` plus valid signatures
-/// from `signer`'s keys.
+/// from `signer`'s keys: see [`psbt_check::verify_device_signatures`].
 ///
 /// The Jade signs every input whose `bip32_derivation` names its master
 /// fingerprint (`sign_psbt()` in `main/process/sign_psbt.c`) and sends back
-/// the whole PSBT re-serialised, so this checks four things:
-///
-/// 1. Nothing but `partial_sigs` changed. Otherwise a faulty device could hand
-///    the finaliser a witness script or derivation we never built.
-/// 2. Every new signature is for one of `signer`'s keys, and verifies against
-///    the sighash computed here, from our own `unsigned` copy.
-/// 3. At least one signature was added. The device returns the PSBT unchanged,
-///    with no error, when it found nothing of its own to sign.
-/// 4. Every one of `signer`'s keys got signed.
+/// the whole PSBT re-serialised, so all of it is compared, not just the
+/// signatures. When it found nothing of its own to sign it returns the PSBT
+/// unchanged, without an error: that is [`JadeError::NoSignatures`].
 fn verify_signed_psbt(
     unsigned: &Psbt,
     signed_bytes: &[u8],
@@ -712,70 +705,20 @@ fn verify_signed_psbt(
 ) -> Result<Psbt, JadeError> {
     let signed = Psbt::deserialize(signed_bytes)
         .map_err(|e| protocol(format!("the device returned an unparseable PSBT: {e}")))?;
-    if signed.inputs.len() != unsigned.inputs.len() {
-        return Err(JadeError::PsbtModified);
-    }
+    Ok(psbt_check::verify_device_signatures(
+        unsigned, signed, signer,
+    )?)
+}
 
-    let secp = Secp256k1::verification_only();
-    let mut sighashes = SighashCache::new(&unsigned.unsigned_tx);
-    let mut stripped = signed.clone();
-    let mut added = 0;
-    let mut first_unsigned_input = None;
-    for (index, (before, after)) in unsigned.inputs.iter().zip(&signed.inputs).enumerate() {
-        let ours: Vec<_> = before
-            .bip32_derivation
-            .iter()
-            .filter(|(_, (fingerprint, _))| *fingerprint == signer)
-            .map(|(key, _)| *key)
-            .collect();
-
-        let kept_earlier_signatures = before
-            .partial_sigs
-            .iter()
-            .all(|(key, signature)| after.partial_sigs.get(key) == Some(signature));
-        if !kept_earlier_signatures {
-            return Err(JadeError::PsbtModified);
+impl From<SignatureCheckError> for JadeError {
+    fn from(error: SignatureCheckError) -> Self {
+        match error {
+            SignatureCheckError::PsbtModified => Self::PsbtModified,
+            SignatureCheckError::NoSignatures => Self::NoSignatures,
+            SignatureCheckError::MissingSignature { input } => Self::MissingSignature { input },
+            SignatureCheckError::InvalidSignature { input } => Self::InvalidSignature { input },
         }
-
-        for (key, signature) in &after.partial_sigs {
-            if before.partial_sigs.contains_key(key) {
-                continue;
-            }
-            if !key.compressed || !ours.contains(&key.inner) {
-                return Err(JadeError::PsbtModified);
-            }
-            let (message, sighash_type) = unsigned
-                .sighash_ecdsa(index, &mut sighashes)
-                .map_err(|_| JadeError::InvalidSignature { input: index })?;
-            if signature.sighash_type != sighash_type
-                || secp
-                    .verify_ecdsa(&message, &signature.signature, &key.inner)
-                    .is_err()
-            {
-                return Err(JadeError::InvalidSignature { input: index });
-            }
-            added += 1;
-        }
-
-        let all_ours_signed = ours
-            .iter()
-            .all(|ours| after.partial_sigs.keys().any(|key| key.inner == *ours));
-        if !all_ours_signed && first_unsigned_input.is_none() {
-            first_unsigned_input = Some(index);
-        }
-        stripped.inputs[index].partial_sigs = before.partial_sigs.clone();
     }
-
-    if stripped != *unsigned {
-        return Err(JadeError::PsbtModified);
-    }
-    if added == 0 {
-        return Err(JadeError::NoSignatures);
-    }
-    if let Some(input) = first_unsigned_input {
-        return Err(JadeError::MissingSignature { input });
-    }
-    Ok(signed)
 }
 
 fn encode_request(id: &str, method: &str, params: Option<Value>) -> Result<Vec<u8>, JadeError> {
@@ -838,7 +781,7 @@ mod tests {
     use bitcoin::bip32::Xpriv;
     use bitcoin::hashes::Hash;
     use bitcoin::psbt::raw;
-    use bitcoin::secp256k1::{Message, SecretKey};
+    use bitcoin::secp256k1::{Message, Secp256k1, SecretKey};
     use bitcoin::sighash::EcdsaSighashType;
     use bitcoin::{
         Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness, absolute,
