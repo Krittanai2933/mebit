@@ -910,7 +910,9 @@ fn unexpected(event: TrezorEvent) -> TrezorBleError {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::Mutex;
+    use std::sync::atomic::AtomicUsize;
 
     use super::*;
 
@@ -1156,6 +1158,185 @@ mod tests {
             tokio::time::timeout(Duration::from_millis(20), canceller.requested()).await
         });
         assert!(fired.is_ok());
+    }
+
+    struct Typist {
+        pause: Duration,
+        answers: Mutex<VecDeque<Option<&'static str>>>,
+        asked: AtomicUsize,
+    }
+
+    impl Typist {
+        fn new(pause_secs: u64, answers: impl IntoIterator<Item = Option<&'static str>>) -> Self {
+            Self {
+                pause: Duration::from_secs(pause_secs),
+                answers: Mutex::new(answers.into_iter().collect()),
+                asked: AtomicUsize::new(0),
+            }
+        }
+
+        fn asked(&self) -> usize {
+            self.asked.load(Ordering::SeqCst)
+        }
+    }
+
+    impl PairingCodeSource for Typist {
+        fn pairing_code(&self) -> Pin<Box<dyn Future<Output = Option<String>> + Send + '_>> {
+            self.asked.fetch_add(1, Ordering::SeqCst);
+            let answer = self
+                .answers
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("asked more often than scripted");
+            let pause = self.pause;
+            Box::pin(async move {
+                if !pause.is_zero() {
+                    tokio::time::sleep(pause).await;
+                }
+                answer.map(str::to_owned)
+            })
+        }
+    }
+
+    #[derive(Default)]
+    struct QuietLink {
+        verdicts: VecDeque<Result<(), TrezorError>>,
+        submitted: Vec<String>,
+        drops_at: Option<Instant>,
+    }
+
+    impl QuietLink {
+        fn verdicts(verdicts: impl IntoIterator<Item = Result<(), TrezorError>>) -> Self {
+            Self {
+                verdicts: verdicts.into_iter().collect(),
+                ..Self::default()
+            }
+        }
+    }
+
+    impl PairingLink for QuietLink {
+        async fn next_packet(&mut self) -> Result<Vec<u8>, TrezorBleError> {
+            match self.drops_at {
+                Some(at) => {
+                    tokio::time::sleep_until(at).await;
+                    Err(TrezorBleError::Disconnected)
+                }
+                None => std::future::pending().await,
+            }
+        }
+
+        async fn on_packet(&mut self, _packet: &[u8]) -> Result<(), TrezorBleError> {
+            unreachable!("the quiet link delivers nothing")
+        }
+
+        fn submit(&mut self, code: &str) -> Result<Vec<Vec<u8>>, VaultCoreError> {
+            self.submitted.push(code.to_owned());
+            let verdict = self
+                .verdicts
+                .pop_front()
+                .expect("a verdict for every submitted code");
+            Ok(verdict.map(|()| vec![code.as_bytes().to_vec()])?)
+        }
+    }
+
+    fn malformed() -> TrezorError {
+        TrezorError::PairingCodeInvalid
+    }
+
+    fn assert_elapsed(started: Instant, expected: Duration) {
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= expected && elapsed < expected + Duration::from_secs(1),
+            "expected about {expected:?}, took {elapsed:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_malformed_code_is_asked_for_again() {
+        let user = Typist::new(0, [Some("12345"), Some("12345a"), Some(" 123456\n")]);
+        let mut link = QuietLink::verdicts([Err(malformed()), Err(malformed()), Ok(())]);
+        let packets = enter_pairing_code(&mut link, &user).await.unwrap();
+        assert_eq!(packets, [b"123456".to_vec()]);
+        assert_eq!(user.asked(), 3);
+        assert_eq!(link.submitted, ["12345", "12345a", "123456"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retyping_does_not_extend_the_five_minutes() {
+        let user = Typist::new(200, [Some("12345"), Some("123456")]);
+        let mut link = QuietLink::verdicts([Err(malformed()), Ok(())]);
+        let started = Instant::now();
+        let outcome = enter_pairing_code(&mut link, &user).await;
+        assert!(
+            matches!(
+                outcome,
+                Err(TrezorBleError::Timeout("waiting for the pairing code"))
+            ),
+            "{outcome:?}"
+        );
+        assert_elapsed(started, USER_TIMEOUT);
+        assert_eq!(
+            link.submitted,
+            ["12345"],
+            "the late code never reached the session"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn only_a_malformed_code_is_asked_for_again() {
+        let refusals: [fn() -> TrezorError; 3] = [
+            || TrezorError::OutOfOrder,
+            || TrezorError::Protocol("x".into()),
+            || TrezorError::PairingFailed("x"),
+        ];
+        for refusal in refusals {
+            let user = Typist::new(0, [Some("123456"), Some("654321")]);
+            let mut link = QuietLink::verdicts([Err(refusal()), Ok(())]);
+            let outcome = enter_pairing_code(&mut link, &user).await;
+            assert!(
+                matches!(outcome, Err(TrezorBleError::Trezor(_))),
+                "{outcome:?}"
+            );
+            assert_eq!(user.asked(), 1, "{:?}", refusal());
+            assert_eq!(link.submitted, ["123456"]);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn giving_up_cancels_the_pairing() {
+        let user = Typist::new(0, [None]);
+        let mut link = QuietLink::default();
+        let outcome = enter_pairing_code(&mut link, &user).await;
+        assert!(
+            matches!(outcome, Err(TrezorBleError::PairingCancelled)),
+            "{outcome:?}"
+        );
+        assert!(link.submitted.is_empty());
+
+        let user = Typist::new(0, [Some("12345"), None]);
+        let mut link = QuietLink::verdicts([Err(malformed())]);
+        let outcome = enter_pairing_code(&mut link, &user).await;
+        assert!(
+            matches!(outcome, Err(TrezorBleError::PairingCancelled)),
+            "{outcome:?}"
+        );
+        assert_eq!(user.asked(), 2);
+        assert_eq!(link.submitted, ["12345"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_link_is_still_read_while_the_user_retypes() {
+        let user = Typist::new(20, [Some("12345"), Some("123456")]);
+        let mut link = QuietLink::verdicts([Err(malformed()), Ok(())]);
+        link.drops_at = Some(Instant::now() + Duration::from_secs(30));
+        let outcome = enter_pairing_code(&mut link, &user).await;
+        assert!(
+            matches!(outcome, Err(TrezorBleError::Disconnected)),
+            "{outcome:?}"
+        );
+        assert_eq!(user.asked(), 2);
+        assert_eq!(link.submitted, ["12345"]);
     }
 
     /// UniFFI wraps objects in `Arc` and runs their futures on a runtime it
