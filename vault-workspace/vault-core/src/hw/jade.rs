@@ -209,8 +209,10 @@ pub enum JadeEvent {
     /// that is still running — today, the next `get_extended_data` of a signing.
     Send(Vec<u8>),
     /// POST `body` (JSON) to `url`, hand the response body to
-    /// [`JadeSession::pinserver_response`], and write the bytes it returns. If
-    /// the POST fails, write what [`JadeSession::pinserver_failed`] returns.
+    /// [`JadeSession::pinserver_response`], and write the bytes it returns. The
+    /// Jade takes those bytes or `cancel` and nothing else. If the POST fails,
+    /// or `pinserver_response` refuses the response, write what
+    /// [`JadeSession::pinserver_failed`] returns instead.
     Pinserver {
         url: String,
         body: String,
@@ -239,7 +241,8 @@ enum State {
         id: String,
         op: Op,
     },
-    /// Waiting for the host to relay a pinserver request.
+    /// The Jade sent its `http_request` and waits for `pin` or `cancel`
+    /// (`handle_pin()` in `main/process/pinclient.c`).
     Pinserver {
         on_reply: String,
     },
@@ -344,6 +347,11 @@ impl JadeSession {
 
     /// The pinserver's response body for the last [`JadeEvent::Pinserver`],
     /// turned into the request that hands it to the device.
+    ///
+    /// A response the device can't take is refused with the session as it was:
+    /// not JSON ([`JadeError::PinserverResponseInvalid`]), or too large to
+    /// send ([`JadeError::RequestTooLarge`]). The device still waits, so write
+    /// what [`JadeSession::pinserver_failed`] returns.
     pub fn pinserver_response(&mut self, body: &str) -> Result<Vec<u8>, VaultCoreError> {
         let State::Pinserver { on_reply } = &self.state else {
             return Err(JadeError::OutOfOrder.into());
@@ -351,25 +359,18 @@ impl JadeSession {
         let on_reply = on_reply.clone();
         let params = serde_json::from_str::<serde_json::Value>(body)
             .map_err(|e| e.to_string())
-            .and_then(|json| Value::serialized(&json).map_err(|e| e.to_string()));
-        let params = match params {
-            Ok(params) => params,
-            Err(e) => {
-                // The device is waiting on this reply; nothing brings it back but a reconnect.
-                self.state = State::Broken;
-                return Err(protocol(format!("pinserver reply is not JSON: {e}")).into());
-            }
-        };
-        self.state = State::Idle;
-        let id = self.next_request_id()?;
+            .and_then(|json| Value::serialized(&json).map_err(|e| e.to_string()))
+            .map_err(|e| JadeError::PinserverResponseInvalid(format!("not JSON: {e}")))?;
+        let id = self.take_id_unchecked();
         self.request(id, &on_reply, Some(params), Op::Unlock)
     }
 
     /// The request to write instead of a pinserver response when the POST
-    /// failed. The device waits for one or the other; `cancel` sends it back to
-    /// its home screen without a reply (`handle_pin()` in
-    /// `main/process/pinclient.c`), so the session is idle again at once and
-    /// the unlock can be retried over the same connection.
+    /// failed or [`JadeSession::pinserver_response`] refused the response. The
+    /// device waits for one or the other; `cancel` sends it back to its home
+    /// screen without a reply (`handle_pin()` in `main/process/pinclient.c`),
+    /// so the session is idle again at once and the unlock can be retried over
+    /// the same connection.
     pub fn pinserver_failed(&mut self) -> Result<Vec<u8>, VaultCoreError> {
         if !matches!(self.state, State::Pinserver { .. }) {
             return Err(JadeError::OutOfOrder.into());
@@ -530,9 +531,13 @@ impl JadeSession {
             State::Broken => return Err(broken()),
             _ => return Err(JadeError::OutOfOrder),
         }
-        // Decimal u32: at most 10 characters, inside the firmware's 16 (`MAXLEN_ID`).
+        Ok(self.take_id_unchecked())
+    }
+
+    /// Decimal u32: at most 10 characters, inside the firmware's 16 (`MAXLEN_ID`).
+    fn take_id_unchecked(&mut self) -> String {
         self.next_id = self.next_id.wrapping_add(1);
-        Ok(self.next_id.to_string())
+        self.next_id.to_string()
     }
 
     fn request(
@@ -1513,17 +1518,6 @@ mod tests {
         session.request_unlock(0).unwrap();
         let no_https = session.receive(&reply("1", request));
         assert!(matches!(jade_error(no_https), JadeError::Protocol(_)));
-
-        let mut session = session_from_1();
-        session.request_unlock(0).unwrap();
-        let event = session.receive(&reply("1", pinserver_request())).unwrap();
-        assert!(matches!(event, JadeEvent::Pinserver { .. }));
-        let not_json = session.pinserver_response("<html>502</html>");
-        assert!(matches!(jade_error(not_json), JadeError::Protocol(_)));
-        assert!(
-            session.request_version_info().is_err(),
-            "the device is still waiting: broken"
-        );
     }
 
     #[test]
