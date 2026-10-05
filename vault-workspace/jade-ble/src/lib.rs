@@ -87,6 +87,9 @@ pub enum JadeBleError {
     #[error("the Jade disconnected")]
     Disconnected,
 
+    /// The pinserver could not be reached, or its response was no use. The
+    /// Jade was sent `cancel` and the connection still works: call `unlock()`
+    /// again.
     #[error("pinserver relay failed: {0}")]
     Pinserver(String),
 
@@ -96,9 +99,10 @@ pub enum JadeBleError {
 
 /// One live BLE connection to one Jade, with its protocol session.
 ///
-/// A device error (declined, wrong PIN, locked) leaves the connection usable.
-/// A call that stops midway (a timeout, a dropped link, its future dropped)
-/// leaves the Jade out of step with the host: reconnect before the next call.
+/// A device error (declined, wrong PIN, locked) or a failed pinserver relay
+/// leaves the connection usable. A call that stops midway (a timeout, a
+/// dropped link, its future dropped) leaves the Jade out of step with the
+/// host: reconnect before the next call.
 pub struct JadeBle {
     peripheral: Peripheral,
     name: String,
@@ -252,8 +256,6 @@ impl JadeBle {
     ) -> Result<JadeEvent, JadeBleError> {
         let outcome = self.exchange(request, first_wait).await;
         if outcome.is_err() {
-            // A no-op after a device error, which leaves the session idle. Any
-            // other failure stopped the exchange midway.
             self.session.abandon();
         }
         outcome
@@ -275,16 +277,21 @@ impl JadeBle {
                     self.write(&bytes).await?;
                 }
                 JadeEvent::Pinserver { url, body } => {
-                    let response = match post_to_pinserver(url, body).await {
-                        Ok(response) => response,
+                    let relayed = post_to_pinserver(url, body).await.and_then(|response| {
+                        self.session
+                            .pinserver_response(&response)
+                            .map_err(|refused| JadeBleError::Pinserver(refused.to_string()))
+                    });
+                    let reply = match relayed {
+                        Ok(reply) => reply,
                         Err(error) => {
-                            // Otherwise the Jade waits on "Checking…" for as long as the link lasts.
+                            // The Jade takes `pin` or `cancel` and nothing else. Without
+                            // `cancel` it waits on "Checking…" for as long as the link lasts.
                             let cancel = self.session.pinserver_failed()?;
                             self.write(&cancel).await?;
                             return Err(error);
                         }
                     };
-                    let reply = self.session.pinserver_response(&response)?;
                     // The Jade may still ask for a passphrase or a new PIN before it
                     // answers (`get_pin_load_keys()` in `main/process/auth_user.c`).
                     wait = first_wait;

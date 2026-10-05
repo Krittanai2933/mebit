@@ -16,7 +16,8 @@
 //!   numeric comparison (the same six digits on the Safe 7 and the host;
 //!   confirm both). Then the Safe 7 pairs the app: the user approves it on
 //!   the device and types the six-digit code it shows, through
-//!   [`PairingCodeSource`]. Keep the returned [`PairingCredential`] (it is a
+//!   [`PairingCodeSource`], which is asked again on the same link when an
+//!   answer isn't six digits. Keep the returned [`PairingCredential`] (it is a
 //!   secret) to skip the code next time. The Safe 7 still asks the user to
 //!   confirm every connection.
 //! - **Exactly a Safe 7.** Any other model is refused, before any pairing
@@ -73,6 +74,10 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 const REPLY_TIMEOUT: Duration = Duration::from_secs(15);
 /// Anything the user does: PIN, approving, the code, confirming.
 const USER_TIMEOUT: Duration = Duration::from_secs(300);
+/// A code source that answers at once would otherwise keep the retry loop
+/// from ever returning `Pending`, and `timeout` only checks its timer after
+/// the future it wraps returns `Pending`.
+const RETRY_PAUSE: Duration = Duration::from_millis(250);
 const CONNECT_ATTEMPTS: u32 = 3;
 
 #[derive(Debug, thiserror::Error)]
@@ -228,6 +233,11 @@ fn trezor_kind(error: &TrezorError) -> ErrorKind {
 
 /// Supplies the six digits the Safe 7 shows while pairing (not its PIN), or
 /// `None` if the user gave up.
+///
+/// Asked again, with nothing said about why, when an answer isn't six ASCII
+/// digits. The pairing stays open meanwhile, and every ask shares one
+/// five-minute limit. A well-formed code that the Safe 7 refuses ends the
+/// pairing instead.
 pub trait PairingCodeSource: Send + Sync {
     fn pairing_code(&self) -> Pin<Box<dyn Future<Output = Option<String>> + Send + '_>>;
 }
@@ -538,8 +548,7 @@ async fn exchange(
                     None | Some(TrezorEvent::AwaitingUser(_)) => {}
                     Some(TrezorEvent::PairingCodeNeeded) => {
                         let codes = codes.ok_or_else(|| unexpected(TrezorEvent::PairingCodeNeeded))?;
-                        let code = code_while_listening(radio, session, codes).await?;
-                        let reply = session.pairing_code(code.trim())?;
+                        let reply = enter_pairing_code(&mut BlePairing { radio, session }, codes).await?;
                         radio.write(&reply).await?;
                     }
                     Some(TrezorEvent::Failed(error)) => return Err(error.into()),
@@ -580,31 +589,71 @@ fn reply_deadline(session: &TrezorSession) -> Instant {
         }
 }
 
-/// Waits for the user's pairing code while still reading the link: the
-/// Safe 7 may end pairing meanwhile (the only button on its code screen
-/// cancels it), and the user shouldn't have to type a code to find out.
+trait PairingLink {
+    async fn next_packet(&mut self) -> Result<Vec<u8>, TrezorBleError>;
+
+    async fn on_packet(&mut self, packet: &[u8]) -> Result<(), TrezorBleError>;
+
+    fn submit(&mut self, code: &str) -> Result<Vec<Vec<u8>>, VaultCoreError>;
+}
+
+struct BlePairing<'a> {
+    radio: &'a mut Radio,
+    session: &'a mut TrezorSession,
+}
+
+impl PairingLink for BlePairing<'_> {
+    async fn next_packet(&mut self) -> Result<Vec<u8>, TrezorBleError> {
+        self.radio.next_packet().await
+    }
+
+    async fn on_packet(&mut self, packet: &[u8]) -> Result<(), TrezorBleError> {
+        let step = self.session.receive(packet)?;
+        self.radio.write(&step.send).await?;
+        match step.event {
+            None | Some(TrezorEvent::AwaitingUser(_)) => Ok(()),
+            Some(TrezorEvent::Failed(error)) => Err(error.into()),
+            Some(other) => Err(unexpected(other)),
+        }
+    }
+
+    fn submit(&mut self, code: &str) -> Result<Vec<Vec<u8>>, VaultCoreError> {
+        self.session.pairing_code(code)
+    }
+}
+
+async fn enter_pairing_code(
+    link: &mut impl PairingLink,
+    codes: &dyn PairingCodeSource,
+) -> Result<Vec<Vec<u8>>, TrezorBleError> {
+    let attempts = async {
+        loop {
+            let code = code_while_listening(link, codes).await?;
+            match link.submit(code.trim()) {
+                Err(VaultCoreError::Trezor(TrezorError::PairingCodeInvalid)) => {
+                    tokio::time::sleep(RETRY_PAUSE).await;
+                }
+                sent => return Ok::<_, TrezorBleError>(sent?),
+            }
+        }
+    };
+    tokio::time::timeout(USER_TIMEOUT, attempts)
+        .await
+        .map_err(|_| TrezorBleError::Timeout("waiting for the pairing code"))?
+}
+
+/// The Safe 7 may end pairing while the user types (the only button on its
+/// code screen cancels it).
 async fn code_while_listening(
-    radio: &mut Radio,
-    session: &mut TrezorSession,
+    link: &mut impl PairingLink,
     codes: &dyn PairingCodeSource,
 ) -> Result<String, TrezorBleError> {
     let code = codes.pairing_code();
     tokio::pin!(code);
-    let deadline = tokio::time::sleep(USER_TIMEOUT);
-    tokio::pin!(deadline);
     loop {
         tokio::select! {
             code = &mut code => return code.ok_or(TrezorBleError::PairingCancelled),
-            packet = radio.next_packet() => {
-                let step = session.receive(&packet?)?;
-                radio.write(&step.send).await?;
-                match step.event {
-                    None | Some(TrezorEvent::AwaitingUser(_)) => {}
-                    Some(TrezorEvent::Failed(error)) => return Err(error.into()),
-                    Some(other) => return Err(unexpected(other)),
-                }
-            }
-            () = &mut deadline => return Err(TrezorBleError::Timeout("waiting for the pairing code")),
+            packet = link.next_packet() => link.on_packet(&packet?).await?,
         }
     }
 }
@@ -878,7 +927,9 @@ fn unexpected(event: TrezorEvent) -> TrezorBleError {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::Mutex;
+    use std::sync::atomic::AtomicUsize;
 
     use super::*;
 
@@ -1124,6 +1175,204 @@ mod tests {
             tokio::time::timeout(Duration::from_millis(20), canceller.requested()).await
         });
         assert!(fired.is_ok());
+    }
+
+    struct Typist {
+        pause: Duration,
+        answers: Mutex<VecDeque<Option<&'static str>>>,
+        asked: AtomicUsize,
+    }
+
+    impl Typist {
+        fn new(pause_secs: u64, answers: impl IntoIterator<Item = Option<&'static str>>) -> Self {
+            Self {
+                pause: Duration::from_secs(pause_secs),
+                answers: Mutex::new(answers.into_iter().collect()),
+                asked: AtomicUsize::new(0),
+            }
+        }
+
+        fn asked(&self) -> usize {
+            self.asked.load(Ordering::SeqCst)
+        }
+    }
+
+    impl PairingCodeSource for Typist {
+        fn pairing_code(&self) -> Pin<Box<dyn Future<Output = Option<String>> + Send + '_>> {
+            self.asked.fetch_add(1, Ordering::SeqCst);
+            let answer = self
+                .answers
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("asked more often than scripted");
+            let pause = self.pause;
+            Box::pin(async move {
+                if !pause.is_zero() {
+                    tokio::time::sleep(pause).await;
+                }
+                answer.map(str::to_owned)
+            })
+        }
+    }
+
+    #[derive(Default)]
+    struct QuietLink {
+        verdicts: VecDeque<Result<(), TrezorError>>,
+        submitted: Vec<String>,
+        drops_at: Option<Instant>,
+    }
+
+    impl QuietLink {
+        fn verdicts(verdicts: impl IntoIterator<Item = Result<(), TrezorError>>) -> Self {
+            Self {
+                verdicts: verdicts.into_iter().collect(),
+                ..Self::default()
+            }
+        }
+    }
+
+    impl PairingLink for QuietLink {
+        async fn next_packet(&mut self) -> Result<Vec<u8>, TrezorBleError> {
+            match self.drops_at {
+                Some(at) => {
+                    tokio::time::sleep_until(at).await;
+                    Err(TrezorBleError::Disconnected)
+                }
+                None => std::future::pending().await,
+            }
+        }
+
+        async fn on_packet(&mut self, _packet: &[u8]) -> Result<(), TrezorBleError> {
+            unreachable!("the quiet link delivers nothing")
+        }
+
+        fn submit(&mut self, code: &str) -> Result<Vec<Vec<u8>>, VaultCoreError> {
+            self.submitted.push(code.to_owned());
+            let verdict = self
+                .verdicts
+                .pop_front()
+                .expect("a verdict for every submitted code");
+            Ok(verdict.map(|()| vec![code.as_bytes().to_vec()])?)
+        }
+    }
+
+    fn malformed() -> TrezorError {
+        TrezorError::PairingCodeInvalid
+    }
+
+    fn assert_elapsed(started: Instant, expected: Duration) {
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= expected && elapsed < expected + Duration::from_secs(1),
+            "expected about {expected:?}, took {elapsed:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_malformed_code_is_asked_for_again() {
+        let user = Typist::new(0, [Some("12345"), Some("12345a"), Some(" 123456\n")]);
+        let mut link = QuietLink::verdicts([Err(malformed()), Err(malformed()), Ok(())]);
+        let packets = enter_pairing_code(&mut link, &user).await.unwrap();
+        assert_eq!(packets, [b"123456".to_vec()]);
+        assert_eq!(user.asked(), 3);
+        assert_eq!(link.submitted, ["12345", "12345a", "123456"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retyping_does_not_extend_the_five_minutes() {
+        let user = Typist::new(200, [Some("12345"), Some("123456")]);
+        let mut link = QuietLink::verdicts([Err(malformed()), Ok(())]);
+        let started = Instant::now();
+        let outcome = enter_pairing_code(&mut link, &user).await;
+        assert!(
+            matches!(
+                outcome,
+                Err(TrezorBleError::Timeout("waiting for the pairing code"))
+            ),
+            "{outcome:?}"
+        );
+        assert_elapsed(started, USER_TIMEOUT);
+        assert_eq!(
+            link.submitted,
+            ["12345"],
+            "the late code never reached the session"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn only_a_malformed_code_is_asked_for_again() {
+        let refusals: [fn() -> TrezorError; 3] = [
+            || TrezorError::OutOfOrder,
+            || TrezorError::Protocol("x".into()),
+            || TrezorError::PairingFailed("x"),
+        ];
+        for refusal in refusals {
+            let user = Typist::new(0, [Some("123456"), Some("654321")]);
+            let mut link = QuietLink::verdicts([Err(refusal()), Ok(())]);
+            let outcome = enter_pairing_code(&mut link, &user).await;
+            assert!(
+                matches!(outcome, Err(TrezorBleError::Trezor(_))),
+                "{outcome:?}"
+            );
+            assert_eq!(user.asked(), 1, "{:?}", refusal());
+            assert_eq!(link.submitted, ["123456"]);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn giving_up_cancels_the_pairing() {
+        let user = Typist::new(0, [None]);
+        let mut link = QuietLink::default();
+        let outcome = enter_pairing_code(&mut link, &user).await;
+        assert!(
+            matches!(outcome, Err(TrezorBleError::PairingCancelled)),
+            "{outcome:?}"
+        );
+        assert!(link.submitted.is_empty());
+
+        let user = Typist::new(0, [Some("12345"), None]);
+        let mut link = QuietLink::verdicts([Err(malformed())]);
+        let outcome = enter_pairing_code(&mut link, &user).await;
+        assert!(
+            matches!(outcome, Err(TrezorBleError::PairingCancelled)),
+            "{outcome:?}"
+        );
+        assert_eq!(user.asked(), 2);
+        assert_eq!(link.submitted, ["12345"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_link_is_still_read_while_the_user_retypes() {
+        let user = Typist::new(20, [Some("12345"), Some("123456")]);
+        let mut link = QuietLink::verdicts([Err(malformed()), Ok(())]);
+        link.drops_at = Some(Instant::now() + Duration::from_secs(30));
+        let outcome = enter_pairing_code(&mut link, &user).await;
+        assert!(
+            matches!(outcome, Err(TrezorBleError::Disconnected)),
+            "{outcome:?}"
+        );
+        assert_eq!(user.asked(), 2);
+        assert_eq!(link.submitted, ["12345"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_source_that_never_waits_still_times_out() {
+        let user = Typist::new(0, std::iter::repeat_n(Some("1"), 2000));
+        let mut link = QuietLink::verdicts(std::iter::repeat_with(|| Err(malformed())).take(2000));
+        let started = Instant::now();
+        let outcome = enter_pairing_code(&mut link, &user).await;
+        assert!(
+            matches!(outcome, Err(TrezorBleError::Timeout(_))),
+            "{outcome:?}"
+        );
+        assert_elapsed(started, USER_TIMEOUT);
+        let tries = link.submitted.len();
+        let paced = (USER_TIMEOUT.as_millis() / RETRY_PAUSE.as_millis()) as usize;
+        assert!(
+            tries.abs_diff(paced) <= 1,
+            "{tries} tries, about {paced} expected"
+        );
     }
 
     /// UniFFI wraps objects in `Arc` and runs their futures on a runtime it

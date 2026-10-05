@@ -1557,6 +1557,46 @@ fn a_wrong_code_is_refused_by_the_device() {
 }
 
 #[test]
+fn a_malformed_code_leaves_the_pairing_waiting_for_the_right_one() {
+    let mut wire = Wire::new(Behaviour::default(), None);
+    wire.type_code = false;
+    let start = wire.host.start().unwrap();
+    wire.to_device.extend(start);
+    wire.run().unwrap();
+    assert!(matches!(
+        wire.events.last(),
+        Some(TrezorEvent::PairingCodeNeeded)
+    ));
+
+    for malformed in ["", "12345", "12345a", "1234567", "123 456"] {
+        assert!(
+            matches!(
+                trezor_error(wire.host.pairing_code(malformed)),
+                TrezorError::PairingCodeInvalid
+            ),
+            "{malformed:?}"
+        );
+        assert!(
+            wire.to_device.is_empty(),
+            "nothing is sent for {malformed:?}"
+        );
+        assert!(!wire.host.is_ready(), "still pairing after {malformed:?}");
+    }
+
+    let shown = wire.device.screen_code.clone().unwrap();
+    let packets = wire.host.pairing_code(&shown).unwrap();
+    wire.to_device.extend(packets);
+    wire.run().unwrap();
+    assert!(
+        wire.events
+            .iter()
+            .any(|event| matches!(event, TrezorEvent::Connected { .. })),
+        "connected after the right code: {:?}",
+        wire.events
+    );
+}
+
+#[test]
 fn the_busy_packet_is_reported_as_busy() {
     let mut wire = Wire::new(
         Behaviour {
