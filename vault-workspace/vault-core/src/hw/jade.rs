@@ -88,6 +88,12 @@ pub enum JadeError {
     #[error("call made out of order")]
     OutOfOrder,
 
+    /// The pinserver answered with something the device can't take (not
+    /// JSON). The session is as it was and the device still waits: write what
+    /// [`JadeSession::pinserver_failed`] returns, then unlock again.
+    #[error("the pinserver's response can't go to the device: {0}")]
+    PinserverResponseInvalid(String),
+
     #[error("request is {0} bytes; the Jade accepts at most {MAX_REQUEST_LEN}")]
     RequestTooLarge(usize),
 
@@ -907,6 +913,9 @@ mod tests {
         piece_len: usize,
         /// (origid, signed PSBT, seqlen, pieces sent) while a signing is fetched.
         signing: Option<(String, Vec<u8>, u64, u64)>,
+        /// The `http_request` went out, so `handle_pin()` in
+        /// `main/process/pinclient.c` takes `pin` or `cancel` and nothing else.
+        awaiting_pin: bool,
     }
 
     impl FakeJade {
@@ -916,6 +925,7 @@ mod tests {
                 pin_wallet: false,
                 piece_len: 3008,
                 signing: None,
+                awaiting_pin: false,
             }
         }
 
@@ -942,6 +952,15 @@ mod tests {
             if ["auth_user", "get_xpub", "sign_psbt"].contains(&method.as_str()) {
                 assert_eq!(param("network"), Some(text("testnet")));
             }
+            // The transport task answers `get_version_info` at once, whatever
+            // a screen on the device waits for.
+            if self.awaiting_pin
+                && !["pin", "cancel", "get_version_info"].contains(&method.as_str())
+            {
+                // The unlock is over, with an error screen the user must dismiss.
+                self.awaiting_pin = false;
+                return error_reply(&id, -32001, "Unexpected message, expecting 'pin'");
+            }
             match method.as_str() {
                 "get_version_info" => reply(&id, version_info("LOCKED", "TEST")),
                 "auth_user" => {
@@ -951,6 +970,7 @@ mod tests {
                             .is_some()
                     );
                     let result = if self.pin_wallet {
+                        self.awaiting_pin = true;
                         pinserver_request()
                     } else {
                         Value::Bool(true)
@@ -958,10 +978,21 @@ mod tests {
                     reply(&id, result)
                 }
                 "pin" => {
+                    assert!(
+                        self.awaiting_pin,
+                        "`pin` without an `http_request` before it"
+                    );
+                    self.awaiting_pin = false;
                     // The pinserver's JSON must reach the device unchanged.
                     let got = serde_json::to_value(Value::Map(params.clone())).unwrap();
                     assert_eq!(got, pinserver_reply());
                     reply(&id, Value::Bool(true))
+                }
+                // `PIN_CANCELLED` is deliberately silent: no reply, and the Jade is home.
+                "cancel" => {
+                    assert!(self.awaiting_pin, "`cancel` with nothing to cancel");
+                    self.awaiting_pin = false;
+                    Vec::new()
                 }
                 "get_xpub" => {
                     let path: Vec<ChildNumber> = param("path")
@@ -1087,6 +1118,14 @@ mod tests {
         let sent: serde_json::Value = serde_json::from_str(body).unwrap();
         assert_eq!(sent, serde_json::json!({"data": "opaque request"}));
         pinserver_reply().to_string()
+    }
+
+    fn until_pinserver(session: &mut JadeSession, jade: &mut FakeJade) {
+        jade.pin_wallet = true;
+        let request = session.request_unlock(0).unwrap();
+        let event = session.receive(&jade.answer(&request)).unwrap();
+        assert!(matches!(event, JadeEvent::Pinserver { .. }), "{event:?}");
+        assert!(jade.awaiting_pin);
     }
 
     /// Runs one exchange to its end the way a host does, cutting every reply
@@ -1506,6 +1545,67 @@ mod tests {
 
         // So the session is idle at once, and the unlock can be retried.
         assert!(session.request_unlock(0).is_ok());
+    }
+
+    #[test]
+    fn a_failed_pinserver_relay_cancels_and_the_unlock_can_be_retried() {
+        let too_big = format!(r#"{{"data":"{}"}}"#, "x".repeat(MAX_REQUEST_LEN));
+        let cases: [(&str, Option<&str>); 4] = [
+            ("the POST failed", None),
+            ("an HTML page with a 200", Some("<html>maintenance</html>")),
+            ("an empty body", Some("")),
+            ("a response too big to forward", Some(&too_big)),
+        ];
+        for (case, body) in cases {
+            let mut jade = FakeJade::new();
+            let mut session = JadeSession::new(NETWORK);
+            until_pinserver(&mut session, &mut jade);
+
+            if let Some(body) = body {
+                let refused = jade_error(session.pinserver_response(body));
+                let expected_kind = if body.len() > MAX_REQUEST_LEN {
+                    matches!(refused, JadeError::RequestTooLarge(_))
+                } else {
+                    matches!(refused, JadeError::PinserverResponseInvalid(_))
+                };
+                assert!(expected_kind, "{case}: {refused:?}");
+                let early = jade_error(session.request_version_info());
+                assert!(matches!(early, JadeError::OutOfOrder), "{case}: {early:?}");
+            }
+            assert!(jade.awaiting_pin, "{case}");
+
+            let cancel = session.pinserver_failed().unwrap();
+            assert!(
+                jade.answer(&cancel).is_empty(),
+                "{case}: `cancel` gets no reply"
+            );
+            assert!(
+                !jade.awaiting_pin,
+                "{case}: the Jade is still on \"Checking…\""
+            );
+
+            let retry = session.request_unlock(0).unwrap();
+            let event = run(&mut session, &mut jade, retry, whole).unwrap();
+            assert!(matches!(event, JadeEvent::Unlocked), "{case}: {event:?}");
+        }
+    }
+
+    #[test]
+    fn a_host_that_never_cancels_is_left_with_a_session_that_refuses_everything() {
+        let mut jade = FakeJade::new();
+        let mut session = JadeSession::new(NETWORK);
+        until_pinserver(&mut session, &mut jade);
+        jade_error(session.pinserver_response("<html>maintenance</html>"));
+
+        let xpub = session.request_xpub(&account_path());
+        assert!(matches!(jade_error(xpub), JadeError::OutOfOrder));
+
+        session.abandon();
+        let after = jade_error(session.request_version_info());
+        assert!(matches!(after, JadeError::Protocol(_)), "{after:?}");
+        let late = jade_error(session.pinserver_failed());
+        assert!(matches!(late, JadeError::OutOfOrder), "{late:?}");
+        assert!(jade.awaiting_pin, "the Jade still waits");
     }
 
     #[test]
