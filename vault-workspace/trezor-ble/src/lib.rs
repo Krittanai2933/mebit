@@ -538,8 +538,7 @@ async fn exchange(
                     None | Some(TrezorEvent::AwaitingUser(_)) => {}
                     Some(TrezorEvent::PairingCodeNeeded) => {
                         let codes = codes.ok_or_else(|| unexpected(TrezorEvent::PairingCodeNeeded))?;
-                        let code = code_while_listening(radio, session, codes).await?;
-                        let reply = session.pairing_code(code.trim())?;
+                        let reply = enter_pairing_code(&mut BlePairing { radio, session }, codes).await?;
                         radio.write(&reply).await?;
                     }
                     Some(TrezorEvent::Failed(error)) => return Err(error.into()),
@@ -580,31 +579,64 @@ fn reply_deadline(session: &TrezorSession) -> Instant {
         }
 }
 
-/// Waits for the user's pairing code while still reading the link: the
-/// Safe 7 may end pairing meanwhile (the only button on its code screen
-/// cancels it), and the user shouldn't have to type a code to find out.
+trait PairingLink {
+    async fn next_packet(&mut self) -> Result<Vec<u8>, TrezorBleError>;
+
+    async fn on_packet(&mut self, packet: &[u8]) -> Result<(), TrezorBleError>;
+
+    fn submit(&mut self, code: &str) -> Result<Vec<Vec<u8>>, VaultCoreError>;
+}
+
+struct BlePairing<'a> {
+    radio: &'a mut Radio,
+    session: &'a mut TrezorSession,
+}
+
+impl PairingLink for BlePairing<'_> {
+    async fn next_packet(&mut self) -> Result<Vec<u8>, TrezorBleError> {
+        self.radio.next_packet().await
+    }
+
+    async fn on_packet(&mut self, packet: &[u8]) -> Result<(), TrezorBleError> {
+        let step = self.session.receive(packet)?;
+        self.radio.write(&step.send).await?;
+        match step.event {
+            None | Some(TrezorEvent::AwaitingUser(_)) => Ok(()),
+            Some(TrezorEvent::Failed(error)) => Err(error.into()),
+            Some(other) => Err(unexpected(other)),
+        }
+    }
+
+    fn submit(&mut self, code: &str) -> Result<Vec<Vec<u8>>, VaultCoreError> {
+        self.session.pairing_code(code)
+    }
+}
+
+async fn enter_pairing_code(
+    link: &mut impl PairingLink,
+    codes: &dyn PairingCodeSource,
+) -> Result<Vec<Vec<u8>>, TrezorBleError> {
+    let attempts = async {
+        let code = code_while_listening(link, codes).await?;
+        Ok::<_, TrezorBleError>(link.submit(code.trim())?)
+    };
+    tokio::time::timeout(USER_TIMEOUT, attempts)
+        .await
+        .map_err(|_| TrezorBleError::Timeout("waiting for the pairing code"))?
+}
+
+/// The Safe 7 may end pairing while the user types (the only button on its
+/// code screen cancels it).
 async fn code_while_listening(
-    radio: &mut Radio,
-    session: &mut TrezorSession,
+    link: &mut impl PairingLink,
     codes: &dyn PairingCodeSource,
 ) -> Result<String, TrezorBleError> {
     let code = codes.pairing_code();
     tokio::pin!(code);
-    let deadline = tokio::time::sleep(USER_TIMEOUT);
-    tokio::pin!(deadline);
     loop {
         tokio::select! {
             code = &mut code => return code.ok_or(TrezorBleError::PairingCancelled),
-            packet = radio.next_packet() => {
-                let step = session.receive(&packet?)?;
-                radio.write(&step.send).await?;
-                match step.event {
-                    None | Some(TrezorEvent::AwaitingUser(_)) => {}
-                    Some(TrezorEvent::Failed(error)) => return Err(error.into()),
-                    Some(other) => return Err(unexpected(other)),
-                }
-            }
-            () = &mut deadline => return Err(TrezorBleError::Timeout("waiting for the pairing code")),
+            packet = link.next_packet() => link.on_packet(&packet?).await?,
         }
     }
 }
