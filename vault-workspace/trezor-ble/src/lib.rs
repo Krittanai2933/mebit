@@ -16,7 +16,8 @@
 //!   numeric comparison (the same six digits on the Safe 7 and the host;
 //!   confirm both). Then the Safe 7 pairs the app: the user approves it on
 //!   the device and types the six-digit code it shows, through
-//!   [`PairingCodeSource`]. Keep the returned [`PairingCredential`] (it is a
+//!   [`PairingCodeSource`], which is asked again on the same link when an
+//!   answer isn't six digits. Keep the returned [`PairingCredential`] (it is a
 //!   secret) to skip the code next time. The Safe 7 still asks the user to
 //!   confirm every connection.
 //! - **Exactly a Safe 7.** Any other model is refused, before any pairing
@@ -73,6 +74,10 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 const REPLY_TIMEOUT: Duration = Duration::from_secs(15);
 /// Anything the user does: PIN, approving, the code, confirming.
 const USER_TIMEOUT: Duration = Duration::from_secs(300);
+/// A code source that answers at once would otherwise keep the retry loop
+/// from ever returning `Pending`, and `timeout` only checks its timer after
+/// the future it wraps returns `Pending`.
+const RETRY_PAUSE: Duration = Duration::from_millis(250);
 const CONNECT_ATTEMPTS: u32 = 3;
 
 #[derive(Debug, thiserror::Error)]
@@ -228,6 +233,11 @@ fn trezor_kind(error: &TrezorError) -> ErrorKind {
 
 /// Supplies the six digits the Safe 7 shows while pairing (not its PIN), or
 /// `None` if the user gave up.
+///
+/// Asked again, with nothing said about why, when an answer isn't six ASCII
+/// digits. The pairing stays open meanwhile, and every ask shares one
+/// five-minute limit. A well-formed code that the Safe 7 refuses ends the
+/// pairing instead.
 pub trait PairingCodeSource: Send + Sync {
     fn pairing_code(&self) -> Pin<Box<dyn Future<Output = Option<String>> + Send + '_>>;
 }
@@ -617,8 +627,15 @@ async fn enter_pairing_code(
     codes: &dyn PairingCodeSource,
 ) -> Result<Vec<Vec<u8>>, TrezorBleError> {
     let attempts = async {
-        let code = code_while_listening(link, codes).await?;
-        Ok::<_, TrezorBleError>(link.submit(code.trim())?)
+        loop {
+            let code = code_while_listening(link, codes).await?;
+            match link.submit(code.trim()) {
+                Err(VaultCoreError::Trezor(TrezorError::PairingCodeInvalid)) => {
+                    tokio::time::sleep(RETRY_PAUSE).await;
+                }
+                sent => return Ok::<_, TrezorBleError>(sent?),
+            }
+        }
     };
     tokio::time::timeout(USER_TIMEOUT, attempts)
         .await
@@ -1337,6 +1354,25 @@ mod tests {
         );
         assert_eq!(user.asked(), 2);
         assert_eq!(link.submitted, ["12345"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_source_that_never_waits_still_times_out() {
+        let user = Typist::new(0, std::iter::repeat_n(Some("1"), 2000));
+        let mut link = QuietLink::verdicts(std::iter::repeat_with(|| Err(malformed())).take(2000));
+        let started = Instant::now();
+        let outcome = enter_pairing_code(&mut link, &user).await;
+        assert!(
+            matches!(outcome, Err(TrezorBleError::Timeout(_))),
+            "{outcome:?}"
+        );
+        assert_elapsed(started, USER_TIMEOUT);
+        let tries = link.submitted.len();
+        let paced = (USER_TIMEOUT.as_millis() / RETRY_PAUSE.as_millis()) as usize;
+        assert!(
+            tries.abs_diff(paced) <= 1,
+            "{tries} tries, about {paced} expected"
+        );
     }
 
     /// UniFFI wraps objects in `Arc` and runs their futures on a runtime it
