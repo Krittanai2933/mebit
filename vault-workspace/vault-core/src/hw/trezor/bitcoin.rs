@@ -1,13 +1,10 @@
-//! Bitcoin on the Safe 7: account xpubs, and co-signing a vault's PSBT
-//! through Trezor's `SignTx` exchange.
-//!
 //! Trezor doesn't take a PSBT. It asks for the transaction piece by piece
 //! (`TxRequest`), and for every input's previous transaction, which it hashes
 //! to check amounts (`core/src/apps/bitcoin/sign_tx/` in trezor-firmware). So
 //! everything it asks for is prepared here from the PSBT, up front, and the
-//! PSBT is refused before anything is sent unless it is exactly the shape
-//! mebit builds: a P2WSH `sortedmulti` vault spend where this Safe 7 holds one
-//! key of every input. Whatever comes back is checked by
+//! PSBT is refused before anything is sent unless each input is from one
+//! supported account or P2WSH `sortedmulti` vault owned by this Safe 7.
+//! Whatever comes back is checked by
 //! [`crate::hw::psbt_check`] against sighashes computed here.
 //!
 //! The vault's other keys reach Trezor as `MultisigRedeemScriptType`:
@@ -21,21 +18,24 @@ use std::collections::{BTreeMap, BTreeSet};
 use bitcoin::bip32::{ChainCode, ChildNumber, DerivationPath, Fingerprint, KeySource, Xpub};
 use bitcoin::hashes::Hash;
 use bitcoin::opcodes::all::OP_CHECKMULTISIG;
-use bitcoin::psbt::Output as PsbtOutput;
+use bitcoin::psbt::{Input as PsbtInput, Output as PsbtOutput};
 use bitcoin::script::{Builder, Instruction, Script, ScriptBuf};
 use bitcoin::secp256k1::{self, Secp256k1, Verification};
-use bitcoin::{Address, EcdsaSighashType, Network, NetworkKind, Psbt, Transaction, TxOut, Txid};
+use bitcoin::{Address, Network, NetworkKind, Psbt, Transaction, TxOut, Txid};
+use miniscript::psbt::PsbtExt;
+use miniscript::{DescriptorPublicKey, ForEachKey};
 use protobuf::{EnumOrUnknown, MessageField};
 
 use super::protos::bitcoin::{
-    GetPublicKey, InputScriptType, MultisigPubkeysOrder, MultisigRedeemScriptType,
-    OutputScriptType, PrevInput, PrevOutput, PrevTx, PublicKey, SignTx, TxAckInput, TxAckOutput,
-    TxAckPrevInput, TxAckPrevMeta, TxAckPrevOutput, TxInput, TxOutput, TxRequest, tx_ack_input,
-    tx_ack_output, tx_ack_prev_input, tx_ack_prev_output, tx_request::RequestType,
+    Address as AddressResponse, GetAddress, GetPublicKey, InputScriptType, MultisigPubkeysOrder,
+    MultisigRedeemScriptType, OutputScriptType, PrevInput, PrevOutput, PrevTx, PublicKey, SignTx,
+    TxAckInput, TxAckOutput, TxAckPrevInput, TxAckPrevMeta, TxAckPrevOutput, TxInput, TxOutput,
+    TxRequest, tx_ack_input, tx_ack_output, tx_ack_prev_input, tx_ack_prev_output,
+    tx_request::RequestType,
 };
 use super::protos::common::HDNodeType;
 use super::{TrezorError, encode};
-use crate::hw::psbt_check;
+use crate::hw::{AddressRequest, psbt_check};
 
 /// Trezor's coin name for a network (`common/defs/bitcoin/*.json`). Signet
 /// and testnet4 share testnet's parameters there.
@@ -65,33 +65,36 @@ pub(super) struct XpubRequest {
 }
 
 impl XpubRequest {
-    /// Only account paths mebit uses: BIP-48 P2WSH multisig, and BIP-84 (to
-    /// compare against what Trezor Suite shows). Anything else is refused.
     pub(super) fn new(
         path: &DerivationPath,
         network: Network,
         options: XpubOptions,
     ) -> Result<(Self, GetPublicKey), TrezorError> {
-        let hardened = |index| ChildNumber::Hardened { index };
-        let allowed = match path.as_ref() {
-            account @ [_, _, _, _] => is_bip48_p2wsh_account(account, network),
-            [purpose, coin_type, account] => {
-                *purpose == hardened(84)
-                    && *coin_type == hardened(coin_type_of(network))
-                    && account.is_hardened()
+        let script_type = match path.as_ref() {
+            account @ [_, _, _, _] if is_bip48_p2wsh_account(account, network) => {
+                Some(InputScriptType::SPENDWITNESS)
             }
-            _ => false,
+            [purpose, coin, account]
+                if *coin
+                    == (ChildNumber::Hardened {
+                        index: coin_type_of(network),
+                    })
+                    && account.is_hardened() =>
+            {
+                ScriptFamily::from_purpose(*purpose).map(ScriptFamily::input_type)
+            }
+            _ => None,
         };
-        if !allowed {
-            return Err(TrezorError::InvalidRequest(format!(
-                "{path} is not a BIP-48 P2WSH or BIP-84 account path on {network}"
-            )));
-        }
+        let script_type = script_type.ok_or_else(|| {
+            refuse(format!(
+                "{path} is not a BIP-48 P2WSH or BIP-44/49/84/86 account path on {network}"
+            ))
+        })?;
 
         let mut request = GetPublicKey::new();
         request.address_n = path_u32(path);
         request.coin_name = Some(coin_name(network).into());
-        request.script_type = Some(EnumOrUnknown::new(InputScriptType::SPENDWITNESS));
+        request.script_type = Some(EnumOrUnknown::new(script_type));
         request.ignore_xpub_magic = Some(!options.slip132);
         request.show_display = Some(options.show_on_device);
         let request_state = Self {
@@ -151,7 +154,7 @@ pub(super) struct Signing {
     signer: Fingerprint,
     inputs: Vec<TxInput>,
     /// Per input, the signer's key, under which its signature goes.
-    signer_keys: Vec<secp256k1::PublicKey>,
+    signer_keys: Vec<SignerKey>,
     outputs: Vec<TxOutput>,
     /// Keyed by txid in Trezor's (display) byte order.
     previous: BTreeMap<[u8; 32], Transaction>,
@@ -179,9 +182,10 @@ impl Signing {
         if psbt.inputs.len() != tx.input.len() || psbt.outputs.len() != tx.output.len() {
             return Err(refuse("the PSBT's maps don't match its transaction"));
         }
+        psbt_check::validate_signing_policy(psbt).map_err(|error| refuse(error.to_string()))?;
 
         let secp = Secp256k1::verification_only();
-        let mut vault: Option<Multisig> = None;
+        let mut wallet: Option<Wallet> = None;
         let mut inputs = Vec::with_capacity(tx.input.len());
         let mut signer_keys = Vec::with_capacity(tx.input.len());
         let mut previous = BTreeMap::new();
@@ -212,34 +216,13 @@ impl Signing {
                     "witness UTXO and previous transaction disagree",
                 ));
             }
-            if input
-                .sighash_type
-                .is_some_and(|sighash| sighash.ecdsa_hash_ty() != Ok(EcdsaSighashType::All))
-            {
-                return Err(refuse_input("only SIGHASH_ALL is signed"));
-            }
-            let witness_script = input
-                .witness_script
-                .as_ref()
-                .ok_or_else(|| refuse_input("no witness script"))?;
-            if spent.script_pubkey != ScriptBuf::new_p2wsh(&witness_script.wscript_hash()) {
-                return Err(refuse_input("the witness script is not what it spends"));
-            }
-            let multisig =
-                Multisig::resolve(witness_script, &input.bip32_derivation, &psbt.xpub, &secp)
-                    .map_err(|why| refuse_input(&why))?;
+            let resolved = Wallet::resolve(input, spent, signer, network, &psbt.xpub, &secp)
+                .map_err(|why| refuse_input(&why))?;
             let (signer_key, signer_path) =
-                multisig.signer(signer).map_err(|why| refuse_input(&why))?;
-            // The device checks paths too, but only as its safety-check
-            // setting says; a testnet session must never sign at mainnet paths.
-            if !is_vault_key_path(&signer_path, network) {
-                return Err(refuse_input(&format!(
-                    "this device's key is at {signer_path}, not a BIP-48 P2WSH vault path on {network}"
-                )));
-            }
-            match &vault {
-                None => vault = Some(multisig.clone()),
-                Some(first) if first.same_vault(&multisig) => {}
+                resolved.signer(signer).map_err(|why| refuse_input(&why))?;
+            match &wallet {
+                None => wallet = Some(resolved.clone()),
+                Some(first) if first.same_wallet(&resolved) => {}
                 Some(_) => return Err(refuse_input("spends from a different vault than input 0")),
             }
 
@@ -248,23 +231,33 @@ impl Signing {
             proto.prev_hash = Some(trezor_hash(&prevout.txid).to_vec());
             proto.prev_index = Some(prevout.vout);
             proto.sequence = Some(txin.sequence.0);
-            proto.script_type = Some(EnumOrUnknown::new(InputScriptType::SPENDWITNESS));
-            proto.multisig = MessageField::some(multisig.proto());
+            proto.script_type = Some(EnumOrUnknown::new(resolved.input_type()));
+            if let Wallet::Multisig(multisig) = resolved {
+                proto.multisig = MessageField::some(multisig.proto());
+            }
             proto.amount = Some(spent.value.to_sat());
             inputs.push(proto);
             signer_keys.push(signer_key);
             previous.insert(trezor_hash(&prevout.txid), prev_tx.clone());
         }
-        let vault = vault.expect("at least one input");
+        let wallet = wallet.expect("at least one input");
 
         let mut outputs = Vec::with_capacity(tx.output.len());
         for (index, (txout, output)) in tx.output.iter().zip(&psbt.outputs).enumerate() {
-            let proto =
-                match change_output(txout, output, &vault, signer, network, &psbt.xpub, &secp) {
-                    Some(change) => change,
-                    None => external_output(txout, network)
-                        .map_err(|why| refuse(format!("output {index}: {why}")))?,
-                };
+            let change = match &wallet {
+                Wallet::Multisig(vault) => {
+                    change_output(txout, output, vault, signer, network, &psbt.xpub, &secp)
+                }
+                Wallet::SingleSig(account) => {
+                    single_change_output(txout, output, account, network, &psbt.xpub, &secp)
+                        .map_err(|why| refuse(format!("output {index}: {why}")))?
+                }
+            };
+            let proto = match change {
+                Some(change) => change,
+                None => external_output(txout, network)
+                    .map_err(|why| refuse(format!("output {index}: {why}")))?,
+            };
             outputs.push(proto);
         }
 
@@ -396,15 +389,24 @@ impl Signing {
     /// The PSBT with the Safe 7's signatures, only if each one verifies.
     pub(super) fn finish(self) -> Result<Psbt, TrezorError> {
         let mut signed = self.unsigned.clone();
-        for (index, der) in self.signatures.iter().enumerate() {
-            let Some(der) = der else { continue };
-            // Trezor returns DER without the sighash byte; it signs SIGHASH_ALL.
-            let signature = secp256k1::ecdsa::Signature::from_der(der)
-                .map_err(|_| psbt_check::SignatureCheckError::InvalidSignature { input: index })?;
-            signed.inputs[index].partial_sigs.insert(
-                bitcoin::PublicKey::new(self.signer_keys[index]),
-                bitcoin::ecdsa::Signature::sighash_all(signature),
-            );
+        for (index, signature) in self.signatures.iter().enumerate() {
+            let Some(signature) = signature else { continue };
+            let invalid = || psbt_check::SignatureCheckError::InvalidSignature { input: index };
+            match self.signer_keys[index] {
+                SignerKey::Ecdsa(key) => {
+                    let signature =
+                        secp256k1::ecdsa::Signature::from_der(signature).map_err(|_| invalid())?;
+                    signed.inputs[index].partial_sigs.insert(
+                        bitcoin::PublicKey::new(key),
+                        bitcoin::ecdsa::Signature::sighash_all(signature),
+                    );
+                }
+                SignerKey::Taproot => {
+                    let signature = bitcoin::taproot::Signature::from_slice(signature)
+                        .map_err(|_| invalid())?;
+                    signed.inputs[index].tap_key_sig = Some(signature);
+                }
+            }
         }
         Ok(psbt_check::verify_device_signatures(
             &self.unsigned,
@@ -418,6 +420,410 @@ impl Signing {
             .ok()
             .and_then(|hash| self.previous.get(&hash))
             .ok_or_else(|| protocol("the Trezor asked for a transaction this one doesn't spend"))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SignerKey {
+    Ecdsa(secp256k1::PublicKey),
+    Taproot,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScriptFamily {
+    Legacy,
+    WrappedSegwit,
+    Segwit,
+    Taproot,
+}
+
+impl ScriptFamily {
+    fn from_purpose(purpose: ChildNumber) -> Option<Self> {
+        match purpose {
+            ChildNumber::Hardened { index: 44 } => Some(Self::Legacy),
+            ChildNumber::Hardened { index: 49 } => Some(Self::WrappedSegwit),
+            ChildNumber::Hardened { index: 84 } => Some(Self::Segwit),
+            ChildNumber::Hardened { index: 86 } => Some(Self::Taproot),
+            _ => None,
+        }
+    }
+
+    fn input_type(self) -> InputScriptType {
+        match self {
+            Self::Legacy => InputScriptType::SPENDADDRESS,
+            Self::WrappedSegwit => InputScriptType::SPENDP2SHWITNESS,
+            Self::Segwit => InputScriptType::SPENDWITNESS,
+            Self::Taproot => InputScriptType::SPENDTAPROOT,
+        }
+    }
+
+    fn output_type(self) -> OutputScriptType {
+        match self {
+            Self::Legacy => OutputScriptType::PAYTOADDRESS,
+            Self::WrappedSegwit => OutputScriptType::PAYTOP2SHWITNESS,
+            Self::Segwit => OutputScriptType::PAYTOWITNESS,
+            Self::Taproot => OutputScriptType::PAYTOTAPROOT,
+        }
+    }
+
+    fn script<C: Verification>(self, key: secp256k1::PublicKey, secp: &Secp256k1<C>) -> ScriptBuf {
+        let public = bitcoin::PublicKey::new(key);
+        match self {
+            Self::Legacy => ScriptBuf::new_p2pkh(&public.pubkey_hash()),
+            Self::WrappedSegwit => Self::Segwit.script(key, secp).to_p2sh(),
+            Self::Segwit => ScriptBuf::new_p2wpkh(&public.wpubkey_hash().expect("compressed key")),
+            Self::Taproot => ScriptBuf::new_p2tr(secp, key.x_only_public_key().0, None),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct SingleSig {
+    family: ScriptFamily,
+    xpub: Xpub,
+    account: KeySource,
+    key: secp256k1::PublicKey,
+    path: DerivationPath,
+}
+
+impl SingleSig {
+    fn resolve<C: Verification>(
+        input: &PsbtInput,
+        spent: &TxOut,
+        signer: Fingerprint,
+        network: Network,
+        xpubs: &BTreeMap<Xpub, KeySource>,
+        secp: &Secp256k1<C>,
+    ) -> Result<Self, String> {
+        if input.witness_script.is_some() {
+            return Err("a single-sig input has a witness script".into());
+        }
+        let taproot = spent.script_pubkey.is_p2tr();
+        let (key_source, expected_key) = if taproot {
+            if !input.bip32_derivation.is_empty()
+                || input.tap_key_origins.len() != 1
+                || input.tap_merkle_root.is_some()
+                || !input.tap_scripts.is_empty()
+                || !input.tap_script_sigs.is_empty()
+            {
+                return Err("only BIP-86 Taproot key-path inputs are supported".into());
+            }
+            let (key, (leaves, source)) = input.tap_key_origins.iter().next().expect("one origin");
+            if !leaves.is_empty() || input.tap_internal_key != Some(*key) {
+                return Err("the Taproot origin does not match its internal key".into());
+            }
+            (source, *key)
+        } else {
+            if input.bip32_derivation.len() != 1
+                || input.tap_internal_key.is_some()
+                || input.tap_merkle_root.is_some()
+                || !input.tap_key_origins.is_empty()
+                || !input.tap_scripts.is_empty()
+                || !input.tap_script_sigs.is_empty()
+                || input.tap_key_sig.is_some()
+            {
+                return Err("a single-sig input must contain exactly its one key origin".into());
+            }
+            let (key, source) = input.bip32_derivation.iter().next().expect("one origin");
+            (source, key.x_only_public_key().0)
+        };
+        let (fingerprint, path) = key_source;
+        if *fingerprint != signer {
+            return Err(format!("no key of fingerprint {signer}"));
+        }
+        let [purpose, coin, account, chain, index] = path.as_ref() else {
+            return Err("not a BIP-44/49/84/86 receive or change key path".into());
+        };
+        let family = ScriptFamily::from_purpose(*purpose).ok_or("unsupported account purpose")?;
+        if *coin
+            != (ChildNumber::Hardened {
+                index: coin_type_of(network),
+            })
+            || *account != (ChildNumber::Hardened { index: 0 })
+            || !matches!(chain, ChildNumber::Normal { index: 0 | 1 })
+            || !index.is_normal()
+            || (family == ScriptFamily::Taproot) != taproot
+        {
+            return Err(format!(
+                "{path} is not account 0 for its script type on {network}"
+            ));
+        }
+        let account_path: DerivationPath = path.as_ref()[..3].to_vec().into();
+        let candidates: Vec<_> = xpubs
+            .iter()
+            .filter_map(|(xpub, source)| {
+                if source != &(signer, account_path.clone())
+                    || !valid_account_xpub(xpub, &account_path, network)
+                {
+                    return None;
+                }
+                let suffix = &path.as_ref()[3..];
+                let derived = xpub.derive_pub(secp, &suffix).ok()?;
+                (derived.public_key.x_only_public_key().0 == expected_key)
+                    .then_some((*xpub, derived.public_key))
+            })
+            .collect();
+        let [(xpub, key)] = candidates.as_slice() else {
+            return Err("no unique global account xpub derives the signing key".into());
+        };
+        if !taproot && !input.bip32_derivation.contains_key(key) {
+            return Err("the global xpub derives a different compressed key".into());
+        }
+        let redeem = (family == ScriptFamily::WrappedSegwit)
+            .then(|| ScriptFamily::Segwit.script(*key, secp));
+        if input.redeem_script != redeem || spent.script_pubkey != family.script(*key, secp) {
+            return Err("the origin, redeem script and previous output do not agree".into());
+        }
+        Ok(Self {
+            family,
+            xpub: *xpub,
+            account: (signer, account_path),
+            key: *key,
+            path: path.clone(),
+        })
+    }
+}
+
+#[derive(Clone)]
+enum Wallet {
+    Multisig(Multisig),
+    SingleSig(SingleSig),
+}
+
+impl Wallet {
+    fn resolve<C: Verification>(
+        input: &PsbtInput,
+        spent: &TxOut,
+        signer: Fingerprint,
+        network: Network,
+        xpubs: &BTreeMap<Xpub, KeySource>,
+        secp: &Secp256k1<C>,
+    ) -> Result<Self, String> {
+        if spent.script_pubkey.is_p2wsh() {
+            if input.redeem_script.is_some()
+                || input.tap_internal_key.is_some()
+                || input.tap_merkle_root.is_some()
+                || input.tap_key_sig.is_some()
+                || !input.tap_key_origins.is_empty()
+                || !input.tap_scripts.is_empty()
+                || !input.tap_script_sigs.is_empty()
+            {
+                return Err("a P2WSH vault input has unrelated redeem or Taproot data".into());
+            }
+            let script = input.witness_script.as_ref().ok_or("no witness script")?;
+            if spent.script_pubkey != script.to_p2wsh() {
+                return Err("the witness script is not what it spends".into());
+            }
+            let multisig = Multisig::resolve(script, &input.bip32_derivation, xpubs, secp)?;
+            if multisig.nodes.iter().any(|node| {
+                let (_, account) = &xpubs[node];
+                !is_bip48_p2wsh_account(account.as_ref(), network)
+                    || !valid_account_xpub(node, account, network)
+            }) {
+                return Err(
+                    "a vault account xpub or origin is not BIP-48 P2WSH on this network".into(),
+                );
+            }
+            let (_, path) = multisig.signer(signer)?;
+            if !is_vault_key_path(&path, network) {
+                return Err(format!(
+                    "this device's key is at {path}, not a BIP-48 P2WSH vault path on {network}"
+                ));
+            }
+            Ok(Self::Multisig(multisig))
+        } else {
+            SingleSig::resolve(input, spent, signer, network, xpubs, secp).map(Self::SingleSig)
+        }
+    }
+
+    fn signer(&self, signer: Fingerprint) -> Result<(SignerKey, DerivationPath), String> {
+        match self {
+            Self::Multisig(multisig) => multisig
+                .signer(signer)
+                .map(|(key, path)| (SignerKey::Ecdsa(key), path)),
+            Self::SingleSig(single) => Ok((
+                if single.family == ScriptFamily::Taproot {
+                    SignerKey::Taproot
+                } else {
+                    SignerKey::Ecdsa(single.key)
+                },
+                single.path.clone(),
+            )),
+        }
+    }
+
+    fn input_type(&self) -> InputScriptType {
+        match self {
+            Self::Multisig(_) => InputScriptType::SPENDWITNESS,
+            Self::SingleSig(single) => single.family.input_type(),
+        }
+    }
+
+    fn same_wallet(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Multisig(a), Self::Multisig(b)) => a.same_vault(b),
+            (Self::SingleSig(a), Self::SingleSig(b)) => {
+                a.family == b.family && a.xpub == b.xpub && a.account == b.account
+            }
+            _ => false,
+        }
+    }
+}
+
+fn valid_account_xpub(xpub: &Xpub, path: &DerivationPath, network: Network) -> bool {
+    xpub.network == NetworkKind::from(network)
+        && usize::from(xpub.depth) == path.len()
+        && path.as_ref().last().copied() == Some(xpub.child_number)
+}
+
+fn single_change_output<C: Verification>(
+    txout: &TxOut,
+    output: &PsbtOutput,
+    account: &SingleSig,
+    network: Network,
+    xpubs: &BTreeMap<Xpub, KeySource>,
+    secp: &Secp256k1<C>,
+) -> Result<Option<TxOutput>, String> {
+    let ours = output
+        .bip32_derivation
+        .values()
+        .any(|(fp, _)| *fp == account.account.0)
+        || output
+            .tap_key_origins
+            .values()
+            .any(|(_, (fp, _))| *fp == account.account.0);
+    if !ours {
+        return Ok(None);
+    }
+    let input = PsbtInput {
+        bip32_derivation: output.bip32_derivation.clone(),
+        redeem_script: output.redeem_script.clone(),
+        witness_script: output.witness_script.clone(),
+        tap_internal_key: output.tap_internal_key,
+        tap_key_origins: output.tap_key_origins.clone(),
+        ..PsbtInput::default()
+    };
+    if output.tap_tree.is_some() {
+        return Err("Taproot script-path change is unsupported".into());
+    }
+    let change = SingleSig::resolve(&input, txout, account.account.0, network, xpubs, secp)?;
+    if change.family != account.family
+        || change.xpub != account.xpub
+        || change.account != account.account
+    {
+        return Ok(None);
+    }
+    let mut proto = TxOutput::new();
+    proto.address_n = path_u32(&change.path);
+    proto.amount = Some(txout.value.to_sat());
+    proto.script_type = Some(EnumOrUnknown::new(change.family.output_type()));
+    Ok(Some(proto))
+}
+
+pub(super) struct AddressVerification {
+    expected: Address,
+}
+
+impl AddressVerification {
+    pub(super) fn new(
+        request: &AddressRequest<'_>,
+        network: Network,
+    ) -> Result<(Self, GetAddress), TrezorError> {
+        let mut xpubs = BTreeMap::new();
+        let mut fingerprints = BTreeSet::new();
+        let valid = request.descriptor.for_each_key(|key| {
+            let DescriptorPublicKey::XPub(key) = key else {
+                return false;
+            };
+            let Some((fingerprint, origin)) = &key.origin else {
+                return false;
+            };
+            if key.wildcard != miniscript::descriptor::Wildcard::Unhardened
+                || !matches!(
+                    key.derivation_path.as_ref(),
+                    [ChildNumber::Normal { index: 0 | 1 }]
+                )
+                || !valid_account_xpub(&key.xkey, origin, network)
+                || !fingerprints.insert(*fingerprint)
+            {
+                return false;
+            }
+            let account = is_bip48_p2wsh_account(origin.as_ref(), network)
+                || matches!(origin.as_ref(), [purpose, coin, ChildNumber::Hardened { index: 0 }]
+                    if ScriptFamily::from_purpose(*purpose).is_some()
+                        && *coin == (ChildNumber::Hardened { index: coin_type_of(network) }));
+            account
+                && xpubs
+                    .insert(key.xkey, (*fingerprint, origin.clone()))
+                    .is_none()
+        });
+        if !valid || !fingerprints.contains(&request.signer) {
+            return Err(refuse(
+                "address verification needs unique enrolled account xpubs, origins, and a receive/change wildcard",
+            ));
+        }
+        let expected =
+            crate::descriptor::derive_address_at(request.descriptor, request.index, network)
+                .map_err(|error| refuse(error.to_string()))?;
+        let definite = request
+            .descriptor
+            .at_derivation_index(request.index)
+            .map_err(|error| refuse(error.to_string()))?;
+        let txout = TxOut {
+            value: bitcoin::Amount::ZERO,
+            script_pubkey: expected.script_pubkey(),
+        };
+        let mut metadata = Psbt::from_unsigned_tx(Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: Vec::new(),
+            output: vec![txout.clone()],
+        })
+        .map_err(|error| refuse(error.to_string()))?;
+        metadata
+            .update_output_with_descriptor(0, &definite)
+            .map_err(|error| refuse(error.to_string()))?;
+        let output = &metadata.outputs[0];
+        if output.tap_tree.is_some() {
+            return Err(refuse(
+                "Taproot script-path address verification is unsupported",
+            ));
+        }
+        let input = PsbtInput {
+            bip32_derivation: output.bip32_derivation.clone(),
+            redeem_script: output.redeem_script.clone(),
+            witness_script: output.witness_script.clone(),
+            tap_internal_key: output.tap_internal_key,
+            tap_key_origins: output.tap_key_origins.clone(),
+            ..PsbtInput::default()
+        };
+        let secp = Secp256k1::verification_only();
+        let wallet = Wallet::resolve(&input, &txout, request.signer, network, &xpubs, &secp)
+            .map_err(refuse)?;
+        let (_, path) = wallet.signer(request.signer).map_err(refuse)?;
+        let mut message = GetAddress::new();
+        message.address_n = path_u32(&path);
+        message.coin_name = Some(coin_name(network).into());
+        message.show_display = Some(true);
+        message.script_type = Some(EnumOrUnknown::new(wallet.input_type()));
+        if let Wallet::Multisig(multisig) = wallet {
+            message.multisig = MessageField::some(multisig.proto());
+        }
+        Ok((Self { expected }, message))
+    }
+
+    pub(super) fn finish(self, response: AddressResponse) -> Result<Address, TrezorError> {
+        let shown: bitcoin::Address<bitcoin::address::NetworkUnchecked> = response
+            .address
+            .ok_or_else(|| protocol("Address response without an address"))?
+            .parse()
+            .map_err(|_| protocol("an unparseable address from the Trezor"))?;
+        if shown.assume_checked() != self.expected {
+            return Err(TrezorError::NetworkMismatch(
+                "the displayed address differs from the enrolled descriptor".into(),
+            ));
+        }
+        Ok(self.expected)
     }
 }
 

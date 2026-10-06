@@ -111,3 +111,15 @@ Runs so far, all with firmware 1.0.41 on macOS: 2026-09-30 and 2026-10-01 with b
   - A lagging notification consumer still drops data silently; `JadeSession`'s checks turn that into an error, never into a wrong result.
   - Unlike 0.11.8, `connect()` no longer discovers services itself: `discover_services()` does, under its own timeout. A failed write, a refused subscription and a call on a vanished peripheral now resolve at once where 0.11.8 left them waiting for this crate's timeouts. Every operation still has one.
 - **Android is untested.** btleplug needs a Rust+Java build there. See `docs/04-open-items.md` item 14.
+
+## Real testnet4 wallet verification
+
+The example also has an `e2e` command group. Offline commands return before opening BLE. Live commands forward to the serial coordinator in `trezor-hw-test`.
+
+```sh
+cargo run --locked -p jade-ble --example jade-hw-test -- --network testnet4 e2e matrix
+cargo run --locked -p jade-ble --example jade-hw-test -- --network testnet4 e2e offline
+cargo run --locked -p jade-ble --example jade-hw-test -- --network testnet4 --name "Jade 123456" e2e enroll --slot j1 --jade-slot-empty
+```
+
+Manually verify that the `mebit_e2e` test slot is empty before declaring `--jade-slot-empty`. Jade RPC can hide registrations belonging to another seed. Read the [testnet4 instructions](../wallet-e2e/README.md) for safe registration reuse, complete coverage, and checkpointed spending. Actual firmware and BLE acceptance remain unverified until you run those cases on your devices.

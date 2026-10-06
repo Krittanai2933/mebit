@@ -18,9 +18,10 @@ use std::str::FromStr;
 
 use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, Xpriv, Xpub};
 use bitcoin::hashes::{Hash, HashEngine, hmac, sha256};
+use bitcoin::key::TapTweak;
 use bitcoin::psbt::Psbt;
 use bitcoin::secp256k1::{Message, Secp256k1};
-use bitcoin::sighash::{EcdsaSighashType, SighashCache};
+use bitcoin::sighash::{EcdsaSighashType, Prevouts, SighashCache};
 use bitcoin::{
     Address, Amount, Network, NetworkKind, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
     Txid, Witness, absolute, transaction,
@@ -38,9 +39,10 @@ use x25519_dalek::{X25519_BASEPOINT_BYTES, x25519};
 use super::identity::tests::{properties, safe7_features, safe7_properties};
 use super::protos::MessageType;
 use super::protos::bitcoin::{
-    GetPublicKey, MultisigRedeemScriptType, OutputScriptType, PrevInput, PrevOutput, PrevTx,
-    PublicKey, SignTx, TxAckInput, TxAckOutput, TxAckPrevInput, TxAckPrevMeta, TxAckPrevOutput,
-    TxInput, TxOutput, TxRequest, tx_request,
+    Address as AddressResponse, GetAddress, GetPublicKey, InputScriptType,
+    MultisigRedeemScriptType, OutputScriptType, PrevInput, PrevOutput, PrevTx, PublicKey, SignTx,
+    TxAckInput, TxAckOutput, TxAckPrevInput, TxAckPrevMeta, TxAckPrevOutput, TxInput, TxOutput,
+    TxRequest, tx_request,
 };
 use super::protos::common::failure::FailureType;
 use super::protos::common::{ButtonRequest, Failure, HDNodeType, Success};
@@ -58,7 +60,7 @@ use super::{
     TrezorEvent, TrezorSession, UserPrompt, XpubOptions, cpace,
 };
 use crate::error::VaultCoreError;
-use crate::hw::psbt_check;
+use crate::hw::{AddressRequest, psbt_check};
 use crate::keys::{generate_master_xpriv, generate_mnemonic, generate_seed};
 
 const NETWORK: Network = Network::Testnet;
@@ -103,6 +105,8 @@ struct Behaviour {
     claimed_pairing: Option<PairingState>,
     /// How `GetPublicKey` is answered.
     xpub_answer: XpubAnswer,
+    wrong_address: bool,
+    decline_address: bool,
 }
 
 /// A cheating device's answers to `GetPublicKey`.
@@ -142,6 +146,8 @@ impl Default for Behaviour {
             miss_allocations: 0,
             claimed_pairing: None,
             xpub_answer: XpubAnswer::Honest,
+            wrong_address: false,
+            decline_address: false,
         }
     }
 }
@@ -153,6 +159,7 @@ enum PromptFor {
     Connection,
     Unlock,
     Xpub,
+    Address,
     Output,
     Total,
 }
@@ -176,6 +183,7 @@ struct FakeSafe7 {
     /// A prompt waiting for `ButtonAck` (`false`) or for the user (`true`).
     prompt: Option<(u8, PromptFor, bool)>,
     xpub_request: Option<GetPublicKey>,
+    address_request: Option<GetAddress>,
     signing: Option<DeviceSigning>,
     /// Message types the host sent, in order.
     received: Vec<u16>,
@@ -254,6 +262,7 @@ impl FakeSafe7 {
             master: master_key(1),
             prompt: None,
             xpub_request: None,
+            address_request: None,
             signing: None,
             received: Vec::new(),
             issued_autoconnect: Vec::new(),
@@ -565,6 +574,13 @@ impl FakeSafe7 {
                     self.after_prompt(session, PromptFor::Xpub)
                 }
             }
+            t if t == mt(MessageType::MessageType_GetAddress) => {
+                let request = GetAddress::parse_from_bytes(payload).unwrap();
+                assert_eq!(request.show_display, Some(true));
+                assert_eq!(request.coin_name(), "Testnet");
+                self.address_request = Some(request);
+                self.ask(session, PromptFor::Address)
+            }
             t if t == mt(MessageType::MessageType_SignTx) => {
                 let sign_tx = SignTx::parse_from_bytes(payload).unwrap();
                 assert_eq!(sign_tx.serialize, Some(false));
@@ -603,6 +619,26 @@ impl FakeSafe7 {
                 let request = self.xpub_request.take().unwrap();
                 let answer = public_key(&self.master, &request, self.behaviour.xpub_answer);
                 self.send(session, mt(MessageType::MessageType_PublicKey), &answer)
+            }
+            PromptFor::Address if self.behaviour.decline_address => {
+                self.address_request = None;
+                self.fail(session, FailureType::Failure_ActionCancelled, "Cancelled")
+            }
+            PromptFor::Address => {
+                let mut request = self.address_request.take().unwrap();
+                if self.behaviour.wrong_address {
+                    *request.address_n.last_mut().unwrap() += 1;
+                }
+                let script = device_script(
+                    &self.master,
+                    request.script_type(),
+                    &request.address_n,
+                    request.multisig.as_ref(),
+                );
+                let mut response = AddressResponse::new();
+                response.address =
+                    Some(Address::from_script(&script, NETWORK).unwrap().to_string());
+                self.send(session, mt(MessageType::MessageType_Address), &response)
             }
             PromptFor::Output | PromptFor::Total if self.behaviour.decline_signing => {
                 self.fail(session, FailureType::Failure_ActionCancelled, "Cancelled")
@@ -759,7 +795,7 @@ impl DeviceSigning {
             Stage::Output(_) => {
                 let ack = TxAckOutput::parse_from_bytes(payload).unwrap();
                 let output = ack.tx.output.clone().unwrap();
-                let external = output.script_type() == OutputScriptType::PAYTOADDRESS;
+                let external = output.address_n.is_empty();
                 self.outputs.push(output);
                 if external {
                     SignStep::Prompt(PromptFor::Output)
@@ -810,9 +846,13 @@ impl DeviceSigning {
                 } else if (outputs.len() as u32) < meta_ref.outputs_count() {
                     self.request(TXOUTPUT, outputs.len() as u32, Some(hash))
                 } else {
-                    if let Err(why) =
-                        check_previous(&self.inputs[input as usize], &meta_ref, &inputs, &outputs)
-                    {
+                    if let Err(why) = check_previous(
+                        &self.inputs[input as usize],
+                        &meta_ref,
+                        &inputs,
+                        &outputs,
+                        master,
+                    ) {
                         return SignStep::Fail(why);
                     }
                     return self.next_previous(input + 1);
@@ -900,36 +940,95 @@ impl DeviceSigning {
         master: &Xpriv,
     ) -> Result<Vec<u8>, &'static str> {
         let secp = Secp256k1::new();
-        let tx = self.transaction()?;
+        let tx = self.transaction(master)?;
         let input = &self.inputs[message_of];
-        let script = multisig_script(input.multisig.as_ref().ok_or("no multisig")?);
-        let sighash = SighashCache::new(&tx)
-            .p2wsh_signature_hash(
-                message_of,
-                &script,
-                Amount::from_sat(input.amount()),
-                EcdsaSighashType::All,
-            )
-            .map_err(|_| "sighash")?;
         let path: DerivationPath = self.inputs[index]
             .address_n
             .iter()
             .map(|&n| ChildNumber::from(n))
             .collect();
         let key = master.derive_priv(&secp, &path).unwrap().private_key;
-        let ours = key.public_key(&secp).serialize();
-        let multisig = self.inputs[index].multisig.as_ref().unwrap();
-        if !multisig_keys(multisig)
-            .iter()
-            .any(|k| k.serialize() == ours)
+        if let Some(multisig) = self.inputs[index].multisig.as_ref()
+            && !multisig_keys(multisig)
+                .iter()
+                .any(|k| *k == key.public_key(&secp))
         {
             return Err("Pubkey not found in multisig script");
         }
-        let message = Message::from_digest(sighash.to_byte_array());
+        let prevouts: Vec<TxOut> = self
+            .inputs
+            .iter()
+            .map(|input| TxOut {
+                value: Amount::from_sat(input.amount()),
+                script_pubkey: device_script(
+                    master,
+                    input.script_type(),
+                    &input.address_n,
+                    input.multisig.as_ref(),
+                ),
+            })
+            .collect();
+        let script = &prevouts[message_of].script_pubkey;
+        let mut cache = SighashCache::new(&tx);
+        if input.script_type() == InputScriptType::SPENDTAPROOT {
+            let sighash = cache
+                .taproot_key_spend_signature_hash(
+                    message_of,
+                    &Prevouts::All(&prevouts),
+                    bitcoin::TapSighashType::Default,
+                )
+                .map_err(|_| "sighash")?;
+            let tweaked =
+                bitcoin::secp256k1::Keypair::from_secret_key(&secp, &key).tap_tweak(&secp, None);
+            let message = Message::from_digest(sighash.to_byte_array());
+            return Ok(secp
+                .sign_schnorr_no_aux_rand(&message, &tweaked.to_keypair())
+                .serialize()
+                .to_vec());
+        }
+        let message = if let Some(multisig) = input.multisig.as_ref() {
+            let script = multisig_script(multisig);
+            Message::from_digest(
+                cache
+                    .p2wsh_signature_hash(
+                        message_of,
+                        &script,
+                        Amount::from_sat(input.amount()),
+                        EcdsaSighashType::All,
+                    )
+                    .map_err(|_| "sighash")?
+                    .to_byte_array(),
+            )
+        } else if input.script_type() == InputScriptType::SPENDADDRESS {
+            Message::from_digest(
+                cache
+                    .legacy_signature_hash(message_of, script, EcdsaSighashType::All.to_u32())
+                    .map_err(|_| "sighash")?
+                    .to_byte_array(),
+            )
+        } else {
+            let script = device_script(
+                master,
+                InputScriptType::SPENDWITNESS,
+                &input.address_n,
+                None,
+            );
+            Message::from_digest(
+                cache
+                    .p2wpkh_signature_hash(
+                        message_of,
+                        &script,
+                        Amount::from_sat(input.amount()),
+                        EcdsaSighashType::All,
+                    )
+                    .map_err(|_| "sighash")?
+                    .to_byte_array(),
+            )
+        };
         Ok(secp.sign_ecdsa(&message, &key).serialize_der().to_vec())
     }
 
-    fn transaction(&self) -> Result<Transaction, &'static str> {
+    fn transaction(&self, master: &Xpriv) -> Result<Transaction, &'static str> {
         let input = self
             .inputs
             .iter()
@@ -951,19 +1050,26 @@ impl DeviceSigning {
             .outputs
             .iter()
             .map(|output| {
-                let script_pubkey = match output.script_type() {
-                    OutputScriptType::PAYTOADDRESS => Address::from_str(output.address())
+                let script_pubkey = if output.address_n.is_empty() {
+                    Address::from_str(output.address())
                         .map_err(|_| "bad address")?
                         .require_network(NETWORK)
                         .map_err(|_| "wrong network")?
-                        .script_pubkey(),
-                    OutputScriptType::PAYTOWITNESS => {
-                        let script = multisig_script(
-                            output.multisig.as_ref().ok_or("change without multisig")?,
-                        );
-                        ScriptBuf::new_p2wsh(&script.wscript_hash())
-                    }
-                    _ => return Err("unsupported output"),
+                        .script_pubkey()
+                } else {
+                    let script_type = match output.script_type() {
+                        OutputScriptType::PAYTOADDRESS => InputScriptType::SPENDADDRESS,
+                        OutputScriptType::PAYTOWITNESS => InputScriptType::SPENDWITNESS,
+                        OutputScriptType::PAYTOP2SHWITNESS => InputScriptType::SPENDP2SHWITNESS,
+                        OutputScriptType::PAYTOTAPROOT => InputScriptType::SPENDTAPROOT,
+                        _ => return Err("unsupported output"),
+                    };
+                    device_script(
+                        master,
+                        script_type,
+                        &output.address_n,
+                        output.multisig.as_ref(),
+                    )
                 };
                 Ok(TxOut {
                     value: Amount::from_sat(output.amount()),
@@ -987,6 +1093,7 @@ fn check_previous(
     meta: &PrevTx,
     inputs: &[PrevInput],
     outputs: &[PrevOutput],
+    master: &Xpriv,
 ) -> Result<(), &'static str> {
     let tx = Transaction {
         version: transaction::Version(meta.version() as i32),
@@ -1027,11 +1134,47 @@ fn check_previous(
     if spent.value.to_sat() != input.amount() {
         return Err("Invalid amount specified");
     }
-    let script = multisig_script(input.multisig.as_ref().ok_or("no multisig")?);
-    if spent.script_pubkey != ScriptBuf::new_p2wsh(&script.wscript_hash()) {
+    if spent.script_pubkey
+        != device_script(
+            master,
+            input.script_type(),
+            &input.address_n,
+            input.multisig.as_ref(),
+        )
+    {
         return Err("Input does not match scriptPubKey");
     }
     Ok(())
+}
+
+fn device_script(
+    master: &Xpriv,
+    script_type: InputScriptType,
+    path: &[u32],
+    multisig: Option<&MultisigRedeemScriptType>,
+) -> ScriptBuf {
+    if let Some(multisig) = multisig {
+        assert_eq!(script_type, InputScriptType::SPENDWITNESS);
+        return multisig_script(multisig).to_p2wsh();
+    }
+    let secp = Secp256k1::new();
+    let path: DerivationPath = path.iter().map(|child| ChildNumber::from(*child)).collect();
+    let public = master
+        .derive_priv(&secp, &path)
+        .unwrap()
+        .private_key
+        .public_key(&secp);
+    let public = bitcoin::CompressedPublicKey(public);
+    let address = match script_type {
+        InputScriptType::SPENDADDRESS => Address::p2pkh(public, NETWORK),
+        InputScriptType::SPENDP2SHWITNESS => Address::p2shwpkh(&public, NETWORK),
+        InputScriptType::SPENDWITNESS => Address::p2wpkh(&public, NETWORK),
+        InputScriptType::SPENDTAPROOT => {
+            Address::p2tr(&secp, public.0.x_only_public_key().0, None, NETWORK)
+        }
+        other => panic!("unsupported device script {other:?}"),
+    };
+    address.script_pubkey()
 }
 
 /// What the firmware derives from `MultisigRedeemScriptType`: each node at
@@ -1803,8 +1946,8 @@ fn only_account_paths_on_the_right_network_are_asked_for() {
         "m/48'/1'/0'/1'",   // P2SH-P2WSH
         "m/48'/1'/0'/2'/0", // below the account
         "m/48'/1'/0/2'",    // unhardened account
-        "m/44'/1'/0'",
-        "m/86'/1'/0'",
+        "m/45'/1'/0'",
+        "m/86'/1'/0",
         "m/84'/0'/0'",
     ] {
         let path = DerivationPath::from_str(path).unwrap();
@@ -1942,6 +2085,592 @@ fn sign(wire: &mut Wire, psbt: &Psbt, signer: Fingerprint) -> Result<(), VaultCo
     let packets = wire.host.request_sign_psbt(psbt, signer)?;
     wire.to_device.extend(packets);
     wire.run()
+}
+
+struct SingleWallet {
+    psbt: Psbt,
+    receive: Descriptor<DescriptorPublicKey>,
+    change: Descriptor<DescriptorPublicKey>,
+    fingerprint: Fingerprint,
+}
+
+fn single_wallet(master: &Xpriv, purpose: u32, count: u32) -> SingleWallet {
+    let secp = Secp256k1::new();
+    let fingerprint = master.fingerprint(&secp);
+    let account = DerivationPath::from_str(&format!("m/{purpose}'/1'/0'")).unwrap();
+    let xpub = Xpub::from_priv(&secp, &master.derive_priv(&secp, &account).unwrap());
+    let descriptor = |chain| {
+        let key = format!("[{fingerprint}/{purpose}'/1'/0']{xpub}/{chain}/*");
+        let script = match purpose {
+            44 => format!("pkh({key})"),
+            49 => format!("sh(wpkh({key}))"),
+            84 => format!("wpkh({key})"),
+            86 => format!("tr({key})"),
+            _ => panic!("unsupported test purpose"),
+        };
+        Descriptor::<DescriptorPublicKey>::from_str(&script).unwrap()
+    };
+    let receive = descriptor(0);
+    let change = descriptor(1);
+    let previous: Vec<Transaction> = (0..count)
+        .map(|index| Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::from_consensus(index),
+            input: vec![TxIn::default()],
+            output: vec![TxOut {
+                value: Amount::from_sat(30_000),
+                script_pubkey: receive.at_derivation_index(index).unwrap().script_pubkey(),
+            }],
+        })
+        .collect();
+    let change_at = change.at_derivation_index(7).unwrap();
+    let destination = device_script(&master_key(9), InputScriptType::SPENDWITNESS, &[0, 2], None);
+    let mut psbt = Psbt::from_unsigned_tx(Transaction {
+        version: transaction::Version::TWO,
+        lock_time: absolute::LockTime::ZERO,
+        input: previous
+            .iter()
+            .map(|tx| TxIn {
+                previous_output: OutPoint {
+                    txid: tx.compute_txid(),
+                    vout: 0,
+                },
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                ..TxIn::default()
+            })
+            .collect(),
+        output: vec![
+            TxOut {
+                value: Amount::from_sat(5_000),
+                script_pubkey: destination,
+            },
+            TxOut {
+                value: Amount::from_sat(u64::from(count) * 30_000 - 5_400),
+                script_pubkey: change_at.script_pubkey(),
+            },
+        ],
+    })
+    .unwrap();
+    for (index, previous) in previous.into_iter().enumerate() {
+        psbt.inputs[index].witness_utxo = Some(previous.output[0].clone());
+        psbt.inputs[index].non_witness_utxo = Some(previous);
+        psbt.update_input_with_descriptor(
+            index,
+            &receive.at_derivation_index(index as u32).unwrap(),
+        )
+        .unwrap();
+    }
+    psbt.update_output_with_descriptor(1, &change_at).unwrap();
+    psbt.xpub.insert(xpub, (fingerprint, account));
+    SingleWallet {
+        psbt,
+        receive,
+        change,
+        fingerprint,
+    }
+}
+
+#[test]
+fn single_sig_accounts_sign_and_finalize_all_four_script_families() {
+    for purpose in [44, 49, 84, 86] {
+        let mut wire = connected(Behaviour::default());
+        let wallet = single_wallet(&wire.device.master, purpose, 2);
+        sign(&mut wire, &wallet.psbt, wallet.fingerprint).unwrap();
+        let Some(TrezorEvent::SignedPsbt(mut signed)) = wire.events.pop() else {
+            panic!("no signed PSBT for BIP-{purpose}");
+        };
+        assert_eq!(signed.unsigned_tx, wallet.psbt.unsigned_tx);
+        assert!(signed.inputs.iter().all(|input| if purpose == 86 {
+            input.tap_key_sig.is_some() && input.partial_sigs.is_empty()
+        } else {
+            input.partial_sigs.len() == 1 && input.tap_key_sig.is_none()
+        }));
+        signed.finalize_mut(&Secp256k1::new()).unwrap();
+        let transaction = signed.extract(&Secp256k1::new()).unwrap();
+        assert_eq!(transaction.input.len(), 2);
+        assert_eq!(transaction.output, wallet.psbt.unsigned_tx.output);
+        assert_eq!(
+            wire.events
+                .iter()
+                .filter(|event| matches!(event, TrezorEvent::AwaitingUser(UserPrompt::Confirm)))
+                .count(),
+            2
+        );
+        assert!(wire.host.is_ready());
+    }
+}
+
+#[test]
+fn single_sig_signatures_for_another_message_and_device_refusal_are_rejected() {
+    for purpose in [44, 49, 84, 86] {
+        let mut wire = connected(Behaviour {
+            sign_wrong_message: true,
+            ..Behaviour::default()
+        });
+        let wallet = single_wallet(&wire.device.master, purpose, 2);
+        assert!(matches!(
+            trezor_error(sign(&mut wire, &wallet.psbt, wallet.fingerprint)),
+            TrezorError::Signatures(psbt_check::SignatureCheckError::InvalidSignature { input: 1 })
+        ));
+        assert!(wire.host.is_ready());
+        let mut wire = connected(Behaviour {
+            decline_signing: true,
+            ..Behaviour::default()
+        });
+        let wallet = single_wallet(&wire.device.master, purpose, 1);
+        assert!(matches!(
+            trezor_error(sign(&mut wire, &wallet.psbt, wallet.fingerprint)),
+            TrezorError::UserCancelled
+        ));
+        assert!(
+            !wire
+                .events
+                .iter()
+                .any(|event| matches!(event, TrezorEvent::SignedPsbt(_)))
+        );
+        assert!(wire.host.is_ready());
+    }
+}
+
+#[test]
+fn all_single_sig_xpub_requests_use_the_account_script_type() {
+    for (purpose, script_type) in [
+        (44, InputScriptType::SPENDADDRESS),
+        (49, InputScriptType::SPENDP2SHWITNESS),
+        (84, InputScriptType::SPENDWITNESS),
+        (86, InputScriptType::SPENDTAPROOT),
+    ] {
+        let path = DerivationPath::from_str(&format!("m/{purpose}'/1'/0'")).unwrap();
+        let (_, message) =
+            super::bitcoin::XpubRequest::new(&path, NETWORK, XpubOptions::default()).unwrap();
+        assert_eq!(message.script_type(), script_type);
+        let mut wire = connected(Behaviour::default());
+        let packets = wire
+            .host
+            .request_xpub(&path, XpubOptions::default())
+            .unwrap();
+        wire.to_device.extend(packets);
+        wire.run().unwrap();
+        let expected = Xpub::from_priv(
+            &Secp256k1::new(),
+            &wire
+                .device
+                .master
+                .derive_priv(&Secp256k1::new(), &path)
+                .unwrap(),
+        );
+        assert!(
+            matches!(wire.events.last(), Some(TrezorEvent::Xpub { xpub, master_fingerprint, .. }) if *xpub == expected && *master_fingerprint == wire.device.master.fingerprint(&Secp256k1::new()))
+        );
+    }
+}
+
+#[test]
+fn descriptor_address_verification_displays_and_matches_receive_and_change() {
+    let mut wire = connected(Behaviour::default());
+    for purpose in [44, 49, 84, 86] {
+        let wallet = single_wallet(&wire.device.master, purpose, 1);
+        for descriptor in [&wallet.receive, &wallet.change] {
+            for index in [0, 1, 7] {
+                let request = AddressRequest {
+                    descriptor,
+                    index,
+                    signer: wallet.fingerprint,
+                };
+                let packets = wire.host.request_verify_address(&request).unwrap();
+                wire.to_device.extend(packets);
+                wire.events.clear();
+                wire.run().unwrap();
+                let expected = descriptor
+                    .at_derivation_index(index)
+                    .unwrap()
+                    .address(NETWORK)
+                    .unwrap();
+                assert!(
+                    matches!(wire.events.last(), Some(TrezorEvent::AddressVerified(address)) if *address == expected)
+                );
+                assert!(matches!(
+                    wire.events.first(),
+                    Some(TrezorEvent::AwaitingUser(UserPrompt::Confirm))
+                ));
+            }
+        }
+    }
+    let vault = vault(&wire.device.master, 1);
+    let account_xpub = vault
+        .psbt
+        .xpub
+        .keys()
+        .find(|xpub| vault.psbt.xpub[xpub].0 == vault.device_fingerprint)
+        .unwrap();
+    let descriptor_keys = vault
+        .psbt
+        .xpub
+        .iter()
+        .map(|(xpub, (fp, _))| format!("[{fp}/48'/1'/0'/2']{xpub}/0/*"))
+        .collect::<Vec<_>>();
+    let descriptor = Descriptor::<DescriptorPublicKey>::from_str(&format!(
+        "wsh(sortedmulti(2,{}))",
+        descriptor_keys.join(",")
+    ))
+    .unwrap();
+    let request = AddressRequest {
+        descriptor: &descriptor,
+        index: 7,
+        signer: vault.device_fingerprint,
+    };
+    let (_, message) = super::bitcoin::AddressVerification::new(&request, NETWORK).unwrap();
+    assert_eq!(message.multisig.m(), 2);
+    assert_eq!(message.multisig.nodes.len(), 3);
+    assert_eq!(
+        message.multisig.pubkeys_order(),
+        super::protos::bitcoin::MultisigPubkeysOrder::LEXICOGRAPHIC
+    );
+    assert_eq!(message.address_n[4..], [0, 7]);
+    assert!(
+        message
+            .multisig
+            .nodes
+            .iter()
+            .any(|node| node.public_key() == account_xpub.public_key.serialize())
+    );
+    let packets = wire.host.request_verify_address(&request).unwrap();
+    wire.to_device.extend(packets);
+    wire.events.clear();
+    wire.run().unwrap();
+    let expected = descriptor
+        .at_derivation_index(7)
+        .unwrap()
+        .address(NETWORK)
+        .unwrap();
+    assert!(
+        matches!(wire.events.last(), Some(TrezorEvent::AddressVerified(address)) if *address == expected)
+    );
+}
+
+#[test]
+fn address_mismatch_refusal_and_disconnection_cannot_produce_verified_address() {
+    for behaviour in [
+        Behaviour {
+            wrong_address: true,
+            ..Behaviour::default()
+        },
+        Behaviour {
+            decline_address: true,
+            ..Behaviour::default()
+        },
+    ] {
+        let mut wire = connected(behaviour);
+        let wallet = single_wallet(&wire.device.master, 84, 1);
+        let request = AddressRequest {
+            descriptor: &wallet.receive,
+            index: 1,
+            signer: wallet.fingerprint,
+        };
+        let packets = wire.host.request_verify_address(&request).unwrap();
+        wire.to_device.extend(packets);
+        let error = trezor_error(wire.run());
+        assert!(matches!(
+            error,
+            TrezorError::NetworkMismatch(_) | TrezorError::UserCancelled
+        ));
+        assert!(
+            !wire
+                .events
+                .iter()
+                .any(|event| matches!(event, TrezorEvent::AddressVerified(_)))
+        );
+        assert!(wire.host.is_ready());
+    }
+    let mut wire = connected(Behaviour {
+        hold_prompts: true,
+        ..Behaviour::default()
+    });
+    let wallet = single_wallet(&wire.device.master, 84, 1);
+    let request = AddressRequest {
+        descriptor: &wallet.receive,
+        index: 1,
+        signer: wallet.fingerprint,
+    };
+    let packets = wire.host.request_verify_address(&request).unwrap();
+    wire.to_device.extend(packets);
+    wire.run().unwrap();
+    assert!(wire.host.awaiting_user());
+    wire.host.abandon();
+    assert!(!wire.host.is_ready());
+    assert!(matches!(
+        trezor_error(wire.host.request_verify_address(&request)),
+        TrezorError::Protocol(_)
+    ));
+    assert!(
+        !wire
+            .events
+            .iter()
+            .any(|event| matches!(event, TrezorEvent::AddressVerified(_)))
+    );
+}
+
+#[test]
+fn single_sig_rejects_inconsistent_origins_scripts_and_policies_before_device_interaction() {
+    type Mutation = Box<dyn Fn(&mut Psbt)>;
+    let common: Vec<(&str, Mutation)> = vec![
+        (
+            "missing previous transaction",
+            Box::new(|psbt| psbt.inputs[0].non_witness_utxo = None),
+        ),
+        (
+            "different previous transaction",
+            Box::new(|psbt| {
+                psbt.inputs[0].non_witness_utxo = psbt.inputs[1].non_witness_utxo.clone()
+            }),
+        ),
+        (
+            "amount mismatch",
+            Box::new(|psbt| {
+                psbt.inputs[0].witness_utxo.as_mut().unwrap().value = Amount::from_sat(1)
+            }),
+        ),
+        ("missing account xpub", Box::new(|psbt| psbt.xpub.clear())),
+        (
+            "wrong account xpub network",
+            Box::new(|psbt| {
+                let (xpub, source) = psbt.xpub.pop_first().unwrap();
+                psbt.xpub.insert(
+                    Xpub {
+                        network: NetworkKind::Main,
+                        ..xpub
+                    },
+                    source,
+                );
+            }),
+        ),
+        (
+            "wrong account origin",
+            Box::new(|psbt| {
+                psbt.xpub.values_mut().next().unwrap().1 =
+                    DerivationPath::from_str("m/84'/0'/0'").unwrap();
+            }),
+        ),
+        (
+            "extraneous witness script",
+            Box::new(|psbt| psbt.inputs[0].witness_script = Some(ScriptBuf::new())),
+        ),
+        (
+            "wrong redeem script",
+            Box::new(|psbt| psbt.inputs[0].redeem_script = Some(ScriptBuf::new())),
+        ),
+        (
+            "unsupported sighash",
+            Box::new(|psbt| psbt.inputs[0].sighash_type = Some(EcdsaSighashType::None.into())),
+        ),
+        (
+            "change script differs from origins",
+            Box::new(|psbt| {
+                psbt.unsigned_tx.output[1].script_pubkey =
+                    psbt.unsigned_tx.output[0].script_pubkey.clone()
+            }),
+        ),
+        (
+            "duplicate funding outpoint",
+            Box::new(|psbt| {
+                psbt.unsigned_tx.input[1] = psbt.unsigned_tx.input[0].clone();
+                psbt.inputs[1] = psbt.inputs[0].clone();
+            }),
+        ),
+    ];
+    let mut wire = connected(Behaviour::default());
+    for purpose in [44, 49, 84, 86] {
+        let wallet = single_wallet(&wire.device.master, purpose, 2);
+        for (label, mutation) in &common {
+            let mut psbt = wallet.psbt.clone();
+            mutation(&mut psbt);
+            assert!(
+                matches!(
+                    trezor_error(wire.host.request_sign_psbt(&psbt, wallet.fingerprint)),
+                    TrezorError::InvalidRequest(_)
+                ),
+                "BIP-{purpose}, {label}"
+            );
+            assert!(wire.host.is_ready());
+        }
+        let mut wrong_origin = wallet.psbt.clone();
+        let source = if purpose == 86 {
+            &mut wrong_origin.inputs[0]
+                .tap_key_origins
+                .values_mut()
+                .next()
+                .unwrap()
+                .1
+        } else {
+            wrong_origin.inputs[0]
+                .bip32_derivation
+                .values_mut()
+                .next()
+                .unwrap()
+        };
+        source.1 = DerivationPath::from_str(&format!("m/{purpose}'/0'/0'/0/0")).unwrap();
+        assert!(matches!(
+            trezor_error(
+                wire.host
+                    .request_sign_psbt(&wrong_origin, wallet.fingerprint)
+            ),
+            TrezorError::InvalidRequest(_)
+        ));
+        let mut wrong_change = wallet.psbt.clone();
+        let source = if purpose == 86 {
+            &mut wrong_change.outputs[1]
+                .tap_key_origins
+                .values_mut()
+                .next()
+                .unwrap()
+                .1
+        } else {
+            wrong_change.outputs[1]
+                .bip32_derivation
+                .values_mut()
+                .next()
+                .unwrap()
+        };
+        source.1 = DerivationPath::from_str(&format!("m/{purpose}'/1'/0'/1/8")).unwrap();
+        assert!(matches!(
+            trezor_error(
+                wire.host
+                    .request_sign_psbt(&wrong_change, wallet.fingerprint)
+            ),
+            TrezorError::InvalidRequest(_)
+        ));
+    }
+    let taproot = single_wallet(&wire.device.master, 86, 2);
+    let tap_cases: Vec<(&str, Mutation)> = vec![
+        (
+            "absent internal key",
+            Box::new(|psbt| psbt.inputs[0].tap_internal_key = None),
+        ),
+        (
+            "script tree root",
+            Box::new(|psbt| {
+                psbt.inputs[0].tap_merkle_root =
+                    Some(bitcoin::taproot::TapNodeHash::from_byte_array([1; 32]))
+            }),
+        ),
+        (
+            "script-path origin",
+            Box::new(|psbt| {
+                psbt.inputs[0]
+                    .tap_key_origins
+                    .values_mut()
+                    .next()
+                    .unwrap()
+                    .0
+                    .push(bitcoin::taproot::TapLeafHash::from_byte_array([1; 32]))
+            }),
+        ),
+        (
+            "explicit Taproot ALL",
+            Box::new(|psbt| {
+                psbt.inputs[0].sighash_type = Some(bitcoin::TapSighashType::All.into())
+            }),
+        ),
+    ];
+    for (label, mutation) in tap_cases {
+        let mut psbt = taproot.psbt.clone();
+        mutation(&mut psbt);
+        assert!(
+            matches!(
+                trezor_error(wire.host.request_sign_psbt(&psbt, taproot.fingerprint)),
+                TrezorError::InvalidRequest(_)
+            ),
+            "{label}"
+        );
+    }
+    let other = single_wallet(&wire.device.master, 84, 2);
+    let mut mixed = taproot.psbt.clone();
+    mixed.inputs[1] = other.psbt.inputs[1].clone();
+    mixed.unsigned_tx.input[1] = other.psbt.unsigned_tx.input[1].clone();
+    mixed.xpub.extend(other.psbt.xpub);
+    assert!(matches!(
+        trezor_error(wire.host.request_sign_psbt(&mixed, taproot.fingerprint)),
+        TrezorError::InvalidRequest(_)
+    ));
+    assert!(
+        !wire
+            .device
+            .received
+            .contains(&mt(MessageType::MessageType_SignTx))
+    );
+}
+
+#[test]
+fn unbound_address_requests_are_rejected_before_device_interaction() {
+    let mut wire = connected(Behaviour::default());
+    let wallet = single_wallet(&wire.device.master, 84, 1);
+    let request = AddressRequest {
+        descriptor: &wallet.receive,
+        index: 0,
+        signer: master_key(9).fingerprint(&Secp256k1::new()),
+    };
+    assert!(matches!(
+        trezor_error(wire.host.request_verify_address(&request)),
+        TrezorError::InvalidRequest(_)
+    ));
+    let xpub = *wallet.psbt.xpub.keys().next().unwrap();
+    let unbound: Descriptor<DescriptorPublicKey> = format!("wpkh({xpub}/0/*)").parse().unwrap();
+    let wrong_coin: Descriptor<DescriptorPublicKey> =
+        format!("wpkh([{}/84'/0'/0']{xpub}/0/*)", wallet.fingerprint)
+            .parse()
+            .unwrap();
+    let fixed: Descriptor<DescriptorPublicKey> =
+        format!("wpkh([{}/84'/1'/0']{xpub}/0/0)", wallet.fingerprint)
+            .parse()
+            .unwrap();
+    for descriptor in [&unbound, &wrong_coin, &fixed] {
+        let request = AddressRequest {
+            descriptor,
+            index: 0,
+            signer: wallet.fingerprint,
+        };
+        assert!(matches!(
+            trezor_error(wire.host.request_verify_address(&request)),
+            TrezorError::InvalidRequest(_)
+        ));
+    }
+    let account = DerivationPath::from_str("m/48'/1'/0'/2'").unwrap();
+    let first = Xpub::from_priv(
+        &Secp256k1::new(),
+        &wire
+            .device
+            .master
+            .derive_priv(&Secp256k1::new(), &account)
+            .unwrap(),
+    );
+    let second = Xpub::from_priv(
+        &Secp256k1::new(),
+        &master_key(2)
+            .derive_priv(&Secp256k1::new(), &account)
+            .unwrap(),
+    );
+    let duplicate_holder: Descriptor<DescriptorPublicKey> = format!(
+        "wsh(sortedmulti(2,[{}/48'/1'/0'/2']{first}/0/*,[{}/48'/1'/0'/2']{second}/0/*))",
+        wallet.fingerprint, wallet.fingerprint
+    )
+    .parse()
+    .unwrap();
+    let request = AddressRequest {
+        descriptor: &duplicate_holder,
+        index: 0,
+        signer: wallet.fingerprint,
+    };
+    assert!(matches!(
+        trezor_error(wire.host.request_verify_address(&request)),
+        TrezorError::InvalidRequest(_)
+    ));
+    assert!(wire.host.is_ready());
+    assert!(
+        !wire
+            .device
+            .received
+            .contains(&mt(MessageType::MessageType_GetAddress))
+    );
 }
 
 #[test]
@@ -2244,6 +2973,37 @@ fn refuses_psbts_it_should_not_send() {
             Box::new(|p| p.inputs[0].sighash_type = Some(EcdsaSighashType::None.into())),
         ),
         ("no global xpubs", Box::new(|p| p.xpub.clear())),
+        (
+            "a vault xpub encoded for another network",
+            Box::new(|p| {
+                let (xpub, source) = p.xpub.pop_first().unwrap();
+                p.xpub.insert(
+                    Xpub {
+                        network: NetworkKind::Main,
+                        ..xpub
+                    },
+                    source,
+                );
+            }),
+        ),
+        (
+            "a vault xpub at the wrong depth",
+            Box::new(|p| {
+                let (mut xpub, source) = p.xpub.pop_first().unwrap();
+                xpub.depth += 1;
+                p.xpub.insert(xpub, source);
+            }),
+        ),
+        (
+            "a native vault input with a redeem script",
+            Box::new(|p| p.inputs[0].redeem_script = Some(ScriptBuf::new())),
+        ),
+        (
+            "a vault input with Taproot metadata",
+            Box::new(move |p| {
+                p.inputs[0].tap_internal_key = Some(stranger_key.x_only_public_key().0)
+            }),
+        ),
         (
             "a missing key origin",
             Box::new(|p| {

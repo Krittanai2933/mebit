@@ -425,13 +425,16 @@ impl TrezorBle {
         &self.identity
     }
 
+    pub fn device_id(&self) -> String {
+        self.radio.peripheral.id().to_string()
+    }
+
     /// The link's negotiated ATT MTU, for diagnostics.
     pub fn mtu(&self) -> u16 {
         self.radio.peripheral.mtu()
     }
 
-    /// The xpub at an account path (BIP-48 P2WSH, or BIP-84 to compare with
-    /// Trezor Suite).
+    /// The xpub at a BIP-48 P2WSH or BIP-44/49/84/86 account path.
     pub async fn xpub(
         &mut self,
         path: &DerivationPath,
@@ -453,8 +456,8 @@ impl TrezorBle {
         }
     }
 
-    /// Has the Safe 7 co-sign a vault PSBT once the user confirms it on the
-    /// device. `signer` is the master fingerprint the vault expects this
+    /// Has the Safe 7 sign a wallet PSBT once the user confirms it on the
+    /// device. `signer` is the master fingerprint the wallet expects this
     /// device to sign with. The result is only returned after it checks out:
     /// `psbt` plus valid signatures from `signer`'s keys, nothing else.
     pub async fn sign_psbt(
@@ -466,6 +469,19 @@ impl TrezorBle {
         let first = self.session.request_sign_psbt(psbt, signer)?;
         match self.run(first).await? {
             TrezorEvent::SignedPsbt(signed) => Ok(signed),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// Displays the descriptor address on the Safe 7 and checks its reply.
+    pub async fn verify_address(
+        &mut self,
+        request: &vault_core::hw::AddressRequest<'_>,
+    ) -> Result<bitcoin::Address, TrezorBleError> {
+        self.begin()?;
+        let first = self.session.request_verify_address(request)?;
+        match self.run(first).await? {
+            TrezorEvent::AddressVerified(address) => Ok(address),
             other => Err(unexpected(other)),
         }
     }
@@ -1387,9 +1403,15 @@ mod tests {
         fn connect_future(options: ConnectOptions, codes: &dyn PairingCodeSource) {
             send(&TrezorBle::connect(options, codes));
         }
-        fn requests(device: &mut TrezorBle, path: &DerivationPath, psbt: &Psbt) {
+        fn requests(
+            device: &mut TrezorBle,
+            path: &DerivationPath,
+            psbt: &Psbt,
+            address: &vault_core::hw::AddressRequest<'_>,
+        ) {
             send(&device.xpub(path, XpubOptions::default()));
             send(&device.sign_psbt(psbt, Fingerprint::default()));
+            send(&device.verify_address(address));
         }
         fn whole(device: TrezorBle) {
             send(&device);

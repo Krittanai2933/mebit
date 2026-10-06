@@ -23,7 +23,7 @@ use std::pin::Pin;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bitcoin::bip32::{DerivationPath, Fingerprint, Xpub};
-use bitcoin::{Network, Psbt};
+use bitcoin::{Address, Network, Psbt};
 use btleplug::api::{
     Central, CentralEvent, CharPropFlags, Characteristic, Manager as _, Peripheral as _,
     ScanFilter, ValueNotification, WriteType,
@@ -31,7 +31,10 @@ use btleplug::api::{
 use btleplug::platform::{Manager, Peripheral};
 use futures_util::{Stream, StreamExt};
 use vault_core::error::VaultCoreError;
-use vault_core::hw::jade::{JadeError, JadeEvent, JadeSession, VersionInfo};
+use vault_core::hw::AddressRequest;
+use vault_core::hw::jade::{
+    JadeError, JadeEvent, JadeRegistrationPolicy, JadeSession, VersionInfo,
+};
 
 // The Jade's GATT interface, from `main/ble/ble.c` in Jade firmware 1.0.41.
 // Both characteristics require an encrypted, authenticated link.
@@ -178,6 +181,11 @@ impl JadeBle {
         &self.name
     }
 
+    /// The platform's physical BLE identifier, independent of the wallet seed.
+    pub fn device_id(&self) -> String {
+        self.peripheral.id().to_string()
+    }
+
     /// Firmware, board, state and network pin. Needs no unlock.
     pub async fn version_info(&mut self) -> Result<VersionInfo, JadeBleError> {
         let request = self.session.request_version_info()?;
@@ -211,6 +219,30 @@ impl JadeBle {
         let request = self.session.request_xpub(path)?;
         match self.drive(request, REPLY_TIMEOUT).await? {
             JadeEvent::Xpub(xpub) => Ok(xpub),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// Displays the descriptor address on the device and checks its reply.
+    pub async fn verify_address(
+        &mut self,
+        request: &AddressRequest<'_>,
+    ) -> Result<Address, JadeBleError> {
+        self.verify_address_with_registration(request, JadeRegistrationPolicy::ExistingOnly)
+            .await
+    }
+
+    /// Uses the dedicated test registration slot under the caller's device lease.
+    pub async fn verify_address_with_registration(
+        &mut self,
+        request: &AddressRequest<'_>,
+        policy: JadeRegistrationPolicy<'_>,
+    ) -> Result<Address, JadeBleError> {
+        let request = self
+            .session
+            .request_verify_address_with_registration(request, policy)?;
+        match self.drive(request, USER_TIMEOUT).await? {
+            JadeEvent::Address(address) => Ok(address),
             other => Err(unexpected(other)),
         }
     }
@@ -274,6 +306,10 @@ impl JadeBle {
                 JadeEvent::NeedMore => {}
                 JadeEvent::Send(bytes) => {
                     wait = REPLY_TIMEOUT;
+                    self.write(&bytes).await?;
+                }
+                JadeEvent::SendForConfirmation(bytes) => {
+                    wait = USER_TIMEOUT;
                     self.write(&bytes).await?;
                 }
                 JadeEvent::Pinserver { url, body } => {

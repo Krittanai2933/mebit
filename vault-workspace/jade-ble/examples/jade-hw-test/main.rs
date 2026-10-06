@@ -7,6 +7,8 @@
 //! cargo run -p jade-ble --example jade-hw-test -- roundtrip --inputs 16
 //! ```
 
+#[path = "../../../wallet-e2e/mod.rs"]
+pub mod e2e;
 mod roundtrip;
 
 use std::error::Error;
@@ -45,6 +47,11 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Offline checks and the serial testnet4 coordinator.
+    E2e {
+        #[command(subcommand)]
+        command: e2e::model::Command,
+    },
     /// Firmware, board, state and network pin. No unlock.
     Info,
     /// Unlock, then print the master fingerprint and the xpub at --path.
@@ -86,7 +93,18 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run(args: Args) -> Result<(), Box<dyn Error>> {
+async fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
+    let selected = std::mem::replace(&mut args.command, Command::Info);
+    if let Command::E2e { command } = selected {
+        if args.network != Network::Testnet4 {
+            return Err("e2e requires --network testnet4".into());
+        }
+        let store = e2e::records::Store::new()?;
+        let result = dispatch_e2e(&args, command, &store).await;
+        e2e::records::log_command(&store, &result)?;
+        return result;
+    }
+    args.command = selected;
     eprintln!("Scanning {} s for a Jade…", args.scan_secs);
     let scan = Duration::from_secs(args.scan_secs);
     let mut jade = JadeBle::connect(args.network, args.name.as_deref(), scan).await?;
@@ -97,12 +115,30 @@ async fn run(args: Args) -> Result<(), Box<dyn Error>> {
     Ok(closed?)
 }
 
+async fn dispatch_e2e(
+    args: &Args,
+    command: e2e::model::Command,
+    store: &e2e::records::Store,
+) -> e2e::Result<()> {
+    if e2e::offline_command(&command, store)? {
+        return Ok(());
+    }
+    if let e2e::model::Command::Device { request, response } = command {
+        let request: e2e::records::WorkerRequest = e2e::records::read_json(&request)?;
+        e2e::records::validate_worker_request(&request)?;
+        let _hardware_lease = e2e::records::Lease::acquire_hardware(store)?;
+        return run_device(args, request, response).await;
+    }
+    forward_coordinator(args, command)
+}
+
 async fn command(
     jade: &mut JadeBle,
     network: Network,
     command: Command,
 ) -> Result<(), Box<dyn Error>> {
     match command {
+        Command::E2e { .. } => return Err("e2e commands must dispatch before opening BLE".into()),
         Command::Info => {
             let info = jade.version_info().await?;
             println!("firmware  {}", info.firmware);
@@ -247,4 +283,158 @@ fn read_psbt(file: &Path) -> Result<Psbt, Box<dyn Error>> {
         return Ok(Psbt::deserialize(&bytes)?);
     }
     Ok(Psbt::from_str(std::str::from_utf8(&bytes)?.trim())?)
+}
+
+fn forward_coordinator(args: &Args, command: e2e::model::Command) -> e2e::Result<()> {
+    use e2e::model::Command as E;
+    let executable = std::env::current_exe()?
+        .with_file_name(format!("trezor-hw-test{}", std::env::consts::EXE_SUFFIX));
+    let mut child = std::process::Command::new(executable);
+    child.args([
+        "--network",
+        "testnet4",
+        "--scan-secs",
+        &args.scan_secs.to_string(),
+    ]);
+    if let Some(name) = &args.name {
+        child.args(["--jade-device", name]);
+    }
+    child.arg("e2e");
+    match command {
+        E::Enroll {
+            slot,
+            jade_slot_empty,
+        } => {
+            child.args(["enroll", "--slot", &slot.to_string()]);
+            if jade_slot_empty {
+                child.arg("--jade-slot-empty");
+            }
+        }
+        E::Prepare { case } => {
+            child.args(["prepare", "--case", &case]);
+        }
+        E::Run {
+            case,
+            funding_outpoint,
+            broadcast,
+        } => {
+            child.args([
+                "run",
+                "--case",
+                &case,
+                "--funding-outpoint",
+                &funding_outpoint.to_string(),
+            ]);
+            if broadcast {
+                child.arg("--broadcast");
+            }
+        }
+        E::Resume { case, broadcast } => {
+            child.args(["resume", "--case", &case]);
+            if broadcast {
+                child.arg("--broadcast");
+            }
+        }
+        _ => return Err("command is not a coordinator operation".into()),
+    }
+    let status = child
+        .status()
+        .map_err(|e| format!("build trezor-hw-test and jade-hw-test before live work: {e}"))?;
+    if !status.success() {
+        return Err(format!("serial coordinator exited with {status}").into());
+    }
+    Ok(())
+}
+
+async fn run_device(
+    args: &Args,
+    request: e2e::records::WorkerRequest,
+    response: PathBuf,
+) -> e2e::Result<()> {
+    use e2e::records::{DeviceAction, DeviceResult, Registration, WorkerResponse};
+    use vault_core::hw::jade::JadeRegistrationPolicy;
+    let mut device = JadeBle::connect(
+        Network::Testnet4,
+        args.name.as_deref(),
+        Duration::from_secs(args.scan_secs),
+    )
+    .await?;
+    let outcome = async {
+        let info = device.version_info().await?;
+        device.unlock().await?;
+        let master = device.xpub(&DerivationPath::master()).await?;
+        let mut accounts = Vec::new();
+        for family in e2e::model::Family::ALL {
+            accounts.push((family, device.xpub(&family.path()).await?));
+        }
+        let identity = e2e::identity_from_accounts(
+            device.device_id(),
+            info.firmware,
+            master.fingerprint(),
+            accounts,
+        );
+        if let Some(expected) = &request.expected {
+            e2e::records::check_identity(expected, &identity)?;
+        }
+        let result = match request.action {
+            DeviceAction::Enroll => DeviceResult::Enrolled,
+            DeviceAction::Verify {
+                descriptor,
+                index,
+                signer,
+                registration,
+            } => {
+                if signer != identity.fingerprint {
+                    return Err("address signer differs from enrolled device".into());
+                }
+                let descriptor =
+                    miniscript::Descriptor::<miniscript::DescriptorPublicKey>::from_str(
+                        &descriptor,
+                    )?;
+                let previous = match &registration {
+                    Registration::ReplaceOwned(text) => Some(miniscript::Descriptor::<
+                        miniscript::DescriptorPublicKey,
+                    >::from_str(text)?),
+                    _ => None,
+                };
+                let policy = match registration {
+                    Registration::ExistingOnly => JadeRegistrationPolicy::ExistingOnly,
+                    Registration::DeclaredEmpty => JadeRegistrationPolicy::VerifiedEmpty,
+                    Registration::ReplaceOwned(_) => JadeRegistrationPolicy::ReplaceOwned(
+                        previous
+                            .as_ref()
+                            .ok_or("missing registration ownership descriptor")?,
+                    ),
+                };
+                let address = device
+                    .verify_address_with_registration(
+                        &vault_core::hw::AddressRequest {
+                            descriptor: &descriptor,
+                            index,
+                            signer: signer.parse()?,
+                        },
+                        policy,
+                    )
+                    .await?;
+                DeviceResult::Address(address.to_string())
+            }
+            DeviceAction::Sign { psbt, signer } => {
+                if signer != identity.fingerprint {
+                    return Err("PSBT signer differs from enrolled device".into());
+                }
+                DeviceResult::Signed(
+                    device
+                        .sign_psbt(&psbt.parse()?, signer.parse()?)
+                        .await?
+                        .to_string(),
+                )
+            }
+        };
+        Ok::<_, e2e::Error>(WorkerResponse { identity, result })
+    }
+    .await;
+    let closed = device.disconnect().await;
+    let result = outcome?;
+    closed?;
+    e2e::records::write_json(&response, &result)
 }

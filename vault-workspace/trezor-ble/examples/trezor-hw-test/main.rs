@@ -9,6 +9,9 @@
 //! cargo run -p trezor-ble --example trezor-hw-test -- roundtrip --inputs 2
 //! ```
 
+mod coordinator;
+#[path = "../../../wallet-e2e/mod.rs"]
+pub mod e2e;
 mod roundtrip;
 
 use std::error::Error;
@@ -61,12 +64,21 @@ struct Args {
     #[arg(long)]
     passphrase_on_device: bool,
 
+    /// Jade selector for enrollment through the serial coordinator.
+    #[arg(long)]
+    jade_device: Option<String>,
+
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Subcommand)]
 enum Command {
+    /// Deterministic offline checks and checkpointed real testnet4 spends.
+    E2e {
+        #[command(subcommand)]
+        command: e2e::model::Command,
+    },
     /// List devices advertising the Trezor service. No connection.
     Scan,
     /// Connect (pairing the first time) and print what the Safe 7 reports.
@@ -119,7 +131,18 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run(args: Args) -> Result<(), Box<dyn Error>> {
+async fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
+    let selected = std::mem::replace(&mut args.command, Command::Info);
+    if let Command::E2e { command } = selected {
+        if args.network != Network::Testnet4 {
+            return Err("e2e requires --network testnet4".into());
+        }
+        let store = e2e::records::Store::new()?;
+        let result = dispatch_e2e(&args, command, &store).await;
+        e2e::records::log_command(&store, &result)?;
+        return result;
+    }
+    args.command = selected;
     let scan = Duration::from_secs(args.scan_secs);
     if let Command::Scan = args.command {
         eprintln!("Scanning {} s…", args.scan_secs);
@@ -202,12 +225,40 @@ async fn run(args: Args) -> Result<(), Box<dyn Error>> {
     Ok(closed?)
 }
 
+async fn dispatch_e2e(
+    args: &Args,
+    command: e2e::model::Command,
+    store: &e2e::records::Store,
+) -> e2e::Result<()> {
+    if e2e::offline_command(&command, store)? {
+        return Ok(());
+    }
+    if let e2e::model::Command::Device { request, response } = command {
+        let request: e2e::records::WorkerRequest = e2e::records::read_json(&request)?;
+        e2e::records::validate_worker_request(&request)?;
+        let _hardware_lease = e2e::records::Lease::acquire_hardware(store)?;
+        return run_device(args, request, response).await;
+    }
+    coordinator::run(
+        command,
+        store,
+        coordinator::Settings {
+            trezor_selector: args.device.clone(),
+            jade_selector: args.jade_device.clone(),
+            scan_secs: args.scan_secs,
+            passphrase_on_device: args.passphrase_on_device,
+        },
+    )
+    .await
+}
+
 async fn command(
     trezor: &mut TrezorBle,
     network: Network,
     command: Command,
 ) -> Result<(), Box<dyn Error>> {
     match command {
+        Command::E2e { .. } => return Err("e2e commands must dispatch before opening BLE".into()),
         Command::Scan => unreachable!("handled before connecting"),
         Command::Info => {
             let identity = trezor.identity();
@@ -431,4 +482,113 @@ fn read_psbt(file: &Path) -> Result<Psbt, Box<dyn Error>> {
         return Ok(Psbt::deserialize(&bytes)?);
     }
     Ok(Psbt::from_str(std::str::from_utf8(&bytes)?.trim())?)
+}
+
+async fn run_device(
+    args: &Args,
+    request: e2e::records::WorkerRequest,
+    response: PathBuf,
+) -> e2e::Result<()> {
+    use e2e::records::{DeviceAction, DeviceResult, WorkerResponse};
+    if let Some(file) = &args.credential_file
+        && file.exists()
+    {
+        e2e::wallet::require_private(file)?;
+    }
+    let credential = match &args.credential_file {
+        Some(file) if file.exists() => Some(PairingCredential::from_bytes(&std::fs::read(file)?)?),
+        _ => None,
+    };
+    let options = ConnectOptions {
+        network: Network::Testnet4,
+        host_name: host_name(),
+        app_name: "mebit testnet4 e2e".into(),
+        passphrase: if args.passphrase_on_device {
+            SessionPassphrase::OnDevice
+        } else {
+            SessionPassphrase::None
+        },
+        credential,
+        device: args.device.clone(),
+        scan: Duration::from_secs(args.scan_secs),
+    };
+    eprintln!("Wake the enrolled Safe 7 and approve the testnet4 request on its screen.");
+    let connected = TrezorBle::connect(
+        options,
+        &CodeSource {
+            file: args.code_file.clone(),
+        },
+    )
+    .await?;
+    if let Some(credential) = connected.new_credential
+        && let Some(file) = &args.credential_file
+    {
+        e2e::records::atomic_write(file, &credential.to_bytes())?;
+    }
+    let mut device = connected.device;
+    let outcome = async {
+        let physical = device.device_id();
+        let firmware = device.identity().firmware_version();
+        let mut fingerprint = None;
+        let mut accounts = Vec::new();
+        for family in e2e::model::Family::ALL {
+            let key = device.xpub(&family.path(), XpubOptions::default()).await?;
+            if fingerprint.is_some_and(|fp| fp != key.master_fingerprint) {
+                return Err("device returned inconsistent master fingerprints".into());
+            }
+            fingerprint = Some(key.master_fingerprint);
+            accounts.push((family, key.xpub));
+        }
+        let identity = e2e::identity_from_accounts(
+            physical,
+            firmware,
+            fingerprint.ok_or("missing fingerprint")?,
+            accounts,
+        );
+        if let Some(expected) = &request.expected {
+            e2e::records::check_identity(expected, &identity)?;
+        }
+        let result = match request.action {
+            DeviceAction::Enroll => DeviceResult::Enrolled,
+            DeviceAction::Verify {
+                descriptor,
+                index,
+                signer,
+                ..
+            } => {
+                if signer != identity.fingerprint {
+                    return Err("address signer differs from enrolled device".into());
+                }
+                let descriptor =
+                    miniscript::Descriptor::<miniscript::DescriptorPublicKey>::from_str(
+                        &descriptor,
+                    )?;
+                let address = device
+                    .verify_address(&vault_core::hw::AddressRequest {
+                        descriptor: &descriptor,
+                        index,
+                        signer: signer.parse()?,
+                    })
+                    .await?;
+                DeviceResult::Address(address.to_string())
+            }
+            DeviceAction::Sign { psbt, signer } => {
+                if signer != identity.fingerprint {
+                    return Err("PSBT signer differs from enrolled device".into());
+                }
+                DeviceResult::Signed(
+                    device
+                        .sign_psbt(&psbt.parse()?, signer.parse()?)
+                        .await?
+                        .to_string(),
+                )
+            }
+        };
+        Ok::<_, e2e::Error>(WorkerResponse { identity, result })
+    }
+    .await;
+    let closed = device.disconnect().await;
+    let result = outcome?;
+    closed?;
+    e2e::records::write_json(&response, &result)
 }

@@ -188,3 +188,16 @@ Runs so far: 2026-10-01, Safe 7 firmware 2.12.5 with the test phrase, macOS 26.6
 - **btleplug 0.13.3** is pinned for its CoreBluetooth fixes: `discover_services()` hangs, event-thread panics, operations that never resolve (#486–#489), and Android JNI crashes. It also requests MTU 517 on Android.
 - **Device authenticity is not checked.** A fake peripheral claiming to be a `T3W1` passes both model checks, and could hand over its own xpub when a vault is set up. Only Trezor's `AuthenticateDevice` (certificate chains from the device's secure elements) could tell. It is required before real funds, so use the Safe 7 on test networks with the test phrase until then: `docs/04-open-items.md` item 19.
 - **Dropping a call's future midway** leaves the device out of step. The next call says so (`Abandoned`): reconnect.
+
+## Real testnet4 wallet verification
+
+The example also has an `e2e` command group. It coordinates hot, Jade, and Safe 7 holders serially and records all 7,315 required cases. Run from `vault-workspace`.
+
+```sh
+cargo run --locked -p trezor-ble --example trezor-hw-test -- --network testnet4 e2e matrix
+cargo run --locked -p trezor-ble --example trezor-hw-test -- --network testnet4 e2e prepare --case <case-id>
+cargo run --locked -p trezor-ble --example trezor-hw-test -- --network testnet4 e2e run --case <case-id> --funding-outpoint <txid:vout> --broadcast
+cargo run --locked -p trezor-ble --example trezor-hw-test -- --network testnet4 e2e resume --case <case-id>
+```
+
+Read the [testnet4 instructions](../wallet-e2e/README.md) for enrollment, funding, registration ownership, offline verification, and private records. Matrix generation and reporting require no devices. Live acceptance stays blocked until every required case has a canonical spend confirmation.
