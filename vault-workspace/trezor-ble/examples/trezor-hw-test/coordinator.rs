@@ -13,7 +13,7 @@ use crate::e2e::model::{Command, FUNDING_SATS, Family, Slot, Source, find_case};
 use crate::e2e::records::{
     AddressProof, Checkpoint, DeviceAction, DeviceResult, Enrollment, Execution, Finalized,
     Funding, Lease, Progress, Registration, Signing, Store, WorkerRequest, WorkerResponse,
-    check_identity, now, read_json, write_json,
+    check_identity, check_identity_for_source, now, read_json, write_json,
 };
 use crate::e2e::{Result, wallet};
 
@@ -146,7 +146,11 @@ impl Workers<'_> {
         }
         let response: WorkerResponse = read_json(&response_path)?;
         if !enrolling {
-            check_identity(&enrollment.identity, &response.identity)?;
+            check_identity_for_source(
+                &enrollment.identity,
+                &response.identity,
+                enrollment.slot.source,
+            )?;
         }
         Ok((response, execution))
     }
@@ -261,7 +265,7 @@ fn enroll(
         enrollment.identity = response.identity;
     }
     if let Some(prior) = prior {
-        check_identity(&prior.identity, &enrollment.identity)?;
+        check_identity_for_source(&prior.identity, &enrollment.identity, slot.source)?;
     }
     if declared_empty {
         enrollment.jade_slot_declared_empty = true;
@@ -330,10 +334,20 @@ fn prepare(store: &Store, workers: &Workers<'_>, chain: &impl Chain, id: &str) -
         derive_address_at(&change, case.change.index, Network::Testnet4)?.to_string();
     let destination = wallet::destination(store, true)?.to_string();
     let mut checkpoint = if store.checkpoint_path(id)?.exists() {
-        let saved = store.load(id)?;
+        let mut saved = store.load(id)?;
         if !matches!(saved.progress, Progress::Prepared) {
             return Err("case has already reserved funding; resume its saved checkpoint".into());
         }
+        for old in &saved.enrolled {
+            let current = enrolled
+                .iter()
+                .find(|enrollment| enrollment.slot == old.slot)
+                .ok_or("enrolled holder missing")?;
+            check_identity_for_source(&old.identity, &current.identity, old.slot.source)?;
+        }
+        // Refresh legacy BLE peripheral IDs from the current enrollment while
+        // preserving the prepared descriptors, destination, and address proofs.
+        saved.enrolled = enrolled.clone();
         saved
     } else {
         Checkpoint {
@@ -408,6 +422,14 @@ fn prepare(store: &Store, workers: &Workers<'_>, chain: &impl Chain, id: &str) -
                 if actual != *address {
                     return Err("hardware address differs from prepared descriptor".into());
                 }
+                if slot.source == Source::Jade {
+                    adopt_jade_identity(
+                        store,
+                        &mut checkpoint,
+                        &mut enrollment,
+                        &response.identity,
+                    )?;
+                }
                 if case.family == Family::P2wsh && slot.source == Source::Jade {
                     enrollment.jade_owned_descriptor = Some(descriptor.to_string());
                     enrollment.jade_slot_declared_empty = false;
@@ -450,22 +472,51 @@ fn prepare(store: &Store, workers: &Workers<'_>, chain: &impl Chain, id: &str) -
     Ok(())
 }
 
-fn validate_checkpoint(store: &Store, checkpoint: &Checkpoint) -> Result<()> {
+fn validate_checkpoint(store: &Store, checkpoint: &mut Checkpoint) -> Result<()> {
     let enrolled = enrolled_case(store, &checkpoint.case)?;
-    for saved in &checkpoint.enrolled {
-        check_identity(
-            &saved.identity,
-            &enrolled
-                .iter()
-                .find(|e| e.slot == saved.slot)
-                .ok_or("enrolled holder missing")?
-                .identity,
-        )?;
+    for saved in &mut checkpoint.enrolled {
+        let current = enrolled
+            .iter()
+            .find(|e| e.slot == saved.slot)
+            .ok_or("enrolled holder missing")?;
+        check_identity_for_source(&saved.identity, &current.identity, saved.slot.source)?;
+        if saved.slot.source == Source::Jade
+            && current.identity.physical_id.starts_with("jade-name:")
+        {
+            saved.identity.physical_id = current.identity.physical_id.clone();
+        }
     }
     if checkpoint.destination != wallet::destination(store, false)?.to_string() {
         return Err("saved test-owned destination changed".into());
     }
     wallet::validate_checkpoint(checkpoint)
+}
+
+fn adopt_jade_identity(
+    store: &Store,
+    checkpoint: &mut Checkpoint,
+    enrollment: &mut Enrollment,
+    actual: &crate::e2e::records::Identity,
+) -> Result<()> {
+    check_identity_for_source(&enrollment.identity, actual, Source::Jade)?;
+    let stable_id = actual
+        .physical_id
+        .strip_prefix("jade-name:")
+        .ok_or("Jade did not report its stable advertised name")?;
+    if stable_id.is_empty() {
+        return Err("Jade advertised an empty device name".into());
+    }
+    let saved = checkpoint
+        .enrolled
+        .iter_mut()
+        .find(|saved| saved.slot == enrollment.slot)
+        .ok_or("Jade enrollment is missing from the case checkpoint")?;
+    check_identity_for_source(&saved.identity, actual, Source::Jade)?;
+
+    enrollment.identity.physical_id = actual.physical_id.clone();
+    saved.identity.physical_id = actual.physical_id.clone();
+    write_json(&store.enrollment_path(enrollment.slot), enrollment)?;
+    store.save(checkpoint)
 }
 
 fn parse_tx(hex: &str) -> Result<Transaction> {
@@ -557,6 +608,7 @@ fn restore_jade_registration(
     if address != checkpoint.receive_address {
         return Err("restored Jade registration derives a different funding address".into());
     }
+    adopt_jade_identity(store, checkpoint, enrollment, &response.identity)?;
     enrollment.jade_owned_descriptor = Some(checkpoint.receive_descriptor.clone());
     enrollment.jade_slot_declared_empty = false;
     write_json(&store.enrollment_path(enrollment.slot), enrollment)?;
@@ -660,14 +712,19 @@ async fn execute(
                     false,
                 )?;
                 checkpoint.executions.push(execution);
+                let actual_identity = response.identity.clone();
                 let DeviceResult::Signed(signed) = response.result else {
                     return Err("signing worker returned a different operation".into());
                 };
-                verify_device_signatures(
+                let verified = verify_device_signatures(
                     &before,
                     signed.parse()?,
                     enrollment.identity.fingerprint.parse()?,
-                )?
+                )?;
+                if slot.source == Source::Jade {
+                    adopt_jade_identity(store, checkpoint, &mut enrollment, &actual_identity)?;
+                }
+                verified
             };
             signing.signed_psbt = signed.to_string();
             signing.completed.push(slot);

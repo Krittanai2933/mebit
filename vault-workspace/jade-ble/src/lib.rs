@@ -313,7 +313,7 @@ impl JadeBle {
                     self.write(&bytes).await?;
                 }
                 JadeEvent::Pinserver { url, body } => {
-                    let relayed = post_to_pinserver(url, body).await.and_then(|response| {
+                    let relayed = relay_pinserver(url, body).await.and_then(|response| {
                         self.session
                             .pinserver_response(&response)
                             .map_err(|refused| JadeBleError::Pinserver(refused.to_string()))
@@ -466,6 +466,21 @@ async fn post_to_pinserver(url: String, body: String) -> Result<String, JadeBleE
     .await
     .map_err(|join| JadeBleError::Pinserver(join.to_string()))?
     .map_err(|error| JadeBleError::Pinserver(error.to_string()))
+}
+
+/// Test-only response injection for a real Jade's pinserver event. This lets
+/// the desktop hardware harness exercise Jade's cancel path without weakening
+/// the HTTPS trust roots or contacting a substitute server. The production
+/// relay is used unless both the Cargo feature and debug build are enabled and
+/// the caller explicitly sets `JADE_TEST_PINSERVER_RESPONSE`.
+async fn relay_pinserver(url: String, body: String) -> Result<String, JadeBleError> {
+    #[cfg(all(feature = "test-pinserver-response", debug_assertions))]
+    if let Some(response) = std::env::var_os("JADE_TEST_PINSERVER_RESPONSE") {
+        eprintln!("TEST ONLY: injecting pinserver response; HTTPS relay skipped");
+        return Ok(response.to_string_lossy().into_owned());
+    }
+
+    post_to_pinserver(url, body).await
 }
 
 async fn within<T>(

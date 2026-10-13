@@ -1218,14 +1218,15 @@ fn parse_xpub(result: Value, network: Network, path: &DerivationPath) -> Result<
     Ok(xpub)
 }
 
-/// Accepts the device's PSBT only if it is `unsigned` plus valid signatures
-/// from `signer`'s keys: see [`psbt_check::verify_device_signatures`].
+/// Verifies the device's signatures against `unsigned` and returns `unsigned`
+/// with only those verified signatures merged in.
 ///
 /// The Jade signs every input whose `bip32_derivation` names its master
-/// fingerprint (`sign_psbt()` in `main/process/sign_psbt.c`) and sends back
-/// the whole PSBT re-serialised, so all of it is compared, not just the
-/// signatures. When it found nothing of its own to sign it returns the PSBT
-/// unchanged, without an error: that is [`JadeError::NoSignatures`].
+/// fingerprint (`sign_psbt()` in `main/process/sign_psbt.c`) and sends back a
+/// re-serialized PSBT. The host transaction and metadata remain authoritative;
+/// only signatures that verify against the original host PSBT are accepted.
+/// When it found nothing of its own to sign it returns the PSBT unchanged,
+/// without an error: that is [`JadeError::NoSignatures`].
 fn verify_signed_psbt(
     unsigned: &Psbt,
     signed_bytes: &[u8],
@@ -1233,7 +1234,7 @@ fn verify_signed_psbt(
 ) -> Result<Psbt, JadeError> {
     let signed = Psbt::deserialize(signed_bytes)
         .map_err(|e| protocol(format!("the device returned an unparseable PSBT: {e}")))?;
-    Ok(psbt_check::verify_device_signatures(
+    Ok(psbt_check::verify_device_signatures_preserving_host_psbt(
         unsigned, signed, signer,
     )?)
 }
@@ -2852,6 +2853,15 @@ mod tests {
         let verified = verify_signed_psbt(&psbt, &signed.serialize(), jade.fingerprint).unwrap();
         assert_eq!(verified, signed);
 
+        // Jade's re-serialized response may rewrite PSBT metadata. The
+        // accepted value must retain the host's version of those fields.
+        let mut rewritten = signed.clone();
+        rewritten.inputs[0].witness_script = Some(ScriptBuf::new());
+        rewritten.inputs[1].bip32_derivation.clear();
+        rewritten.outputs[0].bip32_derivation.clear();
+        let verified = verify_signed_psbt(&psbt, &rewritten.serialize(), jade.fingerprint).unwrap();
+        assert_eq!(verified, signed);
+
         // A cosigner went first; its signature has to survive untouched.
         let cosigned = signed_by(&Signer::new(1), &psbt);
         let both = signed_by(&jade, &cosigned);
@@ -2893,16 +2903,6 @@ mod tests {
             (
                 "output changed",
                 tampered(&|p| p.unsigned_tx.output[0].value = Amount::from_sat(1)),
-                |e| matches!(e, JadeError::PsbtModified),
-            ),
-            (
-                "witness script changed",
-                tampered(&|p| p.inputs[0].witness_script = Some(ScriptBuf::new())),
-                |e| matches!(e, JadeError::PsbtModified),
-            ),
-            (
-                "derivation dropped",
-                tampered(&|p| p.inputs[1].bip32_derivation.clear()),
                 |e| matches!(e, JadeError::PsbtModified),
             ),
             (

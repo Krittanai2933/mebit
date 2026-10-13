@@ -3,6 +3,11 @@ name = "jade-ble"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Opt-in malformed pinserver response injection for the desktop hardware harness.
+# The hook is also gated to debug builds in lib.rs.
+test-pinserver-response = []
+
 [dependencies]
 vault-core = { path = "../vault-core" }
 bitcoin = "0.32"

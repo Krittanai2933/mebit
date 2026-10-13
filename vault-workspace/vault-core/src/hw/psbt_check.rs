@@ -193,7 +193,31 @@ pub fn verify_device_signatures(
     signed: Psbt,
     signer: Fingerprint,
 ) -> Result<Psbt, SignatureCheckError> {
-    if signed.inputs.len() != unsigned.inputs.len() {
+    verify_device_signatures_inner(unsigned, signed, signer, false)
+}
+
+/// Verifies a device's signatures against the host PSBT, then returns the
+/// host PSBT with only those signatures copied in. Some devices rewrite
+/// derivation or script metadata while serializing their response; that data
+/// is never trusted or carried into the accepted PSBT.
+pub(crate) fn verify_device_signatures_preserving_host_psbt(
+    unsigned: &Psbt,
+    signed: Psbt,
+    signer: Fingerprint,
+) -> Result<Psbt, SignatureCheckError> {
+    verify_device_signatures_inner(unsigned, signed, signer, true)
+}
+
+fn verify_device_signatures_inner(
+    unsigned: &Psbt,
+    signed: Psbt,
+    signer: Fingerprint,
+    preserve_host_psbt: bool,
+) -> Result<Psbt, SignatureCheckError> {
+    if signed.unsigned_tx != unsigned.unsigned_tx
+        || signed.inputs.len() != unsigned.inputs.len()
+        || signed.outputs.len() != unsigned.outputs.len()
+    {
         return Err(SignatureCheckError::PsbtModified);
     }
 
@@ -212,7 +236,7 @@ pub fn verify_device_signatures(
         stripped.inputs[index].partial_sigs = before.partial_sigs.clone();
         stripped.inputs[index].tap_key_sig = before.tap_key_sig;
     }
-    if stripped != *unsigned {
+    if !preserve_host_psbt && stripped != *unsigned {
         return Err(SignatureCheckError::PsbtModified);
     }
 
@@ -300,7 +324,24 @@ pub fn verify_device_signatures(
     if let Some(input) = first_unsigned_input {
         return Err(SignatureCheckError::MissingSignature { input });
     }
-    Ok(signed)
+    if !preserve_host_psbt {
+        return Ok(signed);
+    }
+
+    let mut accepted = unsigned.clone();
+    for (index, (before, after)) in unsigned.inputs.iter().zip(&signed.inputs).enumerate() {
+        for (key, signature) in &after.partial_sigs {
+            if !before.partial_sigs.contains_key(key) {
+                accepted.inputs[index]
+                    .partial_sigs
+                    .insert(*key, *signature);
+            }
+        }
+        if before.tap_key_sig.is_none() {
+            accepted.inputs[index].tap_key_sig = after.tap_key_sig;
+        }
+    }
+    Ok(accepted)
 }
 
 /// Every device client trusts these checks, so they are tested here and not
@@ -529,6 +570,63 @@ mod tests {
     }
 
     #[test]
+    fn host_psbt_merge_ignores_device_metadata_and_copies_only_verified_signatures() {
+        let holders = [holder(0), holder(1), holder(2)];
+        let device = &holders[0];
+        let psbt = vault_psbt(&holders);
+        let signed = signed_by(device, &psbt);
+
+        // Jade may rewrite metadata while serializing its response. The
+        // ownership proof and signature check still use the host PSBT.
+        let mut rewritten = signed.clone();
+        rewritten.inputs[0].bip32_derivation.clear();
+        rewritten.inputs[0].witness_script = Some(ScriptBuf::new());
+        rewritten.outputs[0].bip32_derivation.clear();
+
+        let accepted = verify_device_signatures_preserving_host_psbt(
+            &psbt,
+            rewritten,
+            device.fingerprint,
+        )
+        .unwrap();
+        assert_eq!(accepted, signed);
+
+        // The returned transaction remains bound to the original outputs.
+        let mut changed_transaction = signed.clone();
+        changed_transaction.unsigned_tx.output[0].value = Amount::from_sat(1);
+        assert_eq!(
+            verify_device_signatures_preserving_host_psbt(
+                &psbt,
+                changed_transaction,
+                device.fingerprint,
+            ),
+            Err(SignatureCheckError::PsbtModified)
+        );
+
+        // Existing cosigner signatures cannot be dropped or substituted.
+        let cosigned = signed_by(&holders[1], &psbt);
+        let both = signed_by(device, &cosigned);
+        let mut dropped_cosigner_signature = both;
+        let cosigner_key = cosigned.inputs[0]
+            .partial_sigs
+            .keys()
+            .next()
+            .copied()
+            .unwrap();
+        dropped_cosigner_signature.inputs[0]
+            .partial_sigs
+            .remove(&cosigner_key);
+        assert_eq!(
+            verify_device_signatures_preserving_host_psbt(
+                &cosigned,
+                dropped_cosigner_signature,
+                device.fingerprint,
+            ),
+            Err(SignatureCheckError::PsbtModified)
+        );
+    }
+
+    #[test]
     fn accepts_bip86_official_receive_and_change_vectors_and_finalizes() {
         let (device, psbt) = official_bip86_fixture();
         let internal_keys = [
@@ -588,6 +686,18 @@ mod tests {
         assert_eq!(
             verify_device_signatures(&signed, signed.clone(), device.fingerprint),
             Err(SignatureCheckError::NoSignatures)
+        );
+
+        let mut rewritten = signed.clone();
+        rewritten.inputs[0].tap_key_origins.clear();
+        rewritten.outputs[0].tap_key_origins.clear();
+        assert_eq!(
+            verify_device_signatures_preserving_host_psbt(
+                &psbt,
+                rewritten,
+                device.fingerprint,
+            ),
+            Ok(signed.clone())
         );
 
         for changed in [None, signed.inputs[1].tap_key_sig] {

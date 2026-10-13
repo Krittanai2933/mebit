@@ -25,6 +25,11 @@ For first Jade multisig use, manually verify that the `mebit_e2e` test registrat
 
 Choose a case ID from the manifest. Enroll every holder that row requires, including holders outside its signing subset. Complete coverage needs up to seven distinct Jades and seven distinct Safe 7 devices. `prepare` checks the API genesis against rust-bitcoin's testnet4 genesis, compares independent host derivations, and requests address display on each hardware holder for both receive and change. The expected genesis is `00000000da84f2bafbbc53dee25a72ae507ff4914b867c565be350b0da8bf043`.
 
+Jade BLE addresses can rotate between sessions. The harness identifies a Jade
+using its advertised name together with its fingerprint and all five
+origin-bound account xpubs; it does not treat the current BLE address as a
+stable device identity.
+
 ```sh
 cargo run --locked -p trezor-ble --example trezor-hw-test -- --network testnet4 e2e prepare --case <case-id>
 cargo run --locked -p trezor-ble --example trezor-hw-test -- --network testnet4 e2e run --case <case-id> --funding-outpoint <txid:vout> --broadcast

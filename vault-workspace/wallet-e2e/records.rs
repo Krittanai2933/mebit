@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::Result;
-use super::model::{Case, Family, Slot};
+use super::model::{Case, Family, Slot, Source};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Account {
@@ -430,6 +430,42 @@ pub fn check_identity(expected: &Identity, actual: &Identity) -> Result<()> {
     Ok(())
 }
 
+/// Compare a live device with its enrollment. Jade BLE addresses can rotate,
+/// so Jade continuity is established by its wallet keys and, once both
+/// records use the stable advertised-name form, that name as well. Other
+/// transports retain the exact physical-ID check.
+pub fn check_identity_for_source(
+    expected: &Identity,
+    actual: &Identity,
+    source: Source,
+) -> Result<()> {
+    if source != Source::Jade {
+        return check_identity(expected, actual);
+    }
+
+    let stable_names_conflict = match (
+        expected.physical_id.strip_prefix("jade-name:"),
+        actual.physical_id.strip_prefix("jade-name:"),
+    ) {
+        (Some(expected), Some(actual)) => expected != actual,
+        _ => false,
+    };
+    if expected.fingerprint != actual.fingerprint
+        || expected.accounts != actual.accounts
+        || stable_names_conflict
+    {
+        return Err(
+            "connected key holder does not match enrolled identity, origins, and account keys"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+pub fn jade_physical_id(advertised_name: &str) -> String {
+    format!("jade-name:{advertised_name}")
+}
+
 pub fn validate_worker_request(request: &WorkerRequest) -> Result<()> {
     if !matches!(request.action, DeviceAction::Enroll) && request.expected.is_none() {
         return Err("address/signing worker request has no enrolled identity".into());
@@ -461,6 +497,66 @@ pub fn test_store() -> Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_identity(physical_id: &str) -> Identity {
+        Identity {
+            physical_id: physical_id.into(),
+            firmware: "1.0.41".into(),
+            fingerprint: "73c5da0a".into(),
+            accounts: Family::ALL
+                .into_iter()
+                .map(|family| {
+                    (
+                        family,
+                        Account {
+                            origin: format!("m/{}", family.path()),
+                            xpub: format!("xpub-{}", family.name()),
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn jade_identity_survives_ble_address_rotation_when_keys_match() {
+        let enrolled = sample_identity("hci0/dev_46_73_DC_CA_65_9C");
+        let connected = sample_identity(&jade_physical_id("Jade BE0184"));
+
+        assert!(check_identity_for_source(&enrolled, &connected, Source::Jade).is_ok());
+    }
+
+    #[test]
+    fn jade_identity_rejects_changed_fingerprint_origins_or_xpubs() {
+        let enrolled = sample_identity("hci0/dev_46_73_DC_CA_65_9C");
+
+        let mut wrong_fingerprint = sample_identity(&jade_physical_id("Jade BE0184"));
+        wrong_fingerprint.fingerprint = "deadbeef".into();
+        assert!(check_identity_for_source(&enrolled, &wrong_fingerprint, Source::Jade).is_err());
+
+        let mut wrong_origin = sample_identity(&jade_physical_id("Jade BE0184"));
+        wrong_origin
+            .accounts
+            .get_mut(&Family::Bip84)
+            .unwrap()
+            .origin = "m/84'/1'/1'".into();
+        assert!(check_identity_for_source(&enrolled, &wrong_origin, Source::Jade).is_err());
+
+        let mut wrong_xpub = sample_identity(&jade_physical_id("Jade BE0184"));
+        wrong_xpub.accounts.get_mut(&Family::Bip84).unwrap().xpub = "xpub-other".into();
+        assert!(check_identity_for_source(&enrolled, &wrong_xpub, Source::Jade).is_err());
+    }
+
+    #[test]
+    fn jade_stable_name_and_non_jade_physical_ids_remain_strict() {
+        let jade_a = sample_identity(&jade_physical_id("Jade BE0184"));
+        let jade_b = sample_identity(&jade_physical_id("Jade OTHER"));
+        assert!(check_identity_for_source(&jade_a, &jade_b, Source::Jade).is_err());
+
+        let trezor_a = sample_identity("trezor-serial-a");
+        let trezor_b = sample_identity("trezor-serial-b");
+        assert!(check_identity_for_source(&trezor_a, &trezor_b, Source::Trezor).is_err());
+    }
 
     #[test]
     fn exclusive_leases_and_outpoint_reservations_survive_reentry() {

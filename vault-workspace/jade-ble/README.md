@@ -84,7 +84,7 @@ Runs so far, all with firmware 1.0.41 on macOS: 2026-09-30 and 2026-10-01 with b
 | Passphrase | set the Jade to ask for a BIP39 passphrase; `xpub --verify-against …`, wait 30 s before confirming an empty one | unlocks; two ✓ lines | ✅ 2026-10-01, btleplug 0.13.3 |
 | Wrong PIN, retry at once | `xpub` with a wrong PIN, then `xpub` again before pressing Continue on "Incorrect PIN!" | the second run waits for Continue, then asks for the PIN and unlocks | ✅ 2026-10-01, btleplug 0.13.3: the second run started 13 s after the wrong PIN, waited through Continue and the PIN, and unlocked (38 s, against 15–17 s for a plain unlock) |
 | Pinserver unreachable | `ALL_PROXY=http://127.0.0.1:9` before the command, then `xpub` | `pinserver relay failed…`; the Jade drops the unlock at once | ✅ 2026-10-01, harness form, btleplug 0.13.3 and 0.11.8 side by side: the relay error, and the Jade back on its home screen at once with both |
-| Pinserver answers with something that isn't JSON | can't be forced on hardware: the relay trusts only its bundled public roots, so a fake pinserver fails TLS first | `pinserver relay failed: …`; the Jade back on its home screen at once, like the unreachable case | unit-tested only (`a_failed_pinserver_relay_cancels_and_the_unlock_can_be_retried` in `vault-core`) |
+| Pinserver answers with something that isn't JSON | Use the opt-in debug-only injection command below; it simulates the response at the relay boundary and bypasses HTTPS | `pinserver relay failed: …`; the Jade back on its home screen at once, like the unreachable case | ✅ 2026-10-11, Jade Core 1.0.41: injected `not-json`; expected relay error and home screen confirmed; HTTPS bypassed |
 | Drop | pull the Jade's USB while it waits for you | `the Jade disconnected` at once | ✅ 2026-10-01, btleplug 0.13.3: the error 4 s after the unlock began |
 | Reconnect | re-run after a drop | connects; asks for the PIN again | ✅ 2026-10-01, btleplug 0.13.3 |
 | Network pin | `--network bitcoin xpub` on the test wallet | network mismatch, before any PIN prompt | ✅ 2026-10-01, btleplug 0.13.3 |
@@ -93,6 +93,19 @@ Runs so far, all with firmware 1.0.41 on macOS: 2026-09-30 and 2026-10-01 with b
 | Fresh pairing | forget the Jade in the host's Bluetooth settings ("Reset Pairings" on the Jade if needed), `info`, wait 20 s before confirming the 6 digits on both | pairs; `info` prints | ✅ 2026-10-01, btleplug 0.13.3: connecting took 21 s, the wait included |
 | Pairing rejected | forget the Jade in the host's Bluetooth settings, `info`, reject on the Jade | an error within 60 s, no hang | ✅ 2026-10-01, btleplug 0.13.3: `Bluetooth: Runtime Error: Device disconnected` 3 s after the scan |
 | Several Jades | two Jades in range, `info` | `several Jades in range (…)`; `--name` picks one | unit-tested only (one device) |
+
+To exercise the non-JSON cancellation path on a real Jade without changing
+production TLS behavior, opt into the debug-only test feature and provide an
+invalid response body. This injects the body after the Jade requests pinserver
+relay; it does not test HTTPS or a real pinserver response:
+
+```sh
+JADE_TEST_PINSERVER_RESPONSE='not-json' cargo run --locked -p jade-ble --features test-pinserver-response --example jade-hw-test -- --network testnet xpub
+```
+
+The command should fail with a pinserver relay error after sending `cancel` to
+the Jade. Check that the device returns to its home screen. Builds without the
+feature, and all release builds, always use the normal HTTPS relay.
 
 ## Troubleshooting
 

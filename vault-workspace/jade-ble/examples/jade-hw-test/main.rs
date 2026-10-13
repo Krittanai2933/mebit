@@ -368,13 +368,13 @@ async fn run_device(
             accounts.push((family, device.xpub(&family.path()).await?));
         }
         let identity = e2e::identity_from_accounts(
-            device.device_id(),
+            e2e::records::jade_physical_id(device.name()),
             info.firmware,
             master.fingerprint(),
             accounts,
         );
         if let Some(expected) = &request.expected {
-            e2e::records::check_identity(expected, &identity)?;
+            e2e::records::check_identity_for_source(expected, &identity, e2e::model::Source::Jade)?;
         }
         let result = match request.action {
             DeviceAction::Enroll => DeviceResult::Enrolled,
