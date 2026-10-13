@@ -1,5 +1,7 @@
 # Verify wallets on testnet4
 
+For the wallet test inventory, code-path audit, and latest results, see the [wallet verification report](../wallet-e2e-audit/verification.md).
+
 Run commands from `vault-workspace`. Build both existing examples before hardware work.
 
 ```sh

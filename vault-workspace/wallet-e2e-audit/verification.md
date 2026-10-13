@@ -1,6 +1,65 @@
-# Verification record
+# Wallet test inventory and verification report
 
-The implementation is ready for offline review. Real-network acceptance is BLOCKED: no devices were enrolled, no addresses were verified through BLE, and no testnet4 funds were spent. The reported live count is 0/7,315.
+This report inventories wallet tests, the code paths they exercise, and the latest recorded results. The operational test instructions are in [`wallet-e2e/README.md`](../wallet-e2e/README.md). Generated logs and per-case evidence are kept under the ignored `target/wallet-e2e/` directory.
+
+## Latest verification — 2026-10-13
+
+| Check | Result | Evidence and limits |
+| --- | --- | --- |
+| `cargo test --workspace --locked` | PASS — 181 passed, 0 failed | Full Rust workspace, including Jade and Trezor libraries and both hardware-harness example test suites. |
+| `bash wallet-e2e/verify.sh` | PASS — exit 0 | Run from `vault-workspace`. Both CLI examples generated the same 7,315-case matrix; each finalized all 7,315 designated subsets with software fixtures. Independent composition/subset, repeat-process determinism, wrong-network, and unknown-case checks passed. |
+| Offline E2E result | PASS — 7,315/7,315 finalized | `target/wallet-e2e/offline.json`; software fixtures exercise descriptor, PSBT, signature verification, and finalization. Hardware behavior is not verified by this check. |
+| Fresh live report check | BLOCKED — 0 freshly revalidated cases | Testnet API DNS resolution failed (`Temporary failure in name resolution`) while checking the four saved Jade PASS cases. This run made no hardware connection and submitted no transactions. |
+
+The E2E verification script exits successfully when its CLI and offline assertions pass, even when the separate live-acceptance report is BLOCKED. Its refreshed `target/wallet-e2e/report.json` records `recorded_live_pass: 4`, `live_pass: 0`, and `overall: BLOCKED`. The four earlier PASS records remain saved, but this run could not refresh canonical-chain confirmations. This DNS failure limits evidence refresh; it does not indicate that the network rejected those transactions.
+
+## Test inventory and application-path audit
+
+| Area | Tests | What they exercise | Boundary and status |
+| --- | ---: | --- | --- |
+| `vault-core` | 124 | Rust key derivation, descriptors, PSBT handling, Jade and Trezor protocol/client logic, and signature validation. | Unit tests use simulated devices and network interactions. These call Rust library functions directly. |
+| `jade-ble` | 4 library + 13 example | BLE discovery/service behavior and the Jade hardware-test CLI/E2E coordinator. | Automated tests use fixtures or fake devices. Four separately recorded live Jade single-sig cases used the BLE client and testnet transaction workflow. |
+| `trezor-ble` | 13 library + 16 example | BLE discovery, pairing/client behavior, and shared E2E coordinator safeguards. | Automated tests use fixtures or fake devices. No Safe 7 live test is recorded. |
+| `wallet-e2e` | Included in example test totals | Matrix generation, checkpoints, chain reconciliation, and transaction workflows. Harness paths call `vault-core` derivation and PSBT-check functions; single-sig assembly also uses harness-side `bitcoin`/`miniscript` glue. | Offline signing uses software fixtures. Live acceptance is recorded only for the four Jade cases below; no live hot-wallet, Trezor, or multisig result is claimed. |
+| `mobile-signer-ffi` Rust | 5 | FFI-shaped function behavior and tests. | Current functions call mock `vault-core` descriptor/derivation/PSBT abstractions; `sign_psbt` returns a mock signature. UniFFI is not wired. The Expo app uses `mockVault.ts`, has no test script, and does not call this Rust crate. |
+
+These are not all end-to-end tests of the shipped application. Rust unit tests call library functions directly; harness tests exercise CLI/coordinator code; offline E2E uses software signers. The saved Jade live cases exercised the hardware BLE client and testnet workflow. The React Native UI remains mock-backed.
+
+The 181 workspace tests include six non-wallet service tests (two in `custody-service`, four in `monitor-service`); `lender-signer-cli` has no tests. The wallet-specific rows account for the other 175 tests.
+
+## Recorded Jade single-sig testnet4 cases
+
+The saved per-case result files record successful Jade testnet4 spends, including receive/change addresses, txids, fees, and confirmation checkpoints. Their confirmation status was not refreshed in the latest run because DNS resolution failed.
+
+| BIP | Receive address | Change address | Spend txid | Fee | Previously confirmed block |
+| --- | --- | --- | --- | ---: | ---: |
+| 44 | `n2BMo5arHDyAK2CM8c56eoEd18uEkKnRLC` | `msNHWXQNUtKkqwW1RudHr68GBtQ7sy5a4F` | `098ce687ec1e00ad08206baec216db3b9daabb1ed51435b49e49321573c509d1` | 448 sats | 156266 |
+| 49 | `2N5pTWRLrRdAPGvTd9agPFLFZvPfGNy7xuM` | `2MxDFWSepVt6svMXJp2MwB1Swarp7CFW2Lz` | `d5e3c43f384c63bd610de934e1c1128f84282d652e65630ec631bdf370a627a3` | 330 sats | 156266 |
+| 84 | `tb1q4e9q5taxnsvc6m0uxv6h75mkzvnkxeqkckuztr` | `tb1qsqtfalqsdcqc06s0naxrzzluh4utc0ld4pte6n` | `6e7276a5619cf3fa47f42c24611a849f3cd07d1b57e2a544498c1a44826ba15e` | 282 sats | 156242 |
+| 86 | `tb1pyfv094rr0vk28lf8v9yx3veaacdzg26ztqk4ga84zucqqhafnn5q9my9rz` | `tb1pf30xyljsqsyszrn9lzyjykt97j8r9z0062f6u6l9fvjk9m68fy0smwcpn5` | `f49671838a2c0cbff57dc251bbb62922dd87cc2775a9b432a17d235e41e965a7` | 284 sats | 156266 |
+
+Each spend paid 5,000 sats to `tb1qn7pyhvj80jc7k6vhmqprj4m79y6meav6jq2vm9`. Four cases have saved live PASS checkpoints; none was freshly revalidated in this run. The remaining 7,311 cases have no recorded live acceptance result.
+
+## Changes in the preceding commit
+
+Commit `61a838f` (`test(wallet): complete Jade live single-sig BIP44/49/84/86`) changed nine files relative to `cf51e3d`. It identifies an enrolled Jade across BLE address rotation, verifies device responses and copies only verified signatures onto the original host PSBT, keeps Trezor identity checks strict, and adds opt-in malformed-pinserver-response regression coverage and documentation. The four live Jade cases above are the demonstrated scope; the commit does not claim full matrix acceptance.
+
+## Reproduce the local checks
+
+Run from `vault-workspace`:
+
+```sh
+cargo test --workspace --locked
+bash wallet-e2e/verify.sh
+```
+
+For the broader testnet4 matrix workflow and hardware commands, follow [`wallet-e2e/README.md`](../wallet-e2e/README.md). The overall live acceptance criterion remains 7,315 confirmed cases; offline readiness does not count toward live acceptance.
+
+## Historical verification record — initial E2E runner implementation
+
+The following notes document the earlier runner implementation checkpoint and are retained as history. Their 0/7,315 status predates the four Jade live cases documented in the current inventory report.
+
+The implementation was ready for offline review. Real-network acceptance was BLOCKED: no devices were enrolled, no addresses were verified through BLE, and no testnet4 funds were spent. The reported live count was 0/7,315.
 
 The baseline was clean main at `360febfd394aef4f11f67ab079c00809da50445d`. Baseline workspace tests passed 122 tests. The implementation adds actual descriptor and PSBT handling, protocol transcript tests, and an example-only coordinator. Lending policies and mock transaction helpers remain outside the acceptance path.
 
