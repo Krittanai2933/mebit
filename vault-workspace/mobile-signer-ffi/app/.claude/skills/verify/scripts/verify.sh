@@ -101,6 +101,16 @@ cmd_start() {
   printf 'RUN=%q\nSERIAL=%q\nPORT=%q\nAVD=%q\nEMU_PID=%q\n' "$RUN" "$SERIAL" "$PORT" "$AVD" "$EMU_PID" > "$STATE"
   echo "emulator $AVD booting as $SERIAL (pid $EMU_PID); building meanwhile"
 
+  # Two starts in the same second can both pass the check above. The serial then leads to the winner's
+  # emulator, so make sure the port is ours before touching the device.
+  local owner=
+  for i in $(seq 1 30); do
+    owner=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2> /dev/null | head -1)
+    [ -n "$owner" ] || ! emu_alive || { sleep 1; continue; }
+    break
+  done
+  [ "$owner" = "$EMU_PID" ] || fail "emulator pid $EMU_PID does not own port $PORT (owner: ${owner:-nobody}). Another start may have won it. Set VERIFY_PORT to another even port"
+
   ( cd "$APP" && ./kotlin build -m androidApp ) > "$RUN/build.log" 2>&1 \
     || { tail -20 "$RUN/build.log"; fail "build failed, full log: $RUN/build.log"; }
 
@@ -119,6 +129,15 @@ cmd_start() {
     sleep 1
   done
 
+  # Ready means the UI answers and no "isn't responding" dialog is up. In a fresh clone the project compiles
+  # while the emulator boots, and in 6 of 14 such starts the emulator then did not answer or showed that dialog.
+  local ok='' f="$RUN/.poll.xml"
+  for i in 1 2 3 4 5; do
+    if dump_ui "$f" && [ "$(ui count "$f" 'id~:aerr_' 2> /dev/null)" = 0 ]; then ok=1; break; fi
+    sleep 2
+  done
+  [ -n "$ok" ] || { ui list "$f" >&2 2> /dev/null; fail "the emulator is not responding, or a system dialog covers the app. Run verify.sh start again; the build is warm now"; }
+
   meta "$RUN/meta.txt" "apk_sha256=$(sha "$(built_apk)")" \
     "device=$(adbs shell getprop ro.product.model | tr -d '\r') api=$(adbs shell getprop ro.build.version.sdk | tr -d '\r') avd=$AVD"
   step start "$SERIAL" "$AVD"
@@ -129,12 +148,20 @@ cmd_stop() {
   [ -f "$STATE" ] || { echo "no active Android run"; return 0; }
   . "$STATE"
   if emu_alive; then
-    adbs logcat -d -v threadtime '*:W' > "$RUN/logcat-warn.txt" 2>&1 # the full log was 10 MB after a 2 minute run
-    adbs logcat -b crash -d -v threadtime > "$RUN/crash.txt" 2>&1
-    adbs emu kill > /dev/null 2>&1
-    local i=0; while emu_alive && [ "$i" -lt 20 ]; do sleep 1; i=$((i + 1)); done
+    # The serial reaches whichever emulator owns the port. Talk to it only when that is ours.
+    if [ "$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2> /dev/null | head -1)" = "$EMU_PID" ]; then
+      # An emulator that never booted has no logs, and adb would write "waiting for device" into crash.txt.
+      if [ "$(adbs get-state 2> /dev/null)" = device ]; then
+        adbs logcat -d -v threadtime '*:W' > "$RUN/logcat-warn.txt" 2>&1 # the full log was 10 MB after a 2 minute run
+        adbs logcat -b crash -d -v threadtime > "$RUN/crash.txt" 2>&1
+      fi
+      adbs emu kill > /dev/null 2>&1
+      local i=0; while emu_alive && [ "$i" -lt 20 ]; do sleep 1; i=$((i + 1)); done
+    fi
     if emu_alive; then kill "$EMU_PID"; sleep 3; fi
     emu_alive && echo "emulator pid $EMU_PID would not exit. Run: kill -9 $EMU_PID" >&2
+    # adb keeps listing the serial for a moment after the process exits, and a start right after would be refused.
+    for i in 1 2 3 4 5 6 7 8 9 10; do "$ADB" devices | grep -q "^${SERIAL}[[:space:]]" || break; sleep 1; done
   fi
   rm -f "$STATE" "$RUN/.poll.xml" "$RUN/.tap.xml"
   [ -s "$RUN/crash.txt" ] && echo "WARNING: the app crashed during this run. See $RUN/crash.txt"
@@ -173,6 +200,9 @@ cmd_doctor() {
       fi
       adbs shell dumpsys activity activities 2> /dev/null | grep -q "ResumedActivity.* $PKG/" && ok "$PKG is in the foreground" || no "$PKG is not in the foreground (a dialog, the launcher, or a crash)"
       [ -z "$(adbs logcat -b crash -d 2> /dev/null)" ] && ok "crash buffer is empty" || no "crash buffer has entries. See: verify.sh adb logcat -b crash -d"
+      if dump_ui "$RUN/.poll.xml"; then
+        [ "$(ui count "$RUN/.poll.xml" 'id~:aerr_' 2> /dev/null)" = 0 ] && ok "no system dialog on screen" || no "a system 'isn't responding' dialog is on screen. Run verify.sh stop, then verify.sh start"
+      else no "uiautomator cannot dump the UI, so the emulator is not responding. Run verify.sh stop, then verify.sh start"; fi
     fi
   fi
 
@@ -223,7 +253,40 @@ cmd_shot() {
   step shot "$1" "$base.png"; echo "$base.png"; echo "$base.xml"
 }
 
-# iOS: simctl cannot inject touches and idb/Maestro are not installed, so iOS gets launch + screenshot only.
+# drawer: leave the app and open the launcher's all-apps list. No one gesture works on every image
+# (KEYCODE_ALL_APPS fails on API 35 and swipes often fail on 36.1), so try them in turn. The launcher
+# drops input while it is still settling, so wait a second first and give the key a second chance.
+cmd_drawer() {
+  load "$STATE" start
+  local sz W H a i f="$RUN/.poll.xml" up=
+  adbs shell input keyevent KEYCODE_HOME
+  # After a force-stop the launcher can still be showing the all-apps list it launched the app from, and
+  # that list has no hotseat. Either one means the launcher is forward.
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if dump_ui "$f"; then
+      if [ "$(ui count "$f" 'id~:apps_list_view')" -gt 0 ]; then step drawer already-open ok; echo "all-apps list open (already)"; return 0; fi
+      if [ "$(ui count "$f" 'id~:hotseat')" -gt 0 ]; then up=1; break; fi
+    fi
+    sleep 1
+  done
+  [ -n "$up" ] || { ui list "$f" >&2; die "the launcher did not come forward"; }
+  sleep 1
+  sz=$(adbs shell wm size | tr -d '\r' | sed -n 's/.*: *\([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -1); W=${sz% *}; H=${sz#* }
+  [ -n "$W" ] && [ -n "$H" ] || die "cannot read the screen size from wm size"
+  for a in key key-again swipe-slow swipe-long; do
+    case $a in
+      key | key-again) adbs shell input keyevent KEYCODE_ALL_APPS ;;
+      swipe-slow) adbs shell input swipe $((W / 2)) $((H * 83 / 100)) $((W / 2)) $((H * 30 / 100)) 700 ;;
+      swipe-long) adbs shell input swipe $((W / 2)) $((H * 90 / 100)) $((W / 2)) $((H * 10 / 100)) 300 ;;
+    esac
+    if wait_ui "id~:apps_list_view" present 4 2> /dev/null; then step drawer "$a" ok; echo "all-apps list open (via $a)"; return 0; fi
+  done
+  step drawer FAIL
+  dump_ui "$RUN/.poll.xml" && ui list "$RUN/.poll.xml" >&2
+  die "could not open the all-apps list. Is the launcher one with an apps_list_view node?"
+}
+
+# iOS: simctl cannot inject touches and idb/Maestro are not installed, so taps go through the XCUITest bundle in ios-ui/.
 cmd_ios_start() {
   if [ -f "$IOS_STATE" ]; then
     . "$IOS_STATE"
@@ -266,6 +329,46 @@ cmd_ios_shot() {
   echo "$base"
 }
 
+# ios_ui ACTION SELECTOR: run one tap, see or gone through ios-ui/Tests/IosUi.swift on the run's simulator.
+ios_ui() {
+  local act=$1 sel=$2 kind=label contains=0 val=$2 n log
+  case $sel in
+    text~:* | desc~:*) contains=1; val=${sel#*:} ;;
+    text:* | desc:*) val=${sel#*:} ;;
+    id~:*) kind=identifier; contains=1; val=${sel#*:} ;;
+    id:*) kind=identifier; val=${sel#*:} ;;
+  esac
+  load "$IOS_STATE" ios-start
+  n=$(find "$IOS_RUN" -maxdepth 1 -name 'ui-[0-9][0-9]-*.log' | wc -l)
+  log="$IOS_RUN/ui-$(printf %02d $((n + 1)))-$act.log"
+  # xcodebuild once sat for 8 minutes after the test had finished (Xcode 27), so read the result from the
+  # test log, give the process a few seconds to exit, and then stop it.
+  TEST_RUNNER_UI_ACTION=$act TEST_RUNNER_UI_KIND=$kind TEST_RUNNER_UI_CONTAINS=$contains TEST_RUNNER_UI_LABEL=$val \
+    xcodebuild test -project "$HERE/ios-ui/IosUi.xcodeproj" -scheme IosUi -destination "platform=iOS Simulator,id=$UDID" \
+      -derivedDataPath "$OUT/ios-ui-derived" CODE_SIGNING_ALLOWED=NO > "$log" 2>&1 &
+  local pid=$! i
+  for ((i = 0; i < 480; i++)); do
+    grep -qE "Test Case '.*testAction.*' (passed|failed)" "$log" && break
+    kill -0 "$pid" 2> /dev/null || break
+    sleep 0.5
+  done
+  for i in 1 2 3 4 5 6; do kill -0 "$pid" 2> /dev/null || break; sleep 1; done
+  kill "$pid" 2> /dev/null; wait "$pid" 2> /dev/null
+  if grep -q "Test Case '.*testAction.*' passed" "$log"; then
+    printf '%s\tios-%s\t%s\tok\n' "$(date -u +%FT%TZ)" "$act" "$sel" >> "$IOS_RUN/steps.tsv"
+    echo "ios-$act ok: $sel"
+  else
+    printf '%s\tios-%s\t%s\tFAIL\n' "$(date -u +%FT%TZ)" "$act" "$sel" >> "$IOS_RUN/steps.tsv"
+    grep -E "error:" "$log" | sed 's/.*error: //' | head -3 | cut -c1-240 >&2
+    grep -qE "Test Case '.*testAction.*' failed" "$log" || echo "verify.sh: no test result in the log (xcodebuild failed to build or run it, or timed out after 240 s)" >&2
+    echo "verify.sh: ios-$act failed for $sel. Full log: $log" >&2
+    exit 1
+  fi
+}
+cmd_ios_tap() { [ $# -eq 1 ] || die "usage: verify.sh ios-tap SELECTOR"; ios_ui tap "$1"; }
+cmd_ios_see() { [ $# -eq 1 ] || die "usage: verify.sh ios-see SELECTOR"; ios_ui see "$1"; }
+cmd_ios_gone() { [ $# -eq 1 ] || die "usage: verify.sh ios-gone SELECTOR"; ios_ui gone "$1"; }
+
 cmd_ios_stop() {
   [ -f "$IOS_STATE" ] || { echo "no active iOS run"; return 0; }
   . "$IOS_STATE"
@@ -279,8 +382,8 @@ cmd_ios_stop() {
 }
 
 case ${1:-} in
-  start | stop | doctor | see | gone | tap | shot) c=$1; shift; "cmd_$c" "$@" ;;
-  ios-start | ios-shot | ios-stop) c=${1//-/_}; shift; "cmd_$c" "$@" ;;
+  start | stop | doctor | see | gone | tap | shot | drawer) c=$1; shift; "cmd_$c" "$@" ;;
+  ios-start | ios-shot | ios-stop | ios-tap | ios-see | ios-gone) c=${1//-/_}; shift; "cmd_$c" "$@" ;;
   adb) shift; load "$STATE" start; "$ADB" -s "$SERIAL" "$@" ;; # not bounded, so logcat -f and similar can stream
   *) cat << 'EOF'
 usage: verify.sh COMMAND [ARGS]
@@ -290,10 +393,14 @@ usage: verify.sh COMMAND [ARGS]
   gone SELECTOR [SECONDS] wait until SELECTOR is off screen
   tap SELECTOR [N]        tap the centre of the Nth match
   shot LABEL              save NN-LABEL.png and NN-LABEL.xml (the UI hierarchy) in the run directory
+  drawer                  leave the app and open the launcher's all-apps list (tries a key, then swipes)
   adb ARGS...             run adb against the run's emulator
   stop                    save logs, shut the emulator down, keep the evidence
-  ios-start | ios-shot LABEL | ios-stop    the same idea on a throwaway iOS simulator (no taps)
+  ios-start | ios-shot LABEL | ios-stop    the same idea on a throwaway iOS simulator
+  ios-tap SELECTOR        tap an element on the simulator (XCUITest: about 5 s, and 15 s the first time)
+  ios-see SELECTOR        wait for an element on the simulator; ios-gone waits for it to disappear
 SELECTOR is [text|desc|id][~]:VALUE, default text; "~" means contains. Example: tap "text~:Click me"
+On iOS text and desc both match the accessibility label, and id matches the accessibility identifier.
 EOF
     exit 2 ;;
 esac

@@ -7,7 +7,7 @@ This directory is the maintained source for verifying what a user sees and does 
 - `verify.sh doctor` passes, and `verify.sh start` has just finished in this run.
 - The emulator is `emulator-5580`, portrait, started by this run. `start` uninstalls the app first, so the app data is empty.
 - Never drive an emulator or simulator that this run did not start.
-- The proving run used the AVD `Medium_Phone_API_36.0` (1080x2400, Android 36). A different AVD changes the API level in the greeting text and the swipe coordinates in `app-launch.md`.
+- `start` uses the first AVD that `emulator -list-avds` prints, or `VERIFY_AVD`. The recipes passed on five images listed in `SKILL.md`. A different AVD changes the API level in the greeting text.
 
 ## Driving conventions
 
@@ -15,7 +15,7 @@ This directory is the maintained source for verifying what a user sees and does 
 - Find controls by visible text first, then `desc:`, then `id:`. Pass no coordinates to `tap`.
 - Treat every command as literal. Keep quoted strings unchanged, including the `na kub` in the button label.
 - Follow every `tap` with `see` or `gone`. Wait on the UI, never on `sleep`.
-- Drive Android through `verify.sh`. Drive iOS only through `ios-start`, `ios-shot`, and `ios-stop`.
+- Drive Android with `see`, `gone`, `tap`, `shot` and `drawer`. Drive iOS with `ios-start`, `ios-see`, `ios-gone`, `ios-tap`, `ios-shot` and `ios-stop`.
 - Name each `shot` label after the sub-feature ID it proves, for example `home-reveal`.
 
 ## Proof and skip reporting
@@ -25,7 +25,7 @@ This directory is the maintained source for verifying what a user sees and does 
 - Look at every PNG you cite. Images are not in the accessibility tree.
 - Record the feature ID and the entry point used with every artifact.
 - Report an unreachable path with the attempted command and the unmet precondition.
-- Do not report a skipped entry point as verified through a different path. iOS taps cannot be driven, so report "iOS launch verified by screenshot, iOS interaction not verified".
+- Do not report a skipped entry point as verified through a different path. A recipe that passed on Android does not verify iOS, and the reverse.
 
 ## Feature entry contract
 
