@@ -28,11 +28,16 @@ bounded() {
   kill "$pid" 2> /dev/null; wait "$pid" 2> /dev/null
   return 124
 }
-adbs() { bounded 30 "$ADB" -s "$SERIAL" "$@"; }
+ADB_WAIT=${VERIFY_ADB_SECONDS:-30}
+adbs() { bounded "$ADB_WAIT" "$ADB" -s "$SERIAL" "$@"; }
+# adb_answers: false when the emulator does not answer a trivial command in 8 s. A frozen emulator keeps
+# its adb transport listed, so every real command then waits out its whole bound.
+adb_answers() { bounded $((ADB_WAIT < 8 ? ADB_WAIT : 8)) "$ADB" -s "$SERIAL" shell true > /dev/null 2>&1; }
 step() { local IFS=$'\t'; printf '%s\t%s\n' "$(date -u +%FT%TZ)" "$*" >> "$RUN/steps.tsv"; }
 load() { [ -f "$1" ] || die "no active run. Start one with: verify.sh $2"; . "$1"; }
 # Match on the command line too, so a recycled PID is never mistaken for our emulator.
 emu_alive() { ps -p "$EMU_PID" -o command= 2>/dev/null | grep -q -- "-port $PORT"; }
+app_resumed() { adbs shell dumpsys activity activities 2> /dev/null | grep -q "ResumedActivity.* $PKG/"; }
 built_apk() { find "$APP/build/tasks/_androidApp_buildAndroidDebug" -maxdepth 1 -name '*-debug.apk' 2>/dev/null | head -1; }
 sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
 
@@ -47,11 +52,14 @@ meta() {
   } > "$f"
 }
 
-# uiautomator fails now and then while the UI animates, so retry.
+# uiautomator fails now and then while the UI animates, so retry. Returns 2 when adb itself hangs, because
+# another try only waits longer.
 dump_ui() {
-  local i
+  local i out rc
   for i in 1 2 3; do
-    if adbs shell uiautomator dump /sdcard/verify-ui.xml 2>&1 | grep -q 'dumped to'; then
+    out=$(adbs shell uiautomator dump /sdcard/verify-ui.xml 2>&1); rc=$?
+    [ "$rc" -eq 124 ] && return 2
+    if printf '%s' "$out" | grep -q 'dumped to'; then
       adbs exec-out cat /sdcard/verify-ui.xml > "$1" && return 0
     fi
     sleep 1
@@ -59,18 +67,27 @@ dump_ui() {
   return 1
 }
 
+# show_screen FILE: what was on screen at the last good dump, or why there is none
+show_screen() {
+  if [ -s "$1" ]; then ui list "$1" >&2
+  else echo "no UI dump could be taken, so the emulator or the app in front is not responding. Run verify.sh doctor" >&2; fi
+}
+
 # wait_ui SELECTOR present|absent SECONDS
 wait_ui() {
-  local f="$RUN/.poll.xml" n i=0
+  local f="$RUN/.poll.xml" n i=0 rc
+  rm -f "$f" # a failed dump must not leave an earlier screen behind to be listed as the current one
   while :; do
-    if dump_ui "$f" && n=$(ui count "$f" "$1" 2>/dev/null); then
+    dump_ui "$f"; rc=$?
+    [ "$rc" -eq 2 ] && { echo "the emulator does not answer adb (hung?). Run verify.sh doctor" >&2; return 1; }
+    if [ "$rc" -eq 0 ] && n=$(ui count "$f" "$1" 2>/dev/null); then
       [ "$2" = present ] && [ "$n" -gt 0 ] && return 0
       [ "$2" = absent ] && [ "$n" -eq 0 ] && return 0
     fi
     i=$((i + 1)); [ "$i" -ge "$3" ] && break
     sleep 1
   done
-  ui list "$f" >&2
+  show_screen "$f"
   return 1
 }
 
@@ -95,8 +112,11 @@ cmd_start() {
   [ -n "$AVD" ] || die "no AVD found. Create one in Android Studio (Device Manager) or set VERIFY_AVD"
   RUN=$OUT/$(date +%Y%m%d-%H%M%S); mkdir -p "$RUN"
   # -read-only gives the run its own throwaway data, so the AVD's saved state stays untouched.
+  # -cores: headless runs render in software on the host, and a 1 vCPU guest (the Medium Phone AVD here) starved
+  # while it booted. In 15 fresh-clone starts that failed 4 times, with ANRs in 10 of the 15. With 4 vCPUs it was
+  # 0 failures and no ANR in 15. The AVD's own setting stays untouched.
   nohup "$EMULATOR" -avd "$AVD" -port "$PORT" -read-only -no-snapshot -no-audio -no-boot-anim -no-metrics -no-window \
-    < /dev/null > "$RUN/emulator.log" 2>&1 &
+    -cores "${VERIFY_CORES:-4}" < /dev/null > "$RUN/emulator.log" 2>&1 &
   EMU_PID=$!
   printf 'RUN=%q\nSERIAL=%q\nPORT=%q\nAVD=%q\nEMU_PID=%q\n' "$RUN" "$SERIAL" "$PORT" "$AVD" "$EMU_PID" > "$STATE"
   echo "emulator $AVD booting as $SERIAL (pid $EMU_PID); building meanwhile"
@@ -124,10 +144,15 @@ cmd_start() {
   adbs uninstall "$PKG" > /dev/null 2>&1 # empty app data, and no signing-key clash with an older debug build
   ( cd "$APP" && ./kotlin run -m androidApp -d "$SERIAL" ) > "$RUN/run.log" 2>&1 \
     || { tail -20 "$RUN/run.log"; fail "kotlin run failed, full log: $RUN/run.log"; }
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    adbs shell dumpsys activity activities | grep -q "ResumedActivity.* $PKG/" && break
-    sleep 1
-  done
+  # The app can be gone or behind the launcher at this point. On a starved guest the launcher finishes starting
+  # after the app did, or the framework restarts and takes the app with it. Start it again once, then insist.
+  for i in 1 2 3 4 5 6 7 8 9 10; do app_resumed && break; sleep 1; done
+  if ! app_resumed; then
+    echo "$PKG is not in front, starting it again"
+    adbs shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 > /dev/null 2>&1
+    for i in 1 2 3 4 5 6 7 8 9 10; do app_resumed && break; sleep 1; done
+    app_resumed || fail "$PKG did not come to the front. Run verify.sh start again. What is in front: verify.sh adb shell dumpsys activity activities"
+  fi
 
   # Ready means the UI answers and no "isn't responding" dialog is up. In a fresh clone the project compiles
   # while the emulator boots, and in 6 of 14 such starts the emulator then did not answer or showed that dialog.
@@ -139,7 +164,7 @@ cmd_start() {
   [ -n "$ok" ] || { ui list "$f" >&2 2> /dev/null; fail "the emulator is not responding, or a system dialog covers the app. Run verify.sh start again; the build is warm now"; }
 
   meta "$RUN/meta.txt" "apk_sha256=$(sha "$(built_apk)")" \
-    "device=$(adbs shell getprop ro.product.model | tr -d '\r') api=$(adbs shell getprop ro.build.version.sdk | tr -d '\r') avd=$AVD"
+    "device=$(adbs shell getprop ro.product.model | tr -d '\r') api=$(adbs shell getprop ro.build.version.sdk | tr -d '\r') avd=$AVD vcpus=$(adbs shell nproc | tr -d '\r')"
   step start "$SERIAL" "$AVD"
   echo "ready: $SERIAL runs $PKG. Evidence goes to $RUN"
 }
@@ -149,7 +174,7 @@ cmd_stop() {
   . "$STATE"
   if emu_alive; then
     # The serial reaches whichever emulator owns the port. Talk to it only when that is ours.
-    if [ "$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2> /dev/null | head -1)" = "$EMU_PID" ]; then
+    if [ "$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2> /dev/null | head -1)" = "$EMU_PID" ] && adb_answers; then
       # An emulator that never booted has no logs, and adb would write "waiting for device" into crash.txt.
       if [ "$(adbs get-state 2> /dev/null)" = device ]; then
         adbs logcat -d -v threadtime '*:W' > "$RUN/logcat-warn.txt" 2>&1 # the full log was 10 MB after a 2 minute run
@@ -158,18 +183,25 @@ cmd_stop() {
       adbs emu kill > /dev/null 2>&1
       local i=0; while emu_alive && [ "$i" -lt 20 ]; do sleep 1; i=$((i + 1)); done
     fi
-    if emu_alive; then kill "$EMU_PID"; sleep 3; fi
-    emu_alive && echo "emulator pid $EMU_PID would not exit. Run: kill -9 $EMU_PID" >&2
+    if emu_alive; then
+      kill "$EMU_PID"
+      local j=0; while emu_alive && [ "$j" -lt 8 ]; do sleep 1; j=$((j + 1)); done
+    fi
+    # Keep the state, so the live process is not forgotten and the next start still refuses to run beside it.
+    if emu_alive; then
+      echo "emulator pid $EMU_PID would not exit. Run: kill -9 $EMU_PID, then verify.sh stop again" >&2
+      return 1
+    fi
     # adb keeps listing the serial for a moment after the process exits, and a start right after would be refused.
     for i in 1 2 3 4 5 6 7 8 9 10; do "$ADB" devices | grep -q "^${SERIAL}[[:space:]]" || break; sleep 1; done
   fi
   rm -f "$STATE" "$RUN/.poll.xml" "$RUN/.tap.xml"
-  [ -s "$RUN/crash.txt" ] && echo "WARNING: the app crashed during this run. See $RUN/crash.txt"
+  [ -s "$RUN/crash.txt" ] && echo "WARNING: a process crashed during this run ($(sed -n 's/.*Process: \([^,]*\),.*/\1/p' "$RUN/crash.txt" | sort -u | tr '\n' ' ')). See $RUN/crash.txt"
   echo "stopped. Evidence kept in $RUN"
 }
 
 cmd_doctor() {
-  local bad=0 inst d l apk
+  local bad=0 inst d l apk crash
   ok() { echo "ok    $*"; }
   no() { echo "FAIL  $*"; bad=1; }
   command -v java > /dev/null && ok "java: $(java -version 2>&1 | head -1)" || no "java not found"
@@ -188,21 +220,28 @@ cmd_doctor() {
     else
       ok "emulator pid $EMU_PID is ours (its command line has -port $PORT)"
       lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2> /dev/null | grep -qx "$EMU_PID" && ok "port $PORT is owned by that pid" || no "port $PORT is not owned by pid $EMU_PID"
-      [ "$(adbs get-state 2> /dev/null)" = device ] && ok "$SERIAL is online" || no "$SERIAL is not online"
-      [ "$(adbs shell getprop sys.boot_completed 2> /dev/null | tr -d '\r')" = 1 ] && ok "boot completed" || no "boot not completed"
-      inst=$(adbs shell pm path "$PKG" 2> /dev/null | tr -d '\r' | sed -n 's/^package://p' | head -1)
-      apk=$(built_apk)
-      if [ -z "$inst" ]; then no "$PKG is not installed"
-      elif [ -z "$apk" ]; then no "no built APK under build/tasks/_androidApp_buildAndroidDebug. Run ./kotlin build -m androidApp"
+      if ! adb_answers; then
+        no "$SERIAL does not answer adb within 8 s, so the emulator is hung or still starting. Run verify.sh stop, then verify.sh start"
       else
-        d=$(adbs shell sha256sum "$inst" | cut -d' ' -f1); l=$(sha "$apk")
-        [ "$d" = "$l" ] && ok "installed APK is the one in build/ (sha256 ${d:0:12}...)" || no "installed APK differs from the last build. Run verify.sh stop, then verify.sh start"
+        [ "$(adbs get-state 2> /dev/null)" = device ] && ok "$SERIAL is online" || no "$SERIAL is not online"
+        [ "$(adbs shell getprop sys.boot_completed 2> /dev/null | tr -d '\r')" = 1 ] && ok "boot completed" || no "boot not completed"
+        inst=$(adbs shell pm path "$PKG" 2> /dev/null | tr -d '\r' | sed -n 's/^package://p' | head -1)
+        apk=$(built_apk)
+        if [ -z "$inst" ]; then no "$PKG is not installed"
+        elif [ -z "$apk" ]; then no "no built APK under build/tasks/_androidApp_buildAndroidDebug. Run ./kotlin build -m androidApp"
+        else
+          d=$(adbs shell sha256sum "$inst" | cut -d' ' -f1); l=$(sha "$apk")
+          [ "$d" = "$l" ] && ok "installed APK is the one in build/ (sha256 ${d:0:12}...)" || no "installed APK differs from the last build. Run verify.sh stop, then verify.sh start"
+        fi
+        app_resumed && ok "$PKG is in the foreground" || no "$PKG is not in the foreground (a dialog, the launcher, or a crash)"
+        crash=$(adbs logcat -b crash -d 2> /dev/null)
+        # The buffer holds every process. The launcher sometimes crashes while the guest boots, so name them.
+        if [ -z "$crash" ]; then ok "crash buffer is empty"
+        else no "crash buffer has entries from: $(printf '%s\n' "$crash" | sed -n 's/.*Process: \([^,]*\),.*/\1/p' | sort -u | tr '\n' ' ')See: verify.sh adb logcat -b crash -d"; fi
+        if dump_ui "$RUN/.poll.xml"; then
+          [ "$(ui count "$RUN/.poll.xml" 'id~:aerr_' 2> /dev/null)" = 0 ] && ok "no system dialog on screen" || no "a system 'isn't responding' dialog is on screen. Run verify.sh stop, then verify.sh start"
+        else no "uiautomator cannot dump the UI, so the emulator or the app in front is not responding. Run verify.sh stop, then verify.sh start"; fi
       fi
-      adbs shell dumpsys activity activities 2> /dev/null | grep -q "ResumedActivity.* $PKG/" && ok "$PKG is in the foreground" || no "$PKG is not in the foreground (a dialog, the launcher, or a crash)"
-      [ -z "$(adbs logcat -b crash -d 2> /dev/null)" ] && ok "crash buffer is empty" || no "crash buffer has entries. See: verify.sh adb logcat -b crash -d"
-      if dump_ui "$RUN/.poll.xml"; then
-        [ "$(ui count "$RUN/.poll.xml" 'id~:aerr_' 2> /dev/null)" = 0 ] && ok "no system dialog on screen" || no "a system 'isn't responding' dialog is on screen. Run verify.sh stop, then verify.sh start"
-      else no "uiautomator cannot dump the UI, so the emulator is not responding. Run verify.sh stop, then verify.sh start"; fi
     fi
   fi
 
@@ -258,18 +297,21 @@ cmd_shot() {
 # drops input while it is still settling, so wait a second first and give the key a second chance.
 cmd_drawer() {
   load "$STATE" start
-  local sz W H a i f="$RUN/.poll.xml" up=
+  local sz W H a i rc f="$RUN/.poll.xml" up=
+  rm -f "$f"
   adbs shell input keyevent KEYCODE_HOME
   # After a force-stop the launcher can still be showing the all-apps list it launched the app from, and
   # that list has no hotseat. Either one means the launcher is forward.
   for i in 1 2 3 4 5 6 7 8 9 10; do
-    if dump_ui "$f"; then
+    dump_ui "$f"; rc=$?
+    [ "$rc" -eq 2 ] && die "the emulator does not answer adb (hung?). Run verify.sh doctor"
+    if [ "$rc" -eq 0 ]; then
       if [ "$(ui count "$f" 'id~:apps_list_view')" -gt 0 ]; then step drawer already-open ok; echo "all-apps list open (already)"; return 0; fi
       if [ "$(ui count "$f" 'id~:hotseat')" -gt 0 ]; then up=1; break; fi
     fi
     sleep 1
   done
-  [ -n "$up" ] || { ui list "$f" >&2; die "the launcher did not come forward"; }
+  [ -n "$up" ] || { show_screen "$f"; die "the launcher did not come forward"; }
   sleep 1
   sz=$(adbs shell wm size | tr -d '\r' | sed -n 's/.*: *\([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -1); W=${sz% *}; H=${sz#* }
   [ -n "$W" ] && [ -n "$H" ] || die "cannot read the screen size from wm size"
@@ -294,14 +336,10 @@ cmd_ios_start() {
     rm -f "$IOS_STATE"
   fi
   local pick rt dt
-  pick=$(xcrun simctl list runtimes -j | python3 -I -c '
-import json, sys
-rts = [r for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and ".iOS-" in r["identifier"]]
-r = max(rts, key=lambda r: [int(x) for x in r["version"].split(".")])
-d = next(d for d in r["supportedDeviceTypes"] if d.get("productFamily") == "iPhone")
-print(r["identifier"], d["identifier"])')
-  rt=${VERIFY_IOS_RUNTIME:-${pick% *}}; dt=${VERIFY_IOS_DEVICE_TYPE:-${pick#* }}
-  [ -n "$rt" ] && [ -n "$dt" ] || die "no iOS simulator runtime found; install one in Xcode > Settings > Components"
+  # The device type follows the runtime, so setting only VERIFY_IOS_RUNTIME still gives a pair simctl accepts.
+  pick=$(xcrun simctl list runtimes -j | python3 -I "$HERE/ios_pick.py" "${VERIFY_IOS_RUNTIME:-}" "${VERIFY_IOS_DEVICE_TYPE:-}") \
+    || die "no usable iOS runtime and device type pair (see above)"
+  rt=${pick% *}; dt=${pick#* }
   IOS_RUN=$OUT/$(date +%Y%m%d-%H%M%S)-ios; mkdir -p "$IOS_RUN"
   UDID=$(xcrun simctl create "mebit-verify-$(date +%H%M%S)" "$dt" "$rt") || die "simctl create failed for $dt on $rt"
   printf 'IOS_RUN=%q\nUDID=%q\n' "$IOS_RUN" "$UDID" > "$IOS_STATE"

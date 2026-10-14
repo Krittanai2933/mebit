@@ -42,7 +42,7 @@ A warm build starts in 19 to 40 s. The first start in a fresh clone compiles the
 
 To test a cold start yourself, point every cache at an empty directory. `HOME` is not enough, because a JVM takes `user.home` from the operating system's user record. Set `HOME`, `JAVA_TOOL_OPTIONS=-Duser.home=<dir>`, `GRADLE_USER_HOME=<dir>/.gradle`, `KONAN_DATA_DIR=<dir>/.konan` and `ANDROID_USER_HOME=<dir>/.android`, and keep `ANDROID_AVD_HOME` on your real AVD folder. A run with `HOME` alone was cold only for the shell wrapper's downloads.
 
-`verify.sh ios-start` creates a simulator named `mebit-verify-HHMMSS` on the newest installed iOS runtime, boots it, and runs `./kotlin run -m iosApp -p iosSimulatorArm64 -d <udid>`. It took 53 to 93 s, the longer figure with a fresh clone compiling Kotlin/Native. Set `VERIFY_IOS_RUNTIME` and `VERIFY_IOS_DEVICE_TYPE` to use other identifiers from `xcrun simctl list runtimes` and `devicetypes`. On Xcode 27 it ran on the iOS 26.5 runtime. The iOS 18.5 runtime worked on Xcode 26.6 in an earlier session and was not rerun. Do not run `start` and `ios-start` at the same time, because both build into `build/`.
+`verify.sh ios-start` creates a simulator named `mebit-verify-HHMMSS` on the newest installed iOS runtime, boots it, and runs `./kotlin run -m iosApp -p iosSimulatorArm64 -d <udid>`. It took 53 to 93 s, the longer figure with a fresh clone compiling Kotlin/Native. Set `VERIFY_IOS_RUNTIME` to use another runtime from `xcrun simctl list runtimes`. The device type then defaults to the first iPhone that runtime supports, so one variable is enough. Set `VERIFY_IOS_DEVICE_TYPE` as well to choose the device (an identifier from `xcrun simctl list devicetypes`). `ios-start` refuses a pair the runtime does not support and lists some that it does. On Xcode 27 it ran on the iOS 26.5 runtime. The iOS 18.5 runtime worked on Xcode 26.6 in an earlier session and was not rerun. Do not run `start` and `ios-start` at the same time, because both build into `build/`.
 
 Needs macOS on Apple Silicon, a JDK, python3, and an arm64 AVD. iOS also needs Xcode with a simulator runtime. Xcode 27.0 on macOS 27.0.1 was the host for every result below.
 
@@ -75,6 +75,7 @@ The API 37.2 image did not reach `boot_completed` in 240 s on two attempts, and 
 `verify.sh doctor` is read-only and returns 0 when everything it checks is fine. Run it first when anything looks off. It checks the tools, then for an active run:
 
 - the emulator process is the one this skill started, and it owns the port
+- the emulator answers `adb shell` within 8 s. A frozen emulator does not, and `doctor` then reports that one line and skips the checks that need the device, so it takes about 10 s instead of minutes
 - the device is online and finished booting
 - the installed APK has the same sha256 as the one in `build/tasks/_androidApp_buildAndroidDebug`, so you are not driving a stale build
 - `com.mebit.app` is in the foreground
@@ -84,6 +85,15 @@ The API 37.2 image did not reach `boot_completed` in 240 s on two attempts, and 
 For an active iOS run it checks that the simulator is booted and the app is running.
 
 If it prints `FAIL emulator pid ... is gone`, run `verify.sh stop` and then `verify.sh start`. If the APK differs, do the same, because `start` rebuilds.
+
+What to do when `doctor` is red:
+
+| `doctor` says | Do this |
+|---|---|
+| a system "isn't responding" dialog is on screen | If the screen answers, `verify.sh tap "id:aerr_wait"`, then `doctor` again. A dialog that comes back means the process behind it is still stuck, so `stop` and `start`. |
+| `uiautomator` cannot dump the UI | Something is frozen, the emulator or the app in front. `stop`, then `start`. |
+| the emulator does not answer `adb` within 8 s | The emulator process is hung. `stop`, and if it says `would not exit`, run the `kill -9` it prints and `stop` again. |
+| anything about the emulator pid or the port | `stop`, then `start`. |
 
 ## Drive
 
@@ -102,7 +112,7 @@ A selector is `[KIND[~]:]VALUE`. KIND is `text` (the default), `desc` (content d
 
 - Find controls by what the user sees. Never type coordinates yourself.
 - Follow every `tap` with `see` or `gone` for its result. Never use `sleep` to wait for the UI.
-- Each Android command dumps the hierarchy with `uiautomator`, so expect 2 to 3 s per command.
+- Each Android command dumps the hierarchy with `uiautomator`, so expect 2 to 3 s per command. When the emulator does not answer `adb` at all, `see`, `gone`, `tap` and `drawer` stop after one bounded attempt and say so, instead of retrying for minutes.
 - The Android commands see the whole screen, not only this app. `features/app-launch.md` uses the same selectors in the launcher.
 - The app sets no content descriptions or test tags today. When you add a screen, give each control a `contentDescription` or a `testTag`. Compose shows a `testTag` as an `id` only if the root sets `testTagsAsResourceId = true`, which the app does not do yet.
 - Scrolling and typing go through `verify.sh adb shell input swipe ...` and `input text` (ASCII only, `%s` for a space). Neither is exercised yet, because the app has no scrolling or text field. The iOS commands have no scroll or type action either.
@@ -131,7 +141,7 @@ Proof standards for this app:
 
 ## Cleanup
 
-`verify.sh stop` saves the logs, shuts down the emulator this skill started, waits until `adb` stops listing the serial, removes the run state, and keeps the evidence. It is safe on a run whose emulator already died. `verify.sh ios-stop` shuts down and deletes the simulator it created, and warns if the app was not running at the end.
+`verify.sh stop` saves the logs, shuts down the emulator this skill started, waits until `adb` stops listing the serial, removes the run state, and keeps the evidence. It is safe on a run whose emulator already died. When the emulator ignores a polite kill, `stop` exits 1, prints the `kill -9` to run, and keeps the run state, so the next `start` still refuses to run beside that process. Run the `kill -9`, then `stop` again. `verify.sh ios-stop` shuts down and deletes the simulator it created, and warns if the app was not running at the end.
 
 - Kill only what this skill started. Both `stop` commands check the recorded process or device before they act, and `stop` talks to the serial only while its own emulator owns the port.
 - Never run `adb kill-server`, `pkill`, or `killall`. The user may have their own emulators and simulators open.
@@ -153,6 +163,8 @@ Proof standards for this app:
 - `scripts/verify.sh` is the script you run. With no arguments it prints the command list. It exits 0 on success, 1 on failure with the reason on stderr, and 2 on a usage error.
 - `scripts/ui.py` matches selectors against a `uiautomator` dump, and `verify.sh` calls it for you. Run it yourself only to test a selector against a saved hierarchy, for example `python3 -I scripts/ui.py find <run-dir>/03-home-hide.xml "Click me! na kub"`, which prints the tap point `540 126`. Its `list` command prints every node that has text, a description, or an id.
 - `scripts/ios-ui/` holds the XCUITest bundle behind `ios-tap`, `ios-see` and `ios-gone`: `Tests/IosUi.swift` is the test, and `IosUi.xcodeproj` is generated from `project.yml` with `xcodegen generate --spec project.yml`. You need xcodegen only to regenerate the project. `verify.sh` passes the action to the test through `TEST_RUNNER_UI_*` environment variables and builds into `build/verify/ios-ui-derived`.
+- `scripts/selftest.sh` runs the offline regression checks in about 15 s and boots nothing. It covers the selectors against real captured dumps (`scripts/testdata/`), the iOS runtime and device type pairing (`scripts/ios_pick.py`), and `stop`, `doctor` and `see` against a frozen emulator stub. Run it after any change to `verify.sh`.
+- `VERIFY_ADB_SECONDS` (default 30) bounds every `adb` call. The self-test sets it to 1 so the frozen-emulator checks take seconds.
 - `start` writes `build/verify/android.env` and `ios-start` writes `build/verify/ios.env`. They record the run directory and the emulator pid or simulator id. The matching `stop` command removes them.
 
 ## Other checks in this repo
