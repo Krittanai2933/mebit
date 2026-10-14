@@ -32,7 +32,7 @@ ADB_WAIT=${VERIFY_ADB_SECONDS:-30}
 adbs() { bounded "$ADB_WAIT" "$ADB" -s "$SERIAL" "$@"; }
 # adb_answers: false when the emulator does not answer a trivial command in 8 s. A frozen emulator keeps
 # its adb transport listed, so every real command then waits out its whole bound.
-adb_answers() { bounded $((ADB_WAIT < 8 ? ADB_WAIT : 8)) "$ADB" -s "$SERIAL" shell true > /dev/null 2>&1; }
+adb_answers() { local n=${1:-8}; bounded $((ADB_WAIT < n ? ADB_WAIT : n)) "$ADB" -s "$SERIAL" shell true > /dev/null 2>&1; }
 step() { local IFS=$'\t'; printf '%s\t%s\n' "$(date -u +%FT%TZ)" "$*" >> "$RUN/steps.tsv"; }
 load() { [ -f "$1" ] || die "no active run. Start one with: verify.sh $2"; . "$1"; }
 # Match on the command line too, so a recycled PID is never mistaken for our emulator.
@@ -56,6 +56,7 @@ meta() {
 # another try only waits longer.
 dump_ui() {
   local i out rc
+  adb_answers 15 || return 2
   for i in 1 2 3; do
     out=$(adbs shell uiautomator dump /sdcard/verify-ui.xml 2>&1); rc=$?
     [ "$rc" -eq 124 ] && return 2
@@ -155,8 +156,8 @@ cmd_start() {
     app_resumed || fail "$PKG did not come to the front. Run verify.sh start again. What is in front: verify.sh adb shell dumpsys activity activities"
   fi
 
-  # Ready means the UI answers and no "isn't responding" dialog is up. In a fresh clone the project compiles
-  # while the emulator boots, and in 6 of 14 such starts the emulator then did not answer or showed that dialog.
+  # Ready means the UI answers and no "isn't responding" dialog is up. A starved guest can still show one. A dialog
+  # that arrives after this point is not seen here, and doctor catches it.
   local ok='' f="$RUN/.poll.xml"
   for i in 1 2 3 4 5; do
     if dump_ui "$f" && [ "$(ui count "$f" 'id~:aerr_' 2> /dev/null)" = 0 ]; then ok=1; break; fi
