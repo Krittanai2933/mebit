@@ -67,10 +67,11 @@ dump_ui() {
   return 1
 }
 
-# show_screen FILE: what was on screen at the last good dump, or why there is none
+# show_screen FILE: what was on screen at the last good dump, or why there is none, and what the system says is in front
 show_screen() {
   if [ -s "$1" ]; then ui list "$1" >&2
   else echo "no UI dump could be taken, so the emulator or the app in front is not responding. Run verify.sh doctor" >&2; fi
+  adbs shell dumpsys activity activities 2> /dev/null | grep -E 'ResumedActivity|mFocusedApp' | head -2 >&2
 }
 
 # wait_ui SELECTOR present|absent SECONDS
@@ -324,7 +325,7 @@ cmd_drawer() {
     if wait_ui "id~:apps_list_view" present 4 2> /dev/null; then step drawer "$a" ok; echo "all-apps list open (via $a)"; return 0; fi
   done
   step drawer FAIL
-  dump_ui "$RUN/.poll.xml" && ui list "$RUN/.poll.xml" >&2
+  dump_ui "$RUN/.poll.xml"; show_screen "$RUN/.poll.xml"
   die "could not open the all-apps list. Is the launcher one with an apps_list_view node?"
 }
 
