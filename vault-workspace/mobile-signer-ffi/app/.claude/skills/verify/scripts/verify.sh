@@ -93,16 +93,7 @@ wait_ui() {
   return 1
 }
 
-# A start that fails stops the emulator it launched. One that ignores SIGTERM (a race loser stalled for over 20 s in
-# graphics start-up) is killed, since this run started it seconds ago. A kill that fails keeps the state.
-fail() {
-  echo "verify.sh: $*" >&2
-  cmd_stop > /dev/null 2>&1 || {
-    emu_alive && { echo "verify.sh: emulator pid $EMU_PID ignored SIGTERM, killing it" >&2; { kill -9 "$EMU_PID"; wait "$EMU_PID"; } 2> /dev/null; sleep 1; }
-    cmd_stop > /dev/null
-  }
-  exit 1
-}
+fail() { echo "verify.sh: $*" >&2; cmd_stop > /dev/null; exit 1; }
 
 cmd_start() {
   if [ -f "$STATE" ]; then
@@ -202,7 +193,7 @@ cmd_stop() {
       local i=0; while emu_alive && [ "$i" -lt 20 ]; do sleep 1; i=$((i + 1)); done
     fi
     if emu_alive; then
-      # SIGTERM sent 0.2 to 3 s after launch took up to 7.7 s to be acted on (36 tries, six of them 5.9 s or more).
+      # SIGTERM sent 0.2 to 3 s after launch took 2.2 s at the median and up to 7.7 s (36 tries, 9 of them 5.9 s or more).
       kill "$EMU_PID"
       local j=0; while emu_alive && [ "$j" -lt 20 ]; do sleep 1; j=$((j + 1)); done
     fi
@@ -344,12 +335,12 @@ cmd_drawer() {
   sleep 1
   sz=$(adbs shell wm size | tr -d '\r' | sed -n 's/.*: *\([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -1); W=${sz% *}; H=${sz#* }
   [ -n "$W" ] && [ -n "$H" ] || die "cannot read the screen size from wm size"
-  # KEYCODE_ALL_APPS opened the list on every API 36 image tried and on API 35 in 0 of 4, so API 35 starts with
-  # the swipes. The launcher drops gestures while it is busy (under host load one call out of 80 on API 35 saw
-  # all four ignored), so after a failed round it gets HOME again and one more round.
-  local api round via gestures="swipe-slow swipe-long"
+  # KEYCODE_ALL_APPS opened the list on every API 36 image tried and on the one API 35 AVD tried in 0 of 4, so
+  # below API 36 it comes last. The launcher drops gestures while it is busy (under host load one call out of 80
+  # on API 35 saw all four ignored), so after a failed round it gets HOME again and one more round.
+  local api round via gestures="key key-again swipe-slow swipe-long"
   api=$(adbs shell getprop ro.build.version.sdk | tr -d '\r')
-  [ "${api:-0}" -ge 36 ] && gestures="key key-again swipe-slow swipe-long"
+  [ "${api:-0}" -lt 36 ] && gestures="swipe-slow swipe-long key"
   for round in 1 2; do
     for a in $gestures; do
       case $a in
