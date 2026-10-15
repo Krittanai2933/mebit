@@ -131,7 +131,10 @@ cmd_start() {
     [ -n "$owner" ] || ! emu_alive || { sleep 1; continue; }
     break
   done
-  [ "$owner" = "$EMU_PID" ] || fail "emulator pid $EMU_PID does not own port $PORT (owner: ${owner:-nobody}). Another start may have won it. Set VERIFY_PORT to another even port"
+  [ "$owner" = "$EMU_PID" ] || {
+    [ -n "$owner" ] || emu_alive || { tail -5 "$RUN/emulator.log"; fail "emulator exited at once, log: $RUN/emulator.log"; }
+    fail "emulator pid $EMU_PID does not own port $PORT (owner: ${owner:-nobody}). Another start may have won it. Set VERIFY_PORT to another even port"
+  }
 
   ( cd "$APP" && ./kotlin build -m androidApp ) > "$RUN/build.log" 2>&1 \
     || { tail -20 "$RUN/build.log"; fail "build failed, full log: $RUN/build.log"; }
