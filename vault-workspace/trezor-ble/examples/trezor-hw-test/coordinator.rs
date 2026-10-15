@@ -1,5 +1,5 @@
 use std::process::{Command as Process, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bitcoin::consensus::deserialize;
 use bitcoin::consensus::encode::serialize_hex;
@@ -9,7 +9,7 @@ use vault_core::descriptor::derive_address_at;
 use vault_core::hw::psbt_check::verify_device_signatures;
 
 use crate::e2e::chain::{Chain, Esplora, Outspend, Reconciled, reconcile};
-use crate::e2e::model::{Command, FUNDING_SATS, Family, Slot, Source, find_case};
+use crate::e2e::model::{Command, Family, Slot, Source, find_case};
 use crate::e2e::records::{
     AddressProof, Checkpoint, DeviceAction, DeviceResult, Enrollment, Execution, Finalized,
     Funding, Lease, Progress, Registration, Signing, Store, WorkerRequest, WorkerResponse,
@@ -36,15 +36,32 @@ impl Workers<'_> {
         action: DeviceAction,
         enrolling: bool,
     ) -> Result<(WorkerResponse, Execution)> {
+        self.call_with_trace(enrollment, action, enrolling, false)
+    }
+
+    fn call_with_trace(
+        &self,
+        enrollment: &Enrollment,
+        action: DeviceAction,
+        enrolling: bool,
+        trace_signing: bool,
+    ) -> Result<(WorkerResponse, Execution)> {
+        if trace_signing
+            && (enrolling
+                || enrollment.slot.source != Source::Trezor
+                || !matches!(action, DeviceAction::Sign { .. }))
+        {
+            return Err("private trace requires a Trezor diagnostic signing worker".into());
+        }
         let operation = match &action {
             DeviceAction::Enroll => "enroll",
             DeviceAction::Verify { .. } => "verify_address",
             DeviceAction::Sign { .. } => "sign_psbt",
         };
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let stem = format!(
-            "{}-{operation}-{}-{}",
+            "{}-{operation}-{timestamp}-{}",
             enrollment.slot,
-            now(),
             std::process::id()
         );
         let directory = self.store.root.join("private/workers");
@@ -97,6 +114,9 @@ impl Workers<'_> {
             if self.settings.passphrase_on_device {
                 arguments.push("--passphrase-on-device".into());
             }
+        }
+        if trace_signing {
+            arguments.push("--signing-trace-worker".into());
         }
         arguments.extend([
             "e2e".into(),
@@ -231,6 +251,63 @@ pub async fn run(command: Command, store: &Store, settings: Settings) -> Result<
         }
     }
     outcome
+}
+
+pub fn diagnose_sign(
+    case_id: &str,
+    store: &Store,
+    settings: Settings,
+    trace_signing: bool,
+) -> Result<()> {
+    let _lease = Lease::acquire(store)?;
+    let mut checkpoint = store.load(case_id)?;
+    validate_checkpoint(store, &mut checkpoint)?;
+    let Progress::Signing(signing) = &checkpoint.progress else {
+        return Err("signature diagnosis requires a saved SIGNING checkpoint".into());
+    };
+    wallet::validate_signing(&checkpoint, signing)?;
+    let (enrollment, action) = diagnostic_sign_action(&checkpoint)?;
+    let before: Psbt = signing.signed_psbt.parse()?;
+    let workers = Workers {
+        store,
+        settings: &settings,
+    };
+    let (response, _) = workers.call_with_trace(&enrollment, action, false, trace_signing)?;
+    let DeviceResult::Signed(signed) = response.result else {
+        return Err("signature diagnostic worker returned a different operation".into());
+    };
+    verify_device_signatures(
+        &before,
+        signed.parse()?,
+        enrollment.identity.fingerprint.parse()?,
+    )?;
+    println!("Signature verified. The checkpoint was not changed or broadcast.");
+    Ok(())
+}
+
+fn diagnostic_sign_action(checkpoint: &Checkpoint) -> Result<(Enrollment, DeviceAction)> {
+    let Progress::Signing(signing) = &checkpoint.progress else {
+        return Err("signature diagnosis requires a saved SIGNING checkpoint".into());
+    };
+    let slot = *checkpoint
+        .case
+        .signing_subset
+        .get(signing.completed.len())
+        .ok_or("the saved signing case has no incomplete signer")?;
+    if slot.source != Source::Trezor {
+        return Err(format!("the next incomplete signer {slot} is not a Trezor").into());
+    }
+    let enrollment = checkpoint
+        .enrolled
+        .iter()
+        .find(|enrollment| enrollment.slot == slot)
+        .cloned()
+        .ok_or("the next Trezor signer is missing from the checkpoint")?;
+    let action = DeviceAction::Sign {
+        psbt: signing.signed_psbt.clone(),
+        signer: enrollment.identity.fingerprint.clone(),
+    };
+    Ok((enrollment, action))
 }
 
 fn enroll(
@@ -462,8 +539,10 @@ fn prepare(store: &Store, workers: &Workers<'_>, chain: &impl Chain, id: &str) -
     checkpoint.blockers.clear();
     store.save(&checkpoint)?;
     println!(
-        "Prepared {}. Fund exactly {FUNDING_SATS} sats to {} on testnet4 and wait for one confirmation.",
-        case.id, receive_address
+        "Prepared {}. Fund exactly {} sats to {} on testnet4 and wait for one confirmation.",
+        case.id,
+        case.funding_target_sats(),
+        receive_address
     );
     println!(
         "Change {}. Payment 5000 sats to {}. Fee 2 sat/vB, capped at 5000 sats and 10 sat/vB.",
@@ -948,7 +1027,7 @@ mod tests {
                 witness: Witness::new(),
             }],
             output: vec![TxOut {
-                value: Amount::from_sat(FUNDING_SATS),
+                value: Amount::from_sat(case.funding_target_sats()),
                 script_pubkey: receive_address.script_pubkey(),
             }],
         };
@@ -971,6 +1050,71 @@ mod tests {
             runner_revision: "offline-test".into(),
         };
         (checkpoint, funding)
+    }
+
+    #[test]
+    fn diagnostic_sign_action_reuses_saved_psbt_without_changing_checkpoint() {
+        let case = find_case(crate::e2e::model::CONFIRMED_SAFE7_P2WSH_CASE_ID).unwrap();
+        let slot = case.signing_subset[0];
+        assert_eq!(slot.source, Source::Trezor);
+        let checkpoint = Checkpoint {
+            schema: 1,
+            case,
+            enrolled: vec![placeholder(slot, None)],
+            receive_descriptor: String::new(),
+            change_descriptor: String::new(),
+            receive_address: String::new(),
+            change_address: String::new(),
+            destination: String::new(),
+            address_proofs: Vec::new(),
+            executions: Vec::new(),
+            progress: Progress::Signing(Signing {
+                funding: Funding {
+                    outpoint: format!("{}:0", "00".repeat(32)),
+                    transaction_hex: String::new(),
+                    amount_sats: 0,
+                    confirmation: Confirmation {
+                        block_height: 1,
+                        block_hash: "00".repeat(32),
+                        tip_height: 1,
+                        confirmations: 1,
+                        checked_at: 1,
+                    },
+                },
+                unsigned_psbt: "unsigned PSBT".into(),
+                signed_psbt: "saved PSBT with prior signatures".into(),
+                completed: Vec::new(),
+            }),
+            blockers: Vec::new(),
+            created_at: 1,
+            broadcast_authorized: true,
+            genesis_verified_at: 1,
+            runner_revision: "test".into(),
+        };
+        let before = serde_json::to_value(&checkpoint).unwrap();
+
+        let (enrollment, action) = diagnostic_sign_action(&checkpoint).unwrap();
+
+        assert_eq!(enrollment.slot, slot);
+        assert!(matches!(
+            action,
+            DeviceAction::Sign { psbt, .. } if psbt == "saved PSBT with prior signatures"
+        ));
+        assert_eq!(serde_json::to_value(&checkpoint).unwrap(), before);
+    }
+
+    #[test]
+    fn prepared_checkpoint_load_preserves_schema_and_manifest_case() {
+        let store = test_store();
+        let (checkpoint, _) = fixture(&store, false);
+        store.save(&checkpoint).unwrap();
+
+        let loaded = store.load(&checkpoint.case.id).unwrap();
+        assert_eq!(loaded.schema, 1);
+        assert_eq!(loaded.case, checkpoint.case);
+        assert!(matches!(loaded.progress, Progress::Prepared));
+
+        std::fs::remove_dir_all(store.root.parent().unwrap()).unwrap();
     }
 
     #[tokio::test]

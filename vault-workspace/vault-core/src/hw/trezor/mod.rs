@@ -24,6 +24,7 @@ pub mod cpace;
 pub mod identity;
 mod protos;
 mod session;
+mod signing_trace;
 #[cfg(test)]
 mod tests;
 mod thp;
@@ -36,6 +37,114 @@ use super::psbt_check::SignatureCheckError;
 pub use bitcoin::XpubOptions;
 pub use identity::Safe7Identity;
 pub use session::{SessionConfig, Step, TrezorEvent, TrezorSession, UserPrompt};
+pub use signing_trace::{SigningTrace, SigningTraceEnd, SigningTraceFrame};
+
+/// The host-side reason an ECDSA signature from the Safe 7 was rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EcdsaSignatureRejectionReason {
+    /// The device returned bytes that do not parse as a DER ECDSA signature.
+    MalformedDer,
+    /// The DER signature did not verify against the expected input candidates.
+    HostVerificationFailed,
+}
+
+impl fmt::Display for EcdsaSignatureRejectionReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MalformedDer => f.write_str("malformed DER signature"),
+            Self::HostVerificationFailed => f.write_str("host verification failed"),
+        }
+    }
+}
+
+/// One public key and locally computed sighash the rejected DER was checked against.
+pub struct EcdsaSignatureCandidate {
+    input_index: usize,
+    public_key: [u8; 33],
+    sighash: Option<[u8; 32]>,
+    signature_verifies: bool,
+}
+
+impl EcdsaSignatureCandidate {
+    /// Input index associated with this candidate.
+    pub fn input_index(&self) -> usize {
+        self.input_index
+    }
+
+    /// Compressed public key derived from the original PSBT's signing policy.
+    pub fn public_key(&self) -> &[u8; 33] {
+        &self.public_key
+    }
+
+    /// Host-computed sighash, or `None` if the original PSBT could not produce one.
+    pub fn sighash(&self) -> Option<&[u8; 32]> {
+        self.sighash.as_ref()
+    }
+
+    /// Whether the rejected DER verifies for this key and sighash pair.
+    pub fn signature_verifies(&self) -> bool {
+        self.signature_verifies
+    }
+}
+
+impl fmt::Debug for EcdsaSignatureCandidate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EcdsaSignatureCandidate")
+            .field("input_index", &self.input_index)
+            .field("has_sighash", &self.sighash.is_some())
+            .field("signature_verifies", &self.signature_verifies)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Private evidence for an ECDSA signature that the host refused to accept.
+///
+/// Debug and display output omit the DER bytes, public keys, and sighashes.
+pub struct EcdsaSignatureRejection {
+    input_index: usize,
+    reason: EcdsaSignatureRejectionReason,
+    signature_der: Vec<u8>,
+    candidates: Vec<EcdsaSignatureCandidate>,
+}
+
+impl EcdsaSignatureRejection {
+    /// Input index reported for the rejected signature.
+    pub fn input_index(&self) -> usize {
+        self.input_index
+    }
+
+    /// Host-side rejection reason.
+    pub fn reason(&self) -> EcdsaSignatureRejectionReason {
+        self.reason
+    }
+
+    /// Raw DER bytes returned by the device. Keep them in private diagnostics.
+    pub fn signature_der(&self) -> &[u8] {
+        &self.signature_der
+    }
+
+    /// All ECDSA key and sighash candidates from the original PSBT.
+    pub fn candidates(&self) -> &[EcdsaSignatureCandidate] {
+        &self.candidates
+    }
+}
+
+impl fmt::Debug for EcdsaSignatureRejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EcdsaSignatureRejection")
+            .field("input_index", &self.input_index)
+            .field("reason", &self.reason)
+            .field("signature_der", &"[REDACTED]")
+            .field("candidate_count", &self.candidates.len())
+            .finish()
+    }
+}
+
+impl fmt::Display for EcdsaSignatureRejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "at input {}: {}", self.input_index, self.reason)
+    }
+}
 
 /// THP's packet size on Bluetooth LE (`BLE_TX_PACKET_SIZE` and
 /// `BLE_RX_PACKET_SIZE` in the Safe 7's nRF firmware, `CHUNK_SIZE` in
@@ -94,6 +203,9 @@ pub enum TrezorError {
 
     #[error("the Trezor's signatures were refused: {0}")]
     Signatures(#[from] SignatureCheckError),
+
+    #[error("the Trezor signature was rejected {0}")]
+    RejectedSignature(EcdsaSignatureRejection),
 
     /// The bytes on the wire broke the protocol. The session is out of step
     /// with the device after this and refuses further calls: reconnect.
