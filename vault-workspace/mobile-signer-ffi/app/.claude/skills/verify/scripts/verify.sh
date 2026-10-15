@@ -317,13 +317,25 @@ cmd_drawer() {
   sleep 1
   sz=$(adbs shell wm size | tr -d '\r' | sed -n 's/.*: *\([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -1); W=${sz% *}; H=${sz#* }
   [ -n "$W" ] && [ -n "$H" ] || die "cannot read the screen size from wm size"
-  for a in key key-again swipe-slow swipe-long; do
-    case $a in
-      key | key-again) adbs shell input keyevent KEYCODE_ALL_APPS ;;
-      swipe-slow) adbs shell input swipe $((W / 2)) $((H * 83 / 100)) $((W / 2)) $((H * 30 / 100)) 700 ;;
-      swipe-long) adbs shell input swipe $((W / 2)) $((H * 90 / 100)) $((W / 2)) $((H * 10 / 100)) 300 ;;
-    esac
-    if wait_ui "id~:apps_list_view" present 4 2> /dev/null; then step drawer "$a" ok; echo "all-apps list open (via $a)"; return 0; fi
+  # KEYCODE_ALL_APPS opened the list on every API 36 image tried and on API 35 in 0 of 4, so API 35 starts with
+  # the swipes. The launcher drops gestures while it is busy (under host load one call out of 80 on API 35 saw
+  # all four ignored), so after a failed round it gets HOME again and one more round.
+  local api round via gestures="swipe-slow swipe-long"
+  api=$(adbs shell getprop ro.build.version.sdk | tr -d '\r')
+  [ "${api:-0}" -ge 36 ] && gestures="key key-again swipe-slow swipe-long"
+  for round in 1 2; do
+    for a in $gestures; do
+      case $a in
+        key | key-again) adbs shell input keyevent KEYCODE_ALL_APPS ;;
+        swipe-slow) adbs shell input swipe $((W / 2)) $((H * 83 / 100)) $((W / 2)) $((H * 30 / 100)) 700 ;;
+        swipe-long) adbs shell input swipe $((W / 2)) $((H * 90 / 100)) $((W / 2)) $((H * 10 / 100)) 300 ;;
+      esac
+      if wait_ui "id~:apps_list_view" present 4 2> /dev/null; then
+        via=$a; [ "$round" -gt 1 ] && via="$a, round $round"
+        step drawer "$a" ok; echo "all-apps list open (via $via)"; return 0
+      fi
+    done
+    [ "$round" -eq 1 ] && { adbs shell input keyevent KEYCODE_HOME; sleep 3; }
   done
   step drawer FAIL
   dump_ui "$RUN/.poll.xml"; show_screen "$RUN/.poll.xml"
