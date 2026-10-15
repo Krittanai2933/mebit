@@ -93,7 +93,16 @@ wait_ui() {
   return 1
 }
 
-fail() { echo "verify.sh: $*" >&2; cmd_stop > /dev/null; exit 1; }
+# A start that fails stops the emulator it launched. One that ignores SIGTERM (a race loser stalled for over 20 s in
+# graphics start-up) is killed, since this run started it seconds ago. A kill that fails keeps the state.
+fail() {
+  echo "verify.sh: $*" >&2
+  cmd_stop > /dev/null 2>&1 || {
+    emu_alive && { echo "verify.sh: emulator pid $EMU_PID ignored SIGTERM, killing it" >&2; { kill -9 "$EMU_PID"; wait "$EMU_PID"; } 2> /dev/null; sleep 1; }
+    cmd_stop > /dev/null
+  }
+  exit 1
+}
 
 cmd_start() {
   if [ -f "$STATE" ]; then
@@ -193,8 +202,9 @@ cmd_stop() {
       local i=0; while emu_alive && [ "$i" -lt 20 ]; do sleep 1; i=$((i + 1)); done
     fi
     if emu_alive; then
+      # SIGTERM sent in the first seconds after launch took 1.3 to 7.7 s to be acted on, in 36 of 36 tries.
       kill "$EMU_PID"
-      local j=0; while emu_alive && [ "$j" -lt 8 ]; do sleep 1; j=$((j + 1)); done
+      local j=0; while emu_alive && [ "$j" -lt 20 ]; do sleep 1; j=$((j + 1)); done
     fi
     # Keep the state, so the live process is not forgotten and the next start still refuses to run beside it.
     if emu_alive; then
