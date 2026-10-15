@@ -202,7 +202,7 @@ cmd_stop() {
       local i=0; while emu_alive && [ "$i" -lt 20 ]; do sleep 1; i=$((i + 1)); done
     fi
     if emu_alive; then
-      # SIGTERM sent in the first seconds after launch took 1.3 to 7.7 s to be acted on, in 36 of 36 tries.
+      # SIGTERM sent 0.2 to 3 s after launch took up to 7.7 s to be acted on (36 tries, six of them 5.9 s or more).
       kill "$EMU_PID"
       local j=0; while emu_alive && [ "$j" -lt 20 ]; do sleep 1; j=$((j + 1)); done
     fi
