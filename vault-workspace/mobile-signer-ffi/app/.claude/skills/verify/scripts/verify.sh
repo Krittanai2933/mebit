@@ -139,6 +139,10 @@ cmd_start() {
   i=0
   until [ "$(adbs shell getprop sys.boot_completed 2> /dev/null | tr -d '\r')" = 1 ]; do
     emu_alive || { tail -5 "$RUN/emulator.log"; fail "emulator exited while booting, log: $RUN/emulator.log"; }
+    # Without HVF the emulator runs the CPU in software and the guest does not boot in minutes. It says so at once.
+    # An AVD whose .ini has target=android-0 does this: avdmanager could not read the system image's API level.
+    grep -q 'hvf is not enabled' "$RUN/emulator.log" \
+      && fail "the emulator started $AVD without hardware acceleration and would not boot for many minutes. Look at target= in the AVD's .ini file (target=android-0 means avdmanager could not read the system image). Log: $RUN/emulator.log"
     i=$((i + 2)); [ "$i" -gt 240 ] && fail "emulator not booted after 240s, log: $RUN/emulator.log"
     sleep 2
   done
