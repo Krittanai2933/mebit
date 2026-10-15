@@ -4,6 +4,8 @@
   ui.py find  DUMP SELECTOR [N]  print "x y", the centre of the Nth match (default 1st)
   ui.py count DUMP SELECTOR      print how many nodes match
   ui.py list  DUMP               print every node that has text, a description or an id
+  ui.py crash BUFFER PKG         read a `logcat -b crash` capture. Print "app" when PKG is in it, otherwise the
+                                 names of the processes that crashed (Java "Process:" and native ">>> x <<<" forms)
 
 SELECTOR is [KIND[~]:]VALUE. KIND is text (the default), desc or id. A "~" after
 the kind means "contains" instead of "equals".
@@ -44,7 +46,19 @@ def describe(node, box):
         " clickable" if node.get("clickable") == "true" else "")
 
 
+def crash(path, pkg):
+    text = open(path, errors="replace").read()
+    if pkg in text:
+        print("app")
+        return 0
+    names = sorted(set(re.findall(r"Process: ([^,\s]+),", text) + re.findall(r">>> (\S+) <<<", text)))
+    print(" ".join(names))
+    return 0
+
+
 def main(argv):
+    if len(argv) == 4 and argv[1] == "crash":
+        return crash(argv[2], argv[3])
     if len(argv) < 3 or argv[1] not in ("find", "count", "list"):
         sys.exit(__doc__)
     cmd, dump = argv[1], argv[2]

@@ -201,13 +201,17 @@ cmd_stop() {
     # adb keeps listing the serial for a moment after the process exits, and a start right after would be refused.
     for i in 1 2 3 4 5 6 7 8 9 10; do "$ADB" devices | grep -q "^${SERIAL}[[:space:]]" || break; sleep 1; done
   fi
-  rm -f "$STATE" "$RUN/.poll.xml" "$RUN/.tap.xml"
-  [ -s "$RUN/crash.txt" ] && echo "WARNING: a process crashed during this run ($(sed -n 's/.*Process: \([^,]*\),.*/\1/p' "$RUN/crash.txt" | sort -u | tr '\n' ' ')). See $RUN/crash.txt"
+  rm -f "$STATE" "$RUN/.poll.xml" "$RUN/.tap.xml" "$RUN/.crash.txt"
+  if [ -s "$RUN/crash.txt" ]; then
+    local owners; owners=$(ui crash "$RUN/crash.txt" "$PKG")
+    if [ "$owners" = app ]; then echo "WARNING: the app crashed during this run. See $RUN/crash.txt"
+    else echo "note: other processes crashed during this run (${owners:-unnamed}), not the app. See $RUN/crash.txt"; fi
+  fi
   echo "stopped. Evidence kept in $RUN"
 }
 
 cmd_doctor() {
-  local bad=0 inst d l apk crash
+  local bad=0 inst d l apk crash owners
   ok() { echo "ok    $*"; }
   no() { echo "FAIL  $*"; bad=1; }
   command -v java > /dev/null && ok "java: $(java -version 2>&1 | head -1)" || no "java not found"
@@ -240,10 +244,15 @@ cmd_doctor() {
           [ "$d" = "$l" ] && ok "installed APK is the one in build/ (sha256 ${d:0:12}...)" || no "installed APK differs from the last build. Run verify.sh stop, then verify.sh start"
         fi
         app_resumed && ok "$PKG is in the foreground" || no "$PKG is not in the foreground (a dialog, the launcher, or a crash)"
+        # The buffer holds every process. The launcher crashes at boot now and then, and the UWB HAL of the Android 17
+        # image aborts at every boot. Neither is the app, so only a crash of the app is a failure.
         crash=$(adbs logcat -b crash -d 2> /dev/null)
-        # The buffer holds every process. The launcher sometimes crashes while the guest boots, so name them.
         if [ -z "$crash" ]; then ok "crash buffer is empty"
-        else no "crash buffer has entries from: $(printf '%s\n' "$crash" | sed -n 's/.*Process: \([^,]*\),.*/\1/p' | sort -u | tr '\n' ' ')See: verify.sh adb logcat -b crash -d"; fi
+        else
+          printf '%s\n' "$crash" > "$RUN/.crash.txt"; owners=$(ui crash "$RUN/.crash.txt" "$PKG")
+          if [ "$owners" = app ]; then no "$PKG crashed. See: verify.sh adb logcat -b crash -d"
+          else ok "no crash of $PKG. The crash buffer lists: ${owners:-unnamed processes}"; fi
+        fi
         if dump_ui "$RUN/.poll.xml"; then
           [ "$(ui count "$RUN/.poll.xml" 'id~:aerr_' 2> /dev/null)" = 0 ] && ok "no system dialog on screen" || no "a system 'isn't responding' dialog is on screen. Run verify.sh stop, then verify.sh start"
         else no "uiautomator cannot dump the UI, so the emulator or the app in front is not responding. Run verify.sh stop, then verify.sh start"; fi
@@ -300,7 +309,8 @@ cmd_shot() {
 
 # drawer: leave the app and open the launcher's all-apps list. No one gesture works on every image
 # (KEYCODE_ALL_APPS fails on API 35 and swipes often fail on 36.1), so try them in turn. The launcher
-# drops input while it is still settling, so wait a second first and give the key a second chance.
+# drops input while it is still settling, so wait a second first and give the key a second chance. A round
+# in which every gesture is ignored gets HOME again and one more round.
 cmd_drawer() {
   load "$STATE" start
   local sz W H a i rc f="$RUN/.poll.xml" up=

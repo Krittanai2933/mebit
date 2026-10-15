@@ -24,6 +24,12 @@ check "first screen has no dialog" "$(ui count "$D/app-first-screen.xml" 'id~:ae
 check "launcher in front has no button" "$(ui count "$D/launcher-in-front.xml" 'Click me! na kub')" 0
 check "launcher in front has no dialog" "$(ui count "$D/launcher-in-front.xml" 'id~:aerr_')" 0
 
+# The crash buffer holds every process. Only a crash of the app is the app's failure.
+check "crash buffer of a launcher crash is not the app" "$(ui crash "$D/crash-buffer-launcher.txt" com.mebit.app)" "com.google.android.apps.nexuslauncher"
+check "crash buffer of a native HAL abort is not the app" "$(ui crash "$D/crash-buffer-uwb.txt" com.mebit.app)" "/vendor/bin/hw/android.hardware.uwb-service"
+sed 's/com.google.android.apps.nexuslauncher/com.mebit.app/' "$D/crash-buffer-launcher.txt" > "$T/crash-app.txt"
+check "crash buffer with the app's own crash says app" "$(ui crash "$T/crash-app.txt" com.mebit.app)" "app"
+
 # ios-start: the device type must follow the runtime, so VERIFY_IOS_RUNTIME alone gives a pair simctl accepts.
 pick() { python3 -I "$HERE/ios_pick.py" "$@" < "$D/simctl-runtimes.json" 2> /dev/null; }
 check "ios pick, newest runtime" "$(pick)" "com.apple.CoreSimulator.SimRuntime.iOS-26-5 com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"
