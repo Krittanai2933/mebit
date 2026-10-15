@@ -27,3 +27,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-
 [[example]]
 name = "trezor-hw-test"
 test = true             # the roundtrip fixture has tests of its own
+
+[[example]]
+name = "trezor-signature-check"
+test = true

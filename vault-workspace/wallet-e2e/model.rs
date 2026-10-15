@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 
 pub const CASE_COUNT: usize = 7_315;
 pub const FUNDING_SATS: u64 = 50_000;
+pub const CONFIRMED_SAFE7_P2WSH_FUNDING_SATS: u64 = 221_956;
+pub const CONFIRMED_SAFE7_P2WSH_CASE_ID: &str = "multisig-p2wsh-1of1-a0-h0j0t1-s01-r0-12-c1-12";
 pub const PAYMENT_SATS: u64 = 5_000;
 pub const FEE_RATE: u64 = 2;
 pub const FEE_CAP: u64 = 5_000;
@@ -127,6 +129,16 @@ pub struct Case {
     pub signing_subset: Vec<Slot>,
     pub receive: Location,
     pub change: Location,
+}
+
+impl Case {
+    pub fn funding_target_sats(&self) -> u64 {
+        if self.id == CONFIRMED_SAFE7_P2WSH_CASE_ID {
+            CONFIRMED_SAFE7_P2WSH_FUNDING_SATS
+        } else {
+            FUNDING_SATS
+        }
+    }
 }
 
 fn case(family: Family, holders: Vec<Slot>, threshold: usize, mask: u8, index: u32) -> Case {
@@ -330,5 +342,25 @@ mod tests {
             .collect();
         assert_eq!(actual, expected);
         assert_eq!(matrix(), rows);
+    }
+
+    #[test]
+    fn only_the_confirmed_safe7_case_has_a_nondefault_funding_target() {
+        let rows = matrix();
+        let special_cases = rows
+            .iter()
+            .filter(|case| case.funding_target_sats() == CONFIRMED_SAFE7_P2WSH_FUNDING_SATS)
+            .collect::<Vec<_>>();
+
+        assert_eq!(special_cases.len(), 1);
+        assert_eq!(special_cases[0].id, CONFIRMED_SAFE7_P2WSH_CASE_ID);
+        assert!(rows.iter().all(|case| {
+            case.funding_target_sats()
+                == if case.id == CONFIRMED_SAFE7_P2WSH_CASE_ID {
+                    CONFIRMED_SAFE7_P2WSH_FUNDING_SATS
+                } else {
+                    FUNDING_SATS
+                }
+        }));
     }
 }

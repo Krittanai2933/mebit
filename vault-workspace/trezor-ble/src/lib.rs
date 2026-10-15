@@ -42,8 +42,8 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 use vault_core::error::VaultCoreError;
 use vault_core::hw::trezor::{
-    PACKET_LEN, PairingCredential, Safe7Identity, SessionConfig, SessionPassphrase, TrezorError,
-    TrezorEvent, TrezorSession, XpubOptions,
+    PACKET_LEN, PairingCredential, Safe7Identity, SessionConfig, SessionPassphrase, SigningTrace,
+    TrezorError, TrezorEvent, TrezorSession, XpubOptions,
 };
 
 // The Safe 7's GATT interface: `ble_internal.h` and `service.c` in
@@ -226,7 +226,9 @@ fn trezor_kind(error: &TrezorError) -> ErrorKind {
         TrezorError::UserCancelled => ErrorKind::UserCancelled,
         TrezorError::Failure { .. } | TrezorError::NetworkMismatch(_) => ErrorKind::DeviceError,
         TrezorError::InvalidRequest(_) => ErrorKind::InvalidRequest,
-        TrezorError::Signatures(_) => ErrorKind::SignatureCheckFailed,
+        TrezorError::Signatures(_) | TrezorError::RejectedSignature(_) => {
+            ErrorKind::SignatureCheckFailed
+        }
         TrezorError::Protocol(_) | TrezorError::OutOfOrder => ErrorKind::ProtocolError,
     }
 }
@@ -425,6 +427,9 @@ impl TrezorBle {
         &self.identity
     }
 
+    /// The platform's BLE identifier, which may change between connections.
+    /// For persistent device identity, use [`Safe7Identity::device_id`] from
+    /// [`Self::identity`] instead.
     pub fn device_id(&self) -> String {
         self.radio.peripheral.id().to_string()
     }
@@ -471,6 +476,34 @@ impl TrezorBle {
             TrezorEvent::SignedPsbt(signed) => Ok(signed),
             other => Err(unexpected(other)),
         }
+    }
+
+    /// Returns private evidence even when the host rejects the signature or
+    /// the exchange fails. A request that never starts returns no trace.
+    pub async fn sign_psbt_traced(
+        &mut self,
+        psbt: &Psbt,
+        signer: Fingerprint,
+    ) -> (Result<Psbt, TrezorBleError>, Option<SigningTrace>) {
+        if let Err(error) = self.begin() {
+            return (Err(error), None);
+        }
+        let first = match self.session.request_sign_psbt_traced(psbt, signer) {
+            Ok(first) => first,
+            Err(error) => return (Err(error.into()), None),
+        };
+        let outcome = match self.run(first).await {
+            Ok(TrezorEvent::SignedPsbt(signed)) => Ok(signed),
+            Ok(other) => Err(unexpected(other)),
+            Err(error) => Err(error),
+        };
+        (outcome, self.take_signing_trace())
+    }
+
+    /// Recovers private evidence after a diagnostic future was dropped.
+    /// Taking an unfinished attempt freezes it as interrupted.
+    pub fn take_signing_trace(&mut self) -> Option<SigningTrace> {
+        self.session.take_signing_trace()
     }
 
     /// Displays the descriptor address on the Safe 7 and checks its reply.
@@ -1411,6 +1444,8 @@ mod tests {
         ) {
             send(&device.xpub(path, XpubOptions::default()));
             send(&device.sign_psbt(psbt, Fingerprint::default()));
+            send(&device.sign_psbt_traced(psbt, Fingerprint::default()));
+            send(&device.take_signing_trace());
             send(&device.verify_address(address));
         }
         fn whole(device: TrezorBle) {

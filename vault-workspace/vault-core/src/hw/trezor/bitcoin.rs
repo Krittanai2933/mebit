@@ -21,6 +21,7 @@ use bitcoin::opcodes::all::OP_CHECKMULTISIG;
 use bitcoin::psbt::{Input as PsbtInput, Output as PsbtOutput};
 use bitcoin::script::{Builder, Instruction, Script, ScriptBuf};
 use bitcoin::secp256k1::{self, Secp256k1, Verification};
+use bitcoin::sighash::SighashCache;
 use bitcoin::{Address, Network, NetworkKind, Psbt, Transaction, TxOut, Txid};
 use miniscript::psbt::PsbtExt;
 use miniscript::{DescriptorPublicKey, ForEachKey};
@@ -34,7 +35,10 @@ use super::protos::bitcoin::{
     tx_request::RequestType,
 };
 use super::protos::common::HDNodeType;
-use super::{TrezorError, encode};
+use super::{
+    EcdsaSignatureCandidate, EcdsaSignatureRejection, EcdsaSignatureRejectionReason, TrezorError,
+    encode,
+};
 use crate::hw::{AddressRequest, psbt_check};
 
 /// Trezor's coin name for a network (`common/defs/bitcoin/*.json`). Signet
@@ -394,8 +398,16 @@ impl Signing {
             let invalid = || psbt_check::SignatureCheckError::InvalidSignature { input: index };
             match self.signer_keys[index] {
                 SignerKey::Ecdsa(key) => {
-                    let signature =
-                        secp256k1::ecdsa::Signature::from_der(signature).map_err(|_| invalid())?;
+                    let signature = match secp256k1::ecdsa::Signature::from_der(signature) {
+                        Ok(signature) => signature,
+                        Err(_) => {
+                            return Err(TrezorError::RejectedSignature(self.signature_rejection(
+                                index,
+                                EcdsaSignatureRejectionReason::MalformedDer,
+                                signature,
+                            )));
+                        }
+                    };
                     signed.inputs[index].partial_sigs.insert(
                         bitcoin::PublicKey::new(key),
                         bitcoin::ecdsa::Signature::sighash_all(signature),
@@ -408,11 +420,67 @@ impl Signing {
                 }
             }
         }
-        Ok(psbt_check::verify_device_signatures(
-            &self.unsigned,
-            signed,
-            self.signer,
-        )?)
+        match psbt_check::verify_device_signatures(&self.unsigned, signed, self.signer) {
+            Ok(signed) => Ok(signed),
+            Err(error @ psbt_check::SignatureCheckError::InvalidSignature { input })
+                if matches!(self.signer_keys.get(input), Some(SignerKey::Ecdsa(_))) =>
+            {
+                let Some(signature) = self.signatures.get(input).and_then(Option::as_deref) else {
+                    return Err(error.into());
+                };
+                Err(TrezorError::RejectedSignature(self.signature_rejection(
+                    input,
+                    EcdsaSignatureRejectionReason::HostVerificationFailed,
+                    signature,
+                )))
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn signature_rejection(
+        &self,
+        input_index: usize,
+        reason: EcdsaSignatureRejectionReason,
+        signature_der: &[u8],
+    ) -> EcdsaSignatureRejection {
+        let signature = secp256k1::ecdsa::Signature::from_der(signature_der).ok();
+        let secp = Secp256k1::verification_only();
+        let mut sighashes = SighashCache::new(&self.unsigned.unsigned_tx);
+        let candidates = self
+            .signer_keys
+            .iter()
+            .enumerate()
+            .filter_map(|(candidate_index, signer_key)| {
+                let SignerKey::Ecdsa(public_key) = signer_key else {
+                    return None;
+                };
+                let expected = self
+                    .unsigned
+                    .sighash_ecdsa(candidate_index, &mut sighashes)
+                    .ok();
+                let (sighash, signature_verifies) = match (expected, signature.as_ref()) {
+                    (Some((message, _)), Some(signature)) => (
+                        Some(*message.as_ref()),
+                        secp.verify_ecdsa(&message, signature, public_key).is_ok(),
+                    ),
+                    (Some((message, _)), None) => (Some(*message.as_ref()), false),
+                    (None, _) => (None, false),
+                };
+                Some(EcdsaSignatureCandidate {
+                    input_index: candidate_index,
+                    public_key: public_key.serialize(),
+                    sighash,
+                    signature_verifies,
+                })
+            })
+            .collect();
+        EcdsaSignatureRejection {
+            input_index,
+            reason,
+            signature_der: signature_der.to_vec(),
+            candidates,
+        }
     }
 
     fn previous_tx(&self, hash: &[u8]) -> Result<&Transaction, TrezorError> {

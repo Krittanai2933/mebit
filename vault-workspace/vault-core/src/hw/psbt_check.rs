@@ -332,9 +332,7 @@ fn verify_device_signatures_inner(
     for (index, (before, after)) in unsigned.inputs.iter().zip(&signed.inputs).enumerate() {
         for (key, signature) in &after.partial_sigs {
             if !before.partial_sigs.contains_key(key) {
-                accepted.inputs[index]
-                    .partial_sigs
-                    .insert(*key, *signature);
+                accepted.inputs[index].partial_sigs.insert(*key, *signature);
             }
         }
         if before.tap_key_sig.is_none() {
@@ -583,12 +581,9 @@ mod tests {
         rewritten.inputs[0].witness_script = Some(ScriptBuf::new());
         rewritten.outputs[0].bip32_derivation.clear();
 
-        let accepted = verify_device_signatures_preserving_host_psbt(
-            &psbt,
-            rewritten,
-            device.fingerprint,
-        )
-        .unwrap();
+        let accepted =
+            verify_device_signatures_preserving_host_psbt(&psbt, rewritten, device.fingerprint)
+                .unwrap();
         assert_eq!(accepted, signed);
 
         // The returned transaction remains bound to the original outputs.
@@ -692,11 +687,7 @@ mod tests {
         rewritten.inputs[0].tap_key_origins.clear();
         rewritten.outputs[0].tap_key_origins.clear();
         assert_eq!(
-            verify_device_signatures_preserving_host_psbt(
-                &psbt,
-                rewritten,
-                device.fingerprint,
-            ),
+            verify_device_signatures_preserving_host_psbt(&psbt, rewritten, device.fingerprint,),
             Ok(signed.clone())
         );
 

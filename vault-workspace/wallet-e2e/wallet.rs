@@ -23,9 +23,7 @@ use vault_core::keys::{
 use zeroize::Zeroizing;
 
 use super::Result;
-use super::model::{
-    Case, FEE_CAP, FEE_RATE, FUNDING_SATS, Family, PAYMENT_SATS, RATE_CAP, Slot, Source,
-};
+use super::model::{Case, FEE_CAP, FEE_RATE, Family, PAYMENT_SATS, RATE_CAP, Slot, Source};
 use super::records::{
     Account, Checkpoint, Enrollment, Finalized, Identity, Signing, Store, atomic_write,
 };
@@ -429,7 +427,7 @@ pub fn spend_psbt(
     let change_at = change.at_derivation_index(case.change.index)?;
     if output.script_pubkey != independent_script(case, enrolled, 0, case.receive.index)?
         || output.script_pubkey != receive_at.script_pubkey()
-        || output.value.to_sat() != FUNDING_SATS
+        || output.value.to_sat() != case.funding_target_sats()
     {
         return Err("funding script or amount differs from prepared case".into());
     }
@@ -591,7 +589,7 @@ pub fn validate_signing(checkpoint: &Checkpoint, signing: &Signing) -> Result<()
         .require_network(Network::Testnet4)?;
     let unsigned: Psbt = signing.unsigned_psbt.parse()?;
     let signed: Psbt = signing.signed_psbt.parse()?;
-    if signing.funding.amount_sats != FUNDING_SATS {
+    if signing.funding.amount_sats != checkpoint.case.funding_target_sats() {
         return Err("saved funding amount differs from the exact funding target".into());
     }
     validate_psbt(
@@ -780,7 +778,10 @@ pub fn offline_check() -> Result<serde_json::Value> {
             let mut signing_case = case.clone();
             signing_case.receive.index = 7;
             signing_case.change.index = 7;
-            let previous = offline_previous(independent_script(&signing_case, &enrolled, 0, 7)?);
+            let previous = offline_previous(
+                &signing_case,
+                independent_script(&signing_case, &enrolled, 0, 7)?,
+            );
             let outpoint = OutPoint {
                 txid: previous.compute_txid(),
                 vout: 0,
@@ -822,7 +823,7 @@ pub fn offline_check() -> Result<serde_json::Value> {
     )
 }
 
-fn offline_previous(script_pubkey: ScriptBuf) -> Transaction {
+fn offline_previous(case: &Case, script_pubkey: ScriptBuf) -> Transaction {
     Transaction {
         version: transaction::Version::TWO,
         lock_time: absolute::LockTime::ZERO,
@@ -833,7 +834,7 @@ fn offline_previous(script_pubkey: ScriptBuf) -> Transaction {
             witness: Witness::new(),
         }],
         output: vec![TxOut {
-            value: Amount::from_sat(FUNDING_SATS),
+            value: Amount::from_sat(case.funding_target_sats()),
             script_pubkey,
         }],
     }
@@ -841,6 +842,8 @@ fn offline_previous(script_pubkey: ScriptBuf) -> Transaction {
 
 #[cfg(test)]
 mod tests {
+    use super::super::model::FUNDING_SATS;
+    use super::super::records::Progress;
     use super::*;
 
     fn holders(case: &Case) -> Vec<(Mnemonic, Enrollment)> {
@@ -883,6 +886,7 @@ mod tests {
             )
             .unwrap();
             let previous = offline_previous(
+                case,
                 independent_script(case, &enrolled, 0, case.receive.index).unwrap(),
             );
             let outpoint = OutPoint {
@@ -940,8 +944,10 @@ mod tests {
             Network::Testnet4,
         )
         .unwrap();
-        let previous =
-            offline_previous(independent_script(&case, &enrolled, 0, case.receive.index).unwrap());
+        let previous = offline_previous(
+            &case,
+            independent_script(&case, &enrolled, 0, case.receive.index).unwrap(),
+        );
         let outpoint = OutPoint {
             txid: previous.compute_txid(),
             vout: 0,
@@ -977,6 +983,7 @@ mod tests {
         .unwrap();
         for amount in [FUNDING_SATS - 1, FUNDING_SATS + 1, 5_000_000] {
             let mut previous = offline_previous(
+                &case,
                 independent_script(&case, &enrolled, 0, case.receive.index).unwrap(),
             );
             previous.output[0].value = Amount::from_sat(amount);
@@ -985,6 +992,135 @@ mod tests {
                 vout: 0,
             };
             assert!(spend_psbt(&case, &enrolled, &previous, outpoint, &destination).is_err());
+        }
+    }
+
+    #[test]
+    fn confirmed_safe7_funding_is_exact_and_returns_surplus_to_case_change_script() {
+        use super::super::model::{
+            CONFIRMED_SAFE7_P2WSH_CASE_ID, CONFIRMED_SAFE7_P2WSH_FUNDING_SATS,
+        };
+        use super::super::records::{Confirmation, Funding};
+        use bitcoin::consensus::encode::serialize_hex;
+
+        let case = super::super::model::find_case(CONFIRMED_SAFE7_P2WSH_CASE_ID).unwrap();
+        assert_eq!(case.receive.index, 12);
+        assert_eq!(case.change.branch, 1);
+        assert_eq!(case.change.index, 12);
+        let fixture = holders(&case);
+        let enrolled = fixture.iter().map(|(_, e)| e.clone()).collect::<Vec<_>>();
+        let destination = derive_address_at(
+            &descriptor(&case, &enrolled, 1).unwrap(),
+            7,
+            Network::Testnet4,
+        )
+        .unwrap();
+        let previous = offline_previous(
+            &case,
+            independent_script(&case, &enrolled, 0, case.receive.index).unwrap(),
+        );
+        assert_eq!(
+            previous.output[0].value.to_sat(),
+            CONFIRMED_SAFE7_P2WSH_FUNDING_SATS
+        );
+        let outpoint = OutPoint {
+            txid: previous.compute_txid(),
+            vout: 0,
+        };
+        let unsigned = spend_psbt(&case, &enrolled, &previous, outpoint, &destination).unwrap();
+        let (mnemonic, enrollment) = &fixture[0];
+        let signed = sign_mnemonic(&unsigned, mnemonic, enrollment, case.family).unwrap();
+        let change_script = descriptor(&case, &enrolled, 1)
+            .unwrap()
+            .at_derivation_index(case.change.index)
+            .unwrap()
+            .script_pubkey();
+        let fee = unsigned.fee().unwrap().to_sat();
+        assert_eq!(unsigned.unsigned_tx.input[0].previous_output, outpoint);
+        assert_eq!(unsigned.unsigned_tx.output[0].value.to_sat(), PAYMENT_SATS);
+        assert_eq!(unsigned.unsigned_tx.output[1].script_pubkey, change_script);
+        assert_eq!(
+            unsigned.unsigned_tx.output[1].value.to_sat(),
+            CONFIRMED_SAFE7_P2WSH_FUNDING_SATS - PAYMENT_SATS - fee
+        );
+
+        let checkpoint = Checkpoint {
+            schema: 1,
+            case: case.clone(),
+            enrolled: enrolled.clone(),
+            receive_descriptor: descriptor(&case, &enrolled, 0).unwrap().to_string(),
+            change_descriptor: descriptor(&case, &enrolled, 1).unwrap().to_string(),
+            receive_address: derive_address_at(
+                &descriptor(&case, &enrolled, 0).unwrap(),
+                case.receive.index,
+                Network::Testnet4,
+            )
+            .unwrap()
+            .to_string(),
+            change_address: derive_address_at(
+                &descriptor(&case, &enrolled, 1).unwrap(),
+                case.change.index,
+                Network::Testnet4,
+            )
+            .unwrap()
+            .to_string(),
+            destination: destination.to_string(),
+            address_proofs: Vec::new(),
+            executions: Vec::new(),
+            progress: Progress::Prepared,
+            blockers: Vec::new(),
+            created_at: 1,
+            broadcast_authorized: false,
+            genesis_verified_at: 1,
+            runner_revision: "offline-test".into(),
+        };
+        let signing = Signing {
+            funding: Funding {
+                outpoint: outpoint.to_string(),
+                transaction_hex: serialize_hex(&previous),
+                amount_sats: CONFIRMED_SAFE7_P2WSH_FUNDING_SATS,
+                confirmation: Confirmation {
+                    block_height: 1,
+                    block_hash: "00".repeat(32),
+                    tip_height: 1,
+                    confirmations: 1,
+                    checked_at: 1,
+                },
+            },
+            unsigned_psbt: unsigned.to_string(),
+            signed_psbt: signed.to_string(),
+            completed: case.signing_subset.clone(),
+        };
+        validate_signing(&checkpoint, &signing).unwrap();
+        for amount in [
+            CONFIRMED_SAFE7_P2WSH_FUNDING_SATS - 1,
+            CONFIRMED_SAFE7_P2WSH_FUNDING_SATS + 1,
+        ] {
+            let mut incorrect = signing.clone();
+            incorrect.funding.amount_sats = amount;
+            assert!(validate_signing(&checkpoint, &incorrect).is_err());
+        }
+
+        for amount in [
+            CONFIRMED_SAFE7_P2WSH_FUNDING_SATS - 1,
+            CONFIRMED_SAFE7_P2WSH_FUNDING_SATS + 1,
+        ] {
+            let mut incorrect_previous = previous.clone();
+            incorrect_previous.output[0].value = Amount::from_sat(amount);
+            let incorrect_outpoint = OutPoint {
+                txid: incorrect_previous.compute_txid(),
+                vout: 0,
+            };
+            assert!(
+                spend_psbt(
+                    &case,
+                    &enrolled,
+                    &incorrect_previous,
+                    incorrect_outpoint,
+                    &destination,
+                )
+                .is_err()
+            );
         }
     }
 

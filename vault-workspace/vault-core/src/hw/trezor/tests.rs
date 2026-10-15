@@ -56,8 +56,8 @@ use super::protos::thp::{
 };
 use super::thp::Crypto;
 use super::{
-    PACKET_LEN, PairingCredential, Safe7Identity, SessionConfig, SessionPassphrase, TrezorError,
-    TrezorEvent, TrezorSession, UserPrompt, XpubOptions, cpace,
+    EcdsaSignatureRejectionReason, PACKET_LEN, PairingCredential, Safe7Identity, SessionConfig,
+    SessionPassphrase, TrezorError, TrezorEvent, TrezorSession, UserPrompt, XpubOptions, cpace,
 };
 use crate::error::VaultCoreError;
 use crate::hw::{AddressRequest, psbt_check};
@@ -86,6 +86,8 @@ struct Behaviour {
     decline_signing: bool,
     /// Signs input 0's sighash for every input.
     sign_wrong_message: bool,
+    /// Returns bytes that are not a DER signature.
+    malformed_signature: bool,
     /// Sends input 0's signature a second time instead of input 1's.
     repeat_first_signature: bool,
     /// Asks for an extra previous-transaction input that doesn't exist.
@@ -137,6 +139,7 @@ impl Default for Behaviour {
             commit_to_other_secret: false,
             decline_signing: false,
             sign_wrong_message: false,
+            malformed_signature: false,
             repeat_first_signature: false,
             ask_beyond_prev_inputs: false,
             hold_prompts: false,
@@ -719,7 +722,7 @@ enum SignStep {
 }
 
 /// The device's side of `SignTx`, in trezor-firmware's order: inputs,
-/// outputs (confirming external ones), the total, every previous transaction
+/// outputs (confirming external ones), the total, each input and its previous transaction
 /// (hashed and checked), then each input again to sign it.
 struct DeviceSigning {
     sign_tx: SignTx,
@@ -733,6 +736,7 @@ struct DeviceSigning {
 enum Stage {
     Input(u32),
     Output(u32),
+    Verify(u32),
     Prev {
         input: u32,
         meta: Option<PrevTx>,
@@ -802,6 +806,20 @@ impl DeviceSigning {
                 } else {
                     self.after_output()
                 }
+            }
+            Stage::Verify(input) => {
+                let ack = TxAckInput::parse_from_bytes(payload).unwrap();
+                if ack.tx.input.as_ref() != Some(&self.inputs[input as usize]) {
+                    return SignStep::Fail("Transaction has changed during verification");
+                }
+                let hash = self.inputs[input as usize].prev_hash().to_vec();
+                self.stage = Stage::Prev {
+                    input,
+                    meta: None,
+                    inputs: Vec::new(),
+                    outputs: Vec::new(),
+                };
+                self.request(TXMETA, 0, Some(hash))
             }
             Stage::Prev {
                 input,
@@ -880,9 +898,13 @@ impl DeviceSigning {
                 } else {
                     i
                 };
-                match self.sign(i as usize, signed_index, master) {
-                    Ok(signature) => self.signature = Some((reported_index, signature)),
-                    Err(why) => return SignStep::Fail(why),
+                if behaviour.malformed_signature {
+                    self.signature = Some((reported_index, vec![0x30, 0x01, 0x00]));
+                } else {
+                    match self.sign(i as usize, signed_index, master) {
+                        Ok(signature) => self.signature = Some((reported_index, signature)),
+                        Err(why) => return SignStep::Fail(why),
+                    }
                 }
                 if i + 1 < self.sign_tx.inputs_count() {
                     self.stage = Stage::Sign(i + 1);
@@ -917,14 +939,8 @@ impl DeviceSigning {
 
     fn next_previous(&mut self, input: u32) -> SignStep {
         if input < self.sign_tx.inputs_count() {
-            let hash = self.inputs[input as usize].prev_hash().to_vec();
-            self.stage = Stage::Prev {
-                input,
-                meta: None,
-                inputs: Vec::new(),
-                outputs: Vec::new(),
-            };
-            self.request(tx_request::RequestType::TXMETA, 0, Some(hash))
+            self.stage = Stage::Verify(input);
+            self.request(tx_request::RequestType::TXINPUT, input, None)
         } else {
             self.stage = Stage::Sign(0);
             self.request(tx_request::RequestType::TXINPUT, 0, None)
@@ -2087,6 +2103,238 @@ fn sign(wire: &mut Wire, psbt: &Psbt, signer: Fingerprint) -> Result<(), VaultCo
     wire.run()
 }
 
+#[test]
+fn signing_trace_retains_rejection_and_prevents_old_attempt_attribution() {
+    use super::SigningTraceEnd;
+    let mut wire = connected(Behaviour {
+        malformed_signature: true,
+        ..Behaviour::default()
+    });
+    let (psbt, fingerprint) = one_key_bip48_psbt(&wire.device.master);
+    let packets = wire
+        .host
+        .request_sign_psbt_traced(&psbt, fingerprint)
+        .unwrap();
+    wire.to_device.extend(packets);
+    assert!(wire.run().is_err());
+    assert!(wire.host.is_ready());
+    assert!(
+        wire.host
+            .request_sign_psbt_traced(&psbt, fingerprint)
+            .is_err()
+    );
+    let trace = wire.host.take_signing_trace().unwrap();
+    assert_eq!(trace.end(), SigningTraceEnd::Rejected);
+    assert!(!trace.incomplete());
+    assert_eq!(trace.frames()[0].message_type(), 15);
+    assert_eq!(
+        super::decode::<SignTx>(trace.frames()[0].payload())
+            .unwrap()
+            .inputs_count,
+        Some(1)
+    );
+    assert!(
+        trace
+            .frames()
+            .iter()
+            .any(|frame| frame.outbound() && frame.message_type() == 22)
+    );
+    assert_eq!(trace.frames().last().unwrap().message_type(), 21);
+    assert_eq!(
+        super::decode::<TxRequest>(trace.frames().last().unwrap().payload())
+            .unwrap()
+            .request_type(),
+        tx_request::RequestType::TXFINISHED
+    );
+    assert!(wire.host.take_signing_trace().is_none());
+    sign(&mut wire, &psbt, fingerprint).unwrap_err();
+    assert!(wire.host.take_signing_trace().is_none());
+}
+
+#[test]
+fn signing_trace_retains_abandonment_and_unfinished_take() {
+    use super::SigningTraceEnd;
+    for abandon in [false, true] {
+        let mut wire = connected(Behaviour::default());
+        let (psbt, fingerprint) = one_key_bip48_psbt(&wire.device.master);
+        wire.host
+            .request_sign_psbt_traced(&psbt, fingerprint)
+            .unwrap();
+        if abandon {
+            wire.host.abandon();
+        }
+        let trace = wire.host.take_signing_trace().unwrap();
+        assert_eq!(trace.end(), SigningTraceEnd::Interrupted);
+        assert_eq!(trace.frames().len(), 1);
+        assert!(trace.frames()[0].outbound());
+    }
+}
+
+#[test]
+fn signing_trace_records_deferred_handoffs_and_complete_exchange() {
+    use super::SigningTraceEnd;
+    let mut wire = connected(Behaviour::default());
+    let first = wire.host.occupy_link_for_test();
+    let channel = wire.device.channel.as_mut().unwrap();
+    for packet in first {
+        assert!(channel.packet_in(&packet).check_failed().is_ok());
+    }
+    let (_, message_type, _) = channel.message_out().unwrap();
+    assert_eq!(message_type, mt(MessageType::MessageType_ButtonAck));
+    let withheld = wire.device.drain();
+    assert!(wire.host.is_ready());
+    assert!(wire.host.ack_wait().is_some());
+    let (mut psbt, fingerprint) = one_key_bip48_psbt(&wire.device.master);
+    psbt.inputs[0].sighash_type = Some(EcdsaSighashType::All.into());
+    let first = wire
+        .host
+        .request_sign_psbt_traced(&psbt, fingerprint)
+        .unwrap();
+    assert!(first.is_empty(), "the initial request awaits the prior ACK");
+    for reply in withheld {
+        wire.take(reply).unwrap();
+    }
+    wire.run().unwrap();
+    let trace = wire.host.take_signing_trace().unwrap();
+    assert_eq!(trace.end(), SigningTraceEnd::Completed);
+    assert!(!trace.incomplete());
+    assert_eq!(trace.frames()[0].message_type(), 15);
+    assert_eq!(
+        trace
+            .frames()
+            .iter()
+            .filter(|frame| !frame.outbound() && frame.message_type() == 21)
+            .map(|frame| super::decode::<TxRequest>(frame.payload()).unwrap())
+            .filter(|request| {
+                request.request_type() == tx_request::RequestType::TXINPUT
+                    && request.details.tx_hash.is_none()
+            })
+            .count(),
+        3
+    );
+    assert_eq!(
+        trace
+            .frames()
+            .iter()
+            .filter(|frame| frame.message_type() == 15)
+            .count(),
+        1
+    );
+    for pair in trace.frames()[1..trace.frames().len() - 1].chunks_exact(2) {
+        assert!(!pair[0].outbound());
+        assert_eq!(pair[0].message_type(), 21);
+        assert!(pair[1].outbound());
+        assert_eq!(pair[1].message_type(), 22);
+    }
+    assert!(wire.host.is_ready());
+    if let Some(directory) = std::env::var_os("TREZOR_TRACE_FIXTURE_DIR") {
+        use bitcoin::hex::DisplayHex;
+        let directory = std::path::PathBuf::from(directory);
+        let (xpub, _) = psbt.xpub.iter().next().unwrap();
+        let previous = psbt.inputs[0].non_witness_utxo.as_ref().unwrap();
+        let receive = Address::from_script(&previous.output[0].script_pubkey, NETWORK).unwrap();
+        let change =
+            Address::from_script(&psbt.unsigned_tx.output[1].script_pubkey, NETWORK).unwrap();
+        let destination =
+            Address::from_script(&psbt.unsigned_tx.output[0].script_pubkey, NETWORK).unwrap();
+        let slot = serde_json::json!({"source":"trezor","number":0});
+        let psbt_base64 = {
+            const ALPHABET: &[u8] =
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            let mut encoded = String::new();
+            for chunk in psbt.serialize().chunks(3) {
+                let word = (u32::from(chunk[0]) << 16)
+                    | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+                    | u32::from(*chunk.get(2).unwrap_or(&0));
+                for (i, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+                    encoded.push(if i > chunk.len() {
+                        '='
+                    } else {
+                        ALPHABET[((word >> shift) & 63) as usize] as char
+                    });
+                }
+            }
+            encoded
+        };
+        let checkpoint = serde_json::json!({
+            "schema":1, "case":{"family":"p2wsh","account":0,"threshold":1,
+                "holders":[slot],"signing_subset":[slot],
+                "receive":{"branch":0,"index":12},"change":{"branch":1,"index":12}},
+            "enrolled":[{"slot":slot,"identity":{"firmware":"2.12.5","fingerprint":fingerprint.to_string(),
+                "physical_id":"synthetic","accounts":{"p2wsh":{"origin":"m/48'/1'/0'/2'","xpub":xpub.to_string()}}}}],
+            "receive_address":receive.to_string(),"change_address":change.to_string(),"destination":destination.to_string(),
+            "progress":{"Signing":{"completed":[],"unsigned_psbt":psbt_base64,"signed_psbt":psbt_base64,
+                "funding":{"outpoint":psbt.unsigned_tx.input[0].previous_output.to_string(),
+                    "transaction_hex":bitcoin::consensus::encode::serialize_hex(previous),"amount_sats":30000}}}
+        });
+        let frames: Vec<_> = trace.frames().iter().enumerate().map(|(sequence, frame)| serde_json::json!({
+            "sequence":sequence,"outbound":frame.outbound(),"session":1,
+            "message_type":frame.message_type(),"payload":frame.payload().to_lower_hex_string()
+        })).collect();
+        let artifact = serde_json::json!({
+            "schema":1,"psbt_sha256":sha256::Hash::hash(&psbt.serialize()).to_string(),
+            "transaction_id":psbt.unsigned_tx.compute_txid().to_string(),"firmware":"2.12.5",
+            "fingerprint":fingerprint.to_string(),"physical_id":"synthetic",
+            "build_source_sha256":"a".repeat(64),"executable_sha256":"b".repeat(64),
+            "build_source_scope":"length-framed names and bytes: session.rs,signing_trace.rs,bitcoin.rs,thp.rs,psbt_check.rs,trezor-ble/lib.rs,main.rs,coordinator.rs",
+            "runtime_git_revision":null,"handoff":"THP plaintext acceptance, not radio delivery",
+            "incomplete":false,"end":"Completed","frames":frames
+        });
+        std::fs::create_dir_all(&directory).unwrap();
+        for (name, artifact) in [("checkpoint.json", checkpoint), ("trace.json", artifact)] {
+            std::fs::write(directory.join(name), serde_json::to_vec(&artifact).unwrap()).unwrap();
+        }
+    }
+}
+
+#[test]
+fn signing_trace_retains_device_cancellation_and_predecode_protocol_failure() {
+    use super::SigningTraceEnd;
+    let mut wire = connected(Behaviour {
+        hold_prompts: true,
+        ..Behaviour::default()
+    });
+    let (psbt, fingerprint) = one_key_bip48_psbt(&wire.device.master);
+    let first = wire
+        .host
+        .request_sign_psbt_traced(&psbt, fingerprint)
+        .unwrap();
+    wire.to_device.extend(first);
+    wire.run().unwrap();
+    let cancel = wire.host.request_cancel().unwrap();
+    wire.to_device.extend(cancel);
+    assert!(wire.run().is_err());
+    assert_eq!(
+        wire.host.take_signing_trace().unwrap().end(),
+        SigningTraceEnd::Rejected
+    );
+
+    let mut wire = connected(Behaviour {
+        hold_prompts: true,
+        ..Behaviour::default()
+    });
+    let (psbt, fingerprint) = one_key_bip48_psbt(&wire.device.master);
+    let first = wire
+        .host
+        .request_sign_psbt_traced(&psbt, fingerprint)
+        .unwrap();
+    wire.to_device.extend(first);
+    wire.run().unwrap();
+    let malformed = [0x08, 0x80];
+    wire.device
+        .channel
+        .as_mut()
+        .unwrap()
+        .message_in(1, 21, &malformed)
+        .unwrap();
+    let replies = wire.device.drain();
+    assert!(replies.into_iter().any(|reply| wire.take(reply).is_err()));
+    let trace = wire.host.take_signing_trace().unwrap();
+    assert_eq!(trace.end(), SigningTraceEnd::ProtocolFailure);
+    assert_eq!(trace.frames().last().unwrap().payload(), &malformed);
+    assert!(!wire.host.is_ready());
+}
+
 struct SingleWallet {
     psbt: Psbt,
     receive: Descriptor<DescriptorPublicKey>,
@@ -2208,10 +2456,24 @@ fn single_sig_signatures_for_another_message_and_device_refusal_are_rejected() {
             ..Behaviour::default()
         });
         let wallet = single_wallet(&wire.device.master, purpose, 2);
-        assert!(matches!(
-            trezor_error(sign(&mut wire, &wallet.psbt, wallet.fingerprint)),
-            TrezorError::Signatures(psbt_check::SignatureCheckError::InvalidSignature { input: 1 })
-        ));
+        let error = trezor_error(sign(&mut wire, &wallet.psbt, wallet.fingerprint));
+        if purpose == 86 {
+            assert!(matches!(
+                error,
+                TrezorError::Signatures(psbt_check::SignatureCheckError::InvalidSignature {
+                    input: 1
+                })
+            ));
+        } else {
+            let TrezorError::RejectedSignature(rejection) = error else {
+                panic!("{error}");
+            };
+            assert_eq!(rejection.input_index(), 1);
+            assert_eq!(
+                rejection.reason(),
+                EcdsaSignatureRejectionReason::HostVerificationFailed
+            );
+        }
         assert!(wire.host.is_ready());
         let mut wire = connected(Behaviour {
             decline_signing: true,
@@ -2673,6 +2935,178 @@ fn unbound_address_requests_are_rejected_before_device_interaction() {
     );
 }
 
+fn one_key_bip48_psbt(master: &Xpriv) -> (Psbt, Fingerprint) {
+    let secp = Secp256k1::new();
+    let fingerprint = master.fingerprint(&secp);
+    let account = account();
+    let xpub = Xpub::from_priv(&secp, &master.derive_priv(&secp, &account).unwrap());
+    let descriptor = |chain| {
+        Descriptor::<DescriptorPublicKey>::from_str(&format!(
+            "wsh(sortedmulti(1,[{fingerprint}/{account}]{xpub}/{chain}/*))"
+        ))
+        .unwrap()
+        .at_derivation_index(12)
+        .unwrap()
+    };
+    let receive = descriptor(0);
+    let change = descriptor(1);
+    let previous = Transaction {
+        version: transaction::Version::TWO,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![TxIn::default()],
+        output: vec![TxOut {
+            value: Amount::from_sat(30_000),
+            script_pubkey: receive.script_pubkey(),
+        }],
+    };
+    let mut psbt = Psbt::from_unsigned_tx(Transaction {
+        version: transaction::Version::TWO,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: OutPoint {
+                txid: previous.compute_txid(),
+                vout: 0,
+            },
+            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+            ..TxIn::default()
+        }],
+        output: vec![
+            TxOut {
+                value: Amount::from_sat(5_000),
+                script_pubkey: device_script(
+                    &master_key(9),
+                    InputScriptType::SPENDWITNESS,
+                    &[0, 2],
+                    None,
+                ),
+            },
+            TxOut {
+                value: Amount::from_sat(24_600),
+                script_pubkey: change.script_pubkey(),
+            },
+        ],
+    })
+    .unwrap();
+    psbt.inputs[0].witness_utxo = Some(previous.output[0].clone());
+    psbt.inputs[0].non_witness_utxo = Some(previous);
+    psbt.update_input_with_descriptor(0, &receive).unwrap();
+    psbt.update_output_with_descriptor(1, &change).unwrap();
+    psbt.xpub.insert(xpub, (fingerprint, account));
+    (psbt, fingerprint)
+}
+
+#[test]
+fn one_key_bip48_p2wsh_transmits_multisig_and_finalizes_at_index_12() {
+    let mut wire = connected(Behaviour {
+        hold_prompts: true,
+        ..Behaviour::default()
+    });
+    let (psbt, fingerprint) = one_key_bip48_psbt(&wire.device.master);
+    sign(&mut wire, &psbt, fingerprint).unwrap();
+    wire.user_confirms().unwrap();
+
+    let signing = wire.device.signing.as_ref().unwrap();
+    assert_eq!(signing.inputs.len(), 1);
+    assert_eq!(signing.outputs.len(), 2);
+    let input = &signing.inputs[0];
+    assert_eq!(input.script_type(), InputScriptType::SPENDWITNESS);
+    assert_eq!(
+        input.address_n,
+        [0x8000_0030, 0x8000_0001, 0x8000_0000, 0x8000_0002, 0, 12]
+    );
+    let multisig = input
+        .multisig
+        .as_ref()
+        .expect("one-key P2WSH needs multisig metadata");
+    assert_eq!(multisig.m(), 1);
+    assert_eq!(multisig.nodes.len(), 1);
+    assert_eq!(multisig.address_n, [0, 12]);
+    assert_eq!(
+        multisig_script(multisig),
+        *psbt.inputs[0].witness_script.as_ref().unwrap()
+    );
+    let change = &signing.outputs[1];
+    assert_eq!(change.script_type(), OutputScriptType::PAYTOWITNESS);
+    assert_eq!(
+        change.address_n,
+        [0x8000_0030, 0x8000_0001, 0x8000_0000, 0x8000_0002, 1, 12]
+    );
+    let change_multisig = change
+        .multisig
+        .as_ref()
+        .expect("one-key P2WSH change needs multisig metadata");
+    assert_eq!(change_multisig.m(), 1);
+    assert_eq!(change_multisig.nodes.len(), 1);
+    assert_eq!(change_multisig.address_n, [1, 12]);
+    assert_eq!(
+        multisig_script(change_multisig).to_p2wsh(),
+        psbt.unsigned_tx.output[1].script_pubkey
+    );
+
+    wire.user_confirms().unwrap();
+    let Some(TrezorEvent::SignedPsbt(mut signed)) = wire.events.pop() else {
+        panic!("no signed one-key P2WSH PSBT");
+    };
+    assert_eq!(signed.unsigned_tx, psbt.unsigned_tx);
+    assert_eq!(signed.inputs[0].partial_sigs.len(), 1);
+    let (key, signature) = signed.inputs[0].partial_sigs.first_key_value().unwrap();
+    let witness_script = psbt.inputs[0].witness_script.as_ref().unwrap();
+    let digest = SighashCache::new(&psbt.unsigned_tx)
+        .p2wsh_signature_hash(
+            0,
+            witness_script,
+            psbt.inputs[0].witness_utxo.as_ref().unwrap().value,
+            EcdsaSighashType::All,
+        )
+        .unwrap();
+    let secp = Secp256k1::new();
+    secp.verify_ecdsa(&Message::from(digest), &signature.signature, &key.inner)
+        .unwrap();
+    signed.finalize_mut(&secp).unwrap();
+    let transaction = signed.extract(&secp).unwrap();
+    assert_eq!(transaction.input.len(), 1);
+    assert_eq!(transaction.output, psbt.unsigned_tx.output);
+    assert_eq!(transaction.input[0].witness.len(), 3);
+    assert_eq!(
+        transaction.input[0].witness.last().unwrap(),
+        witness_script.as_bytes()
+    );
+    assert!(wire.host.is_ready());
+}
+
+#[test]
+fn one_key_bip48_p2wsh_rejects_matching_p2wpkh_script_code_signature() {
+    let master = master_key(1);
+    let (psbt, fingerprint) = one_key_bip48_psbt(&master);
+    let secp = Secp256k1::new();
+    let (public_key, (_, path)) = psbt.inputs[0].bip32_derivation.first_key_value().unwrap();
+    let key = master.derive_priv(&secp, path).unwrap().private_key;
+    assert_eq!(key.public_key(&secp), *public_key);
+    let public_key = bitcoin::PublicKey::new(*public_key);
+    let p2wpkh = ScriptBuf::new_p2wpkh(&public_key.wpubkey_hash().unwrap());
+    let digest = SighashCache::new(&psbt.unsigned_tx)
+        .p2wpkh_signature_hash(
+            0,
+            &p2wpkh,
+            psbt.inputs[0].witness_utxo.as_ref().unwrap().value,
+            EcdsaSighashType::All,
+        )
+        .unwrap();
+    let message = Message::from(digest);
+    let signature = secp.sign_ecdsa(&message, &key);
+    secp.verify_ecdsa(&message, &signature, &public_key.inner)
+        .unwrap();
+    let mut signed = psbt.clone();
+    signed.inputs[0].partial_sigs.insert(
+        public_key,
+        bitcoin::ecdsa::Signature::sighash_all(signature),
+    );
+    assert_eq!(
+        psbt_check::verify_device_signatures(&psbt, signed, fingerprint).map(|_| ()),
+        Err(psbt_check::SignatureCheckError::InvalidSignature { input: 0 })
+    );
+}
+
 #[test]
 fn signs_a_vault_spend_that_finalizes_2_of_3() {
     for inputs in [1, 2, 7] {
@@ -2708,12 +3142,56 @@ fn a_wrong_signature_is_refused() {
         ..Behaviour::default()
     });
     let vault = vault(&wire.device.master, 2);
-    match trezor_error(sign(&mut wire, &vault.psbt, vault.device_fingerprint)) {
-        TrezorError::Signatures(psbt_check::SignatureCheckError::InvalidSignature { input: 1 }) => {
-        }
-        other => panic!("{other}"),
-    }
+    let error = trezor_error(sign(&mut wire, &vault.psbt, vault.device_fingerprint));
+    assert_eq!(
+        error.to_string(),
+        "the Trezor signature was rejected at input 1: host verification failed"
+    );
+    let TrezorError::RejectedSignature(rejection) = &error else {
+        panic!("{error}");
+    };
+    assert_eq!(rejection.input_index(), 1);
+    assert_eq!(rejection.candidates().len(), 2);
+    assert!(
+        rejection
+            .candidates()
+            .iter()
+            .all(|candidate| { candidate.sighash().is_some() && !candidate.signature_verifies() })
+    );
+    let signature_hex: String = rejection
+        .signature_der()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert!(!format!("{error:?}").contains(&signature_hex));
+    assert!(!error.to_string().contains(&signature_hex));
     assert!(wire.host.is_ready(), "the exchange ended in step");
+}
+
+#[test]
+fn malformed_ecdsa_signature_is_captured_without_leaking_der() {
+    let mut wire = connected(Behaviour {
+        malformed_signature: true,
+        ..Behaviour::default()
+    });
+    let wallet = vault(&wire.device.master, 1);
+    let error = trezor_error(sign(&mut wire, &wallet.psbt, wallet.device_fingerprint));
+    let TrezorError::RejectedSignature(rejection) = &error else {
+        panic!("{error}");
+    };
+
+    assert_eq!(rejection.input_index(), 0);
+    assert_eq!(
+        rejection.reason(),
+        EcdsaSignatureRejectionReason::MalformedDer
+    );
+    assert_eq!(rejection.signature_der(), &[0x30, 0x01, 0x00]);
+    assert_eq!(rejection.candidates().len(), 1);
+    assert!(rejection.candidates()[0].sighash().is_some());
+    assert!(!rejection.candidates()[0].signature_verifies());
+    assert!(!format!("{error:?}").contains("300100"));
+    assert!(!error.to_string().contains("300100"));
+    assert!(wire.host.is_ready());
 }
 
 #[test]
