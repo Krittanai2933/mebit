@@ -266,8 +266,14 @@ cmd_doctor() {
 
   if [ -f "$IOS_STATE" ]; then
     . "$IOS_STATE"
-    xcrun simctl list devices | grep "$UDID" | grep -q Booted && ok "iOS simulator $UDID is booted" || no "iOS simulator $UDID is not booted"
-    xcrun simctl spawn "$UDID" launchctl list 2> /dev/null | grep -q "UIKitApplication:$PKG" && ok "iOS app $PKG is running" || no "iOS app $PKG is not running"
+    if [ "${IOS_DEVICE:-}" = 1 ]; then
+      xcrun devicectl device info lockState --device "$UDID" > /dev/null 2>&1 && ok "iOS device $UDID answers" || no "iOS device $UDID does not answer"
+      xcrun devicectl device info processes --device "$UDID" 2> /dev/null | awk -v p="${IOS_PID:-0}" '$1 == p { f = 1 } END { exit !f }' \
+        && ok "iOS app $BUNDLE is running (pid ${IOS_PID:-?})" || no "iOS app $BUNDLE is not running"
+    else
+      xcrun simctl list devices | grep "$UDID" | grep -q Booted && ok "iOS simulator $UDID is booted" || no "iOS simulator $UDID is not booted"
+      xcrun simctl spawn "$UDID" launchctl list 2> /dev/null | grep -q "UIKitApplication:$PKG" && ok "iOS app $PKG is running" || no "iOS app $PKG is not running"
+    fi
   else
     echo "--    no active iOS run (verify.sh ios-start)"
   fi
@@ -361,12 +367,47 @@ cmd_drawer() {
 }
 
 # iOS: simctl cannot inject touches and idb/Maestro are not installed, so taps go through the XCUITest bundle in ios-ui/.
+# A physical iPhone. VERIFY_IOS_DEVICE is its UDID (xcrun devicectl list devices) and VERIFY_IOS_TEAM the Apple team id,
+# which is the OU of the Apple Development certificate. VERIFY_IOS_BUNDLE_ID replaces com.mebit.app when another team
+# already owns it. The app is built straight from the checked-in Xcode project with the team and the id passed as build
+# settings, so no tracked file changes. The device must be unlocked and its developer must be trusted once on the phone.
+ios_device_start() {
+  local bundle=${VERIFY_IOS_BUNDLE_ID:-$PKG} derived app
+  [ -n "${VERIFY_IOS_TEAM:-}" ] || die "VERIFY_IOS_TEAM is not set. It is the OU of your Apple Development certificate"
+  UDID=$VERIFY_IOS_DEVICE
+  xcrun devicectl device info lockState --device "$UDID" > /dev/null 2>&1 \
+    || die "device $UDID does not answer. Plug it in, unlock it, and check xcrun devicectl list devices"
+  IOS_RUN=$OUT/$(date +%Y%m%d-%H%M%S)-ios; mkdir -p "$IOS_RUN"
+  printf 'IOS_RUN=%q\nUDID=%q\nIOS_DEVICE=1\nBUNDLE=%q\nTEAM=%q\n' "$IOS_RUN" "$UDID" "$bundle" "$VERIFY_IOS_TEAM" > "$IOS_STATE"
+  echo "device $UDID, team $VERIFY_IOS_TEAM, bundle id $bundle, building"
+  derived=$IOS_RUN/derived
+  xcodebuild -project "$APP/iosApp/module.xcodeproj" -scheme app -destination "platform=iOS,id=$UDID" -configuration Debug \
+    -derivedDataPath "$derived" -allowProvisioningUpdates -allowProvisioningDeviceRegistration \
+    DEVELOPMENT_TEAM="$VERIFY_IOS_TEAM" PRODUCT_BUNDLE_IDENTIFIER="$bundle" KOTLIN_CLI_WRAPPER_PATH="$APP/kotlin" build \
+    > "$IOS_RUN/build.log" 2>&1 \
+    || { grep 'error:' "$IOS_RUN/build.log" | sed 's/.*error: //' | head -3 | cut -c1-300 >&2; ios_fail "xcodebuild failed, full log: $IOS_RUN/build.log"; }
+  app=$derived/Build/Products/Debug-iphoneos/app.app
+  xcrun devicectl device install app --device "$UDID" "$app" > "$IOS_RUN/install.log" 2>&1 \
+    || { tail -5 "$IOS_RUN/install.log" | cut -c1-300 >&2; ios_fail "install failed, full log: $IOS_RUN/install.log"; }
+  xcrun devicectl device process launch --device "$UDID" --terminate-existing --json-output "$IOS_RUN/launch.json" "$bundle" \
+    > "$IOS_RUN/launch.log" 2>&1 \
+    || { grep -i -E "trusted|locked|error" "$IOS_RUN/launch.log" | head -3 | cut -c1-300 >&2
+         # The app stays installed. Removing the last app of a developer also removes the entry to trust it by.
+         die "launch failed, full log: $IOS_RUN/launch.log. If it says the profile is not trusted, trust the developer on the phone (Settings, General, VPN & Device Management, Developer App), then run ios-start again. ios-stop removes the app"; }
+  printf 'IOS_PID=%q\n' "$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["result"]["process"]["processIdentifier"])' "$IOS_RUN/launch.json" 2> /dev/null)" >> "$IOS_STATE"
+  sleep 2 # first frame
+  meta "$IOS_RUN/meta.txt" "device=$UDID team=$VERIFY_IOS_TEAM bundle=$bundle"
+  echo "ready: device $UDID runs $bundle. Evidence goes to $IOS_RUN"
+}
+
 cmd_ios_start() {
   if [ -f "$IOS_STATE" ]; then
     . "$IOS_STATE"
-    xcrun simctl list devices | grep -q "$UDID" && die "iOS run $IOS_RUN is still active (simulator $UDID). Stop it first: verify.sh ios-stop"
+    # A device run is rebuilt, reinstalled and relaunched, so its old state is not an obstacle.
+    [ "${IOS_DEVICE:-}" = 1 ] || { xcrun simctl list devices | grep -q "$UDID" && die "iOS run $IOS_RUN is still active (simulator $UDID). Stop it first: verify.sh ios-stop"; }
     rm -f "$IOS_STATE"
   fi
+  [ -z "${VERIFY_IOS_DEVICE:-}" ] || { ios_device_start; return; }
   local pick rt dt
   # The device type follows the runtime, so setting only VERIFY_IOS_RUNTIME still gives a pair simctl accepts.
   pick=$(xcrun simctl list runtimes -j | python3 -I "$HERE/ios_pick.py" "${VERIFY_IOS_RUNTIME:-}" "${VERIFY_IOS_DEVICE_TYPE:-}") \
@@ -395,7 +436,11 @@ cmd_ios_shot() {
   local n base
   n=$(find "$IOS_RUN" -maxdepth 1 -name '[0-9][0-9]-*.png' | wc -l)
   base="$IOS_RUN/$(printf %02d $((n + 1)))-$1.png"
-  xcrun simctl io "$UDID" screenshot "$base" > /dev/null 2>&1 || die "simctl screenshot failed"
+  if [ "${IOS_DEVICE:-}" = 1 ]; then
+    xcrun devicectl device capture screenshot --device "$UDID" --destination "$base" > /dev/null 2>&1 || die "devicectl screenshot failed. Is the phone unlocked?"
+  else
+    xcrun simctl io "$UDID" screenshot "$base" > /dev/null 2>&1 || die "simctl screenshot failed"
+  fi
   echo "$base"
 }
 
@@ -413,9 +458,15 @@ ios_ui() {
   log="$IOS_RUN/ui-$(printf %02d $((n + 1)))-$act.log"
   # xcodebuild once sat for 8 minutes after the test had finished (Xcode 27), so read the result from the
   # test log, give the process a few seconds to exit, and then stop it.
+  local dest=("platform=iOS Simulator,id=$UDID") derived="$OUT/ios-ui-derived" sign=(CODE_SIGNING_ALLOWED=NO) bundle=$PKG
+  if [ "${IOS_DEVICE:-}" = 1 ]; then # the test runner is installed on the phone, so it is signed with the same team
+    dest=("platform=iOS,id=$UDID"); derived="$OUT/ios-ui-derived-device"; bundle=$BUNDLE
+    sign=(-allowProvisioningUpdates DEVELOPMENT_TEAM="$TEAM" PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE.ui")
+  fi
   TEST_RUNNER_UI_ACTION=$act TEST_RUNNER_UI_KIND=$kind TEST_RUNNER_UI_CONTAINS=$contains TEST_RUNNER_UI_LABEL=$val \
-    xcodebuild test -project "$HERE/ios-ui/IosUi.xcodeproj" -scheme IosUi -destination "platform=iOS Simulator,id=$UDID" \
-      -derivedDataPath "$OUT/ios-ui-derived" CODE_SIGNING_ALLOWED=NO > "$log" 2>&1 &
+    TEST_RUNNER_MEBIT_BUNDLE_ID=$bundle \
+    xcodebuild test -project "$HERE/ios-ui/IosUi.xcodeproj" -scheme IosUi -destination "${dest[0]}" \
+      -derivedDataPath "$derived" "${sign[@]}" > "$log" 2>&1 &
   local pid=$! i
   for ((i = 0; i < 480; i++)); do
     grep -qE "Test Case '.*testAction.*' (passed|failed)" "$log" && break
@@ -442,6 +493,21 @@ cmd_ios_gone() { [ $# -eq 1 ] || die "usage: verify.sh ios-gone SELECTOR"; ios_u
 cmd_ios_stop() {
   [ -f "$IOS_STATE" ] || { echo "no active iOS run"; return 0; }
   . "$IOS_STATE"
+  if [ "${IOS_DEVICE:-}" = 1 ]; then
+    # Leave the phone as it was found. Uninstalling also ends the process, so look first.
+    xcrun devicectl device info processes --device "$UDID" 2> /dev/null | awk -v p="${IOS_PID:-0}" '$1 == p { f = 1 } END { exit !f }' \
+      || echo "WARNING: $BUNDLE was not running when the iOS run ended; it may have crashed"
+    xcrun devicectl device uninstall app --device "$UDID" "$BUNDLE.ui.xctrunner" > /dev/null 2>&1
+    # With the last app of a developer gone, the phone asks to trust that developer again. VERIFY_IOS_KEEP_APP=1 keeps it.
+    if [ -n "${VERIFY_IOS_KEEP_APP:-}" ]; then
+      xcrun devicectl device process terminate --device "$UDID" --pid "${IOS_PID:-0}" > /dev/null 2>&1
+    else
+      xcrun devicectl device uninstall app --device "$UDID" "$BUNDLE" > /dev/null 2>&1
+    fi
+    rm -f "$IOS_STATE"
+    echo "stopped. Evidence kept in $IOS_RUN"
+    return 0
+  fi
   xcrun simctl spawn "$UDID" launchctl list 2> /dev/null | grep -q "UIKitApplication:$PKG" \
     || echo "WARNING: $PKG was not running when the iOS run ended; it may have crashed"
   xcrun simctl shutdown "$UDID" > /dev/null 2>&1
@@ -471,6 +537,8 @@ usage: verify.sh COMMAND [ARGS]
   ios-see SELECTOR        wait for an element on the simulator; ios-gone waits for it to disappear
 SELECTOR is [text|desc|id][~]:VALUE, default text; "~" means contains. Example: tap "text~:Click me"
 On iOS text and desc both match the accessibility label, and id matches the accessibility identifier.
+A physical iPhone: VERIFY_IOS_DEVICE=<udid> VERIFY_IOS_TEAM=<team id> [VERIFY_IOS_BUNDLE_ID=<id>] verify.sh ios-start
+  (ios-stop removes the app from the phone, and the developer must then be trusted again; VERIFY_IOS_KEEP_APP=1 keeps it)
 EOF
     exit 2 ;;
 esac
