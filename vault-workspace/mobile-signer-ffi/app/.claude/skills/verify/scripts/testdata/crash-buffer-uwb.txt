@@ -1,0 +1,40 @@
+--------- beginning of crash
+10-15 11:43:59.163   538   538 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 538 (android.hardwar), pid 538 (android.hardwar)
+10-15 11:43:59.189   559   559 F DEBUG   : *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+10-15 11:43:59.189   559   559 F DEBUG   : Build fingerprint: 'google/sdk_gphone16k_arm64/emu64a16k:17/CP41.260831.007/16416850:userdebug/dev-keys'
+10-15 11:43:59.189   559   559 F DEBUG   : Kernel Release: '6.12.81-android16-6-g4f69fc7b210c-ab16167562'
+10-15 11:43:59.189   559   559 F DEBUG   : Revision: '0'
+10-15 11:43:59.189   559   559 F DEBUG   : ABI: 'arm64'
+10-15 11:43:59.189   559   559 F DEBUG   : Timestamp: 2026-10-15 11:43:59.176762334+0700
+10-15 11:43:59.189   559   559 F DEBUG   : Process uptime: 1s
+10-15 11:43:59.189   559   559 F DEBUG   : Page size: 16384 bytes
+10-15 11:43:59.189   559   559 F DEBUG   : Executable: /vendor/bin/hw/android.hardware.uwb-service
+10-15 11:43:59.189   559   559 F DEBUG   : Cmdline: /vendor/bin/hw/android.hardware.uwb-service /dev/uwb0
+10-15 11:43:59.189   559   559 F DEBUG   : pid: 538, ppid: 1, tid: 538, name: android.hardwar  >>> /vendor/bin/hw/android.hardware.uwb-service <<<
+10-15 11:43:59.189   559   559 F DEBUG   : uid: 1083
+10-15 11:43:59.189   559   559 F DEBUG   : tagged_addr_ctrl: 0000000000000001 (PR_TAGGED_ADDR_ENABLE)
+10-15 11:43:59.189   559   559 F DEBUG   : pac_enabled_keys: 000000000000000f (PR_PAC_APIAKEY, PR_PAC_APIBKEY, PR_PAC_APDAKEY, PR_PAC_APDBKEY)
+10-15 11:43:59.189   559   559 F DEBUG   : signal 6 (SIGABRT), code -1 (SI_QUEUE), fault addr --------
+10-15 11:43:59.189   559   559 F DEBUG   : Abort message: 'failed to open the serial device: Os { code: 6, kind: Uncategorized, message: "No such device or address" }'
+10-15 11:43:59.189   559   559 F DEBUG   : 
+10-15 11:43:59.189   559   559 F DEBUG   :     x0  0000000000000000  x1  000000000000021a  x2  0000000000000006  x3  00007fffd21938b0
+10-15 11:43:59.189   559   559 F DEBUG   :     x4  6462687564631f6b  x5  6462687564631f6b  x6  6462687564631f6b  x7  7f7f7f7f7f7f7f7f
+10-15 11:43:59.189   559   559 F DEBUG   :     x8  00000000000000f0  x9  13ff5b13ce62e80e  x10 000000ff00000020  x11 000000000006c000
+10-15 11:43:59.189   559   559 F DEBUG   :     x12 000000007fffffff  x13 0000000000000362  x14 000001170acea150  x15 0000000029aaaaab
+10-15 11:43:59.189   559   559 F DEBUG   :     x16 000073fdc81576f8  x17 000073fdc813bfc0  x18 000073fdc9374000  x19 000000000000021a
+10-15 11:43:59.189   559   559 F DEBUG   :     x20 000000000000021a  x21 00000000ffffffff  x22 00007fffd2193a40  x23 00005779bf0969c0
+10-15 11:43:59.189   559   559 F DEBUG   :     x24 00005779bf09c600  x25 00007fffd21941d0  x26 00007fffd2193be0  x27 000073fdc8482e80
+10-15 11:43:59.189   559   559 F DEBUG   :     x28 00007fffd21949c8  x29 00007fffd2193930
+10-15 11:43:59.189   559   559 F DEBUG   :     lr  000073fdc80d88ec  sp  00007fffd21938b0  pc  000073fdc80d8910  pst 0000000000001000
+10-15 11:43:59.189   559   559 F DEBUG   :     esr 0000000000000000  vg  0000000000000000
+10-15 11:43:59.189   559   559 F DEBUG   : 
+10-15 11:43:59.189   559   559 F DEBUG   : 18 total frames
+10-15 11:43:59.189   559   559 F DEBUG   : backtrace:
+10-15 11:43:59.189   559   559 F DEBUG   :       #00 pc 0000000000078910  /apex/com.android.runtime/lib64/bionic/libc.so (abort+160) (BuildId: c4b1f4a2273ae85d0a136e4d0a3aafa0)
+10-15 11:43:59.189   559   559 F DEBUG   :       #01 pc 000000000003e284  /vendor/bin/hw/android.hardware.uwb-service (std::sys::pal::unix::abort_internal+8) (BuildId: 8d8402af21e3e4939ff08b7bb72f3227)
+10-15 11:43:59.189   559   559 F DEBUG   :       #02 pc 000000000003bda8  /vendor/bin/hw/android.hardware.uwb-service (std::process::abort+8) (BuildId: 8d8402af21e3e4939ff08b7bb72f3227)
+10-15 11:43:59.189   559   559 F DEBUG   :       #03 pc 00000000000387d8  /vendor/bin/hw/android.hardware.uwb-service (__rustc::__rust_abort+8) (BuildId: 8d8402af21e3e4939ff08b7bb72f3227)
+10-15 11:43:59.189   559   559 F DEBUG   :       #04 pc 000000000002cf48  /vendor/bin/hw/android.hardware.uwb-service (__rustc::__rust_start_panic+16) (BuildId: 8d8402af21e3e4939ff08b7bb72f3227)
+10-15 11:43:59.189   559   559 F DEBUG   :       #05 pc 00000000000387cc  /vendor/bin/hw/android.hardware.uwb-service (__rustc::rust_panic+8) (BuildId: 8d8402af21e3e4939ff08b7bb72f3227)
+10-15 11:43:59.189   559   559 F DEBUG   :       #06 pc 000000000003c0b0  /vendor/bin/hw/android.hardware.uwb-service (std::panicking::panic_with_hook+276) (BuildId: 8d8402af21e3e4939ff08b7bb72f3227)
+10-15 11:43:59.189   559   559 F DEBUG   :       #07 pc 0000000000037f24  /vendor/bin/hw/android.hardware.uwb-service (std::panicking::panic_handler::{closure#0}+60) (BuildId: 8d8402af21e3e4939ff08b7bb72f3227)
