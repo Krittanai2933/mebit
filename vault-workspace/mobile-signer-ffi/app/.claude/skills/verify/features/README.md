@@ -7,7 +7,7 @@ This directory is the maintained source for verifying what a user sees and does 
 - `verify.sh doctor` passes, and `verify.sh start` has just finished in this run.
 - The emulator is `emulator-5580`, portrait, started by this run. `start` uninstalls the app first, so the app data is empty.
 - Never drive an emulator or simulator that this run did not start.
-- `start` uses the first AVD that `emulator -list-avds` prints, or `VERIFY_AVD`. The recipes passed on five images listed in `SKILL.md`. A different AVD changes the API level in the greeting text.
+- `start` uses the first AVD that `emulator -list-avds` prints, or `VERIFY_AVD`. The recipes passed on the nine AVDs listed in `SKILL.md`. A different AVD changes the API level in the greeting text.
 
 ## Driving conventions
 
