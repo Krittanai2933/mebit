@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+
 use std::path::Path;
 
 use bip39::Mnemonic;
@@ -25,7 +26,7 @@ use zeroize::Zeroizing;
 use super::Result;
 use super::model::{Case, FEE_CAP, FEE_RATE, Family, PAYMENT_SATS, RATE_CAP, Slot, Source};
 use super::records::{
-    Account, Checkpoint, Enrollment, Finalized, Identity, Signing, Store, atomic_write,
+    Account, Checkpoint, Enrollment, Finalized, Identity, Progress, Signing, Store, atomic_write,
 };
 
 fn account_from_mnemonic(mnemonic: &Mnemonic, family: Family) -> Result<(Xpriv, Xpub)> {
@@ -564,7 +565,7 @@ pub fn validate_checkpoint(checkpoint: &Checkpoint) -> Result<()> {
             }
             (
                 super::records::DeviceAction::Sign { psbt, .. },
-                super::records::Progress::Signing(signing),
+                Progress::Signing(signing),
             ) => {
                 let next = checkpoint.case.signing_subset.get(signing.completed.len());
                 if next != Some(&request.slot) || psbt != &signing.signed_psbt {
