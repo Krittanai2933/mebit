@@ -25,3 +25,7 @@ The two processes share digest `1e084bbf7182a3da749752498280785e21ee8bea86e2bd73
 The narrow comment review proposed zero deletions and found no unresolved issue. Independent read-only review, configured as `gpt-5.6-sol`, returned VERIFIED for the offline integration. It confirmed the exact target commit, retained backup, unstaged wallet work, both conflict resolutions, source preservation, complete verification logs, and the corrected lockfile evidence. No integration correctness or evidence flags remain.
 
 All verification is offline. Actual BLE recovery and testnet4 spend acceptance remain unverified; the live result stays 0/7,315. Full workspace formatting retains its documented unchanged-package failures.
+
+## Later E2E status update — 2026-10-16
+
+The preceding status describes the integration checkpoint and has since been superseded. The refreshed local report contains eight Jade/Hot Wallet single-sig PASS checkpoints and five multisig PASS checkpoints; all five multisig spends were confirmed at block 156696. Four Trezor single-sig confirmations are friend-reported rather than locally checkpointed. The offline run passes 7,315/7,315 with digest `951dc04a35aa056826e4bee3320f1224257ccf3bd7011bd7f883ac78a44eeec7`. Overall live acceptance is BLOCKED at 13/7,315; see [`verification.md`](verification.md).

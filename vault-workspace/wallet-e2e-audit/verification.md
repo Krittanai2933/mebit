@@ -2,16 +2,18 @@
 
 This report inventories wallet tests, the code paths they exercise, and the latest recorded results. The operational test instructions are in [`wallet-e2e/README.md`](../wallet-e2e/README.md). Generated logs and per-case evidence are kept under the ignored `target/wallet-e2e/` directory.
 
-## Latest saved verification — 2026-10-13 16:32 +07:00
+## Latest E2E verification status — 2026-10-16
 
 | Check | Result | Evidence and limits |
 | --- | --- | --- |
-| `cargo test --workspace --locked` | PASS — 181 passed, 0 failed | Full Rust workspace, including Jade and Trezor libraries and both hardware-harness example test suites. |
-| `bash wallet-e2e/verify.sh` | PASS — exit 0 | Run from `vault-workspace`. Both CLI examples generated the same 7,315-case matrix; each finalized all 7,315 designated subsets with software fixtures. Independent composition/subset, repeat-process determinism, wrong-network, and unknown-case checks passed. |
-| Offline E2E result | PASS — 7,315/7,315 finalized | `target/wallet-e2e/offline.json`; software fixtures exercise descriptor, PSBT, signature verification, and finalization. Hardware behavior is not verified by this check. |
-| Live acceptance report | BLOCKED — 8/7,315 confirmed live PASS | `target/wallet-e2e/report.json`, generated at the timestamp above, records four Jade and four Hot Wallet cases as PASS. This report snapshot has not been refreshed for this documentation update. |
+| Example build | PASS | `cargo build --locked -p trezor-ble -p jade-ble --examples` completed on 2026-10-16. |
+| E2E matrix | PASS — 7,315 cases | Both current example binaries generated the 12 single-sig + 7,303 multisig matrix. |
+| Offline E2E | PASS — 7,315/7,315 finalized | Both current example binaries produced digest `951dc04a35aa056826e4bee3320f1224257ccf3bd7011bd7f883ac78a44eeec7`. This uses software fixtures; hardware behavior remains unverified by the offline check. |
+| Live acceptance JSON | BLOCKED — 13/7,315 locally recorded PASS; generated 2026-10-16 09:55 +07:00 | `target/wallet-e2e/report.json` records 13 live PASS checkpoints: four Jade single-sig, four Hot Wallet single-sig, and five multisig cases. The five multisig checkpoints were reconciled by `e2e resume` and confirmed at block 156696. |
+| Documented live results | BLOCKED — 17/7,315 reported confirmed; 7,298 not yet passing | Combines the 13 locally recorded cases with four friend-reported Trezor single-sig cases below. Trezor transaction and confirmation details were supplied by the operator; they are not in this workspace's generated report or checkpoints. |
+| Full `bash wallet-e2e/verify.sh` | NOT RUN | The script ends by refreshing the live report, which requires Esplora. Its network-free build, matrix, and offline steps were run separately; network-dependent report/reconciliation remains outstanding. |
 
-The E2E verification script exits successfully when its CLI and offline assertions pass, even when the separate live-acceptance report is BLOCKED. The saved `target/wallet-e2e/report.json` records `recorded_live_pass: 8`, `live_pass: 8`, and `overall: BLOCKED`. The eight PASS records consist of four Jade single-sig cases and four Hot Wallet single-sig cases. Their saved checkpoints include canonical funding and spend confirmations; chain state was not rechecked while updating this report.
+The generated `target/wallet-e2e/report.json` remains at `recorded_live_pass: 13`, `live_pass: 13`, `remaining: 7302`, and `overall: BLOCKED`. Its 13 PASS records are four Jade single-sig cases, four Hot Wallet single-sig cases, and five multisig cases. The five multisig checkpoints were reconciled by the coordinator and each records a canonical confirmation at block 156696. The four Trezor cases below raise the documented aggregate to 17/7,315, with 7,298 cases still not passing in this tracker. Full live acceptance remains BLOCKED.
 
 ## Test inventory and application-path audit
 
@@ -19,11 +21,11 @@ The E2E verification script exits successfully when its CLI and offline assertio
 | --- | ---: | --- | --- |
 | `vault-core` | 124 | Rust key derivation, descriptors, PSBT handling, Jade and Trezor protocol/client logic, and signature validation. | Unit tests use simulated devices and network interactions. These call Rust library functions directly. |
 | `jade-ble` | 4 library + 13 example | BLE discovery/service behavior and the Jade hardware-test CLI/E2E coordinator. | Automated tests use fixtures or fake devices. Four separately recorded live Jade single-sig cases used the BLE client and testnet transaction workflow. |
-| `trezor-ble` | 13 library + 16 example | BLE discovery, pairing/client behavior, and shared E2E coordinator safeguards. | Automated tests use fixtures or fake devices. No Safe 7 live test is recorded. |
-| `wallet-e2e` | Included in example test totals | Matrix generation, checkpoints, chain reconciliation, and transaction workflows. Harness paths call `vault-core` derivation and PSBT-check functions; single-sig assembly also uses harness-side `bitcoin`/`miniscript` glue. | Offline signing uses software fixtures. Eight live cases are recorded below: four Jade and four Hot Wallet. No live Trezor or multisig result is claimed. |
+| `trezor-ble` | 13 library + 16 example | BLE discovery, pairing/client behavior, and shared E2E coordinator safeguards. | Automated tests use fixtures or fake devices. Four Trezor Safe 7 single-sig results were reported by the operator's friend and are included in the 17-case documented live total; they are not in this workspace's saved live checkpoints. |
+| `wallet-e2e` | Included in example test totals | Matrix generation, checkpoints, chain reconciliation, and transaction workflows. Harness paths call `vault-core` derivation and PSBT-check functions; single-sig assembly also uses harness-side `bitcoin`/`miniscript` glue. | Offline signing uses software fixtures. Thirteen local PASS cases and four friend-reported Trezor results are documented below. The generated local report includes only the 13 local checkpoints. |
 | `mobile-signer-ffi` Rust | 5 | FFI-shaped function behavior and tests. | Current functions call mock `vault-core` descriptor/derivation/PSBT abstractions; `sign_psbt` returns a mock signature. UniFFI is not wired. The Expo app uses `mockVault.ts`, has no test script, and does not call this Rust crate. |
 
-These are not all end-to-end tests of the shipped application. Rust unit tests call library functions directly; harness tests exercise CLI/coordinator code; offline E2E uses software signers. The saved Jade live cases exercised the hardware BLE client, while the Hot Wallet live cases exercised software signing; both used the testnet workflow. The React Native UI remains mock-backed.
+These are not all end-to-end tests of the shipped application. Rust unit tests call library functions directly; harness tests exercise CLI/coordinator code; offline E2E uses software signers. The locally saved Jade live cases exercised the hardware BLE client, while the Hot Wallet live cases exercised software signing; both used the testnet workflow. The four Trezor results below were supplied from a friend's E2E report and operator-provided explorer output. They count in the documented live total, but have not been imported into this workspace's private checkpoints. The React Native UI remains mock-backed.
 
 The 181 workspace tests include six non-wallet service tests (two in `custody-service`, four in `monitor-service`); `lender-signer-cli` has no tests. The wallet-specific rows account for the other 175 tests.
 
@@ -51,7 +53,32 @@ These four cases used the enrolled `h1` software signer and the same 5,000-sat d
 | 84 | `tb1qrgdq0p2vx9x3zfsrkxwjm6qhg4p2z5rhw5tmns` | `tb1qpp7u5fndqq58hcm2nr76vae69x57mpqt5wueku` | `69e519b086640750201cf70af1b91636218f6108a4509e42b5a4f40cdd15c992` | 282 sats | 156368 |
 | 86 | `tb1pn3syu8cacmn5jpsw5yrazx38herqw53exn0g5jf30dwkshuskmjst2j4er` | `tb1pz7gr5q3d654xm3qzjxnq6xtvzumfukfgus8tps4k78whvwfygy0spz6d95` | `fd21a08da582d1d7c35ea6c867b38c47a2ba81db8bb9ed2cddf65c51368068b5` | 284 sats | 156378 |
 
-Across the saved report, eight cases have live PASS checkpoints: Jade 4/4 and Hot Wallet 4/4. The other 7,307 cases have no recorded live acceptance result. The aggregate remains BLOCKED until all 7,315 required cases pass.
+The documented live total is 17/7,315: 13 locally recorded PASS checkpoints (Jade 4/4, Hot Wallet 4/4, multisig 5/5) plus four friend-reported, explorer-confirmed Trezor single-sig spends. The Trezor results remain outside `target/wallet-e2e/report.json`, which records only the 13 local cases. There are 7,298 cases without a passing result in this tracker, so the aggregate remains BLOCKED.
+
+## Locally reconciled multisig PASS cases
+
+The five result files below now have local progress `PASS`. Each `e2e resume` reconciled the saved finalized spend against canonical testnet4 chain data and recorded confirmation at block 156696 (six confirmations when the report was generated at 09:55 +07:00 on 2026-10-16). Their fees, virtual sizes, and txids match the generated report and private checkpoints.
+
+| Threshold | Case ID | Funding outpoint | Receive address | Spend txid | Fee | vsize | Local result | Confirmed block |
+| --- | --- | --- | --- | --- | ---: | ---: | --- | ---: |
+| 2-of-2 | `multisig-p2wsh-2of2-a0-h1j1t0-s03-r0-29-c1-29` | `a00f06ec6b7a788c0977e71e7be74cb3c6b16d4ca03c0b09af8f3311b9faa319:0` | `tb1q7qhrj0q25skfu83ycuah8mhuzw83u25rzsqkvvapjkxvzwyqnd9qw8pcmw` | `d53ce05760e7b0af344b4d5f144fa14c70c873ff54ef0103776533ff8fac3e8b` | 362 sats | 180 vB | PASS | 156696 |
+| 1-of-2 | `multisig-p2wsh-1of2-a0-h1j1t0-s02-r0-28-c1-28` | `b60aee372c49078594657ea364fcf383452381c3d256bafcd0fcd747c0d92e24:1` | `tb1q3ryd0wqq9304fd0t32renmtdujz8ged9uld2jysdvmwuyl0ggadqgdl76e` | `d1e57d01db7b059514401cbcf9d51882b8dd714453cd2f871c1c6de2a6fa73de` | 324 sats | 162 vB | PASS | 156696 |
+| 1-of-3 | `multisig-p2wsh-1of3-a0-h2j1t0-s04-r0-91-c1-91` | `40171d6634cbe1f5f23d4c6cb7d37259f31a2a65b251aabfea7f47d1356b89aa:0` | `tb1q6x4yve26xwlfe6jem6t0rp26hxc867y34qcwy5gr92qu0h5zpacq7qjuhx` | `872d0f955fff6a7163d27ace7861e7cc12222ef64a85bb155e37c7fe919c28c1` | 342 sats | 171 vB | PASS | 156696 |
+| 2-of-3 | `multisig-p2wsh-2of3-a0-h2j1t0-s05-r0-93-c1-93` | `719ab4127b46396425f6d9008b327b8dfe7195f2bddcbcdd29d4b0ce07706522:1` | `tb1ql3nehdurgl9w6vkt2x6qcwvdlm26ux28782jmlfzjed60gzpv2rss9jnrt` | `443b623aa5b962901a2734f08739f2271dea74cc086ccdeda641bad06e254db0` | 378 sats | 189 vB | PASS | 156696 |
+| 3-of-3 | `multisig-p2wsh-3of3-a0-h2j1t0-s07-r0-95-c1-95` | `69bc117c181b18dbd9975c60aa4c9209f4418c34e0498cde1eca881956841e1a:0` | `tb1qdl5hscq6k2kt7a9z9v6dys96ew5np6nqedf29zhtvckfsf7g587sdz79gx` | `19987dd29483a1542a1325ad1167a51f6b7c9cbf60e29d35cdaf27639dc61a86` | 414 sats | 207 vB | PASS | 156696 |
+
+## Friend-reported Trezor Safe 7 single-sig testnet4 cases
+
+The following four cases and confirmed spends were supplied from the friend's E2E report and the operator-provided explorer output. The report said these were `e2e resume` checks, so no new Trezor signing was performed during those checks. The funding receive addresses were not included in the supplied evidence. These count as friend-reported cases in the documented 17/7,315 live total, but are not part of this workspace's local `report.json` count.
+
+| BIP | Case ID | Payment output | Change address | Spend txid | Fee | Confirmed block |
+| --- | --- | --- | --- | --- | ---: | ---: |
+| 44 | `trezor-bip44-a0-h0j0t1-s01-r0-8-c1-8` | 5,000 sats to `tb1qphjkxm23hqyjgy53g2kl5cxvanhvw8zlfhfx4t` | `mgCCGaQXWu1JGnuyhqvzgvUEmgAyRVMesi` (44,552 sats) | `e94d90f65ac97a3646207b11fd8896fa4aad5ef6b8215ca370d84db20f4e75b9` | 448 sats | 156281 |
+| 49 | `trezor-bip49-a0-h0j0t1-s01-r0-9-c1-9` | 5,000 sats to `tb1qphjkxm23hqyjgy53g2kl5cxvanhvw8zlfhfx4t` | `2N1K4jqn55X8ULQYhL3A9T8JVReFSbR2zg5` (44,670 sats) | `28156e0b09ccf4d4193bbf602faa81c5c2f41ed7ad1c9ac543bdcc3ed147bdde` | 330 sats | 156281 |
+| 84 | `trezor-bip84-a0-h0j0t1-s01-r0-10-c1-10` | 5,000 sats to `tb1qphjkxm23hqyjgy53g2kl5cxvanhvw8zlfhfx4t` | `tb1q6mpyx6qvvpuhkg0u9fq7ddllh6zrsrpw8zw67p` (44,718 sats) | `db41499941f8f3d7a4b52a80b0a207d617adf487b40038e1faa6e3ea5bcd136a` | 282 sats | 156281 |
+| 86 | `trezor-bip86-a0-h0j0t1-s01-r0-11-c1-11` | 5,000 sats to `tb1qphjkxm23hqyjgy53g2kl5cxvanhvw8zlfhfx4t` | `tb1pqctq7eyaeyg3y4xf94pgj2dj5ds8p2ap96fl3awt8turymksn8xsguykl3` (44,716 sats) | `659cb71576f40d7d0cbf16344dc0f62682f6278772ff61ecc488c5b52f7affb7` | 284 sats | 156281 |
+
+The friend's report showed a separate 4/7,315 snapshot for the Trezor cases and offline PASS. This tracker combines those four reported cases with the 13 locally recorded PASS cases above; the generated local JSON remains unchanged. This partial combined result does not establish full-matrix acceptance.
 
 ## Changes in the preceding commit
 

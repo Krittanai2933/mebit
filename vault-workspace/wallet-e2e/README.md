@@ -13,7 +13,7 @@ cargo run --locked -p trezor-ble --example trezor-hw-test -- --network testnet4 
 
 `matrix` writes `target/wallet-e2e/manifest.json`. It contains 12 single-sig cases and 7,303 P2WSH cases, including every threshold and exact signing subset through seven holders. Each case has fixed receive and change indices. Source permutations do not create additional funded rows.
 
-`offline` derives receive and change scripts independently at indices 0, 1, and 7. It signs and finalizes all 7,315 designated subsets with software fixtures at index 7. Fixtures representing hardware sources exercise transaction behavior. Hardware behavior and real-network acceptance remain unverified. Run `bash wallet-e2e/verify.sh` to check both executables, independent matrix expectations, and determinism across separate processes.
+`offline` derives receive and change scripts independently at indices 0, 1, and 7. It signs and finalizes all 7,315 designated subsets with software fixtures at index 7. Fixtures representing hardware sources exercise transaction behavior; this offline check does not verify hardware behavior or live acceptance. Full real-network acceptance remains incomplete. See the [wallet verification report](../wallet-e2e-audit/verification.md) for the latest partial live results. Run `bash wallet-e2e/verify.sh` to check both executables, independent matrix expectations, and determinism across separate processes.
 
 Enroll each independent test holder once. Canonical slots are `h1` through `h7`, `j1` through `j7`, and `t1` through `t7`. Hardware enrollment reads all five account xpubs through BLE. Device identity, fingerprint, origins, and xpubs bind every subsequent request. Duplicate physical identifiers, fingerprints, and account keys are refused.
 
