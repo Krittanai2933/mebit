@@ -27,6 +27,66 @@ cargo run --locked -p trezor-ble --example trezor-hw-test -- --network testnet4 
 
 For first Jade multisig use, manually verify that the `mebit_e2e` test registration slot is empty before passing `--jade-slot-empty`. Jade RPC hides records belonging to other seeds, so an absent response cannot prove the slot is empty. The flag records your declaration. The runner reads back every registration and refuses unrelated visible overwrites. It replaces a previous test registration only when readback matches the saved ownership descriptor. Before signing a resumed case, the coordinator restores that case's registration and verifies its address again. Firmware support still requires verification on your actual device. See the [Jade 1.0.41 RPC documentation](https://github.com/Blockstream/Jade/blob/1.0.41/docs/index.rst).
 
+### Run a multisig with a remote Trezor
+
+For a remote 3-of-3 using local hot key `h1`, local Jade `j1`, and your
+friend's Safe 7 `t1`, use case
+`multisig-p2wsh-3of3-a0-h1j1t1-s07-r0-74-c1-74`. A new Trezor seed means a
+new `t1` identity and a different multisig address. Do not reuse an address or
+funding outpoint from the previous Trezor enrollment.
+
+Your friend enrolls the Safe 7 on their computer, then exports its public
+identity. The mnemonic and BLE pairing credential stay on their computer:
+
+```sh
+cargo run --locked -p trezor-ble --example trezor-hw-test -- --network testnet4 e2e enroll --slot t1
+cargo run --locked -p trezor-ble --example trezor-hw-test -- --network testnet4 e2e export-enrollment --slot t1 --out target/t1-public.json
+```
+
+Transfer `target/t1-public.json` to your computer and import it as `t1`. The
+import command refuses to replace an existing different identity; preserve
+that workspace and resolve the slot before proceeding. Prepare with
+`--remote-slot t1`. The
+coordinator writes one case-bound request for each Trezor address check. Send
+each request to your friend; they approve the displayed address on the Safe 7,
+then return the response. Import each response and repeat until the coordinator
+prints the funding address.
+
+```sh
+cargo run --locked -p trezor-ble --example trezor-hw-test -- --network testnet4 e2e import-enrollment --slot t1 --file target/t1-public.json
+cargo run --locked -p jade-ble --example jade-hw-test -- --network testnet4 --name "Jade BE0184" e2e prepare --case multisig-p2wsh-3of3-a0-h1j1t1-s07-r0-74-c1-74 --remote-slot t1
+```
+
+On your friend's computer, run the Trezor worker with the request file, approve
+the operation on the device, and return the response file:
+
+```sh
+cargo run --locked -p trezor-ble --example trezor-hw-test -- --network testnet4 --device "Safe 7 selector" e2e remote-worker --request target/remote.request.json --response target/remote.response.json
+```
+
+On your computer, import the response using its local path. Repeat the same
+worker/import exchange if `prepare` requests the second address check:
+
+```sh
+cargo run --locked -p trezor-ble --example trezor-hw-test -- --network testnet4 e2e import-remote --case multisig-p2wsh-3of3-a0-h1j1t1-s07-r0-74-c1-74 --response target/remote.response.json
+```
+
+After address checks complete, fund the new receive address with exactly
+50,000 sats and wait for one confirmation. Start the spend with `--broadcast`.
+The local hot key and Jade sign first; the coordinator then writes a request
+for the Trezor signature. Your friend runs `remote-worker` for that request and
+returns the response. Import it with `e2e import-remote`; the coordinator
+validates the Trezor signatures against the saved PSBT, finalizes, broadcasts,
+and waits for confirmation. No transaction is broadcast until your local run
+command includes `--broadcast`.
+
+Request and response files contain account xpubs and transaction details, but
+not the mnemonic or pairing credential. Keep the files private and transfer
+them over a channel you trust. The remote address check is attested by the
+operator who reads the Safe 7 screen; the file itself is not a cryptographic
+device attestation. The spend signatures are cryptographically verified by the
+coordinator before finalization.
+
 Choose a case ID from the manifest. Enroll every holder that row requires, including holders outside its signing subset. Complete coverage needs up to seven distinct Jades and seven distinct Safe 7 devices. `prepare` checks the API genesis against rust-bitcoin's testnet4 genesis, compares independent host derivations, and requests address display on each hardware holder for both receive and change. The expected genesis is `00000000da84f2bafbbc53dee25a72ae507ff4914b867c565be350b0da8bf043`.
 
 Jade BLE addresses can rotate between sessions. The harness identifies a Jade

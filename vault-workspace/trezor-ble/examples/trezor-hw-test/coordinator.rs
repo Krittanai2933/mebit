@@ -12,8 +12,10 @@ use crate::e2e::chain::{Chain, Esplora, Outspend, Reconciled, reconcile};
 use crate::e2e::model::{Command, Family, Slot, Source, find_case};
 use crate::e2e::records::{
     AddressProof, Checkpoint, DeviceAction, DeviceResult, Enrollment, Execution, Finalized,
-    Funding, Lease, Progress, Registration, Signing, Store, WorkerRequest, WorkerResponse,
-    check_identity, check_identity_for_source, now, read_json, write_json,
+    Funding, Lease, MAX_PUBLIC_ENROLLMENT_BYTES, MAX_REMOTE_FILE_BYTES, Progress, PublicEnrollment,
+    Registration, RemoteRequest, RemoteResponse, Signing, Store, WorkerRequest, WorkerResponse,
+    check_identity, check_identity_for_source, now, read_json, read_json_limited,
+    validate_remote_request, validate_remote_response, write_json,
 };
 use crate::e2e::{Result, wallet};
 
@@ -199,9 +201,10 @@ pub async fn run(command: Command, store: &Store, settings: Settings) -> Result<
         settings: &settings,
     };
     let case_id = match &command {
-        Command::Prepare { case } | Command::Run { case, .. } | Command::Resume { case, .. } => {
-            Some(case.clone())
-        }
+        Command::Prepare { case, .. }
+        | Command::ImportRemote { case, .. }
+        | Command::Run { case, .. }
+        | Command::Resume { case, .. } => Some(case.clone()),
         _ => None,
     };
     let outcome = async {
@@ -210,7 +213,14 @@ pub async fn run(command: Command, store: &Store, settings: Settings) -> Result<
                 slot,
                 jade_slot_empty,
             } => enroll(store, &workers, &chain, slot, jade_slot_empty),
-            Command::Prepare { case } => prepare(store, &workers, &chain, &case),
+            Command::ExportEnrollment { slot, out } => export_enrollment(store, slot, &out),
+            Command::ImportEnrollment { slot, file } => import_enrollment(store, slot, &file),
+            Command::Prepare { case, remote_slot } => {
+                prepare(store, &workers, &chain, &case, remote_slot)
+            }
+            Command::ImportRemote { case, response } => {
+                import_remote(store, &workers, &chain, &case, &response).await
+            }
             Command::Run {
                 case,
                 funding_outpoint,
@@ -367,6 +377,63 @@ fn enroll(
     Ok(())
 }
 
+fn export_enrollment(store: &Store, slot: Slot, out: &std::path::Path) -> Result<()> {
+    if slot.source != Source::Trezor {
+        return Err("public enrollment export is for a Trezor slot".into());
+    }
+    let enrollment: Enrollment = read_json(&store.enrollment_path(slot))?;
+    wallet::independent_holders(std::slice::from_ref(&enrollment))?;
+    write_json(
+        out,
+        &PublicEnrollment {
+            schema: 1,
+            slot,
+            identity: enrollment.identity,
+        },
+    )?;
+    println!("Exported public identity for {slot} to {}.", out.display());
+    println!(
+        "The file contains account xpubs and device identity only; it excludes pairing credentials."
+    );
+    Ok(())
+}
+
+fn import_enrollment(store: &Store, slot: Slot, file: &std::path::Path) -> Result<()> {
+    if slot.source != Source::Trezor {
+        return Err("public enrollment import is for a Trezor slot".into());
+    }
+    let profile: PublicEnrollment = read_json_limited(file, MAX_PUBLIC_ENROLLMENT_BYTES)?;
+    if profile.schema != 1 || profile.slot != slot {
+        return Err("public enrollment schema or slot does not match".into());
+    }
+    let imported = Enrollment {
+        slot,
+        identity: profile.identity,
+        selector: None,
+        jade_slot_declared_empty: false,
+        jade_owned_descriptor: None,
+    };
+    wallet::independent_holders(std::slice::from_ref(&imported))?;
+    let mut all = store.enrollments()?;
+    if let Some(existing) = all.iter().find(|enrollment| enrollment.slot == slot) {
+        check_identity(&existing.identity, &imported.identity).map_err(|_| {
+            format!(
+                "{slot} already has a different identity; keep its existing enrollment and use an unused Trezor slot"
+            )
+        })?;
+        println!("{slot} already has this public identity.");
+        return Ok(());
+    }
+    all.push(imported.clone());
+    wallet::independent_holders(&all)?;
+    write_json(&store.enrollment_path(slot), &imported)?;
+    println!(
+        "Imported public Trezor identity for {slot}, fingerprint {}.",
+        imported.identity.fingerprint
+    );
+    Ok(())
+}
+
 fn enrolled_case(store: &Store, case: &crate::e2e::model::Case) -> Result<Vec<Enrollment>> {
     let all = store.enrollments()?;
     let selected = case
@@ -398,8 +465,17 @@ fn revision() -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
-fn prepare(store: &Store, workers: &Workers<'_>, chain: &impl Chain, id: &str) -> Result<()> {
+fn prepare(
+    store: &Store,
+    workers: &Workers<'_>,
+    chain: &impl Chain,
+    id: &str,
+    remote_slot: Option<Slot>,
+) -> Result<()> {
     let case = find_case(id)?;
+    if let Some(slot) = remote_slot {
+        validate_remote_slot(&case, slot)?;
+    }
     let enrolled = enrolled_case(store, &case)?;
     wallet::check_derivation(&case, &enrolled)?;
     chain.verify_network()?;
@@ -414,6 +490,12 @@ fn prepare(store: &Store, workers: &Workers<'_>, chain: &impl Chain, id: &str) -
         let mut saved = store.load(id)?;
         if !matches!(saved.progress, Progress::Prepared) {
             return Err("case has already reserved funding; resume its saved checkpoint".into());
+        }
+        if let Some(requested) = remote_slot {
+            if saved.remote_slot.is_some_and(|saved| saved != requested) {
+                return Err("prepared case already uses a different remote signer".into());
+            }
+            saved.remote_slot = Some(requested);
         }
         for old in &saved.enrolled {
             let current = enrolled
@@ -444,6 +526,8 @@ fn prepare(store: &Store, workers: &Workers<'_>, chain: &impl Chain, id: &str) -
             broadcast_authorized: false,
             genesis_verified_at: now(),
             runner_revision: revision(),
+            remote_slot,
+            pending_remote: None,
         }
     };
     if checkpoint.receive_address != receive_address
@@ -482,16 +566,17 @@ fn prepare(store: &Store, workers: &Workers<'_>, chain: &impl Chain, id: &str) -
                 } else {
                     Registration::ExistingOnly
                 };
-                let (response, execution) = workers.call(
-                    &enrollment,
-                    DeviceAction::Verify {
-                        descriptor: descriptor.to_string(),
-                        index,
-                        signer: enrollment.identity.fingerprint.clone(),
-                        registration,
-                    },
-                    false,
-                )?;
+                let action = DeviceAction::Verify {
+                    descriptor: descriptor.to_string(),
+                    index,
+                    signer: enrollment.identity.fingerprint.clone(),
+                    registration,
+                };
+                let Some((response, execution)) =
+                    call_or_queue_remote(store, workers, &mut checkpoint, &enrollment, action)?
+                else {
+                    return Ok(());
+                };
                 checkpoint.executions.push(execution);
                 let DeviceResult::Address(actual) = response.result else {
                     return Err("address worker returned a different operation".into());
@@ -549,6 +634,203 @@ fn prepare(store: &Store, workers: &Workers<'_>, chain: &impl Chain, id: &str) -
         change_address, destination
     );
     Ok(())
+}
+
+fn validate_remote_slot(case: &crate::e2e::model::Case, slot: Slot) -> Result<()> {
+    if slot.source != Source::Trezor || !case.holders.contains(&slot) {
+        return Err("remote slot must name an enrolled Trezor holder in this case".into());
+    }
+    Ok(())
+}
+
+fn call_or_queue_remote(
+    store: &Store,
+    workers: &Workers<'_>,
+    checkpoint: &mut Checkpoint,
+    enrollment: &Enrollment,
+    action: DeviceAction,
+) -> Result<Option<(WorkerResponse, Execution)>> {
+    if checkpoint.remote_slot == Some(enrollment.slot) {
+        queue_remote_action(store, checkpoint, enrollment, action)?;
+        Ok(None)
+    } else {
+        workers.call(enrollment, action, false).map(Some)
+    }
+}
+
+fn queue_remote_action(
+    store: &Store,
+    checkpoint: &mut Checkpoint,
+    enrollment: &Enrollment,
+    action: DeviceAction,
+) -> Result<()> {
+    let request = if let Some(pending) = &checkpoint.pending_remote {
+        if pending.slot != enrollment.slot
+            || pending.action != action
+            || pending.expected != enrollment.identity
+        {
+            return Err("another remote action is pending for this case".into());
+        }
+        pending.clone()
+    } else {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        RemoteRequest {
+            schema: 1,
+            request_id: format!("{nonce}-{}", std::process::id()),
+            case_id: checkpoint.case.id.clone(),
+            slot: enrollment.slot,
+            action,
+            expected: enrollment.identity.clone(),
+        }
+    };
+    validate_remote_request(&request)?;
+    let path = store.remote_request_path(&checkpoint.case.id)?;
+    write_json(&path, &request)?;
+    checkpoint.pending_remote = Some(request.clone());
+    let operation = match &request.action {
+        DeviceAction::Verify { .. } => "address verification",
+        DeviceAction::Sign { .. } => "PSBT signing",
+        DeviceAction::Enroll => return Err("remote enrollment is not supported".into()),
+    };
+    checkpoint.blockers = vec![format!("waiting for remote {} {operation}", request.slot)];
+    store.save(checkpoint)?;
+    println!("Remote {operation} required from {}.", request.slot);
+    println!(
+        "Send this private request file to the Trezor holder: {}",
+        path.display()
+    );
+    println!("On their machine, run e2e remote-worker with this request and a response file.");
+    println!(
+        "Then import the response with e2e import-remote --case {} --response <file>.",
+        checkpoint.case.id
+    );
+    Ok(())
+}
+
+async fn import_remote(
+    store: &Store,
+    workers: &Workers<'_>,
+    chain: &impl Chain,
+    case_id: &str,
+    response_path: &std::path::Path,
+) -> Result<()> {
+    let mut checkpoint = store.load(case_id)?;
+    let request = checkpoint
+        .pending_remote
+        .clone()
+        .ok_or("case has no pending remote request")?;
+    if request.case_id != case_id || checkpoint.remote_slot != Some(request.slot) {
+        return Err("pending remote request does not belong to this case setup".into());
+    }
+    validate_remote_request(&request)?;
+    let response: RemoteResponse = read_json_limited(response_path, MAX_REMOTE_FILE_BYTES)?;
+    validate_remote_response(&request, &response)?;
+    let enrollment = checkpoint
+        .enrolled
+        .iter()
+        .find(|enrollment| enrollment.slot == request.slot)
+        .ok_or("remote signer is missing from the saved case")?;
+    check_identity(&enrollment.identity, &request.expected)?;
+    let archive_path = store.remote_response_archive_path(case_id, &request.request_id)?;
+    write_json(&archive_path, &response)?;
+
+    match (&request.action, &response.response.result) {
+        (
+            DeviceAction::Verify {
+                descriptor, index, ..
+            },
+            DeviceResult::Address(actual),
+        ) => {
+            let (branch, expected_address) = if descriptor == &checkpoint.receive_descriptor
+                && *index == checkpoint.case.receive.index
+            {
+                (0, checkpoint.receive_address.clone())
+            } else if descriptor == &checkpoint.change_descriptor
+                && *index == checkpoint.case.change.index
+            {
+                (1, checkpoint.change_address.clone())
+            } else {
+                return Err(
+                    "remote address request differs from the prepared receive/change address"
+                        .into(),
+                );
+            };
+            if actual != &expected_address {
+                return Err("Trezor-displayed address differs from the prepared address".into());
+            }
+            if checkpoint.address_proofs.iter().any(|proof| {
+                proof.slot == request.slot && proof.branch == branch && proof.index == *index
+            }) {
+                return Err("remote address proof was already recorded".into());
+            }
+            checkpoint.address_proofs.push(AddressProof {
+                slot: request.slot,
+                branch,
+                index: *index,
+                address: actual.clone(),
+                firmware: response.response.identity.firmware.clone(),
+                fingerprint: response.response.identity.fingerprint.clone(),
+                device_displayed: true,
+                verified_at: now(),
+            });
+            checkpoint.executions.push(remote_execution(
+                request.slot,
+                "verify_address",
+                &request.request_id,
+            ));
+            checkpoint.pending_remote = None;
+            checkpoint.blockers.clear();
+            let remote_slot = checkpoint.remote_slot;
+            store.save(&checkpoint)?;
+            prepare(store, workers, chain, case_id, remote_slot)
+        }
+        (DeviceAction::Sign { psbt, .. }, DeviceResult::Signed(returned)) => {
+            let Progress::Signing(mut signing) = checkpoint.progress.clone() else {
+                return Err("remote signature arrived when the case is not signing".into());
+            };
+            let next = checkpoint
+                .case
+                .signing_subset
+                .get(signing.completed.len())
+                .ok_or("case has no incomplete signer")?;
+            if *next != request.slot || signing.signed_psbt != *psbt {
+                return Err(
+                    "remote signature is stale or not for the next designated signer".into(),
+                );
+            }
+            let before: Psbt = signing.signed_psbt.parse()?;
+            let accepted = verify_device_signatures(
+                &before,
+                returned.parse()?,
+                request.expected.fingerprint.parse()?,
+            )?;
+            signing.signed_psbt = accepted.to_string();
+            signing.completed.push(request.slot);
+            checkpoint.progress = Progress::Signing(signing);
+            checkpoint.executions.push(remote_execution(
+                request.slot,
+                "sign_psbt",
+                &request.request_id,
+            ));
+            checkpoint.pending_remote = None;
+            checkpoint.blockers.clear();
+            store.save(&checkpoint)?;
+            execute(store, workers, chain, &mut checkpoint, None).await
+        }
+        _ => Err("remote worker response does not match its request".into()),
+    }
+}
+
+fn remote_execution(slot: Slot, operation: &str, request_id: &str) -> Execution {
+    Execution {
+        timestamp: now(),
+        slot,
+        operation: format!("remote_{operation}"),
+        command: vec!["e2e".into(), "import-remote".into()],
+        exit_status: Some(0),
+        success: true,
+        log: format!("accepted remote response for request {request_id}"),
+    }
 }
 
 fn validate_checkpoint(store: &Store, checkpoint: &mut Checkpoint) -> Result<()> {
@@ -782,14 +1064,15 @@ async fn execute(
                     checkpoint.case.family,
                 )?
             } else {
-                let (response, execution) = workers.call(
-                    &enrollment,
-                    DeviceAction::Sign {
-                        psbt: before.to_string(),
-                        signer: enrollment.identity.fingerprint.clone(),
-                    },
-                    false,
-                )?;
+                let action = DeviceAction::Sign {
+                    psbt: before.to_string(),
+                    signer: enrollment.identity.fingerprint.clone(),
+                };
+                let Some((response, execution)) =
+                    call_or_queue_remote(store, workers, checkpoint, &enrollment, action)?
+                else {
+                    return Ok(());
+                };
                 checkpoint.executions.push(execution);
                 let actual_identity = response.identity.clone();
                 let DeviceResult::Signed(signed) = response.result else {
@@ -1048,6 +1331,8 @@ mod tests {
             broadcast_authorized: authorize,
             genesis_verified_at: now(),
             runner_revision: "offline-test".into(),
+            remote_slot: None,
+            pending_remote: None,
         };
         (checkpoint, funding)
     }
@@ -1090,6 +1375,8 @@ mod tests {
             broadcast_authorized: true,
             genesis_verified_at: 1,
             runner_revision: "test".into(),
+            remote_slot: None,
+            pending_remote: None,
         };
         let before = serde_json::to_value(&checkpoint).unwrap();
 

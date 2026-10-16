@@ -531,6 +531,54 @@ pub fn validate_checkpoint(checkpoint: &Checkpoint) -> Result<()> {
         return Err("saved enrolled holders differ from the manifest case".into());
     }
     independent_holders(&checkpoint.enrolled)?;
+    if let Some(slot) = checkpoint.remote_slot
+        && (slot.source != Source::Trezor || !checkpoint.case.holders.contains(&slot))
+    {
+        return Err("saved remote signer is not a Trezor holder in this case".into());
+    }
+    if let Some(request) = &checkpoint.pending_remote {
+        super::records::validate_remote_request(request)?;
+        if request.case_id != checkpoint.case.id || checkpoint.remote_slot != Some(request.slot) {
+            return Err("saved remote request does not match the case's remote signer".into());
+        }
+        let enrollment = checkpoint
+            .enrolled
+            .iter()
+            .find(|enrollment| enrollment.slot == request.slot)
+            .ok_or("saved remote signer is not enrolled in this case")?;
+        super::records::check_identity(&enrollment.identity, &request.expected)?;
+        match (&request.action, &checkpoint.progress) {
+            (
+                super::records::DeviceAction::Verify {
+                    descriptor, index, ..
+                },
+                _,
+            ) => {
+                let receive = descriptor == &checkpoint.receive_descriptor
+                    && *index == checkpoint.case.receive.index;
+                let change = descriptor == &checkpoint.change_descriptor
+                    && *index == checkpoint.case.change.index;
+                if !receive && !change {
+                    return Err("saved remote address request is not for this case's receive or change address".into());
+                }
+            }
+            (
+                super::records::DeviceAction::Sign { psbt, .. },
+                super::records::Progress::Signing(signing),
+            ) => {
+                let next = checkpoint.case.signing_subset.get(signing.completed.len());
+                if next != Some(&request.slot) || psbt != &signing.signed_psbt {
+                    return Err("saved remote PSBT request is stale or out of signer order".into());
+                }
+            }
+            (super::records::DeviceAction::Sign { .. }, _) => {
+                return Err("saved remote signing request has no signing checkpoint".into());
+            }
+            (super::records::DeviceAction::Enroll, _) => {
+                return Err("remote enrollment is not supported".into());
+            }
+        }
+    }
     let receive = descriptor(&checkpoint.case, &checkpoint.enrolled, 0)?;
     let change = descriptor(&checkpoint.case, &checkpoint.enrolled, 1)?;
     if checkpoint.receive_descriptor != receive.to_string()
@@ -1073,6 +1121,8 @@ mod tests {
             broadcast_authorized: false,
             genesis_verified_at: 1,
             runner_revision: "offline-test".into(),
+            remote_slot: None,
+            pending_remote: None,
         };
         let signing = Signing {
             funding: Funding {

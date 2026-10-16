@@ -257,10 +257,34 @@ pub enum Command {
         #[arg(long)]
         jade_slot_empty: bool,
     },
+    /// Export only a Trezor's public test-account identity for a remote coordinator.
+    ExportEnrollment {
+        #[arg(long)]
+        slot: Slot,
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    /// Import a remote Trezor's public identity without importing transport credentials.
+    ImportEnrollment {
+        #[arg(long)]
+        slot: Slot,
+        #[arg(long)]
+        file: std::path::PathBuf,
+    },
     /// Verify receiving and change addresses, then print funding instructions.
     Prepare {
         #[arg(long)]
         case: String,
+        /// Use a file-based remote worker for this enrolled Trezor slot.
+        #[arg(long)]
+        remote_slot: Option<Slot>,
+    },
+    /// Import the pending remote device response and continue the saved case.
+    ImportRemote {
+        #[arg(long)]
+        case: String,
+        #[arg(long)]
+        response: std::path::PathBuf,
     },
     /// Spend a confirmed funding outpoint. Broadcast requires an explicit flag.
     Run {

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,14 +35,24 @@ pub struct Enrollment {
     pub jade_owned_descriptor: Option<String>,
 }
 
+/// Public account identity exported for a remote signer. This intentionally
+/// excludes transport selectors, Jade registration state, and pairing
+/// credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicEnrollment {
+    pub schema: u32,
+    pub slot: Slot,
+    pub identity: Identity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Registration {
     ExistingOnly,
     DeclaredEmpty,
     ReplaceOwned(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeviceAction {
     Enroll,
     Verify {
@@ -75,6 +85,31 @@ pub struct WorkerResponse {
     pub identity: Identity,
     pub result: DeviceResult,
 }
+
+/// A case-bound hardware action that can be carried to a remote device host.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteRequest {
+    pub schema: u32,
+    pub request_id: String,
+    pub case_id: String,
+    pub slot: Slot,
+    pub action: DeviceAction,
+    pub expected: Identity,
+}
+
+/// The remote worker echoes the request identity so stale or cross-case
+/// responses cannot be applied to a checkpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteResponse {
+    pub schema: u32,
+    pub request_id: String,
+    pub case_id: String,
+    pub slot: Slot,
+    pub response: WorkerResponse,
+}
+
+pub const MAX_REMOTE_FILE_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_PUBLIC_ENROLLMENT_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Execution {
@@ -193,6 +228,10 @@ pub struct Checkpoint {
     pub broadcast_authorized: bool,
     pub genesis_verified_at: u64,
     pub runner_revision: String,
+    #[serde(default)]
+    pub remote_slot: Option<Slot>,
+    #[serde(default)]
+    pub pending_remote: Option<RemoteRequest>,
 }
 
 pub fn now() -> u64 {
@@ -251,6 +290,16 @@ pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
 
 pub fn read_json<T: for<'a> Deserialize<'a>>(path: &Path) -> Result<T> {
     Ok(serde_json::from_slice(&fs::read(path)?)?)
+}
+
+pub fn read_json_limited<T: for<'a> Deserialize<'a>>(path: &Path, max_bytes: usize) -> Result<T> {
+    let limit = u64::try_from(max_bytes)?.saturating_add(1);
+    let mut bytes = Vec::new();
+    fs::File::open(path)?.take(limit).read_to_end(&mut bytes)?;
+    if bytes.len() > max_bytes {
+        return Err("JSON handoff file exceeds the size limit".into());
+    }
+    Ok(serde_json::from_slice(&bytes)?)
 }
 
 pub fn log_command(store: &Store, result: &Result<()>) -> Result<()> {
@@ -325,6 +374,29 @@ impl Store {
         Ok(self.root.join("private/cases").join(format!("{id}.json")))
     }
 
+    pub fn remote_request_path(&self, id: &str) -> Result<PathBuf> {
+        super::model::find_case(id)?;
+        Ok(self
+            .root
+            .join("private/handoff")
+            .join(format!("{id}.request.json")))
+    }
+
+    pub fn remote_response_archive_path(&self, id: &str, request_id: &str) -> Result<PathBuf> {
+        super::model::find_case(id)?;
+        if request_id.is_empty()
+            || !request_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err("invalid remote request ID".into());
+        }
+        Ok(self
+            .root
+            .join("private/handoff")
+            .join(format!("{id}.{request_id}.response.json")))
+    }
+
     pub fn load(&self, id: &str) -> Result<Checkpoint> {
         let saved: Checkpoint = read_json(&self.checkpoint_path(id)?)?;
         if saved.schema != 1 || saved.case != super::model::find_case(id)? {
@@ -382,6 +454,7 @@ pub fn public_result(checkpoint: &Checkpoint) -> serde_json::Value {
         "spend":finalized.map(|f|json!({"txid":f.txid,"fee_sats":f.fee_sats,"vsize":f.vsize,"broadcast_authorized":f.broadcast_authorized})),
         "confirmation":match &checkpoint.progress {Progress::Pass{confirmation,..}=>Some(confirmation),_=>None},
         "executions":checkpoint.executions,
+        "remote_handoff":checkpoint.pending_remote.as_ref().map(|request| json!({"request_id":request.request_id,"slot":request.slot,"action":match &request.action {DeviceAction::Verify{..}=>"verify_address",DeviceAction::Sign{..}=>"sign_psbt",DeviceAction::Enroll=>"invalid"}})),
         "versions":{"runner":env!("CARGO_PKG_VERSION"),"bitcoin":"0.32","miniscript":"13","baseline":"360febfd394aef4f11f67ab079c00809da50445d","revision":checkpoint.runner_revision}
     })
 }
@@ -477,6 +550,66 @@ pub fn validate_worker_request(request: &WorkerRequest) -> Result<()> {
     Ok(())
 }
 
+pub fn validate_remote_request(request: &RemoteRequest) -> Result<()> {
+    if request.schema != 1 {
+        return Err("unsupported remote request schema".into());
+    }
+    if request.request_id.is_empty()
+        || !request
+            .request_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err("invalid remote request ID".into());
+    }
+    let case = super::model::find_case(&request.case_id)?;
+    if request.slot.source != Source::Trezor || !case.holders.contains(&request.slot) {
+        return Err("remote requests must target an enrolled Trezor holder in the case".into());
+    }
+    let enrollment = Enrollment {
+        slot: request.slot,
+        identity: request.expected.clone(),
+        selector: None,
+        jade_slot_declared_empty: false,
+        jade_owned_descriptor: None,
+    };
+    super::wallet::independent_holders(&[enrollment])?;
+    let worker_request = WorkerRequest {
+        action: request.action.clone(),
+        expected: Some(request.expected.clone()),
+    };
+    validate_worker_request(&worker_request)?;
+    match &request.action {
+        DeviceAction::Enroll => Err("remote enrollment is not supported".into()),
+        DeviceAction::Verify { signer, .. } if signer != &request.expected.fingerprint => {
+            Err("remote address request signer differs from enrolled fingerprint".into())
+        }
+        DeviceAction::Sign { signer, .. }
+            if signer != &request.expected.fingerprint
+                || !case.signing_subset.contains(&request.slot) =>
+        {
+            Err("remote signing request does not match the case signer".into())
+        }
+        _ => Ok(()),
+    }
+}
+
+pub fn validate_remote_response(request: &RemoteRequest, response: &RemoteResponse) -> Result<()> {
+    if response.schema != 1
+        || response.request_id != request.request_id
+        || response.case_id != request.case_id
+        || response.slot != request.slot
+    {
+        return Err("remote response does not match the pending case request".into());
+    }
+    check_identity(&request.expected, &response.response.identity)?;
+    match (&request.action, &response.response.result) {
+        (DeviceAction::Verify { .. }, DeviceResult::Address(_))
+        | (DeviceAction::Sign { .. }, DeviceResult::Signed(_)) => Ok(()),
+        _ => Err("remote worker response does not match the requested action".into()),
+    }
+}
+
 #[cfg(test)]
 pub fn test_store() -> Store {
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -497,6 +630,21 @@ pub fn test_store() -> Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::e2e::model::{Slot, find_case};
+
+    fn valid_remote_identity() -> Identity {
+        let store = test_store();
+        let hot_slot = Slot {
+            source: Source::Hot,
+            number: 1,
+        };
+        let mnemonic = crate::e2e::wallet::hot_mnemonic(&store, hot_slot, true).unwrap();
+        let mut identity = crate::e2e::wallet::mnemonic_identity(&mnemonic).unwrap();
+        identity.physical_id = "test-trezor-device".into();
+        identity.firmware = "test firmware".into();
+        std::fs::remove_dir_all(store.root.parent().unwrap()).unwrap();
+        identity
+    }
 
     fn sample_identity(physical_id: &str) -> Identity {
         Identity {
@@ -559,6 +707,52 @@ mod tests {
     }
 
     #[test]
+    fn remote_enrollment_and_address_responses_are_bound_to_the_manifest_case() {
+        let case = find_case("multisig-p2wsh-3of3-a0-h1j1t1-s07-r0-74-c1-74").unwrap();
+        let slot = Slot {
+            source: Source::Trezor,
+            number: 1,
+        };
+        let expected = valid_remote_identity();
+        let request = RemoteRequest {
+            schema: 1,
+            request_id: "request-123".into(),
+            case_id: case.id,
+            slot,
+            action: DeviceAction::Verify {
+                descriptor: "case descriptor".into(),
+                index: case.receive.index,
+                signer: expected.fingerprint.clone(),
+                registration: Registration::ExistingOnly,
+            },
+            expected: expected.clone(),
+        };
+
+        validate_remote_request(&request).unwrap();
+        let response = RemoteResponse {
+            schema: 1,
+            request_id: request.request_id.clone(),
+            case_id: request.case_id.clone(),
+            slot,
+            response: WorkerResponse {
+                identity: expected,
+                result: DeviceResult::Address("test-address".into()),
+            },
+        };
+        validate_remote_response(&request, &response).unwrap();
+
+        let mut stale = response.clone();
+        stale.request_id = "different-request".into();
+        assert!(validate_remote_response(&request, &stale).is_err());
+        let mut wrong_slot = request;
+        wrong_slot.slot = Slot {
+            source: Source::Trezor,
+            number: 2,
+        };
+        assert!(validate_remote_request(&wrong_slot).is_err());
+    }
+
+    #[test]
     fn exclusive_leases_and_outpoint_reservations_survive_reentry() {
         let store = test_store();
         let lease = Lease::acquire(&store).unwrap();
@@ -601,6 +795,19 @@ mod tests {
             );
         }
         assert!(store.checkpoint_path("../escape").is_err());
+        std::fs::remove_dir_all(store.root.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn bounded_json_reader_rejects_oversized_handoff_files() {
+        let store = test_store();
+        let path = store.root.join("handoff.json");
+        std::fs::write(&path, br#"{"ok":true}"#).unwrap();
+        assert!(read_json_limited::<serde_json::Value>(&path, 4).is_err());
+        assert_eq!(
+            read_json_limited::<serde_json::Value>(&path, 32).unwrap()["ok"],
+            true
+        );
         std::fs::remove_dir_all(store.root.parent().unwrap()).unwrap();
     }
 }

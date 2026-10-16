@@ -138,6 +138,13 @@ enum E2eCommand {
         #[arg(long)]
         trace_signing: bool,
     },
+    /// Execute one testnet4 remote Trezor worker request and write its bound response.
+    RemoteWorker {
+        #[arg(long)]
+        request: PathBuf,
+        #[arg(long)]
+        response: PathBuf,
+    },
     #[command(flatten)]
     Shared(e2e::model::Command),
 }
@@ -273,6 +280,17 @@ async fn dispatch_e2e(
             case,
             trace_signing,
         } => coordinator::diagnose_sign(&case, store, settings, trace_signing),
+        E2eCommand::RemoteWorker { request, response } => {
+            if args.network != Network::Testnet4 {
+                return Err("remote workers accept testnet4 E2E requests only".into());
+            }
+            let request: e2e::records::RemoteRequest =
+                e2e::records::read_json_limited(&request, e2e::records::MAX_REMOTE_FILE_BYTES)?;
+            e2e::records::validate_remote_request(&request)?;
+            let _hardware_lease = e2e::records::Lease::acquire_hardware(store)?;
+            let default_credential = store.secrets.join(format!("{}.credential", request.slot));
+            run_remote_device(args, request, response, &default_credential).await
+        }
         E2eCommand::Shared(command) => {
             if e2e::offline_command(&command, store)? {
                 return Ok(());
@@ -286,7 +304,7 @@ async fn dispatch_e2e(
                     return Err("private trace flag requires a signing worker".into());
                 }
                 let _hardware_lease = e2e::records::Lease::acquire_hardware(store)?;
-                return run_device(args, request, response).await;
+                return run_device(args, request, response, None).await;
             }
             coordinator::run(command, store, settings).await
         }
@@ -701,14 +719,16 @@ async fn run_device(
     args: &Args,
     request: e2e::records::WorkerRequest,
     response: PathBuf,
+    default_credential: Option<&Path>,
 ) -> e2e::Result<()> {
     use e2e::records::{DeviceAction, DeviceResult, WorkerResponse};
-    if let Some(file) = &args.credential_file
+    let credential_file = args.credential_file.as_deref().or(default_credential);
+    if let Some(file) = credential_file
         && file.exists()
     {
         e2e::wallet::require_private(file)?;
     }
-    let credential = match &args.credential_file {
+    let credential = match credential_file {
         Some(file) if file.exists() => Some(PairingCredential::from_bytes(&std::fs::read(file)?)?),
         _ => None,
     };
@@ -734,7 +754,7 @@ async fn run_device(
     )
     .await?;
     if let Some(credential) = connected.new_credential
-        && let Some(file) = &args.credential_file
+        && let Some(file) = credential_file
     {
         e2e::records::atomic_write(file, &credential.to_bytes())?;
     }
@@ -837,6 +857,43 @@ async fn run_device(
     let result = outcome?;
     closed?;
     e2e::records::write_json(&response, &result)
+}
+
+async fn run_remote_device(
+    args: &Args,
+    request: e2e::records::RemoteRequest,
+    response_path: PathBuf,
+    default_credential: &Path,
+) -> e2e::Result<()> {
+    use e2e::records::{RemoteResponse, WorkerRequest, WorkerResponse};
+    e2e::records::validate_remote_request(&request)?;
+    let worker_response_path = response_path.with_extension("worker-response.json");
+    if worker_response_path.exists() {
+        std::fs::remove_file(&worker_response_path)?;
+    }
+    let worker_request = WorkerRequest {
+        action: request.action.clone(),
+        expected: Some(request.expected.clone()),
+    };
+    run_device(
+        args,
+        worker_request,
+        worker_response_path.clone(),
+        Some(default_credential),
+    )
+    .await?;
+    let worker_response: WorkerResponse = e2e::records::read_json(&worker_response_path)?;
+    std::fs::remove_file(&worker_response_path)?;
+    let remote_response = RemoteResponse {
+        schema: 1,
+        request_id: request.request_id,
+        case_id: request.case_id,
+        slot: request.slot,
+        response: worker_response,
+    };
+    e2e::records::write_json(&response_path, &remote_response)?;
+    println!("Remote response written to {}.", response_path.display());
+    Ok(())
 }
 
 #[cfg(test)]

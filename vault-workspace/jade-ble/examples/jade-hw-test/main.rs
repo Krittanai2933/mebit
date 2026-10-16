@@ -310,8 +310,38 @@ fn forward_coordinator(args: &Args, command: e2e::model::Command) -> e2e::Result
                 child.arg("--jade-slot-empty");
             }
         }
-        E::Prepare { case } => {
+        E::ExportEnrollment { slot, out } => {
+            child.args([
+                "export-enrollment",
+                "--slot",
+                &slot.to_string(),
+                "--out",
+                &out.to_string_lossy(),
+            ]);
+        }
+        E::ImportEnrollment { slot, file } => {
+            child.args([
+                "import-enrollment",
+                "--slot",
+                &slot.to_string(),
+                "--file",
+                &file.to_string_lossy(),
+            ]);
+        }
+        E::Prepare { case, remote_slot } => {
             child.args(["prepare", "--case", &case]);
+            if let Some(slot) = remote_slot {
+                child.args(["--remote-slot", &slot.to_string()]);
+            }
+        }
+        E::ImportRemote { case, response } => {
+            child.args([
+                "import-remote",
+                "--case",
+                &case,
+                "--response",
+                &response.to_string_lossy(),
+            ]);
         }
         E::Run {
             case,
