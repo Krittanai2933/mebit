@@ -73,6 +73,7 @@ Sources:
 **Two pairings.**
 - The OS pairs the Bluetooth link: LE Secure Connections, numeric comparison. The same six digits show on the Safe 7 and on the host; confirm both.
 - Then THP pairs the app. The Safe 7 asks "Allow mebit on <host> to pair?" and shows a six-digit code, which the user types on the host. That code is not the PIN.
+  - If the host gets anything but six ASCII digits, it asks again on the same link, and all the tries share five minutes. The Safe 7 is not told. A well-formed code that the Safe 7 refuses ends the pairing: reconnect.
 - After that the host holds a **pairing credential**. It is a secret: it contains the host's static key. Keep it in Keychain or Keystore.
 - The Safe 7 may say it already knows this host only when this host presented a credential that Safe 7 issued: the handshake shows whether our stored credential matched the device. A peer that claims a pairing without one is refused (THP specification, host state HH3). Otherwise any peripheral could skip pairing, or pass for the paired Safe 7.
 - With the credential, a reconnection skips the code. Autoconnect credentials are never requested, so the Safe 7 asks "Allow … to connect with this Trezor?". The exception is when it still holds an open channel from this host's last connection: it then replaces that channel without asking. That is "channel replacement": THP specification, section of that name, and `core/embed/rust/src/thp/mod.rs`, `core/src/apps/thp/pairing.py`. Channels outlive a dropped link, so on 2026-10-01 no reconnection asked, not even one made just after turning the Safe 7 off and on (HW-13).
@@ -155,6 +156,7 @@ Runs so far: 2026-10-01, Safe 7 firmware 2.12.5 with the test phrase, macOS 26.6
 | HW-11 | lock the Safe 7, wake it to its lock screen, then `info` | PIN asked on the Safe 7, then connected | ✅ the Safe 7 asked for its PIN, then connected (24.7 s including the 10 s scan). A first try while it slept found nothing. |
 | HW-12 | forget the Safe 7 in the host's Bluetooth settings (or vice versa), `info` | the `BondRemoved` guidance, or OS pairing again | ✅ forgotten on the Mac: OS numeric comparison again, and the THP credential still accepted (no code). That run's signing ended `cancelled on the Trezor`, cause unknown; a repeat signed and finalized. |
 | HW-13 | restart the Safe 7, unlock it, then `info` | "Allow … to connect with this Trezor?" if the restart emptied its channel cache | ❔ connected with no prompt. Inconclusive: whether the restart was a full power-off isn't confirmed, and the spec doesn't say whether the cache survives one. |
+| HW-14 | fresh pairing (`--credential-file` pointing at a new file). At the code prompt type `12345`, then `12345a`, then the real code | the harness asks again each time and the Safe 7 stays on its code screen; pairing finishes with no new approval and no reconnect. Typing malformed codes only ends with `timed out waiting for the pairing code` about five minutes after the first prompt | not run yet (unit-tested only: `trezor-ble` driver tests, and `a_malformed_code_leaves_the_pairing_waiting_for_the_right_one` in `vault-core`) |
 
 **Not verifiable here:**
 - iOS and Android: they need the Phase 1 UniFFI wrapper and an app.
@@ -186,3 +188,16 @@ Runs so far: 2026-10-01, Safe 7 firmware 2.12.5 with the test phrase, macOS 26.6
 - **btleplug 0.13.3** is pinned for its CoreBluetooth fixes: `discover_services()` hangs, event-thread panics, operations that never resolve (#486–#489), and Android JNI crashes. It also requests MTU 517 on Android.
 - **Device authenticity is not checked.** A fake peripheral claiming to be a `T3W1` passes both model checks, and could hand over its own xpub when a vault is set up. Only Trezor's `AuthenticateDevice` (certificate chains from the device's secure elements) could tell. It is required before real funds, so use the Safe 7 on test networks with the test phrase until then: `docs/04-open-items.md` item 19.
 - **Dropping a call's future midway** leaves the device out of step. The next call says so (`Abandoned`): reconnect.
+
+## Real testnet4 wallet verification
+
+The example also has an `e2e` command group. It coordinates hot, Jade, and Safe 7 holders serially and records all 7,315 required cases. Run from `vault-workspace`.
+
+```sh
+cargo run --locked -p trezor-ble --example trezor-hw-test -- --network testnet4 e2e matrix
+cargo run --locked -p trezor-ble --example trezor-hw-test -- --network testnet4 e2e prepare --case <case-id>
+cargo run --locked -p trezor-ble --example trezor-hw-test -- --network testnet4 e2e run --case <case-id> --funding-outpoint <txid:vout> --broadcast
+cargo run --locked -p trezor-ble --example trezor-hw-test -- --network testnet4 e2e resume --case <case-id>
+```
+
+Read the [testnet4 instructions](../wallet-e2e/README.md) for enrollment, funding, registration ownership, offline verification, and private records. Matrix generation and reporting require no devices. Live acceptance stays blocked until every required case has a canonical spend confirmation.

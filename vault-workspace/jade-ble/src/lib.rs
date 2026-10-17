@@ -23,7 +23,7 @@ use std::pin::Pin;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bitcoin::bip32::{DerivationPath, Fingerprint, Xpub};
-use bitcoin::{Network, Psbt};
+use bitcoin::{Address, Network, Psbt};
 use btleplug::api::{
     Central, CentralEvent, CharPropFlags, Characteristic, Manager as _, Peripheral as _,
     ScanFilter, ValueNotification, WriteType,
@@ -31,7 +31,10 @@ use btleplug::api::{
 use btleplug::platform::{Manager, Peripheral};
 use futures_util::{Stream, StreamExt};
 use vault_core::error::VaultCoreError;
-use vault_core::hw::jade::{JadeError, JadeEvent, JadeSession, VersionInfo};
+use vault_core::hw::AddressRequest;
+use vault_core::hw::jade::{
+    JadeError, JadeEvent, JadeRegistrationPolicy, JadeSession, VersionInfo,
+};
 
 // The Jade's GATT interface, from `main/ble/ble.c` in Jade firmware 1.0.41.
 // Both characteristics require an encrypted, authenticated link.
@@ -87,6 +90,9 @@ pub enum JadeBleError {
     #[error("the Jade disconnected")]
     Disconnected,
 
+    /// The pinserver could not be reached, or its response was no use. The
+    /// Jade was sent `cancel` and the connection still works: call `unlock()`
+    /// again.
     #[error("pinserver relay failed: {0}")]
     Pinserver(String),
 
@@ -96,9 +102,10 @@ pub enum JadeBleError {
 
 /// One live BLE connection to one Jade, with its protocol session.
 ///
-/// A device error (declined, wrong PIN, locked) leaves the connection usable.
-/// A call that stops midway (a timeout, a dropped link, its future dropped)
-/// leaves the Jade out of step with the host: reconnect before the next call.
+/// A device error (declined, wrong PIN, locked) or a failed pinserver relay
+/// leaves the connection usable. A call that stops midway (a timeout, a
+/// dropped link, its future dropped) leaves the Jade out of step with the
+/// host: reconnect before the next call.
 pub struct JadeBle {
     peripheral: Peripheral,
     name: String,
@@ -174,6 +181,11 @@ impl JadeBle {
         &self.name
     }
 
+    /// The platform's physical BLE identifier, independent of the wallet seed.
+    pub fn device_id(&self) -> String {
+        self.peripheral.id().to_string()
+    }
+
     /// Firmware, board, state and network pin. Needs no unlock.
     pub async fn version_info(&mut self) -> Result<VersionInfo, JadeBleError> {
         let request = self.session.request_version_info()?;
@@ -207,6 +219,30 @@ impl JadeBle {
         let request = self.session.request_xpub(path)?;
         match self.drive(request, REPLY_TIMEOUT).await? {
             JadeEvent::Xpub(xpub) => Ok(xpub),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// Displays the descriptor address on the device and checks its reply.
+    pub async fn verify_address(
+        &mut self,
+        request: &AddressRequest<'_>,
+    ) -> Result<Address, JadeBleError> {
+        self.verify_address_with_registration(request, JadeRegistrationPolicy::ExistingOnly)
+            .await
+    }
+
+    /// Uses the dedicated test registration slot under the caller's device lease.
+    pub async fn verify_address_with_registration(
+        &mut self,
+        request: &AddressRequest<'_>,
+        policy: JadeRegistrationPolicy<'_>,
+    ) -> Result<Address, JadeBleError> {
+        let request = self
+            .session
+            .request_verify_address_with_registration(request, policy)?;
+        match self.drive(request, USER_TIMEOUT).await? {
+            JadeEvent::Address(address) => Ok(address),
             other => Err(unexpected(other)),
         }
     }
@@ -252,8 +288,6 @@ impl JadeBle {
     ) -> Result<JadeEvent, JadeBleError> {
         let outcome = self.exchange(request, first_wait).await;
         if outcome.is_err() {
-            // A no-op after a device error, which leaves the session idle. Any
-            // other failure stopped the exchange midway.
             self.session.abandon();
         }
         outcome
@@ -274,17 +308,26 @@ impl JadeBle {
                     wait = REPLY_TIMEOUT;
                     self.write(&bytes).await?;
                 }
+                JadeEvent::SendForConfirmation(bytes) => {
+                    wait = USER_TIMEOUT;
+                    self.write(&bytes).await?;
+                }
                 JadeEvent::Pinserver { url, body } => {
-                    let response = match post_to_pinserver(url, body).await {
-                        Ok(response) => response,
+                    let relayed = relay_pinserver(url, body).await.and_then(|response| {
+                        self.session
+                            .pinserver_response(&response)
+                            .map_err(|refused| JadeBleError::Pinserver(refused.to_string()))
+                    });
+                    let reply = match relayed {
+                        Ok(reply) => reply,
                         Err(error) => {
-                            // Otherwise the Jade waits on "Checking…" for as long as the link lasts.
+                            // The Jade takes `pin` or `cancel` and nothing else. Without
+                            // `cancel` it waits on "Checking…" for as long as the link lasts.
                             let cancel = self.session.pinserver_failed()?;
                             self.write(&cancel).await?;
                             return Err(error);
                         }
                     };
-                    let reply = self.session.pinserver_response(&response)?;
                     // The Jade may still ask for a passphrase or a new PIN before it
                     // answers (`get_pin_load_keys()` in `main/process/auth_user.c`).
                     wait = first_wait;
@@ -423,6 +466,21 @@ async fn post_to_pinserver(url: String, body: String) -> Result<String, JadeBleE
     .await
     .map_err(|join| JadeBleError::Pinserver(join.to_string()))?
     .map_err(|error| JadeBleError::Pinserver(error.to_string()))
+}
+
+/// Test-only response injection for a real Jade's pinserver event. This lets
+/// the desktop hardware harness exercise Jade's cancel path without weakening
+/// the HTTPS trust roots or contacting a substitute server. The production
+/// relay is used unless both the Cargo feature and debug build are enabled and
+/// the caller explicitly sets `JADE_TEST_PINSERVER_RESPONSE`.
+async fn relay_pinserver(url: String, body: String) -> Result<String, JadeBleError> {
+    #[cfg(all(feature = "test-pinserver-response", debug_assertions))]
+    if let Some(response) = std::env::var_os("JADE_TEST_PINSERVER_RESPONSE") {
+        eprintln!("TEST ONLY: injecting pinserver response; HTTPS relay skipped");
+        return Ok(response.to_string_lossy().into_owned());
+    }
+
+    post_to_pinserver(url, body).await
 }
 
 async fn within<T>(

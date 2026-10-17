@@ -35,9 +35,12 @@ use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, Xpub};
-use bitcoin::{Network, NetworkKind, Psbt};
+use bitcoin::{Address, Network, NetworkKind, Psbt};
 use ciborium::Value;
+use miniscript::descriptor::{ShInner, Wildcard, WshInner};
+use miniscript::{Descriptor, DescriptorPublicKey};
 
+use super::AddressRequest;
 use super::psbt_check::{self, SignatureCheckError};
 use crate::error::VaultCoreError;
 
@@ -88,6 +91,12 @@ pub enum JadeError {
     #[error("call made out of order")]
     OutOfOrder,
 
+    /// The pinserver answered with something the device can't take (not
+    /// JSON). The session is as it was and the device still waits: write what
+    /// [`JadeSession::pinserver_failed`] returns, then unlock again.
+    #[error("the pinserver's response can't go to the device: {0}")]
+    PinserverResponseInvalid(String),
+
     #[error("request is {0} bytes; the Jade accepts at most {MAX_REQUEST_LEN}")]
     RequestTooLarge(usize),
 
@@ -105,6 +114,37 @@ pub enum JadeError {
 
     #[error("the signature on input {input} does not verify")]
     InvalidSignature { input: usize },
+
+    #[error("unsupported signing policy")]
+    UnsupportedSigningPolicy,
+
+    #[error("input {input} has an invalid previous output")]
+    InvalidPrevout { input: usize },
+
+    #[error("input {input} has invalid BIP86 metadata")]
+    InvalidTaproot { input: usize },
+
+    #[error("invalid address request: {0}")]
+    InvalidAddressRequest(String),
+
+    #[error("the Jade's identity or account xpub differs from the descriptor")]
+    SignerMismatch,
+
+    #[error("the Jade returned an address different from the descriptor")]
+    AddressMismatch,
+
+    #[error(
+        "mebit_e2e belongs to a different multisig; supply its recorded descriptor before reuse"
+    )]
+    RegistrationConflict,
+
+    #[error("the Jade's multisig registration did not match its requested descriptor")]
+    RegistrationMismatch,
+
+    #[error(
+        "mebit_e2e is not visible; Jade RPC cannot prove the slot empty across wallets; manually verify it and declare VerifiedEmpty"
+    )]
+    RegistrationRequired,
 }
 
 /// `JADE_STATE` from `get_version_info` (`docs/index.rst`).
@@ -202,9 +242,13 @@ pub enum JadeEvent {
     /// Write these bytes to the Jade. This is the next request of an exchange
     /// that is still running — today, the next `get_extended_data` of a signing.
     Send(Vec<u8>),
+    /// Write these bytes and allow time for address or registration confirmation.
+    SendForConfirmation(Vec<u8>),
     /// POST `body` (JSON) to `url`, hand the response body to
-    /// [`JadeSession::pinserver_response`], and write the bytes it returns. If
-    /// the POST fails, write what [`JadeSession::pinserver_failed`] returns.
+    /// [`JadeSession::pinserver_response`], and write the bytes it returns. The
+    /// Jade takes those bytes or `cancel` and nothing else. If the POST fails,
+    /// or `pinserver_response` refuses the response, write what
+    /// [`JadeSession::pinserver_failed`] returns instead.
     Pinserver {
         url: String,
         body: String,
@@ -212,6 +256,8 @@ pub enum JadeEvent {
     VersionInfo(VersionInfo),
     Unlocked,
     Xpub(Xpub),
+    /// The address the user confirmed, checked against the requested descriptor.
+    Address(Address),
     /// Only ever the PSBT that was sent plus valid signatures from the signer's
     /// keys: at least one, one for every signer key its inputs list, and no
     /// other change.
@@ -233,7 +279,8 @@ enum State {
         id: String,
         op: Op,
     },
-    /// Waiting for the host to relay a pinserver request.
+    /// The Jade sent its `http_request` and waits for `pin` or `cancel`
+    /// (`handle_pin()` in `main/process/pinclient.c`).
     Pinserver {
         on_reply: String,
     },
@@ -246,6 +293,58 @@ enum Op {
     Unlock,
     Xpub(DerivationPath),
     Sign(Box<Signing>),
+    Address(Box<AddressVerification>),
+}
+
+const E2E_MULTISIG_NAME: &str = "mebit_e2e";
+
+/// Permission to use the dedicated test slot on one physically identified Jade.
+#[derive(Debug, Clone, Copy)]
+pub enum JadeRegistrationPolicy<'a> {
+    /// Reuse an exact registration; never register or overwrite a missing slot.
+    ExistingOnly,
+    /// The operator manually checked the slot is empty on this physical device.
+    /// Jade RPC hides records belonging to other wallets and cannot prove this.
+    VerifiedEmpty,
+    /// Replace only a readback that exactly matches a previously recorded wallet.
+    ReplaceOwned(&'a Descriptor<DescriptorPublicKey>),
+}
+
+struct AddressKey {
+    fingerprint: Fingerprint,
+    origin: DerivationPath,
+    account: Xpub,
+    branch: u32,
+}
+
+enum AddressKind {
+    Single { variant: &'static str },
+    Multisig { registration: Value },
+}
+
+struct PreparedAddress {
+    expected: Address,
+    keys: Vec<AddressKey>,
+    selected: usize,
+    index: u32,
+    kind: AddressKind,
+}
+
+enum AddressStep {
+    Master,
+    Account,
+    Registrations,
+    Existing,
+    Register,
+    Readback,
+    Confirm,
+}
+
+struct AddressVerification {
+    prepared: PreparedAddress,
+    previous: Option<Value>,
+    allow_initial_registration: bool,
+    step: AddressStep,
 }
 
 /// A signed PSBT arriving in pieces.
@@ -320,6 +419,7 @@ impl JadeSession {
         psbt: &Psbt,
         signer: Fingerprint,
     ) -> Result<Vec<u8>, VaultCoreError> {
+        psbt_check::validate_signing_policy(psbt).map_err(JadeError::from)?;
         let id = self.next_request_id()?;
         let params = map([
             ("network", self.network_param()),
@@ -336,8 +436,63 @@ impl JadeSession {
         self.request(id, "sign_psbt", Some(params), Op::Sign(Box::new(signing)))
     }
 
+    /// Binds the descriptor to this Jade, then displays and checks its address.
+    /// Multisig uses the dedicated `mebit_e2e` test registration slot.
+    pub fn request_verify_address(
+        &mut self,
+        request: &AddressRequest<'_>,
+    ) -> Result<Vec<u8>, VaultCoreError> {
+        self.request_verify_address_with_registration(request, JadeRegistrationPolicy::ExistingOnly)
+    }
+
+    /// Allows replacing the test slot only when its readback matches the recorded descriptor.
+    /// The caller must hold the device lease and persist the previous descriptor.
+    pub fn request_verify_address_with_registration(
+        &mut self,
+        request: &AddressRequest<'_>,
+        policy: JadeRegistrationPolicy<'_>,
+    ) -> Result<Vec<u8>, VaultCoreError> {
+        let id = self.next_request_id()?;
+        let prepared = PreparedAddress::new(request, self.network)?;
+        let previous = match policy {
+            JadeRegistrationPolicy::ReplaceOwned(descriptor) => {
+                let previous = PreparedAddress::new(
+                    &AddressRequest {
+                        descriptor,
+                        index: 0,
+                        signer: request.signer,
+                    },
+                    self.network,
+                )?;
+                let AddressKind::Multisig { registration } = previous.kind else {
+                    return Err(
+                        invalid_address("previous descriptor is not a BIP48 multisig").into(),
+                    );
+                };
+                Some(registration)
+            }
+            JadeRegistrationPolicy::ExistingOnly | JadeRegistrationPolicy::VerifiedEmpty => None,
+        };
+        let params = map([
+            ("network", self.network_param()),
+            ("path", Value::Array(Vec::new())),
+        ]);
+        let address = AddressVerification {
+            prepared,
+            previous,
+            allow_initial_registration: matches!(policy, JadeRegistrationPolicy::VerifiedEmpty),
+            step: AddressStep::Master,
+        };
+        self.request(id, "get_xpub", Some(params), Op::Address(Box::new(address)))
+    }
+
     /// The pinserver's response body for the last [`JadeEvent::Pinserver`],
     /// turned into the request that hands it to the device.
+    ///
+    /// A response the device can't take is refused with the session as it was:
+    /// not JSON ([`JadeError::PinserverResponseInvalid`]), or too large to
+    /// send ([`JadeError::RequestTooLarge`]). The device still waits, so write
+    /// what [`JadeSession::pinserver_failed`] returns.
     pub fn pinserver_response(&mut self, body: &str) -> Result<Vec<u8>, VaultCoreError> {
         let State::Pinserver { on_reply } = &self.state else {
             return Err(JadeError::OutOfOrder.into());
@@ -345,25 +500,18 @@ impl JadeSession {
         let on_reply = on_reply.clone();
         let params = serde_json::from_str::<serde_json::Value>(body)
             .map_err(|e| e.to_string())
-            .and_then(|json| Value::serialized(&json).map_err(|e| e.to_string()));
-        let params = match params {
-            Ok(params) => params,
-            Err(e) => {
-                // The device is waiting on this reply; nothing brings it back but a reconnect.
-                self.state = State::Broken;
-                return Err(protocol(format!("pinserver reply is not JSON: {e}")).into());
-            }
-        };
-        self.state = State::Idle;
-        let id = self.next_request_id()?;
+            .and_then(|json| Value::serialized(&json).map_err(|e| e.to_string()))
+            .map_err(|e| JadeError::PinserverResponseInvalid(format!("not JSON: {e}")))?;
+        let id = self.take_id_unchecked();
         self.request(id, &on_reply, Some(params), Op::Unlock)
     }
 
     /// The request to write instead of a pinserver response when the POST
-    /// failed. The device waits for one or the other; `cancel` sends it back to
-    /// its home screen without a reply (`handle_pin()` in
-    /// `main/process/pinclient.c`), so the session is idle again at once and
-    /// the unlock can be retried over the same connection.
+    /// failed or [`JadeSession::pinserver_response`] refused the response. The
+    /// device waits for one or the other; `cancel` sends it back to its home
+    /// screen without a reply (`handle_pin()` in `main/process/pinclient.c`),
+    /// so the session is idle again at once and the unlock can be retried over
+    /// the same connection.
     pub fn pinserver_failed(&mut self) -> Result<Vec<u8>, VaultCoreError> {
         if !matches!(self.state, State::Pinserver { .. }) {
             return Err(JadeError::OutOfOrder.into());
@@ -429,7 +577,137 @@ impl JadeSession {
             Op::Unlock => self.on_unlock(result),
             Op::Xpub(path) => Ok(JadeEvent::Xpub(parse_xpub(result, self.network, &path)?)),
             Op::Sign(signing) => self.on_signed_piece(*signing, seqnum, seqlen, result),
+            Op::Address(address) => self.on_address(*address, result),
         }
+    }
+
+    fn on_address(
+        &mut self,
+        mut verification: AddressVerification,
+        result: Value,
+    ) -> Result<JadeEvent, VaultCoreError> {
+        let prepared = &verification.prepared;
+        let selected = &prepared.keys[prepared.selected];
+        let next = match verification.step {
+            AddressStep::Master => {
+                let root = parse_xpub(result, self.network, &DerivationPath::default())?;
+                if root.fingerprint() != selected.fingerprint {
+                    return Err(JadeError::SignerMismatch.into());
+                }
+                AddressStep::Account
+            }
+            AddressStep::Account => {
+                let account = parse_xpub(result, self.network, &selected.origin)?;
+                if account != selected.account {
+                    return Err(JadeError::SignerMismatch.into());
+                }
+                match prepared.kind {
+                    AddressKind::Single { .. } => AddressStep::Confirm,
+                    AddressKind::Multisig { .. } => AddressStep::Registrations,
+                }
+            }
+            AddressStep::Registrations => {
+                let Value::Map(registrations) = result else {
+                    return Err(protocol("get_registered_multisigs result is not a map").into());
+                };
+                if field(&registrations, E2E_MULTISIG_NAME).is_some() {
+                    AddressStep::Existing
+                } else if verification.allow_initial_registration {
+                    AddressStep::Register
+                } else {
+                    return Err(JadeError::RegistrationRequired.into());
+                }
+            }
+            AddressStep::Existing | AddressStep::Readback => {
+                let registration = parse_registration(result)?;
+                let AddressKind::Multisig {
+                    registration: expected,
+                } = &prepared.kind
+                else {
+                    unreachable!("only multisig reads a registration");
+                };
+                if same_registration(&registration, expected) {
+                    AddressStep::Confirm
+                } else if matches!(verification.step, AddressStep::Existing)
+                    && verification
+                        .previous
+                        .as_ref()
+                        .is_some_and(|previous| same_registration(&registration, previous))
+                {
+                    AddressStep::Register
+                } else {
+                    return Err(if matches!(verification.step, AddressStep::Existing) {
+                        JadeError::RegistrationConflict
+                    } else {
+                        JadeError::RegistrationMismatch
+                    }
+                    .into());
+                }
+            }
+            AddressStep::Register => {
+                if result != Value::Bool(true) {
+                    return Err(JadeError::RegistrationMismatch.into());
+                }
+                AddressStep::Readback
+            }
+            AddressStep::Confirm => {
+                let encoded = result
+                    .into_text()
+                    .map_err(|_| protocol("get_receive_address result is not text"))?;
+                let address = Address::from_str(&encoded)
+                    .map_err(|_| JadeError::AddressMismatch)?
+                    .require_network(self.network)
+                    .map_err(|_| JadeError::AddressMismatch)?;
+                if address != prepared.expected {
+                    return Err(JadeError::AddressMismatch.into());
+                }
+                return Ok(JadeEvent::Address(address));
+            }
+        };
+        let (method, params) = match next {
+            AddressStep::Master => unreachable!("master is the first request"),
+            AddressStep::Account => (
+                "get_xpub",
+                Some(map([
+                    ("network", self.network_param()),
+                    ("path", path_value(&selected.origin)),
+                ])),
+            ),
+            AddressStep::Registrations => ("get_registered_multisigs", None),
+            AddressStep::Existing | AddressStep::Readback => (
+                "get_registered_multisig",
+                Some(map([
+                    ("multisig_name", text(E2E_MULTISIG_NAME)),
+                    ("as_file", Value::Bool(false)),
+                ])),
+            ),
+            AddressStep::Register => {
+                let AddressKind::Multisig { registration } = &prepared.kind else {
+                    unreachable!("only multisig registers a wallet");
+                };
+                (
+                    "register_multisig",
+                    Some(map([
+                        ("network", self.network_param()),
+                        ("multisig_name", text(E2E_MULTISIG_NAME)),
+                        ("descriptor", registration.clone()),
+                    ])),
+                )
+            }
+            AddressStep::Confirm => (
+                "get_receive_address",
+                Some(prepared.receive_params(self.network_param())),
+            ),
+        };
+        let needs_confirmation = matches!(next, AddressStep::Register | AddressStep::Confirm);
+        verification.step = next;
+        let id = self.next_request_id()?;
+        let bytes = self.request(id, method, params, Op::Address(Box::new(verification)))?;
+        Ok(if needs_confirmation {
+            JadeEvent::SendForConfirmation(bytes)
+        } else {
+            JadeEvent::Send(bytes)
+        })
     }
 
     /// Pops the next complete reply off the inbox, skipping device log lines.
@@ -524,9 +802,13 @@ impl JadeSession {
             State::Broken => return Err(broken()),
             _ => return Err(JadeError::OutOfOrder),
         }
-        // Decimal u32: at most 10 characters, inside the firmware's 16 (`MAXLEN_ID`).
+        Ok(self.take_id_unchecked())
+    }
+
+    /// Decimal u32: at most 10 characters, inside the firmware's 16 (`MAXLEN_ID`).
+    fn take_id_unchecked(&mut self) -> String {
         self.next_id = self.next_id.wrapping_add(1);
-        Ok(self.next_id.to_string())
+        self.next_id.to_string()
     }
 
     fn request(
@@ -550,6 +832,252 @@ impl JadeSession {
             Network::Regtest => "localtest",
             _ => "testnet",
         })
+    }
+}
+
+impl PreparedAddress {
+    fn new(request: &AddressRequest<'_>, network: Network) -> Result<Self, JadeError> {
+        if request.index >= (1 << 31) {
+            return Err(invalid_address("address index must be unhardened"));
+        }
+        let (purpose, variant, threshold, descriptor_keys) = match request.descriptor {
+            Descriptor::Pkh(key) => (44, Some("pkh(k)"), None, vec![key.as_inner()]),
+            Descriptor::Wpkh(key) => (84, Some("wpkh(k)"), None, vec![key.as_inner()]),
+            Descriptor::Sh(script) => match script.as_inner() {
+                ShInner::Wpkh(key) => (49, Some("sh(wpkh(k))"), None, vec![key.as_inner()]),
+                _ => return Err(invalid_address("only sh(wpkh) is supported")),
+            },
+            Descriptor::Tr(script) if script.tap_tree().is_none() => {
+                (86, Some("tr(k)"), None, vec![script.internal_key()])
+            }
+            Descriptor::Wsh(script) => match script.as_inner() {
+                WshInner::SortedMulti(multisig) => (
+                    48,
+                    None,
+                    Some(multisig.k()),
+                    multisig.pks().iter().collect(),
+                ),
+                _ => return Err(invalid_address("only wsh(sortedmulti) is supported")),
+            },
+            _ => {
+                return Err(invalid_address(
+                    "unsupported descriptor or Taproot script path",
+                ));
+            }
+        };
+        if descriptor_keys.len() > 7 {
+            return Err(invalid_address(
+                "at most seven independent signers are supported",
+            ));
+        }
+        let mut keys = descriptor_keys
+            .into_iter()
+            .map(|key| AddressKey::new(key, purpose, network))
+            .collect::<Result<Vec<_>, _>>()?;
+        for (index, key) in keys.iter().enumerate() {
+            if keys[..index].iter().any(|earlier| {
+                earlier.fingerprint == key.fingerprint
+                    || (earlier.account.public_key == key.account.public_key
+                        && earlier.account.chain_code == key.account.chain_code)
+            }) {
+                return Err(invalid_address("duplicate signer identity or account key"));
+            }
+            if key.branch != keys[0].branch {
+                return Err(invalid_address(
+                    "all signers must use the same receive or change branch",
+                ));
+            }
+        }
+        keys.sort_by_key(|key| (key.fingerprint, key.account));
+        let selected = keys
+            .iter()
+            .position(|key| key.fingerprint == request.signer)
+            .ok_or_else(|| invalid_address("selected signer does not occur in the descriptor"))?;
+        let kind = match (variant, threshold) {
+            (Some(variant), None) => AddressKind::Single { variant },
+            (None, Some(threshold)) => AddressKind::Multisig {
+                registration: map([
+                    ("variant", text("wsh(multi(k))")),
+                    ("sorted", Value::Bool(true)),
+                    ("threshold", uint(threshold as u64)),
+                    (
+                        "signers",
+                        Value::Array(keys.iter().map(AddressKey::registration).collect()),
+                    ),
+                ]),
+            },
+            _ => unreachable!("descriptor shape determines its registration"),
+        };
+        let expected =
+            crate::descriptor::derive_address_at(request.descriptor, request.index, network)
+                .map_err(|error| invalid_address(error.to_string()))?;
+        Ok(Self {
+            expected,
+            keys,
+            selected,
+            index: request.index,
+            kind,
+        })
+    }
+
+    fn receive_params(&self, network: Value) -> Value {
+        let selected = &self.keys[self.selected];
+        match &self.kind {
+            AddressKind::Single { variant } => {
+                let mut path = selected.origin.as_ref().to_vec();
+                path.push(ChildNumber::Normal {
+                    index: selected.branch,
+                });
+                path.push(ChildNumber::Normal { index: self.index });
+                map([
+                    ("network", network),
+                    ("variant", text(variant)),
+                    ("path", path_value(&DerivationPath::from(path))),
+                ])
+            }
+            AddressKind::Multisig { .. } => map([
+                ("network", network),
+                ("multisig_name", text(E2E_MULTISIG_NAME)),
+                (
+                    "paths",
+                    Value::Array(
+                        self.keys
+                            .iter()
+                            .map(|key| {
+                                Value::Array(vec![uint(key.branch.into()), uint(self.index.into())])
+                            })
+                            .collect(),
+                    ),
+                ),
+            ]),
+        }
+    }
+}
+
+impl AddressKey {
+    fn new(key: &DescriptorPublicKey, purpose: u32, network: Network) -> Result<Self, JadeError> {
+        let DescriptorPublicKey::XPub(key) = key else {
+            return Err(invalid_address("each key must be an account xpub"));
+        };
+        let (fingerprint, origin) = key
+            .origin
+            .as_ref()
+            .ok_or_else(|| invalid_address("account xpub has no master origin"))?;
+        let coin_type = u32::from(network != Network::Bitcoin);
+        let path = origin.as_ref();
+        let expected_len = if purpose == 48 { 4 } else { 3 };
+        if path.len() != expected_len
+            || path[0] != (ChildNumber::Hardened { index: purpose })
+            || path[1] != (ChildNumber::Hardened { index: coin_type })
+            || !path[2].is_hardened()
+            || (purpose == 48 && path[3] != (ChildNumber::Hardened { index: 2 }))
+        {
+            return Err(invalid_address(
+                "origin does not match the script's account path",
+            ));
+        }
+        if key.xkey.network != NetworkKind::from(network)
+            || usize::from(key.xkey.depth) != expected_len
+            || key.xkey.child_number != path[expected_len - 1]
+        {
+            return Err(invalid_address(
+                "xpub does not match its account origin or network",
+            ));
+        }
+        let [
+            ChildNumber::Normal {
+                index: branch @ (0 | 1),
+            },
+        ] = key.derivation_path.as_ref()
+        else {
+            return Err(invalid_address(
+                "account xpub must have a receive or change branch",
+            ));
+        };
+        if key.wildcard != Wildcard::Unhardened {
+            return Err(invalid_address(
+                "descriptor must end with an unhardened wildcard",
+            ));
+        }
+        Ok(Self {
+            fingerprint: *fingerprint,
+            origin: origin.clone(),
+            account: key.xkey,
+            branch: *branch,
+        })
+    }
+
+    fn registration(&self) -> Value {
+        map([
+            (
+                "fingerprint",
+                Value::Bytes(self.fingerprint.as_bytes().to_vec()),
+            ),
+            ("derivation", path_value(&self.origin)),
+            ("xpub", text(&self.account.to_string())),
+            ("path", Value::Array(Vec::new())),
+        ])
+    }
+}
+
+fn path_value(path: &DerivationPath) -> Value {
+    Value::Array(
+        path.into_iter()
+            .map(|&child| uint(u32::from(child).into()))
+            .collect(),
+    )
+}
+
+fn invalid_address(message: impl Into<String>) -> JadeError {
+    JadeError::InvalidAddressRequest(message.into())
+}
+
+fn parse_registration(result: Value) -> Result<Value, JadeError> {
+    let Value::Map(fields) = result else {
+        return Err(protocol("get_registered_multisig result is not a map"));
+    };
+    if field(&fields, "multisig_name").and_then(Value::as_text) != Some(E2E_MULTISIG_NAME) {
+        return Err(JadeError::RegistrationMismatch);
+    }
+    field(&fields, "descriptor")
+        .cloned()
+        .ok_or(JadeError::RegistrationMismatch)
+}
+
+fn same_registration(actual: &Value, expected: &Value) -> bool {
+    let (Value::Map(actual), Value::Map(expected)) = (actual, expected) else {
+        return false;
+    };
+    let unblinded = field(actual, "master_blinding_key")
+        .is_none_or(|key| matches!(key, Value::Null) || key.as_bytes().is_some_and(Vec::is_empty));
+    unblinded
+        && actual.len()
+            == expected.len() + usize::from(field(actual, "master_blinding_key").is_some())
+        && expected.iter().all(|(key, expected)| {
+            key.as_text()
+                .and_then(|key| field(actual, key))
+                .is_some_and(|actual| same_value(actual, expected))
+        })
+}
+
+fn same_value(actual: &Value, expected: &Value) -> bool {
+    match (actual, expected) {
+        (Value::Map(actual), Value::Map(expected)) => {
+            actual.len() == expected.len()
+                && expected.iter().all(|(key, expected)| {
+                    key.as_text()
+                        .and_then(|key| field(actual, key))
+                        .is_some_and(|actual| same_value(actual, expected))
+                })
+        }
+        (Value::Array(actual), Value::Array(expected)) => {
+            actual.len() == expected.len()
+                && actual
+                    .iter()
+                    .zip(expected)
+                    .all(|(actual, expected)| same_value(actual, expected))
+        }
+        _ => actual == expected,
     }
 }
 
@@ -690,14 +1218,15 @@ fn parse_xpub(result: Value, network: Network, path: &DerivationPath) -> Result<
     Ok(xpub)
 }
 
-/// Accepts the device's PSBT only if it is `unsigned` plus valid signatures
-/// from `signer`'s keys: see [`psbt_check::verify_device_signatures`].
+/// Verifies the device's signatures against `unsigned` and returns `unsigned`
+/// with only those verified signatures merged in.
 ///
 /// The Jade signs every input whose `bip32_derivation` names its master
-/// fingerprint (`sign_psbt()` in `main/process/sign_psbt.c`) and sends back
-/// the whole PSBT re-serialised, so all of it is compared, not just the
-/// signatures. When it found nothing of its own to sign it returns the PSBT
-/// unchanged, without an error: that is [`JadeError::NoSignatures`].
+/// fingerprint (`sign_psbt()` in `main/process/sign_psbt.c`) and sends back a
+/// re-serialized PSBT. The host transaction and metadata remain authoritative;
+/// only signatures that verify against the original host PSBT are accepted.
+/// When it found nothing of its own to sign it returns the PSBT unchanged,
+/// without an error: that is [`JadeError::NoSignatures`].
 fn verify_signed_psbt(
     unsigned: &Psbt,
     signed_bytes: &[u8],
@@ -705,7 +1234,7 @@ fn verify_signed_psbt(
 ) -> Result<Psbt, JadeError> {
     let signed = Psbt::deserialize(signed_bytes)
         .map_err(|e| protocol(format!("the device returned an unparseable PSBT: {e}")))?;
-    Ok(psbt_check::verify_device_signatures(
+    Ok(psbt_check::verify_device_signatures_preserving_host_psbt(
         unsigned, signed, signer,
     )?)
 }
@@ -717,6 +1246,9 @@ impl From<SignatureCheckError> for JadeError {
             SignatureCheckError::NoSignatures => Self::NoSignatures,
             SignatureCheckError::MissingSignature { input } => Self::MissingSignature { input },
             SignatureCheckError::InvalidSignature { input } => Self::InvalidSignature { input },
+            SignatureCheckError::UnsupportedPolicy => Self::UnsupportedSigningPolicy,
+            SignatureCheckError::InvalidPrevout { input } => Self::InvalidPrevout { input },
+            SignatureCheckError::InvalidTaproot { input } => Self::InvalidTaproot { input },
         }
     }
 }
@@ -907,6 +1439,13 @@ mod tests {
         piece_len: usize,
         /// (origid, signed PSBT, seqlen, pieces sent) while a signing is fetched.
         signing: Option<(String, Vec<u8>, u64, u64)>,
+        /// The `http_request` went out, so `handle_pin()` in
+        /// `main/process/pinclient.c` takes `pin` or `cancel` and nothing else.
+        awaiting_pin: bool,
+        registration: Option<Value>,
+        registration_count: usize,
+        corrupt_readback: bool,
+        requests: Vec<String>,
     }
 
     impl FakeJade {
@@ -916,6 +1455,11 @@ mod tests {
                 pin_wallet: false,
                 piece_len: 3008,
                 signing: None,
+                awaiting_pin: false,
+                registration: None,
+                registration_count: 0,
+                corrupt_readback: false,
+                requests: Vec::new(),
             }
         }
 
@@ -939,8 +1483,26 @@ mod tests {
                 .cloned()
                 .unwrap_or_default();
             let param = |key: &str| field(&params, key).cloned();
-            if ["auth_user", "get_xpub", "sign_psbt"].contains(&method.as_str()) {
+            self.requests.push(method.clone());
+            if [
+                "auth_user",
+                "get_xpub",
+                "sign_psbt",
+                "get_receive_address",
+                "register_multisig",
+            ]
+            .contains(&method.as_str())
+            {
                 assert_eq!(param("network"), Some(text("testnet")));
+            }
+            // The transport task answers `get_version_info` at once, whatever
+            // a screen on the device waits for.
+            if self.awaiting_pin
+                && !["pin", "cancel", "get_version_info"].contains(&method.as_str())
+            {
+                // The unlock is over, with an error screen the user must dismiss.
+                self.awaiting_pin = false;
+                return error_reply(&id, -32001, "Unexpected message, expecting 'pin'");
             }
             match method.as_str() {
                 "get_version_info" => reply(&id, version_info("LOCKED", "TEST")),
@@ -951,6 +1513,7 @@ mod tests {
                             .is_some()
                     );
                     let result = if self.pin_wallet {
+                        self.awaiting_pin = true;
                         pinserver_request()
                     } else {
                         Value::Bool(true)
@@ -958,10 +1521,21 @@ mod tests {
                     reply(&id, result)
                 }
                 "pin" => {
+                    assert!(
+                        self.awaiting_pin,
+                        "`pin` without an `http_request` before it"
+                    );
+                    self.awaiting_pin = false;
                     // The pinserver's JSON must reach the device unchanged.
                     let got = serde_json::to_value(Value::Map(params.clone())).unwrap();
                     assert_eq!(got, pinserver_reply());
                     reply(&id, Value::Bool(true))
+                }
+                // `PIN_CANCELLED` is deliberately silent: no reply, and the Jade is home.
+                "cancel" => {
+                    assert!(self.awaiting_pin, "`cancel` with nothing to cancel");
+                    self.awaiting_pin = false;
+                    Vec::new()
                 }
                 "get_xpub" => {
                     let path: Vec<ChildNumber> = param("path")
@@ -974,6 +1548,97 @@ mod tests {
                     let secp = Secp256k1::new();
                     let xpub = self.signer.master.derive_priv(&secp, &path).unwrap();
                     reply(&id, text(&Xpub::from_priv(&secp, &xpub).to_string()))
+                }
+                "get_registered_multisigs" => {
+                    let result = match self.registration {
+                        Some(_) => map([(E2E_MULTISIG_NAME, Value::Bool(true))]),
+                        None => Value::Map(Vec::new()),
+                    };
+                    reply(&id, result)
+                }
+                "register_multisig" => {
+                    assert_eq!(param("multisig_name"), Some(text(E2E_MULTISIG_NAME)));
+                    self.registration = param("descriptor");
+                    self.registration_count += 1;
+                    reply(&id, Value::Bool(true))
+                }
+                "get_registered_multisig" => {
+                    assert_eq!(param("multisig_name"), Some(text(E2E_MULTISIG_NAME)));
+                    assert_eq!(param("as_file"), Some(Value::Bool(false)));
+                    let mut registration = self.registration.clone().expect("registered wallet");
+                    let Value::Map(fields) = &mut registration else {
+                        panic!("registration map")
+                    };
+                    fields.push((text("master_blinding_key"), Value::Bytes(Vec::new())));
+                    if self.corrupt_readback {
+                        let threshold = fields
+                            .iter_mut()
+                            .find(|(key, _)| key.as_text() == Some("threshold"))
+                            .unwrap();
+                        threshold.1 = uint(7);
+                    }
+                    reply(
+                        &id,
+                        map([
+                            ("multisig_name", text(E2E_MULTISIG_NAME)),
+                            ("descriptor", registration),
+                        ]),
+                    )
+                }
+                "get_receive_address" => {
+                    let address = if let Some(variant) = param("variant") {
+                        let path = decode_path(&param("path").unwrap());
+                        let secp = Secp256k1::new();
+                        let private = self.signer.master.derive_priv(&secp, &path).unwrap();
+                        let public = private.private_key.public_key(&secp);
+                        let compressed = bitcoin::CompressedPublicKey(public);
+                        match variant.as_text().unwrap() {
+                            "pkh(k)" => Address::p2pkh(bitcoin::PublicKey::new(public), NETWORK),
+                            "sh(wpkh(k))" => Address::p2shwpkh(&compressed, NETWORK),
+                            "wpkh(k)" => Address::p2wpkh(&compressed, NETWORK),
+                            "tr(k)" => {
+                                Address::p2tr(&secp, public.x_only_public_key().0, None, NETWORK)
+                            }
+                            other => panic!("unexpected address variant {other}"),
+                        }
+                    } else {
+                        assert_eq!(param("multisig_name"), Some(text(E2E_MULTISIG_NAME)));
+                        let registration = self.registration.as_ref().unwrap().as_map().unwrap();
+                        let threshold =
+                            unsigned(field(registration, "threshold").unwrap(), "threshold")
+                                .unwrap();
+                        let signers = field(registration, "signers").unwrap().as_array().unwrap();
+                        let paths = param("paths").unwrap().into_array().unwrap();
+                        assert_eq!(paths.len(), signers.len());
+                        let secp = Secp256k1::verification_only();
+                        let mut public_keys = signers
+                            .iter()
+                            .zip(paths)
+                            .map(|(signer, path)| {
+                                let signer = signer.as_map().unwrap();
+                                assert_eq!(field(signer, "path"), Some(&Value::Array(Vec::new())));
+                                let account = Xpub::from_str(
+                                    field(signer, "xpub").unwrap().as_text().unwrap(),
+                                )
+                                .unwrap();
+                                account
+                                    .derive_pub(&secp, &decode_path(&path))
+                                    .unwrap()
+                                    .public_key
+                            })
+                            .collect::<Vec<_>>();
+                        public_keys.sort_by_key(|key| key.serialize());
+                        let mut script = bitcoin::script::Builder::new().push_int(threshold as i64);
+                        for key in &public_keys {
+                            script = script.push_key(&bitcoin::PublicKey::new(*key));
+                        }
+                        let script = script
+                            .push_int(signers.len() as i64)
+                            .push_opcode(bitcoin::opcodes::all::OP_CHECKMULTISIG)
+                            .into_script();
+                        Address::p2wsh(&script, NETWORK)
+                    };
+                    reply(&id, text(&address.to_string()))
                 }
                 "sign_psbt" => {
                     let bytes = param("psbt")
@@ -1089,6 +1754,14 @@ mod tests {
         pinserver_reply().to_string()
     }
 
+    fn until_pinserver(session: &mut JadeSession, jade: &mut FakeJade) {
+        jade.pin_wallet = true;
+        let request = session.request_unlock(0).unwrap();
+        let event = session.receive(&jade.answer(&request)).unwrap();
+        assert!(matches!(event, JadeEvent::Pinserver { .. }), "{event:?}");
+        assert!(jade.awaiting_pin);
+    }
+
     /// Runs one exchange to its end the way a host does, cutting every reply
     /// into fragments of `cut(n)` bytes.
     fn run(
@@ -1114,7 +1787,7 @@ mod tests {
                 }
             }
             outgoing = match event {
-                JadeEvent::Send(bytes) => bytes,
+                JadeEvent::Send(bytes) | JadeEvent::SendForConfirmation(bytes) => bytes,
                 JadeEvent::Pinserver { url, body } => {
                     session.pinserver_response(&fake_pinserver(&url, &body))?
                 }
@@ -1162,6 +1835,507 @@ mod tests {
             .and_then(Value::as_map)
             .unwrap()
             .clone()
+    }
+
+    fn decode_path(value: &Value) -> DerivationPath {
+        DerivationPath::from(
+            value
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|child| ChildNumber::from(u32::try_from(child.as_integer().unwrap()).unwrap()))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn single_descriptor(
+        signer: &Signer,
+        purpose: u32,
+        branch: u32,
+    ) -> Descriptor<DescriptorPublicKey> {
+        let secp = Secp256k1::new();
+        let origin = DerivationPath::from_str(&format!("m/{purpose}'/1'/0'")).unwrap();
+        let account = Xpub::from_priv(&secp, &signer.master.derive_priv(&secp, &origin).unwrap());
+        let key = format!(
+            "[{}/{purpose}'/1'/0']{account}/{branch}/*",
+            signer.fingerprint
+        );
+        let descriptor = match purpose {
+            44 => format!("pkh({key})"),
+            49 => format!("sh(wpkh({key}))"),
+            84 => format!("wpkh({key})"),
+            86 => format!("tr({key})"),
+            _ => panic!("single-sig purpose"),
+        };
+        Descriptor::from_str(&descriptor).unwrap()
+    }
+
+    fn multisig_descriptor(
+        threshold: usize,
+        signers: &[&Signer],
+    ) -> Descriptor<DescriptorPublicKey> {
+        Descriptor::from_str(&format!(
+            "wsh(sortedmulti({threshold},{}))",
+            signers
+                .iter()
+                .map(|signer| signer.descriptor_key())
+                .collect::<Vec<_>>()
+                .join(",")
+        ))
+        .unwrap()
+    }
+
+    fn address_of(event: JadeEvent) -> Address {
+        match event {
+            JadeEvent::Address(address) => address,
+            other => panic!("expected confirmed address, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verifies_each_single_sig_script_and_receive_change_path() {
+        for purpose in [44, 49, 84, 86] {
+            for branch in [0, 1] {
+                for index in [0, 1, 7] {
+                    let mut jade = FakeJade::new();
+                    let descriptor = single_descriptor(&jade.signer, purpose, branch);
+                    let request = AddressRequest {
+                        descriptor: &descriptor,
+                        index,
+                        signer: jade.signer.fingerprint,
+                    };
+                    let mut session = JadeSession::with_ids_after(Network::Testnet4, 0);
+                    let outgoing = session.request_verify_address(&request).unwrap();
+                    let address =
+                        address_of(run(&mut session, &mut jade, outgoing, scattered).unwrap());
+                    assert!(
+                        address
+                            .as_unchecked()
+                            .is_valid_for_network(Network::Testnet4)
+                    );
+                    assert_eq!(
+                        jade.requests,
+                        ["get_xpub", "get_xpub", "get_receive_address"]
+                    );
+                    assert_eq!(jade.registration_count, 0);
+                    let path =
+                        DerivationPath::from_str(&format!("m/{purpose}'/1'/0'/{branch}/{index}"))
+                            .unwrap();
+                    let secp = Secp256k1::new();
+                    let key = jade
+                        .signer
+                        .master
+                        .derive_priv(&secp, &path)
+                        .unwrap()
+                        .private_key
+                        .public_key(&secp);
+                    let compressed = bitcoin::CompressedPublicKey(key);
+                    let expected = match purpose {
+                        44 => Address::p2pkh(bitcoin::PublicKey::new(key), Network::Testnet4),
+                        49 => Address::p2shwpkh(&compressed, Network::Testnet4),
+                        84 => Address::p2wpkh(&compressed, Network::Testnet4),
+                        86 => {
+                            Address::p2tr(&secp, key.x_only_public_key().0, None, Network::Testnet4)
+                        }
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(address, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multisig_requires_an_explicit_empty_slot_declaration() {
+        let mut jade = FakeJade::new();
+        let cosigners = [Signer::new(1), Signer::new(2)];
+        let descriptor = multisig_descriptor(2, &[&jade.signer, &cosigners[0], &cosigners[1]]);
+        let request = AddressRequest {
+            descriptor: &descriptor,
+            index: 7,
+            signer: jade.signer.fingerprint,
+        };
+        let mut session = session_from_1();
+        let outgoing = session.request_verify_address(&request).unwrap();
+        assert!(matches!(
+            jade_error(run(&mut session, &mut jade, outgoing, whole)),
+            JadeError::RegistrationRequired
+        ));
+        assert_eq!(jade.registration_count, 0);
+        assert!(
+            !jade
+                .requests
+                .iter()
+                .any(|method| method == "get_receive_address")
+        );
+
+        let outgoing = session
+            .request_verify_address_with_registration(
+                &request,
+                JadeRegistrationPolicy::VerifiedEmpty,
+            )
+            .unwrap();
+        let address = address_of(run(&mut session, &mut jade, outgoing, scattered).unwrap());
+        assert_eq!(address.script_pubkey().len(), 34);
+        assert_eq!(jade.registration_count, 1);
+        assert_eq!(
+            &jade.requests[jade.requests.len() - 6..],
+            [
+                "get_xpub",
+                "get_xpub",
+                "get_registered_multisigs",
+                "register_multisig",
+                "get_registered_multisig",
+                "get_receive_address"
+            ]
+        );
+
+        let outgoing = session.request_verify_address(&request).unwrap();
+        assert_eq!(
+            address_of(run(&mut session, &mut jade, outgoing, whole).unwrap()),
+            address
+        );
+        assert_eq!(jade.registration_count, 1);
+    }
+
+    #[test]
+    fn test_slot_replacement_requires_exact_previous_registration() {
+        let mut jade = FakeJade::new();
+        let cosigners = [Signer::new(1), Signer::new(2)];
+        let signers = [&jade.signer, &cosigners[0], &cosigners[1]];
+        let previous = multisig_descriptor(2, &signers);
+        let next = multisig_descriptor(1, &signers);
+        let unrelated = multisig_descriptor(3, &signers);
+        let fingerprint = jade.signer.fingerprint;
+        let mut session = session_from_1();
+        let previous_request = AddressRequest {
+            descriptor: &previous,
+            index: 0,
+            signer: fingerprint,
+        };
+        let outgoing = session
+            .request_verify_address_with_registration(
+                &previous_request,
+                JadeRegistrationPolicy::VerifiedEmpty,
+            )
+            .unwrap();
+        run(&mut session, &mut jade, outgoing, whole).unwrap();
+
+        let next_request = AddressRequest {
+            descriptor: &next,
+            index: 1,
+            signer: fingerprint,
+        };
+        for policy in [
+            JadeRegistrationPolicy::ExistingOnly,
+            JadeRegistrationPolicy::VerifiedEmpty,
+            JadeRegistrationPolicy::ReplaceOwned(&unrelated),
+        ] {
+            let outgoing = session
+                .request_verify_address_with_registration(&next_request, policy)
+                .unwrap();
+            assert!(matches!(
+                jade_error(run(&mut session, &mut jade, outgoing, whole)),
+                JadeError::RegistrationConflict
+            ));
+            assert_eq!(jade.registration_count, 1);
+        }
+        let outgoing = session
+            .request_verify_address_with_registration(
+                &next_request,
+                JadeRegistrationPolicy::ReplaceOwned(&previous),
+            )
+            .unwrap();
+        address_of(run(&mut session, &mut jade, outgoing, scattered).unwrap());
+        assert_eq!(jade.registration_count, 2);
+    }
+
+    #[test]
+    fn canonical_multisig_registration_survives_key_permutations() {
+        let mut jade = FakeJade::new();
+        let cosigners = [Signer::new(1), Signer::new(2)];
+        let original = multisig_descriptor(2, &[&jade.signer, &cosigners[0], &cosigners[1]]);
+        let permuted = multisig_descriptor(2, &[&cosigners[1], &jade.signer, &cosigners[0]]);
+        let fingerprint = jade.signer.fingerprint;
+        let mut session = session_from_1();
+        let first = AddressRequest {
+            descriptor: &original,
+            index: 7,
+            signer: fingerprint,
+        };
+        let outgoing = session
+            .request_verify_address_with_registration(&first, JadeRegistrationPolicy::VerifiedEmpty)
+            .unwrap();
+        let address = address_of(run(&mut session, &mut jade, outgoing, whole).unwrap());
+        let second = AddressRequest {
+            descriptor: &permuted,
+            index: 7,
+            signer: fingerprint,
+        };
+        let outgoing = session.request_verify_address(&second).unwrap();
+        assert_eq!(
+            address_of(run(&mut session, &mut jade, outgoing, scattered).unwrap()),
+            address
+        );
+        assert_eq!(jade.registration_count, 1);
+    }
+
+    #[test]
+    fn corrupted_registration_readback_prevents_address_display() {
+        let mut jade = FakeJade::new();
+        jade.corrupt_readback = true;
+        let cosigner = Signer::new(1);
+        let descriptor = multisig_descriptor(1, &[&jade.signer, &cosigner]);
+        let request = AddressRequest {
+            descriptor: &descriptor,
+            index: 0,
+            signer: jade.signer.fingerprint,
+        };
+        let mut session = session_from_1();
+        let outgoing = session
+            .request_verify_address_with_registration(
+                &request,
+                JadeRegistrationPolicy::VerifiedEmpty,
+            )
+            .unwrap();
+        assert!(matches!(
+            jade_error(run(&mut session, &mut jade, outgoing, whole)),
+            JadeError::RegistrationMismatch
+        ));
+        assert!(
+            !jade
+                .requests
+                .iter()
+                .any(|method| method == "get_receive_address")
+        );
+    }
+
+    #[test]
+    fn address_verification_refuses_wrong_origin_identity_and_account() {
+        let mut jade = FakeJade::new();
+        let descriptor = single_descriptor(&jade.signer, 84, 0);
+        let encoded = descriptor.to_string();
+        let wrong_origin =
+            Descriptor::from_str(&encoded.split('#').next().unwrap().replace("/84'/", "/44'/"))
+                .unwrap();
+        let mut session = session_from_1();
+        let request = AddressRequest {
+            descriptor: &wrong_origin,
+            index: 0,
+            signer: jade.signer.fingerprint,
+        };
+        assert!(matches!(
+            jade_error(session.request_verify_address(&request)),
+            JadeError::InvalidAddressRequest(_)
+        ));
+        assert!(jade.requests.is_empty());
+
+        let request = AddressRequest {
+            descriptor: &descriptor,
+            index: 0,
+            signer: Fingerprint::from([0; 4]),
+        };
+        assert!(matches!(
+            jade_error(session.request_verify_address(&request)),
+            JadeError::InvalidAddressRequest(_)
+        ));
+        let other = Signer::new(1);
+        let other_descriptor = single_descriptor(&other, 84, 0);
+        let request = AddressRequest {
+            descriptor: &other_descriptor,
+            index: 0,
+            signer: other.fingerprint,
+        };
+        let outgoing = session.request_verify_address(&request).unwrap();
+        assert!(matches!(
+            jade_error(run(&mut session, &mut jade, outgoing, whole)),
+            JadeError::SignerMismatch
+        ));
+        assert_eq!(jade.requests, ["get_xpub"]);
+
+        let other_descriptor = Descriptor::from_str(
+            &other_descriptor
+                .to_string()
+                .split('#')
+                .next()
+                .unwrap()
+                .replace(
+                    &other.fingerprint.to_string(),
+                    &jade.signer.fingerprint.to_string(),
+                ),
+        )
+        .unwrap();
+        let request = AddressRequest {
+            descriptor: &other_descriptor,
+            index: 0,
+            signer: jade.signer.fingerprint,
+        };
+        let outgoing = session.request_verify_address(&request).unwrap();
+        assert!(matches!(
+            jade_error(run(&mut session, &mut jade, outgoing, whole)),
+            JadeError::SignerMismatch
+        ));
+        assert!(
+            !jade
+                .requests
+                .iter()
+                .any(|method| method == "get_receive_address")
+        );
+    }
+
+    #[test]
+    fn address_reply_must_match_and_rejection_or_disconnect_is_visible() {
+        for rejection in [false, true] {
+            let mut jade = FakeJade::new();
+            let descriptor = single_descriptor(&jade.signer, 86, 0);
+            let request = AddressRequest {
+                descriptor: &descriptor,
+                index: 7,
+                signer: jade.signer.fingerprint,
+            };
+            let mut session = session_from_1();
+            let master = session.request_verify_address(&request).unwrap();
+            let JadeEvent::Send(account) = session.receive(&jade.answer(&master)).unwrap() else {
+                panic!("account query")
+            };
+            let JadeEvent::SendForConfirmation(address) =
+                session.receive(&jade.answer(&account)).unwrap()
+            else {
+                panic!("address confirmation")
+            };
+            let Value::Map(fields) = ciborium::from_reader(address.as_slice()).unwrap() else {
+                panic!("request map")
+            };
+            let id = field(&fields, "id").unwrap().as_text().unwrap();
+            let incoming = if rejection {
+                error_reply(id, -32000, "User cancelled")
+            } else {
+                let secp = Secp256k1::new();
+                let other = Signer::new(1);
+                let key = other
+                    .master
+                    .private_key
+                    .public_key(&secp)
+                    .x_only_public_key()
+                    .0;
+                reply(
+                    id,
+                    text(&Address::p2tr(&secp, key, None, NETWORK).to_string()),
+                )
+            };
+            let error = jade_error(session.receive(&incoming));
+            assert!(if rejection {
+                matches!(error, JadeError::UserCancelled)
+            } else {
+                matches!(error, JadeError::AddressMismatch)
+            });
+            assert!(session.request_version_info().is_ok());
+        }
+        let jade = FakeJade::new();
+        let descriptor = single_descriptor(&jade.signer, 84, 0);
+        let request = AddressRequest {
+            descriptor: &descriptor,
+            index: 0,
+            signer: jade.signer.fingerprint,
+        };
+        let mut session = session_from_1();
+        session.request_verify_address(&request).unwrap();
+        session.abandon();
+        assert!(
+            matches!(jade_error(session.request_verify_address(&request)), JadeError::Protocol(message) if message.contains("reconnect"))
+        );
+    }
+
+    #[test]
+    fn unsupported_addresses_and_duplicate_holders_are_rejected_before_rpc() {
+        let jade = FakeJade::new();
+        let descriptor = single_descriptor(&jade.signer, 84, 0);
+        let encoded = descriptor.to_string();
+        let encoded = encoded.split('#').next().unwrap();
+        let mut session = session_from_1();
+        let invalid = [
+            encoded.replace("/0/*", "/2/*"),
+            encoded.replace("/*", "/7"),
+            encoded.replace("/84'/1'/", "/84'/0'/"),
+            encoded.replace(&format!("[{}/84'/1'/0']", jade.signer.fingerprint), ""),
+        ];
+        for encoded in invalid {
+            let descriptor = Descriptor::from_str(&encoded).unwrap();
+            let request = AddressRequest {
+                descriptor: &descriptor,
+                index: 0,
+                signer: jade.signer.fingerprint,
+            };
+            assert!(matches!(
+                jade_error(session.request_verify_address(&request)),
+                JadeError::InvalidAddressRequest(_)
+            ));
+        }
+        let request = AddressRequest {
+            descriptor: &descriptor,
+            index: 1 << 31,
+            signer: jade.signer.fingerprint,
+        };
+        assert!(matches!(
+            jade_error(session.request_verify_address(&request)),
+            JadeError::InvalidAddressRequest(_)
+        ));
+
+        let cosigner = Signer::new(1);
+        let other_key = cosigner.descriptor_key().replace(
+            &cosigner.fingerprint.to_string(),
+            &jade.signer.fingerprint.to_string(),
+        );
+        let duplicate = Descriptor::from_str(&format!(
+            "wsh(sortedmulti(1,{},{}))",
+            jade.signer.descriptor_key(),
+            other_key
+        ))
+        .unwrap();
+        let request = AddressRequest {
+            descriptor: &duplicate,
+            index: 0,
+            signer: jade.signer.fingerprint,
+        };
+        assert!(matches!(
+            jade_error(session.request_verify_address(&request)),
+            JadeError::InvalidAddressRequest(_)
+        ));
+
+        let taproot = single_descriptor(&jade.signer, 86, 0);
+        let Descriptor::Tr(taproot) = taproot else {
+            panic!("taproot descriptor")
+        };
+        let script_path = Descriptor::from_str(&format!(
+            "tr({},pk({}))",
+            taproot.internal_key(),
+            taproot.internal_key()
+        ))
+        .unwrap();
+        let request = AddressRequest {
+            descriptor: &script_path,
+            index: 0,
+            signer: jade.signer.fingerprint,
+        };
+        assert!(matches!(
+            jade_error(session.request_verify_address(&request)),
+            JadeError::InvalidAddressRequest(_)
+        ));
+        assert!(session.request_version_info().is_ok());
+    }
+
+    #[test]
+    fn unsupported_sighash_is_refused_before_signing_rpc() {
+        let jade = FakeJade::new();
+        let mut psbt = vault_psbt(&jade.signer, 1);
+        psbt.inputs[0].sighash_type = Some(EcdsaSighashType::Single.into());
+        let mut session = session_from_1();
+        assert!(matches!(
+            jade_error(session.request_sign_psbt(&psbt, jade.signer.fingerprint)),
+            JadeError::UnsupportedSigningPolicy
+        ));
+        assert!(session.request_version_info().is_ok());
+        assert!(jade.requests.is_empty());
     }
 
     #[test]
@@ -1474,17 +2648,6 @@ mod tests {
         session.request_unlock(0).unwrap();
         let no_https = session.receive(&reply("1", request));
         assert!(matches!(jade_error(no_https), JadeError::Protocol(_)));
-
-        let mut session = session_from_1();
-        session.request_unlock(0).unwrap();
-        let event = session.receive(&reply("1", pinserver_request())).unwrap();
-        assert!(matches!(event, JadeEvent::Pinserver { .. }));
-        let not_json = session.pinserver_response("<html>502</html>");
-        assert!(matches!(jade_error(not_json), JadeError::Protocol(_)));
-        assert!(
-            session.request_version_info().is_err(),
-            "the device is still waiting: broken"
-        );
     }
 
     #[test]
@@ -1506,6 +2669,67 @@ mod tests {
 
         // So the session is idle at once, and the unlock can be retried.
         assert!(session.request_unlock(0).is_ok());
+    }
+
+    #[test]
+    fn a_failed_pinserver_relay_cancels_and_the_unlock_can_be_retried() {
+        let too_big = format!(r#"{{"data":"{}"}}"#, "x".repeat(MAX_REQUEST_LEN));
+        let cases: [(&str, Option<&str>); 4] = [
+            ("the POST failed", None),
+            ("an HTML page with a 200", Some("<html>maintenance</html>")),
+            ("an empty body", Some("")),
+            ("a response too big to forward", Some(&too_big)),
+        ];
+        for (case, body) in cases {
+            let mut jade = FakeJade::new();
+            let mut session = JadeSession::new(NETWORK);
+            until_pinserver(&mut session, &mut jade);
+
+            if let Some(body) = body {
+                let refused = jade_error(session.pinserver_response(body));
+                let expected_kind = if body.len() > MAX_REQUEST_LEN {
+                    matches!(refused, JadeError::RequestTooLarge(_))
+                } else {
+                    matches!(refused, JadeError::PinserverResponseInvalid(_))
+                };
+                assert!(expected_kind, "{case}: {refused:?}");
+                let early = jade_error(session.request_version_info());
+                assert!(matches!(early, JadeError::OutOfOrder), "{case}: {early:?}");
+            }
+            assert!(jade.awaiting_pin, "{case}");
+
+            let cancel = session.pinserver_failed().unwrap();
+            assert!(
+                jade.answer(&cancel).is_empty(),
+                "{case}: `cancel` gets no reply"
+            );
+            assert!(
+                !jade.awaiting_pin,
+                "{case}: the Jade is still on \"Checking…\""
+            );
+
+            let retry = session.request_unlock(0).unwrap();
+            let event = run(&mut session, &mut jade, retry, whole).unwrap();
+            assert!(matches!(event, JadeEvent::Unlocked), "{case}: {event:?}");
+        }
+    }
+
+    #[test]
+    fn a_host_that_never_cancels_is_left_with_a_session_that_refuses_everything() {
+        let mut jade = FakeJade::new();
+        let mut session = JadeSession::new(NETWORK);
+        until_pinserver(&mut session, &mut jade);
+        jade_error(session.pinserver_response("<html>maintenance</html>"));
+
+        let xpub = session.request_xpub(&account_path());
+        assert!(matches!(jade_error(xpub), JadeError::OutOfOrder));
+
+        session.abandon();
+        let after = jade_error(session.request_version_info());
+        assert!(matches!(after, JadeError::Protocol(_)), "{after:?}");
+        let late = jade_error(session.pinserver_failed());
+        assert!(matches!(late, JadeError::OutOfOrder), "{late:?}");
+        assert!(jade.awaiting_pin, "the Jade still waits");
     }
 
     #[test]
@@ -1629,6 +2853,15 @@ mod tests {
         let verified = verify_signed_psbt(&psbt, &signed.serialize(), jade.fingerprint).unwrap();
         assert_eq!(verified, signed);
 
+        // Jade's re-serialized response may rewrite PSBT metadata. The
+        // accepted value must retain the host's version of those fields.
+        let mut rewritten = signed.clone();
+        rewritten.inputs[0].witness_script = Some(ScriptBuf::new());
+        rewritten.inputs[1].bip32_derivation.clear();
+        rewritten.outputs[0].bip32_derivation.clear();
+        let verified = verify_signed_psbt(&psbt, &rewritten.serialize(), jade.fingerprint).unwrap();
+        assert_eq!(verified, signed);
+
         // A cosigner went first; its signature has to survive untouched.
         let cosigned = signed_by(&Signer::new(1), &psbt);
         let both = signed_by(&jade, &cosigned);
@@ -1670,16 +2903,6 @@ mod tests {
             (
                 "output changed",
                 tampered(&|p| p.unsigned_tx.output[0].value = Amount::from_sat(1)),
-                |e| matches!(e, JadeError::PsbtModified),
-            ),
-            (
-                "witness script changed",
-                tampered(&|p| p.inputs[0].witness_script = Some(ScriptBuf::new())),
-                |e| matches!(e, JadeError::PsbtModified),
-            ),
-            (
-                "derivation dropped",
-                tampered(&|p| p.inputs[1].bip32_derivation.clear()),
                 |e| matches!(e, JadeError::PsbtModified),
             ),
             (

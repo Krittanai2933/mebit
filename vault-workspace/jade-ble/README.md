@@ -44,7 +44,7 @@ Checked against firmware 1.0.41 source, and on a Jade Core with that firmware.
   - Replies arrive as indications on `6e400003-…`.
 - **Pairing.** The first connection pairs by numeric comparison. Confirm on the Jade and on the host, but only if the 6 digits match.
 - **Unlock is per connection.** A PIN wallet locks again when BLE drops, though not always at once (`docs/04-open-items.md` item 25), so treat every new connection as needing the PIN. Unlocking a PIN wallet relays an encrypted request to Blockstream's pinserver, so the host must be online.
-  - If the pinserver can't be reached, `unlock()` fails with the relay error and sends the Jade `cancel`, which returns it to its home screen. Call `unlock()` again once online.
+  - If the pinserver can't be reached, or answers with something that isn't JSON, `unlock()` fails with the relay error and sends the Jade `cancel`, which returns it to its home screen. Call `unlock()` again once online.
   - After the pinserver answers, the Jade may still ask for a BIP39 passphrase, or run a PIN change requested on the device. `unlock()` waits for the user through both.
 - **Replies outlive the link.** The Jade sends replies per transport, not per connection: a reply it finishes while a later connection is up goes out on that one (seen 2026-10-01: an unlock left at the passphrase screen, then confirmed during the next unlock). Request ids start at random per connection, so such a reply is refused rather than taken for an answer. The call it lands on fails; reconnect. A reply finished while no host is connected, say a signing confirmed after the host timed out, did not show up on the next connection.
 - **Network pin.** The first unlock pins the wallet to mainnet or to the test networks. A Jade Core cannot switch back: that setting only exists in QR mode, which needs a camera. To change it, factory-reset and restore. `unlock()` checks the pin before anyone is asked for a PIN.
@@ -84,6 +84,7 @@ Runs so far, all with firmware 1.0.41 on macOS: 2026-09-30 and 2026-10-01 with b
 | Passphrase | set the Jade to ask for a BIP39 passphrase; `xpub --verify-against …`, wait 30 s before confirming an empty one | unlocks; two ✓ lines | ✅ 2026-10-01, btleplug 0.13.3 |
 | Wrong PIN, retry at once | `xpub` with a wrong PIN, then `xpub` again before pressing Continue on "Incorrect PIN!" | the second run waits for Continue, then asks for the PIN and unlocks | ✅ 2026-10-01, btleplug 0.13.3: the second run started 13 s after the wrong PIN, waited through Continue and the PIN, and unlocked (38 s, against 15–17 s for a plain unlock) |
 | Pinserver unreachable | `ALL_PROXY=http://127.0.0.1:9` before the command, then `xpub` | `pinserver relay failed…`; the Jade drops the unlock at once | ✅ 2026-10-01, harness form, btleplug 0.13.3 and 0.11.8 side by side: the relay error, and the Jade back on its home screen at once with both |
+| Pinserver answers with something that isn't JSON | Use the opt-in debug-only injection command below; it simulates the response at the relay boundary and bypasses HTTPS | `pinserver relay failed: …`; the Jade back on its home screen at once, like the unreachable case | ✅ 2026-10-11, Jade Core 1.0.41: injected `not-json`; expected relay error and home screen confirmed; HTTPS bypassed |
 | Drop | pull the Jade's USB while it waits for you | `the Jade disconnected` at once | ✅ 2026-10-01, btleplug 0.13.3: the error 4 s after the unlock began |
 | Reconnect | re-run after a drop | connects; asks for the PIN again | ✅ 2026-10-01, btleplug 0.13.3 |
 | Network pin | `--network bitcoin xpub` on the test wallet | network mismatch, before any PIN prompt | ✅ 2026-10-01, btleplug 0.13.3 |
@@ -92,6 +93,19 @@ Runs so far, all with firmware 1.0.41 on macOS: 2026-09-30 and 2026-10-01 with b
 | Fresh pairing | forget the Jade in the host's Bluetooth settings ("Reset Pairings" on the Jade if needed), `info`, wait 20 s before confirming the 6 digits on both | pairs; `info` prints | ✅ 2026-10-01, btleplug 0.13.3: connecting took 21 s, the wait included |
 | Pairing rejected | forget the Jade in the host's Bluetooth settings, `info`, reject on the Jade | an error within 60 s, no hang | ✅ 2026-10-01, btleplug 0.13.3: `Bluetooth: Runtime Error: Device disconnected` 3 s after the scan |
 | Several Jades | two Jades in range, `info` | `several Jades in range (…)`; `--name` picks one | unit-tested only (one device) |
+
+To exercise the non-JSON cancellation path on a real Jade without changing
+production TLS behavior, opt into the debug-only test feature and provide an
+invalid response body. This injects the body after the Jade requests pinserver
+relay; it does not test HTTPS or a real pinserver response:
+
+```sh
+JADE_TEST_PINSERVER_RESPONSE='not-json' cargo run --locked -p jade-ble --features test-pinserver-response --example jade-hw-test -- --network testnet xpub
+```
+
+The command should fail with a pinserver relay error after sending `cancel` to
+the Jade. Check that the device returns to its home screen. Builds without the
+feature, and all release builds, always use the normal HTTPS relay.
 
 ## Troubleshooting
 
@@ -110,3 +124,15 @@ Runs so far, all with firmware 1.0.41 on macOS: 2026-09-30 and 2026-10-01 with b
   - A lagging notification consumer still drops data silently; `JadeSession`'s checks turn that into an error, never into a wrong result.
   - Unlike 0.11.8, `connect()` no longer discovers services itself: `discover_services()` does, under its own timeout. A failed write, a refused subscription and a call on a vanished peripheral now resolve at once where 0.11.8 left them waiting for this crate's timeouts. Every operation still has one.
 - **Android is untested.** btleplug needs a Rust+Java build there. See `docs/04-open-items.md` item 14.
+
+## Real testnet4 wallet verification
+
+The example also has an `e2e` command group. Offline commands return before opening BLE. Live commands forward to the serial coordinator in `trezor-hw-test`.
+
+```sh
+cargo run --locked -p jade-ble --example jade-hw-test -- --network testnet4 e2e matrix
+cargo run --locked -p jade-ble --example jade-hw-test -- --network testnet4 e2e offline
+cargo run --locked -p jade-ble --example jade-hw-test -- --network testnet4 --name "Jade 123456" e2e enroll --slot j1 --jade-slot-empty
+```
+
+Manually verify that the `mebit_e2e` test slot is empty before declaring `--jade-slot-empty`. Jade RPC can hide registrations belonging to another seed. Read the [testnet4 instructions](../wallet-e2e/README.md) for safe registration reuse, complete coverage, and checkpointed spending. Actual firmware and BLE acceptance remain unverified until you run those cases on your devices.

@@ -57,7 +57,8 @@
     - **ยังต้องตัดสินใจ**: เมื่อ credential ที่เก็บไว้ไม่ตรงกับเครื่องที่เจอ host ถอยไปจับคู่ใหม่เงียบๆ (`new_credential` เป็นสัญญาณเดียว) แอปจึงแยก "เครื่องใหม่" กับ "ไม่ใช่เครื่องที่ลงทะเบียนไว้" ไม่ได้ ควรมี flag ใน `Connected` หรือ option ให้ error แทน
     - `sign_psbt` รับ PSBT ของ vault `sortedmulti` ใดก็ได้ที่มี key ของเครื่องนี้ โดยถือ global xpubs ใน PSBT เองเป็น "vault" ผู้เรียกจึงต้องเทียบกับ descriptor ของ vault ที่ลงทะเบียนไว้ และรัน `policy` ก่อนเซ็นทุกครั้ง (ตอนนี้ยังไม่มีผู้เรียก)
     - test ที่ยังขาด (mutation ยังรอด): check เชิง defense-in-depth ใน `Multisig::resolve` และ change, message ที่มาผิด session, เพดาน retransmission, MTU check, `Canceller` ของ `trezor-ble`
-    - `trezor-ble`: code ที่พิมพ์ผิดรูปแบบตัดการเชื่อมต่อแทนที่จะให้พิมพ์ใหม่ และ deadline รอ reply ถูกต่อทุกครั้งที่มี packet ใดๆ เข้ามา
+    - `trezor-ble`: ✅ code ที่พิมพ์ผิดรูปแบบ (ไม่ครบ 6 หลักหรือมีตัวอักษร) ถามใหม่ได้แล้วโดยไม่ตัดการเชื่อม (แก้ในโค้ด 2026-10-06 มี test แล้ว ยังไม่ได้ทดสอบกับ Safe 7 จริง ดู HW-14 ใน README ของ `trezor-ble`) เวลา 300 วินาทีของ `USER_TIMEOUT` นับรวมทุกครั้งที่ถาม และมี `RETRY_PAUSE` 250 มิลลิวินาทีก่อนถามใหม่ กัน source ที่ตอบทันทีวนไม่จบ ที่ยังเหลือ: `PairingCodeSource` ยังบอก UI ไม่ได้ว่า code ก่อนหน้าผิดรูปแบบ
+    - `trezor-ble` **ยังไม่ได้แก้**: deadline รอ reply ถูกต่อทุกครั้งที่มี packet ใดๆ เข้ามา
     - เล็กน้อย: `as_shown` แบบ SLIP-132 ยังไม่ถูกตรวจกับ node, `trezor_static_public_key` ใน credential ยังไม่ถูกผูกกับ handshake, ยังไม่ตรวจ `fw_vendor`
 25. **Jade ยัง unlock อยู่ได้หลัง host หลุดระหว่างทำงาน** (พบครั้งเดียวระหว่างรัน checklist ของ Jade บน btleplug 0.13.3, 2026-10-01)
     - kill harness ตอนจอขอยืนยันการเซ็น แล้วกดยืนยันบน Jade: `info` 21 และ 37 วินาทีหลังจากนั้นยังเห็น state `Ready` แล้วเป็น `Locked` ที่ 65 วินาที (บันทึกใน `05-progress-and-next-steps.md`)

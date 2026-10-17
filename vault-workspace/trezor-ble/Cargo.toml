@@ -12,13 +12,22 @@ futures-util = "0.3"
 thiserror = "2"
 
 [dev-dependencies]
-# examples/trezor-hw-test only — none of this reaches the library's users
+# examples/trezor-hw-test and the unit tests only — none of this reaches the library's users
 bitcoin = { version = "0.32", features = ["base64"] }
 bip39 = "2.2.2"
 clap = { version = "4.6.4", features = ["derive"] }
 miniscript = "13"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "3.3"
+zeroize = "1"
+jade-ble = { path = "../jade-ble" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "signal", "test-util"] }
 
 [[example]]
 name = "trezor-hw-test"
 test = true             # the roundtrip fixture has tests of its own
+
+[[example]]
+name = "trezor-signature-check"
+test = true
