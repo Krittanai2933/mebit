@@ -26,6 +26,6 @@ The narrow comment review proposed zero deletions and found no unresolved issue.
 
 All verification is offline. Actual BLE recovery and testnet4 spend acceptance remain unverified; the live result stays 0/7,315. Full workspace formatting retains its documented unchanged-package failures.
 
-## Later E2E status update — 2026-10-16
+## Later E2E status update — 2026-10-17
 
-The preceding status describes the integration checkpoint and has since been superseded. The refreshed local report contains eight Jade/Hot Wallet single-sig PASS checkpoints and five multisig PASS checkpoints; all five multisig spends were confirmed at block 156696. Four Trezor single-sig confirmations are friend-reported rather than locally checkpointed. The offline run passes 7,315/7,315 with digest `951dc04a35aa056826e4bee3320f1224257ccf3bd7011bd7f883ac78a44eeec7`. Overall live acceptance is BLOCKED at 13/7,315; see [`verification.md`](verification.md).
+The preceding status describes the integration checkpoint and has since been superseded. Fourteen local result records are PASS: eight Jade/Hot Wallet single-sig and six multisig. The latest multisig case includes a remote Trezor signature and has a saved confirmation at block 156802. The 2026-10-17 aggregate report refresh could not resolve mempool.space, so it reports `live_pass: 0` and `recorded_live_pass: 14`; a fresh chain recheck is pending. Four Trezor single-sig confirmations are friend-reported rather than locally checkpointed. The offline run passes 7,315/7,315 with digest `951dc04a35aa056826e4bee3320f1224257ccf3bd7011bd7f883ac78a44eeec7`. See [`verification.md`](verification.md) for the current status.

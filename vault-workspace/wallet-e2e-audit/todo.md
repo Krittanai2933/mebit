@@ -17,13 +17,13 @@
 - [x] Complete independent review of the implementation and audit trail.
 - [ ] Confirm every live row on testnet4. Still BLOCKED; see the current status note below and `verification.md` for confirmed, pending, and friend-reported results.
 
-## Latest live checkpoint status — 2026-10-16
+## Latest live checkpoint status — 2026-10-17
 
-The generated JSON was refreshed on 2026-10-16 09:55 +07:00. It records 13/7,315 live PASS: four Jade single-sig, four Hot Wallet single-sig, and five multisig cases. Each multisig resume recorded a canonical confirmation at block 156696. Four Trezor single-sig confirmations remain friend-reported and are excluded from this workspace's local JSON. Overall acceptance remains BLOCKED with 7,302 live cases remaining.
+The generated JSON was refreshed on 2026-10-17 13:45 +07:00. Fourteen local result records remain PASS: four Jade single-sig, four Hot Wallet single-sig, and six multisig cases. The newest multisig result is the Jade + hot + remote Trezor 3-of-3 case, saved as confirmed at block 156802. This refresh could not resolve mempool.space; `report.json` therefore shows `live_pass: 0`, `recorded_live_pass: 14`, and DNS errors on the fresh checks. Four Trezor single-sig confirmations remain friend-reported and excluded from this workspace's local JSON. Overall acceptance remains BLOCKED; rerun the report once DNS/network access is restored.
 
 The settled user plan supplies the architecture. Skip a second architecture arena because it would repeat the planning pass. Three isolated workers own the verifier, Trezor protocol, and Jade protocol. The coordinator owns manifests, enrollment, evidence, and network execution. Each unit ends with targeted verification.
 
-Throughput checkpoint: count rows and exercise one case from each script family before testing all source compositions. Compare results against independently derived scripts and observed CLI output. No live transaction is authorized by this implementation request.
+Throughput checkpoint: count rows and exercise one case from each script family before testing all source compositions. Compare results against independently derived scripts and observed CLI output. The original implementation request did not authorize live transactions; later operator-authorized testnet cases are listed above and in `verification.md`.
 
 At the original implementation checkpoint, workspace tests passed 165 tests; Clippy with warnings denied, both example builds, targeted formatting, and the CLI driver passed. Each example process signed and finalized all 7,315 designated software subsets with the then-current digest. Independent review corrected public-result integrity and audited the decision trail. Full workspace formatting still fails in four unchanged packages, as recorded in verification.md. Later live test progress and the refreshed offline digest are recorded above and in verification.md.
 

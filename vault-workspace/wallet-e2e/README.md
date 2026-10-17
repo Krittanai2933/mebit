@@ -80,6 +80,20 @@ validates the Trezor signatures against the saved PSBT, finalizes, broadcasts,
 and waits for confirmation. No transaction is broadcast until your local run
 command includes `--broadcast`.
 
+This sequential remote-signing workflow was exercised by case
+`multisig-p2wsh-3of3-a0-h1j1t1-s07-r0-74-c1-74`. It confirmed spend
+`16ba3787cdcdef4dc85fa412cec081b73da174b4bb6efb8073b28314d0f7046c`
+with a 414-sat fee. It demonstrates hot key + Jade signing locally followed by
+the remote Trezor signature; it does not exercise independent PSBT copies
+being signed separately and merged later. The case details and current report
+status are in the [wallet verification report](../wallet-e2e-audit/verification.md).
+
+`e2e report` freshly reconciles saved PASS checkpoints against testnet4. If the
+host cannot reach mempool.space, the report keeps the earlier PASS count in
+`recorded_live_pass`, reports zero successful fresh checks in `live_pass`, and
+lists the network error as the blocker. Restore network access and rerun the
+report before treating saved confirmations as current chain state.
+
 Request and response files contain account xpubs and transaction details, but
 not the mnemonic or pairing credential. Keep the files private and transfer
 them over a channel you trust. The remote address check is attested by the

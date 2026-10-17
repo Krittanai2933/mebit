@@ -8,6 +8,6 @@ Closeout review verified the completed CLI driver, both 7,315-case results, matc
 
 Actual BLE and real-network acceptance were unverified at 0/7,315 when this review closed. Full workspace formatting still fails in the four unchanged packages listed in verification.md. These are documented completion limits rather than an offline PASS claim for live behavior.
 
-## Later E2E status update — 2026-10-16
+## Later E2E status update — 2026-10-17
 
-The live status at review closeout has been superseded. The refreshed local report records eight Jade/Hot Wallet single-sig PASS checkpoints and five multisig PASS checkpoints, all five confirmed at block 156696. Four Trezor single-sig confirmations are friend-reported and remain outside the local JSON. The offline matrix and fixture run pass 7,315/7,315. Overall live acceptance remains BLOCKED at 13/7,315; see [`verification.md`](verification.md) for current details.
+The live status at review closeout has been superseded. Fourteen local result records are PASS: four Jade single-sig, four Hot Wallet single-sig, and six multisig cases. The latest is the remote Trezor 3-of-3 case, confirmed at block 156802 in its saved checkpoint. The 2026-10-17 aggregate report refresh could not resolve mempool.space, so it reports `live_pass: 0` and `recorded_live_pass: 14`; a fresh chain recheck is pending. Four Trezor single-sig confirmations remain friend-reported and outside the local JSON. The offline matrix and fixture run pass 7,315/7,315. See [`verification.md`](verification.md) for the detailed counts and limits.
