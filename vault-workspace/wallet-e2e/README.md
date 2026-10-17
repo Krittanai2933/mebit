@@ -133,10 +133,12 @@ cargo run --locked -p jade-ble --example jade-hw-test -- \
 
 Then run the pinned spend. The input must be exactly the still-unspent
 44,586-sat output above. The transaction pays 5,000 sats to the same test
-destination; the current conservative satisfaction-weight estimate is 438 sats,
-so expected change is 39,148 sats to the index-75 address printed by `prepare`.
-Jade and the hot
-signer each sign the original unsigned PSBT locally. The coordinator then
+destination. The pre-sign conservative satisfaction-weight estimate was 438
+sats (implying 39,148 sats of change), while the confirmed spend used a 414-sat
+fee (207 vB at 2 sat/vB) and returned 39,172 sats to
+`tb1q26wm7ccjtktcuw5eej2u4fdgphcmppqax6gjfmn9lj7v9yq5e70qqfn08j`. The spend
+txid is `2f29b5e81d320db83ba8916ae42ab3c521814c9b556f6c7ec6d21ae097cf1c01`,
+confirmed at block 156846. Jade and the hot signer each sign the original unsigned PSBT locally. The coordinator then
 requests the Trezor signature on that same unsigned PSBT. Send the new private
 request to your friend; they approve and return the signed response. Import it
 with the command printed by the coordinator. Only then can the coordinator
