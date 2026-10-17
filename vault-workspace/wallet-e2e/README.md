@@ -88,6 +88,74 @@ the remote Trezor signature; it does not exercise independent PSBT copies
 being signed separately and merged later. The case details and current report
 status are in the [wallet verification report](../wallet-e2e-audit/verification.md).
 
+### Supplemental check: independent copies of one unsigned PSBT
+
+The separate protocol check is
+`multisig-p2wsh-3of3-independent-a0-h1j1t1-s07-r1-74-c1-75`. It spends the
+confirmed 44,586-sat change output from the sequential 3-of-3 transaction
+above (`16ba3787cdcdef4dc85fa412cec081b73da174b4bb6efb8073b28314d0f7046c:1`).
+It sends each signer the same saved unsigned PSBT, verifies each response
+against that baseline, and merges only that signer's validated signatures.
+The required manifest remains 7,315 cases; this supplemental result is tracked
+separately in `report.json`.
+
+Prepare the supplemental case using the already enrolled `h1`, `j1`, and `t1`.
+The receive address is the previously verified multisig change address
+`tb1qen9wltlce98h89j202l5x8lmdt6hg7r7ggpqt7q7lt69ag6t9rjsvgzz80`; its saved
+proof is reused from the completed source case. The new change address at
+branch 1/index 75 is checked during this preparation. Because `t1` is remote,
+the friend handles that one address-verification request.
+
+```sh
+cargo run --locked -p jade-ble --example jade-hw-test -- \
+  --network testnet4 --name "Jade BE0184" \
+  e2e prepare \
+  --case multisig-p2wsh-3of3-independent-a0-h1j1t1-s07-r1-74-c1-75 \
+  --remote-slot t1
+```
+
+When `prepare` prints a private request path, send that file to the Trezor
+holder. They approve the change address, run `e2e remote-worker`, and return
+the response file. Import it using the printed case ID:
+
+```sh
+cargo run --locked -p trezor-ble --example trezor-hw-test -- \
+  --network testnet4 --device "Safe 7 selector" \
+  e2e remote-worker --request target/remote.request.json \
+  --response target/remote.response.json
+
+cargo run --locked -p jade-ble --example jade-hw-test -- \
+  --network testnet4 --name "Jade BE0184" \
+  e2e import-remote \
+  --case multisig-p2wsh-3of3-independent-a0-h1j1t1-s07-r1-74-c1-75 \
+  --response target/remote.response.json
+```
+
+Then run the pinned spend. The input must be exactly the still-unspent
+44,586-sat output above. The transaction pays 5,000 sats to the same test
+destination; the current conservative satisfaction-weight estimate is 438 sats,
+so expected change is 39,148 sats to the index-75 address printed by `prepare`.
+Jade and the hot
+signer each sign the original unsigned PSBT locally. The coordinator then
+requests the Trezor signature on that same unsigned PSBT. Send the new private
+request to your friend; they approve and return the signed response. Import it
+with the command printed by the coordinator. Only then can the coordinator
+merge, finalize, broadcast, and await confirmation.
+
+```sh
+cargo run --locked -p jade-ble --example jade-hw-test -- \
+  --network testnet4 --name "Jade BE0184" \
+  e2e run \
+  --case multisig-p2wsh-3of3-independent-a0-h1j1t1-s07-r1-74-c1-75 \
+  --funding-outpoint 16ba3787cdcdef4dc85fa412cec081b73da174b4bb6efb8073b28314d0f7046c:1 \
+  --signing-mode independent --broadcast
+```
+
+The friend handles one remote address check during preparation and one remote
+signing request during the spend. The public report records this result under
+`supplemental_cases` and `supplemental_live_pass`; it never changes the required
+matrix's `live_pass` or `remaining` counts.
+
 `e2e report` freshly reconciles saved PASS checkpoints against testnet4. If the
 host cannot reach mempool.space, the report keeps the earlier PASS count in
 `recorded_live_pass`, reports zero successful fresh checks in `live_pass`, and

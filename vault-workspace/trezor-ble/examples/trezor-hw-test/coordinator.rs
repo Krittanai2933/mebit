@@ -9,13 +9,16 @@ use vault_core::descriptor::derive_address_at;
 use vault_core::hw::psbt_check::verify_device_signatures;
 
 use crate::e2e::chain::{Chain, Esplora, Outspend, Reconciled, reconcile};
-use crate::e2e::model::{Command, Family, Slot, Source, find_case};
+use crate::e2e::model::{
+    Command, Family, INDEPENDENT_SIGNING_CASE_ID, INDEPENDENT_SIGNING_SOURCE_CASE_ID, SigningMode,
+    Slot, Source, find_case,
+};
 use crate::e2e::records::{
     AddressProof, Checkpoint, DeviceAction, DeviceResult, Enrollment, Execution, Finalized,
-    Funding, Lease, MAX_PUBLIC_ENROLLMENT_BYTES, MAX_REMOTE_FILE_BYTES, Progress, PublicEnrollment,
-    Registration, RemoteRequest, RemoteResponse, Signing, Store, WorkerRequest, WorkerResponse,
-    check_identity, check_identity_for_source, now, read_json, read_json_limited,
-    validate_remote_request, validate_remote_response, write_json,
+    Funding, IndependentSignature, Lease, MAX_PUBLIC_ENROLLMENT_BYTES, MAX_REMOTE_FILE_BYTES,
+    Progress, PublicEnrollment, Registration, RemoteRequest, RemoteResponse, Signing, Store,
+    WorkerRequest, WorkerResponse, check_identity, check_identity_for_source, now, read_json,
+    read_json_limited, validate_remote_request, validate_remote_response, write_json,
 };
 use crate::e2e::{Result, wallet};
 
@@ -225,22 +228,33 @@ pub async fn run(command: Command, store: &Store, settings: Settings) -> Result<
                 case,
                 funding_outpoint,
                 broadcast,
+                signing_mode,
             } => {
                 let mut checkpoint = store.load(&case)?;
                 checkpoint.broadcast_authorized |= broadcast;
+                if let Some(requested) = signing_mode
+                    && matches!(checkpoint.progress, Progress::Signing(_))
+                    && let Progress::Signing(saved) = &checkpoint.progress
+                    && saved.mode != requested
+                {
+                    return Err(
+                        "requested signing mode differs from the saved signing checkpoint".into(),
+                    );
+                }
                 execute(
                     store,
                     &workers,
                     &chain,
                     &mut checkpoint,
                     Some(funding_outpoint),
+                    signing_mode,
                 )
                 .await
             }
             Command::Resume { case, broadcast } => {
                 let mut checkpoint = store.load(&case)?;
                 checkpoint.broadcast_authorized |= broadcast;
-                execute(store, &workers, &chain, &mut checkpoint, None).await
+                execute(store, &workers, &chain, &mut checkpoint, None, None).await
             }
             _ => Err("offline and worker commands must dispatch before coordinator startup".into()),
         }
@@ -277,7 +291,10 @@ pub fn diagnose_sign(
     };
     wallet::validate_signing(&checkpoint, signing)?;
     let (enrollment, action) = diagnostic_sign_action(&checkpoint)?;
-    let before: Psbt = signing.signed_psbt.parse()?;
+    let before: Psbt = match signing.mode {
+        SigningMode::Sequential => signing.signed_psbt.parse()?,
+        SigningMode::Independent => signing.unsigned_psbt.parse()?,
+    };
     let workers = Workers {
         store,
         settings: &settings,
@@ -313,8 +330,12 @@ fn diagnostic_sign_action(checkpoint: &Checkpoint) -> Result<(Enrollment, Device
         .find(|enrollment| enrollment.slot == slot)
         .cloned()
         .ok_or("the next Trezor signer is missing from the checkpoint")?;
+    let psbt = match signing.mode {
+        SigningMode::Sequential => signing.signed_psbt.clone(),
+        SigningMode::Independent => signing.unsigned_psbt.clone(),
+    };
     let action = DeviceAction::Sign {
-        psbt: signing.signed_psbt.clone(),
+        psbt,
         signer: enrollment.identity.fingerprint.clone(),
     };
     Ok((enrollment, action))
@@ -479,8 +500,8 @@ fn prepare(
     let enrolled = enrolled_case(store, &case)?;
     wallet::check_derivation(&case, &enrolled)?;
     chain.verify_network()?;
-    let receive = wallet::descriptor(&case, &enrolled, 0)?;
-    let change = wallet::descriptor(&case, &enrolled, 1)?;
+    let receive = wallet::descriptor(&case, &enrolled, case.receive.branch)?;
+    let change = wallet::descriptor(&case, &enrolled, case.change.branch)?;
     let receive_address =
         derive_address_at(&receive, case.receive.index, Network::Testnet4)?.to_string();
     let change_address =
@@ -540,12 +561,23 @@ fn prepare(
             "prepared descriptors, enrolled accounts, or test-owned destination changed".into(),
         );
     }
+    reuse_independent_signing_receive_proofs(store, &mut checkpoint)?;
     checkpoint.genesis_verified_at = now();
     store.save(&checkpoint)?;
     for slot in &case.holders {
         for (branch, descriptor, index, address) in [
-            (0, &receive, case.receive.index, &receive_address),
-            (1, &change, case.change.index, &change_address),
+            (
+                case.receive.branch,
+                &receive,
+                case.receive.index,
+                &receive_address,
+            ),
+            (
+                case.change.branch,
+                &change,
+                case.change.index,
+                &change_address,
+            ),
         ] {
             if checkpoint.address_proofs.iter().any(|p| {
                 p.slot == *slot && p.branch == branch && p.index == index && p.address == *address
@@ -633,6 +665,58 @@ fn prepare(
         "Change {}. Payment 5000 sats to {}. Fee 2 sat/vB, capped at 5000 sats and 10 sat/vB.",
         change_address, destination
     );
+    Ok(())
+}
+
+fn reuse_independent_signing_receive_proofs(
+    store: &Store,
+    checkpoint: &mut Checkpoint,
+) -> Result<()> {
+    if checkpoint.case.id != INDEPENDENT_SIGNING_CASE_ID || !checkpoint.address_proofs.is_empty() {
+        return Ok(());
+    }
+    let source = store.load(INDEPENDENT_SIGNING_SOURCE_CASE_ID)?;
+    wallet::validate_checkpoint(&source)?;
+    if !matches!(source.progress, Progress::Pass { .. })
+        || source.case.holders != checkpoint.case.holders
+        || source.change_descriptor != checkpoint.receive_descriptor
+        || source.change_address != checkpoint.receive_address
+        || source.case.change.branch != checkpoint.case.receive.branch
+        || source.case.change.index != checkpoint.case.receive.index
+    {
+        return Err("supplemental test requires the prior confirmed multisig checkpoint and its matching receive address".into());
+    }
+    for slot in &checkpoint.case.holders {
+        let old = source
+            .enrolled
+            .iter()
+            .find(|enrollment| enrollment.slot == *slot)
+            .ok_or("prior multisig checkpoint is missing a holder")?;
+        let current = checkpoint
+            .enrolled
+            .iter()
+            .find(|enrollment| enrollment.slot == *slot)
+            .ok_or("supplemental case is missing a holder")?;
+        check_identity_for_source(&old.identity, &current.identity, slot.source)?;
+        let mut proofs = source.address_proofs.iter().filter(|proof| {
+            proof.slot == *slot
+                && proof.branch == checkpoint.case.receive.branch
+                && proof.index == checkpoint.case.receive.index
+                && proof.address == checkpoint.receive_address
+        });
+        let proof = proofs
+            .next()
+            .ok_or("prior confirmed case has no matching displayed receive-address proof")?;
+        if proofs.next().is_some()
+            || proof.fingerprint != current.identity.fingerprint
+            || proof.firmware != current.identity.firmware
+        {
+            return Err(
+                "prior address proof does not match the supplemental enrolled identity".into(),
+            );
+        }
+        checkpoint.address_proofs.push(proof.clone());
+    }
     Ok(())
 }
 
@@ -744,11 +828,17 @@ async fn import_remote(
             let (branch, expected_address) = if descriptor == &checkpoint.receive_descriptor
                 && *index == checkpoint.case.receive.index
             {
-                (0, checkpoint.receive_address.clone())
+                (
+                    checkpoint.case.receive.branch,
+                    checkpoint.receive_address.clone(),
+                )
             } else if descriptor == &checkpoint.change_descriptor
                 && *index == checkpoint.case.change.index
             {
-                (1, checkpoint.change_address.clone())
+                (
+                    checkpoint.case.change.branch,
+                    checkpoint.change_address.clone(),
+                )
             } else {
                 return Err(
                     "remote address request differs from the prepared receive/change address"
@@ -793,18 +883,42 @@ async fn import_remote(
                 .signing_subset
                 .get(signing.completed.len())
                 .ok_or("case has no incomplete signer")?;
-            if *next != request.slot || signing.signed_psbt != *psbt {
+            let expected_psbt = match signing.mode {
+                SigningMode::Sequential => &signing.signed_psbt,
+                SigningMode::Independent => &signing.unsigned_psbt,
+            };
+            if *next != request.slot || expected_psbt != psbt {
                 return Err(
                     "remote signature is stale or not for the next designated signer".into(),
                 );
             }
-            let before: Psbt = signing.signed_psbt.parse()?;
-            let accepted = verify_device_signatures(
-                &before,
-                returned.parse()?,
-                request.expected.fingerprint.parse()?,
-            )?;
-            signing.signed_psbt = accepted.to_string();
+            let returned: Psbt = returned.parse()?;
+            match signing.mode {
+                SigningMode::Sequential => {
+                    let before: Psbt = signing.signed_psbt.parse()?;
+                    let accepted = verify_device_signatures(
+                        &before,
+                        returned,
+                        request.expected.fingerprint.parse()?,
+                    )?;
+                    signing.signed_psbt = accepted.to_string();
+                }
+                SigningMode::Independent => {
+                    let unsigned: Psbt = signing.unsigned_psbt.parse()?;
+                    let merged: Psbt = signing.signed_psbt.parse()?;
+                    let (merged, accepted) = wallet::merge_independent_signature(
+                        &unsigned,
+                        &merged,
+                        returned,
+                        request.expected.fingerprint.parse()?,
+                    )?;
+                    signing.signed_psbt = merged.to_string();
+                    signing.independent_signatures.push(IndependentSignature {
+                        slot: request.slot,
+                        psbt: accepted.to_string(),
+                    });
+                }
+            }
             signing.completed.push(request.slot);
             checkpoint.progress = Progress::Signing(signing);
             checkpoint.executions.push(remote_execution(
@@ -815,7 +929,7 @@ async fn import_remote(
             checkpoint.pending_remote = None;
             checkpoint.blockers.clear();
             store.save(&checkpoint)?;
-            execute(store, workers, chain, &mut checkpoint, None).await
+            execute(store, workers, chain, &mut checkpoint, None, None).await
         }
         _ => Err("remote worker response does not match its request".into()),
     }
@@ -983,8 +1097,36 @@ async fn execute(
     chain: &impl Chain,
     checkpoint: &mut Checkpoint,
     supplied: Option<OutPoint>,
+    requested_mode: Option<SigningMode>,
 ) -> Result<()> {
     validate_checkpoint(store, checkpoint)?;
+    let effective_mode = match &checkpoint.progress {
+        Progress::Signing(signing) => {
+            if requested_mode.is_some_and(|requested| requested != signing.mode) {
+                return Err(
+                    "requested signing mode differs from the saved signing checkpoint".into(),
+                );
+            }
+            signing.mode
+        }
+        _ => requested_mode.unwrap_or_else(|| {
+            if checkpoint.case.id == INDEPENDENT_SIGNING_CASE_ID {
+                SigningMode::Independent
+            } else {
+                SigningMode::Sequential
+            }
+        }),
+    };
+    if effective_mode == SigningMode::Independent
+        && checkpoint.case.id != INDEPENDENT_SIGNING_CASE_ID
+    {
+        return Err("independent signing is only enabled for the supplemental test case".into());
+    }
+    if let Some(expected) = checkpoint.case.expected_funding_outpoint()
+        && supplied.is_some_and(|outpoint| outpoint.to_string() != expected)
+    {
+        return Err("supplemental case requires its pinned confirmed funding outpoint".into());
+    }
     chain.verify_network()?;
     checkpoint.genesis_verified_at = now();
     checkpoint.blockers.clear();
@@ -1005,6 +1147,15 @@ async fn execute(
     }
     if let Progress::AwaitingFunding { outpoint } = &checkpoint.progress {
         let outpoint: OutPoint = outpoint.parse()?;
+        if checkpoint
+            .case
+            .expected_funding_outpoint()
+            .is_some_and(|expected| outpoint.to_string() != expected)
+        {
+            return Err(
+                "saved funding outpoint differs from the pinned supplemental test UTXO".into(),
+            );
+        }
         if supplied.is_some_and(|o| o != outpoint) {
             return Err("new funding outpoint differs from reserved outpoint".into());
         }
@@ -1015,6 +1166,13 @@ async fn execute(
     }
     if let Progress::FundingConfirmed(funding) = &checkpoint.progress {
         let outpoint: OutPoint = funding.outpoint.parse()?;
+        if checkpoint
+            .case
+            .expected_funding_outpoint()
+            .is_some_and(|expected| outpoint.to_string() != expected)
+        {
+            return Err("confirmed funding differs from the pinned supplemental test UTXO".into());
+        }
         if supplied.is_some_and(|o| o != outpoint) {
             return Err("new funding outpoint differs from confirmed outpoint".into());
         }
@@ -1036,6 +1194,8 @@ async fn execute(
             unsigned_psbt: psbt.to_string(),
             signed_psbt: psbt.to_string(),
             completed: Vec::new(),
+            mode: effective_mode,
+            independent_signatures: Vec::new(),
         });
         store.save(checkpoint)?;
     }
@@ -1055,8 +1215,13 @@ async fn execute(
             if slot.source == Source::Jade && checkpoint.case.family == Family::P2wsh {
                 restore_jade_registration(store, workers, checkpoint, &mut enrollment)?;
             }
-            let before: Psbt = signing.signed_psbt.parse()?;
-            let signed = if slot.source == Source::Hot {
+            let unsigned: Psbt = signing.unsigned_psbt.parse()?;
+            let merged_before: Psbt = signing.signed_psbt.parse()?;
+            let before = match signing.mode {
+                SigningMode::Sequential => merged_before.clone(),
+                SigningMode::Independent => unsigned.clone(),
+            };
+            let returned = if slot.source == Source::Hot {
                 wallet::sign_hot(
                     &before,
                     &wallet::hot_mnemonic(store, slot, false)?,
@@ -1078,17 +1243,32 @@ async fn execute(
                 let DeviceResult::Signed(signed) = response.result else {
                     return Err("signing worker returned a different operation".into());
                 };
-                let verified = verify_device_signatures(
-                    &before,
-                    signed.parse()?,
-                    enrollment.identity.fingerprint.parse()?,
-                )?;
                 if slot.source == Source::Jade {
                     adopt_jade_identity(store, checkpoint, &mut enrollment, &actual_identity)?;
                 }
-                verified
+                signed.parse()?
             };
-            signing.signed_psbt = signed.to_string();
+            let fingerprint: bitcoin::bip32::Fingerprint =
+                enrollment.identity.fingerprint.parse()?;
+            match signing.mode {
+                SigningMode::Sequential => {
+                    let accepted = verify_device_signatures(&before, returned, fingerprint)?;
+                    signing.signed_psbt = accepted.to_string();
+                }
+                SigningMode::Independent => {
+                    let (merged, accepted) = wallet::merge_independent_signature(
+                        &unsigned,
+                        &merged_before,
+                        returned,
+                        fingerprint,
+                    )?;
+                    signing.signed_psbt = merged.to_string();
+                    signing.independent_signatures.push(IndependentSignature {
+                        slot,
+                        psbt: accepted.to_string(),
+                    });
+                }
+            }
             signing.completed.push(slot);
             checkpoint.progress = Progress::Signing(signing.clone());
             store.save(checkpoint)?;
@@ -1369,6 +1549,8 @@ mod tests {
                 unsigned_psbt: "unsigned PSBT".into(),
                 signed_psbt: "saved PSBT with prior signatures".into(),
                 completed: Vec::new(),
+                mode: SigningMode::Sequential,
+                independent_signatures: Vec::new(),
             }),
             blockers: Vec::new(),
             created_at: 1,
@@ -1433,7 +1615,15 @@ mod tests {
                 network_ok: true,
                 spend_confirmed: Cell::new(true),
             };
-            let failed = execute(&store, &workers, &chain, &mut checkpoint, Some(outpoint)).await;
+            let failed = execute(
+                &store,
+                &workers,
+                &chain,
+                &mut checkpoint,
+                Some(outpoint),
+                None,
+            )
+            .await;
             assert!(
                 failed
                     .unwrap_err()
@@ -1448,7 +1638,7 @@ mod tests {
                 finalized.transaction_hex
             );
             checkpoint = saved;
-            execute(&store, &workers, &chain, &mut checkpoint, None)
+            execute(&store, &workers, &chain, &mut checkpoint, None, None)
                 .await
                 .unwrap();
             assert!(matches!(
@@ -1496,22 +1686,36 @@ mod tests {
             spend_confirmed: Cell::new(true),
         };
         assert!(
-            execute(&store, &workers, &chain, &mut checkpoint, Some(outpoint))
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("genesis")
+            execute(
+                &store,
+                &workers,
+                &chain,
+                &mut checkpoint,
+                Some(outpoint),
+                None
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("genesis")
         );
         assert!(matches!(checkpoint.progress, Progress::Prepared));
         assert!(chain.submissions.borrow().is_empty());
         chain.network_ok = true;
-        execute(&store, &workers, &chain, &mut checkpoint, Some(outpoint))
-            .await
-            .unwrap();
+        execute(
+            &store,
+            &workers,
+            &chain,
+            &mut checkpoint,
+            Some(outpoint),
+            None,
+        )
+        .await
+        .unwrap();
         assert!(matches!(checkpoint.progress, Progress::Finalized(_)));
         assert!(chain.submissions.borrow().is_empty());
         checkpoint.broadcast_authorized = true;
-        execute(&store, &workers, &chain, &mut checkpoint, None)
+        execute(&store, &workers, &chain, &mut checkpoint, None, None)
             .await
             .unwrap();
         assert_eq!(chain.submissions.borrow().len(), 1);
@@ -1549,14 +1753,28 @@ mod tests {
         };
         let empty = crate::e2e::report::collect(&store, &chain).unwrap();
         assert_eq!(empty["live_pass"], 0);
+        assert_eq!(empty["supplemental_live_pass"], 0);
+        assert_eq!(
+            empty["supplemental_cases"][0]["case"]["id"],
+            INDEPENDENT_SIGNING_CASE_ID
+        );
         assert_eq!(empty["genesis_verified_at"], serde_json::Value::Null);
         chain.network_ok = true;
-        execute(&store, &workers, &chain, &mut checkpoint, Some(outpoint))
-            .await
-            .unwrap();
+        execute(
+            &store,
+            &workers,
+            &chain,
+            &mut checkpoint,
+            Some(outpoint),
+            None,
+        )
+        .await
+        .unwrap();
         let saved = std::fs::read(store.checkpoint_path(&checkpoint.case.id).unwrap()).unwrap();
         let report = crate::e2e::report::collect(&store, &chain).unwrap();
         assert_eq!(report["live_pass"], 1);
+        assert_eq!(report["supplemental_live_pass"], 0);
+        assert_eq!(report["remaining"], crate::e2e::model::CASE_COUNT - 1);
         assert_eq!(report["recorded_live_pass"], 1);
         assert_eq!(report["overall"], "BLOCKED");
         let public_path = store

@@ -10,6 +10,13 @@ pub const CASE_COUNT: usize = 7_315;
 pub const FUNDING_SATS: u64 = 50_000;
 pub const CONFIRMED_SAFE7_P2WSH_FUNDING_SATS: u64 = 221_956;
 pub const CONFIRMED_SAFE7_P2WSH_CASE_ID: &str = "multisig-p2wsh-1of1-a0-h0j0t1-s01-r0-12-c1-12";
+pub const INDEPENDENT_SIGNING_CASE_ID: &str =
+    "multisig-p2wsh-3of3-independent-a0-h1j1t1-s07-r1-74-c1-75";
+pub const INDEPENDENT_SIGNING_SOURCE_CASE_ID: &str =
+    "multisig-p2wsh-3of3-a0-h1j1t1-s07-r0-74-c1-74";
+pub const INDEPENDENT_SIGNING_FUNDING_SATS: u64 = 44_586;
+pub const INDEPENDENT_SIGNING_OUTPOINT: &str =
+    "16ba3787cdcdef4dc85fa412cec081b73da174b4bb6efb8073b28314d0f7046c:1";
 pub const PAYMENT_SATS: u64 = 5_000;
 pub const FEE_RATE: u64 = 2;
 pub const FEE_CAP: u64 = 5_000;
@@ -133,11 +140,17 @@ pub struct Case {
 
 impl Case {
     pub fn funding_target_sats(&self) -> u64 {
-        if self.id == CONFIRMED_SAFE7_P2WSH_CASE_ID {
+        if self.id == INDEPENDENT_SIGNING_CASE_ID {
+            INDEPENDENT_SIGNING_FUNDING_SATS
+        } else if self.id == CONFIRMED_SAFE7_P2WSH_CASE_ID {
             CONFIRMED_SAFE7_P2WSH_FUNDING_SATS
         } else {
             FUNDING_SATS
         }
+    }
+
+    pub fn expected_funding_outpoint(&self) -> Option<&'static str> {
+        (self.id == INDEPENDENT_SIGNING_CASE_ID).then_some(INDEPENDENT_SIGNING_OUTPOINT)
     }
 }
 
@@ -191,6 +204,57 @@ pub fn manifest() -> &'static [Case] {
     CASES.get_or_init(generate_matrix)
 }
 
+/// One live supplemental protocol check. It is deliberately excluded from
+/// `manifest()` so it cannot change the required 7,315-case acceptance count.
+pub fn supplemental_cases() -> &'static [Case] {
+    static CASES: std::sync::OnceLock<Vec<Case>> = std::sync::OnceLock::new();
+    CASES.get_or_init(|| {
+        vec![Case {
+            id: INDEPENDENT_SIGNING_CASE_ID.to_owned(),
+            wallet_class: "multisig".to_owned(),
+            family: Family::P2wsh,
+            account: 0,
+            threshold: 3,
+            holders: vec![
+                Slot {
+                    source: Source::Hot,
+                    number: 1,
+                },
+                Slot {
+                    source: Source::Jade,
+                    number: 1,
+                },
+                Slot {
+                    source: Source::Trezor,
+                    number: 1,
+                },
+            ],
+            signing_subset: vec![
+                Slot {
+                    source: Source::Hot,
+                    number: 1,
+                },
+                Slot {
+                    source: Source::Jade,
+                    number: 1,
+                },
+                Slot {
+                    source: Source::Trezor,
+                    number: 1,
+                },
+            ],
+            receive: Location {
+                branch: 1,
+                index: 74,
+            },
+            change: Location {
+                branch: 1,
+                index: 75,
+            },
+        }]
+    })
+}
+
 fn generate_matrix() -> Vec<Case> {
     let mut rows = Vec::with_capacity(CASE_COUNT);
     for source in [Source::Hot, Source::Jade, Source::Trezor] {
@@ -239,8 +303,17 @@ pub fn find_case(id: &str) -> Result<Case, String> {
     manifest()
         .iter()
         .find(|c| c.id == id)
+        .or_else(|| supplemental_cases().iter().find(|c| c.id == id))
         .cloned()
         .ok_or_else(|| format!("unknown case {id}; use e2e matrix"))
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum SigningMode {
+    #[default]
+    Sequential,
+    Independent,
 }
 
 #[derive(Debug, Subcommand)]
@@ -294,6 +367,10 @@ pub enum Command {
         funding_outpoint: bitcoin::OutPoint,
         #[arg(long)]
         broadcast: bool,
+        /// Ask each signer to sign the same saved unsigned PSBT, then merge
+        /// only the verified signatures. Required for the supplemental case.
+        #[arg(long, value_enum)]
+        signing_mode: Option<SigningMode>,
     },
     /// Reconcile saved transaction bytes and chain state before continuing.
     Resume {
@@ -386,5 +463,29 @@ mod tests {
                     FUNDING_SATS
                 }
         }));
+    }
+
+    #[test]
+    fn supplemental_independent_signing_case_is_pinned_but_outside_required_matrix() {
+        let case = find_case(INDEPENDENT_SIGNING_CASE_ID).unwrap();
+        assert_eq!(manifest().len(), CASE_COUNT);
+        assert!(manifest().iter().all(|row| row.id != case.id));
+        assert_eq!(supplemental_cases(), &[case.clone()]);
+        assert_eq!(case.threshold, 3);
+        assert_eq!(case.holders.len(), 3);
+        assert_eq!(case.signing_subset, case.holders);
+        assert_eq!(case.receive.branch, 1);
+        assert_eq!(case.receive.index, 74);
+        assert_eq!(case.change.branch, 1);
+        assert_eq!(case.change.index, 75);
+        assert_eq!(case.funding_target_sats(), INDEPENDENT_SIGNING_FUNDING_SATS);
+        assert_eq!(
+            case.expected_funding_outpoint(),
+            Some(INDEPENDENT_SIGNING_OUTPOINT)
+        );
+        assert_eq!(
+            INDEPENDENT_SIGNING_FUNDING_SATS - PAYMENT_SATS - 438,
+            39_148
+        );
     }
 }

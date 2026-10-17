@@ -347,6 +347,7 @@ fn forward_coordinator(args: &Args, command: e2e::model::Command) -> e2e::Result
             case,
             funding_outpoint,
             broadcast,
+            signing_mode,
         } => {
             child.args([
                 "run",
@@ -357,6 +358,15 @@ fn forward_coordinator(args: &Args, command: e2e::model::Command) -> e2e::Result
             ]);
             if broadcast {
                 child.arg("--broadcast");
+            }
+            if let Some(mode) = signing_mode {
+                child.args([
+                    "--signing-mode",
+                    match mode {
+                        e2e::model::SigningMode::Sequential => "sequential",
+                        e2e::model::SigningMode::Independent => "independent",
+                    },
+                ]);
             }
         }
         E::Resume { case, broadcast } => {

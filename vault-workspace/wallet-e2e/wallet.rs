@@ -24,7 +24,10 @@ use vault_core::keys::{
 use zeroize::Zeroizing;
 
 use super::Result;
-use super::model::{Case, FEE_CAP, FEE_RATE, Family, PAYMENT_SATS, RATE_CAP, Slot, Source};
+use super::model::{
+    Case, FEE_CAP, FEE_RATE, Family, INDEPENDENT_SIGNING_CASE_ID, PAYMENT_SATS, RATE_CAP,
+    SigningMode, Slot, Source,
+};
 use super::records::{
     Account, Checkpoint, Enrollment, Finalized, Identity, Progress, Signing, Store, atomic_write,
 };
@@ -298,7 +301,7 @@ pub fn independent_script(
 pub fn check_derivation(case: &Case, enrolled: &[Enrollment]) -> Result<()> {
     for branch in [0, 1] {
         let descriptor = descriptor(case, enrolled, branch)?;
-        for index in [0, 1, 7, case.receive.index] {
+        for index in [0, 1, 7, case.receive.index, case.change.index] {
             if derive_address_at(&descriptor, index, Network::Testnet4)?.script_pubkey()
                 != independent_script(case, enrolled, branch, index)?
             {
@@ -422,11 +425,12 @@ pub fn spend_psbt(
         .output
         .get(outpoint.vout as usize)
         .ok_or("funding vout missing")?;
-    let receive = descriptor(case, enrolled, 0)?;
-    let change = descriptor(case, enrolled, 1)?;
+    let receive = descriptor(case, enrolled, case.receive.branch)?;
+    let change = descriptor(case, enrolled, case.change.branch)?;
     let receive_at = receive.at_derivation_index(case.receive.index)?;
     let change_at = change.at_derivation_index(case.change.index)?;
-    if output.script_pubkey != independent_script(case, enrolled, 0, case.receive.index)?
+    if output.script_pubkey
+        != independent_script(case, enrolled, case.receive.branch, case.receive.index)?
         || output.script_pubkey != receive_at.script_pubkey()
         || output.value.to_sat() != case.funding_target_sats()
     {
@@ -563,12 +567,13 @@ pub fn validate_checkpoint(checkpoint: &Checkpoint) -> Result<()> {
                     return Err("saved remote address request is not for this case's receive or change address".into());
                 }
             }
-            (
-                super::records::DeviceAction::Sign { psbt, .. },
-                Progress::Signing(signing),
-            ) => {
+            (super::records::DeviceAction::Sign { psbt, .. }, Progress::Signing(signing)) => {
                 let next = checkpoint.case.signing_subset.get(signing.completed.len());
-                if next != Some(&request.slot) || psbt != &signing.signed_psbt {
+                let expected_psbt = match signing.mode {
+                    SigningMode::Sequential => &signing.signed_psbt,
+                    SigningMode::Independent => &signing.unsigned_psbt,
+                };
+                if next != Some(&request.slot) || psbt != expected_psbt {
                     return Err("saved remote PSBT request is stale or out of signer order".into());
                 }
             }
@@ -580,8 +585,16 @@ pub fn validate_checkpoint(checkpoint: &Checkpoint) -> Result<()> {
             }
         }
     }
-    let receive = descriptor(&checkpoint.case, &checkpoint.enrolled, 0)?;
-    let change = descriptor(&checkpoint.case, &checkpoint.enrolled, 1)?;
+    let receive = descriptor(
+        &checkpoint.case,
+        &checkpoint.enrolled,
+        checkpoint.case.receive.branch,
+    )?;
+    let change = descriptor(
+        &checkpoint.case,
+        &checkpoint.enrolled,
+        checkpoint.case.change.branch,
+    )?;
     if checkpoint.receive_descriptor != receive.to_string()
         || checkpoint.change_descriptor != change.to_string()
         || checkpoint.receive_address
@@ -599,11 +612,15 @@ pub fn validate_checkpoint(checkpoint: &Checkpoint) -> Result<()> {
     for enrollment in &checkpoint.enrolled {
         for (branch, index, address) in [
             (
-                0,
+                checkpoint.case.receive.branch,
                 checkpoint.case.receive.index,
                 &checkpoint.receive_address,
             ),
-            (1, checkpoint.case.change.index, &checkpoint.change_address),
+            (
+                checkpoint.case.change.branch,
+                checkpoint.case.change.index,
+                &checkpoint.change_address,
+            ),
         ] {
             if checkpoint
                 .address_proofs
@@ -641,6 +658,13 @@ pub fn validate_signing(checkpoint: &Checkpoint, signing: &Signing) -> Result<()
     if signing.funding.amount_sats != checkpoint.case.funding_target_sats() {
         return Err("saved funding amount differs from the exact funding target".into());
     }
+    if checkpoint
+        .case
+        .expected_funding_outpoint()
+        .is_some_and(|expected| expected.parse::<OutPoint>().ok() != Some(outpoint))
+    {
+        return Err("saved funding outpoint differs from the pinned supplemental test UTXO".into());
+    }
     validate_psbt(
         &checkpoint.case,
         &checkpoint.enrolled,
@@ -657,6 +681,46 @@ pub fn validate_signing(checkpoint: &Checkpoint, signing: &Signing) -> Result<()
         &destination,
         &signed,
     )?;
+    if signing.mode == SigningMode::Independent {
+        if checkpoint.case.id != INDEPENDENT_SIGNING_CASE_ID {
+            return Err("independent PSBT signing is restricted to the supplemental case".into());
+        }
+        if signing.independent_signatures.len() != signing.completed.len() {
+            return Err("independent signature evidence does not match completed signers".into());
+        }
+        let mut reconstructed = unsigned.clone();
+        for (slot, evidence) in signing
+            .completed
+            .iter()
+            .zip(&signing.independent_signatures)
+        {
+            if evidence.slot != *slot {
+                return Err("independent signature evidence is out of signer order".into());
+            }
+            let enrollment = checkpoint
+                .enrolled
+                .iter()
+                .find(|enrollment| enrollment.slot == *slot)
+                .ok_or("independent signer is not enrolled")?;
+            let fingerprint: Fingerprint = enrollment.identity.fingerprint.parse()?;
+            let returned: Psbt = evidence.psbt.parse()?;
+            let (merged, accepted) = merge_independent_signature(
+                &unsigned,
+                &reconstructed,
+                returned.clone(),
+                fingerprint,
+            )?;
+            if accepted != returned {
+                return Err("independent PSBT contains unaccepted changes".into());
+            }
+            reconstructed = merged;
+        }
+        if reconstructed != signed {
+            return Err("merged PSBT differs from the verified independent signatures".into());
+        }
+    } else if !signing.independent_signatures.is_empty() {
+        return Err("sequential signing checkpoint contains independent signature evidence".into());
+    }
     verify_completed(
         &unsigned,
         &signed,
@@ -664,6 +728,56 @@ pub fn validate_signing(checkpoint: &Checkpoint, signing: &Signing) -> Result<()
         &checkpoint.case,
         &checkpoint.enrolled,
     )
+}
+
+/// Verify an independently signed copy against the unchanged unsigned PSBT,
+/// then merge only the signer's verified signatures into the host PSBT.
+pub fn merge_independent_signature(
+    unsigned: &Psbt,
+    merged: &Psbt,
+    returned: Psbt,
+    signer: Fingerprint,
+) -> Result<(Psbt, Psbt)> {
+    let accepted = verify_device_signatures(unsigned, returned, signer)?;
+    let mut candidate = merged.clone();
+    for (index, input) in unsigned.inputs.iter().enumerate() {
+        for key in input
+            .bip32_derivation
+            .iter()
+            .filter_map(|(key, (fingerprint, _))| (*fingerprint == signer).then_some(key))
+        {
+            let key = bitcoin::PublicKey::new(*key);
+            let signature = accepted.inputs[index]
+                .partial_sigs
+                .get(&key)
+                .ok_or("independent signer did not sign an assigned input key")?;
+            if candidate.inputs[index]
+                .partial_sigs
+                .insert(key, *signature)
+                .is_some()
+            {
+                return Err("independent signature duplicates an existing signer".into());
+            }
+        }
+        if input
+            .tap_key_origins
+            .values()
+            .any(|(_, (fingerprint, _))| *fingerprint == signer)
+        {
+            let signature = accepted.inputs[index]
+                .tap_key_sig
+                .ok_or("independent Taproot signer returned no key-path signature")?;
+            if candidate.inputs[index]
+                .tap_key_sig
+                .replace(signature)
+                .is_some()
+            {
+                return Err("independent Taproot signature duplicates an existing signer".into());
+            }
+        }
+    }
+    let merged = verify_device_signatures(merged, candidate, signer)?;
+    Ok((merged, accepted))
 }
 
 pub fn validate_finalized(checkpoint: &Checkpoint, finalized: &Finalized) -> Result<Transaction> {
@@ -1045,6 +1159,74 @@ mod tests {
     }
 
     #[test]
+    fn independent_signers_each_sign_the_same_unsigned_psbt_before_merge() {
+        use super::super::model::INDEPENDENT_SIGNING_CASE_ID;
+
+        let case = super::super::model::find_case(INDEPENDENT_SIGNING_CASE_ID).unwrap();
+        let fixture = holders(&case);
+        let enrolled = fixture
+            .iter()
+            .map(|(_, enrollment)| enrollment.clone())
+            .collect::<Vec<_>>();
+        check_derivation(&case, &enrolled).unwrap();
+        let destination = derive_address_at(
+            &descriptor(&case, &enrolled, 1).unwrap(),
+            7,
+            Network::Testnet4,
+        )
+        .unwrap();
+        let previous = offline_previous(
+            &case,
+            independent_script(&case, &enrolled, case.receive.branch, case.receive.index).unwrap(),
+        );
+        let outpoint = OutPoint {
+            txid: previous.compute_txid(),
+            vout: 0,
+        };
+        let unsigned = spend_psbt(&case, &enrolled, &previous, outpoint, &destination).unwrap();
+        assert_eq!(unsigned.fee().unwrap().to_sat(), 438);
+        assert_eq!(unsigned.unsigned_tx.output[0].value.to_sat(), PAYMENT_SATS);
+        assert_eq!(unsigned.unsigned_tx.output[1].value.to_sat(), 39_148);
+        assert_eq!(
+            unsigned.unsigned_tx.output[1].script_pubkey,
+            descriptor(&case, &enrolled, case.change.branch)
+                .unwrap()
+                .at_derivation_index(case.change.index)
+                .unwrap()
+                .script_pubkey()
+        );
+
+        let mut merged = unsigned.clone();
+        let mut completed = Vec::new();
+        for (mnemonic, enrollment) in &fixture {
+            // Each software fixture starts from the same host unsigned PSBT.
+            let returned = sign_mnemonic(&unsigned, mnemonic, enrollment, case.family).unwrap();
+            let fingerprint: Fingerprint = enrollment.identity.fingerprint.parse().unwrap();
+            let (next, accepted) =
+                merge_independent_signature(&unsigned, &merged, returned, fingerprint).unwrap();
+            assert_eq!(
+                verify_device_signatures(&unsigned, accepted.clone(), fingerprint).unwrap(),
+                accepted
+            );
+            if completed.is_empty() {
+                assert!(
+                    merge_independent_signature(&unsigned, &next, accepted.clone(), fingerprint,)
+                        .is_err()
+                );
+                let mut altered = accepted.clone();
+                altered.unsigned_tx.output[0].value += Amount::from_sat(1);
+                assert!(
+                    merge_independent_signature(&unsigned, &next, altered, fingerprint,).is_err()
+                );
+            }
+            merged = next;
+            completed.push(enrollment.slot);
+        }
+        verify_completed(&unsigned, &merged, &completed, &case, &enrolled).unwrap();
+        assert!(finalize(&merged).is_ok());
+    }
+
+    #[test]
     fn confirmed_safe7_funding_is_exact_and_returns_surplus_to_case_change_script() {
         use super::super::model::{
             CONFIRMED_SAFE7_P2WSH_CASE_ID, CONFIRMED_SAFE7_P2WSH_FUNDING_SATS,
@@ -1141,6 +1323,8 @@ mod tests {
             unsigned_psbt: unsigned.to_string(),
             signed_psbt: signed.to_string(),
             completed: case.signing_subset.clone(),
+            mode: SigningMode::Sequential,
+            independent_signatures: Vec::new(),
         };
         validate_signing(&checkpoint, &signing).unwrap();
         for amount in [

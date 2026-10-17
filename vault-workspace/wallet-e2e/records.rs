@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::Result;
-use super::model::{Case, Family, Slot, Source};
+use super::model::{Case, Family, SigningMode, Slot, Source};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Account {
@@ -157,6 +157,18 @@ pub struct Signing {
     pub unsigned_psbt: String,
     pub signed_psbt: String,
     pub completed: Vec<Slot>,
+    #[serde(default)]
+    pub mode: SigningMode,
+    /// The independently signed copies, each verified against `unsigned_psbt`.
+    /// These are private checkpoint evidence and never enter public reports.
+    #[serde(default)]
+    pub independent_signatures: Vec<IndependentSignature>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndependentSignature {
+    pub slot: Slot,
+    pub psbt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -439,6 +451,10 @@ pub fn public_result(checkpoint: &Checkpoint) -> serde_json::Value {
         state => state.finalized().map(|f| &f.signing.funding),
     };
     let finalized = checkpoint.progress.finalized();
+    let signing = match &checkpoint.progress {
+        Progress::Signing(signing) => Some(signing),
+        state => state.finalized().map(|finalized| &finalized.signing),
+    };
     json!({
         "schema": 1, "case": checkpoint.case, "network": "testnet4",
         "api": "https://mempool.space/testnet4/api", "status": checkpoint.progress.status(),
@@ -449,6 +465,8 @@ pub fn public_result(checkpoint: &Checkpoint) -> serde_json::Value {
         "origins": checkpoint.enrolled.iter().map(|e| json!({"slot":e.slot,"fingerprint":e.identity.fingerprint,"origin":e.identity.accounts.get(&checkpoint.case.family).map(|a|&a.origin),"firmware":e.identity.firmware})).collect::<Vec<_>>(),
         "funding": funding.map(|f|json!({"outpoint":f.outpoint,"amount_sats":f.amount_sats,"confirmation":f.confirmation})),
         "signing_subset": checkpoint.case.signing_subset,
+        "signing_mode": signing.map(|signing| signing.mode),
+        "independent_signature_slots": signing.map(|signing| signing.independent_signatures.iter().map(|signature| signature.slot).collect::<Vec<_>>()),
         "designated_signatures": match &checkpoint.progress {Progress::Signing(s)=>s.completed.as_slice(), state=>state.finalized().map_or(&[] as &[Slot],|f|f.signing.completed.as_slice())},
         "fee_policy":{"sat_per_vb":super::model::FEE_RATE,"fee_cap_sats":super::model::FEE_CAP,"effective_rate_cap":super::model::RATE_CAP},
         "spend":finalized.map(|f|json!({"txid":f.txid,"fee_sats":f.fee_sats,"vsize":f.vsize,"broadcast_authorized":f.broadcast_authorized})),

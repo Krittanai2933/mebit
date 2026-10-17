@@ -33,9 +33,12 @@ pub fn offline_command(command: &model::Command, store: &records::Store) -> Resu
             let pass = report["live_pass"]
                 .as_u64()
                 .ok_or("report has no live pass count")?;
+            let supplemental = report["supplemental_live_pass"]
+                .as_u64()
+                .unwrap_or_default();
             records::write_json(&store.root.join("report.json"), &report)?;
             println!(
-                "Overall {}. Confirmed live PASS {pass}/{}. Offline {}.",
+                "Overall {}. Confirmed live PASS {pass}/{}. Supplemental independent-signing PASS {supplemental}/1. Offline {}.",
                 report["overall"].as_str().unwrap_or("BLOCKED"),
                 model::CASE_COUNT,
                 report["offline"]["status"].as_str().unwrap_or("NOT_RUN")
