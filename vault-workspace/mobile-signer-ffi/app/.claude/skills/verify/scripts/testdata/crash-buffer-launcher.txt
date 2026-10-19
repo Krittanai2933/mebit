@@ -1,0 +1,16 @@
+--------- beginning of crash
+10-14 23:57:34.136  1011  1039 E AndroidRuntime: FATAL EXCEPTION: UiThreadHelper
+10-14 23:57:34.136  1011  1039 E AndroidRuntime: Process: com.google.android.apps.nexuslauncher, PID: 1011
+10-14 23:57:34.136  1011  1039 E AndroidRuntime: java.lang.NullPointerException: Attempt to read from field 'java.lang.String android.view.SurfaceControl.mName' on a null object reference in method 'void android.view.SurfaceControl.copyFrom(android.view.SurfaceControl, java.lang.String)'
+10-14 23:57:34.136  1011  1039 E AndroidRuntime: 	at android.os.Parcel.createExceptionOrNull(Parcel.java:3346)
+10-14 23:57:34.136  1011  1039 E AndroidRuntime: 	at android.os.Parcel.createException(Parcel.java:3324)
+10-14 23:57:34.136  1011  1039 E AndroidRuntime: 	at android.os.Parcel.readException(Parcel.java:3307)
+10-14 23:57:34.136  1011  1039 E AndroidRuntime: 	at android.os.Parcel.readException(Parcel.java:3249)
+10-14 23:57:34.136  1011  1039 E AndroidRuntime: 	at com.android.wm.shell.shared.IShellTransitions$Stub$Proxy.getHomeTaskOverlayContainer(go/retraceme ee19ec8c009da7af1d458e7d1683a6f5bf3b93b44f6674aa108e1a3e78584fe0:25)
+10-14 23:57:34.136  1011  1039 E AndroidRuntime: 	at com.android.quickstep.SystemUiProxy.getHomeTaskOverlayContainer(go/retraceme ee19ec8c009da7af1d458e7d1683a6f5bf3b93b44f6674aa108e1a3e78584fe0:6)
+10-14 23:57:34.136  1011  1039 E AndroidRuntime: 	at A2.c.run(go/retraceme ee19ec8c009da7af1d458e7d1683a6f5bf3b93b44f6674aa108e1a3e78584fe0:35)
+10-14 23:57:34.136  1011  1039 E AndroidRuntime: 	at android.os.Handler.handleCallback(Handler.java:995)
+10-14 23:57:34.136  1011  1039 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:103)
+10-14 23:57:34.136  1011  1039 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:248)
+10-14 23:57:34.136  1011  1039 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:338)
+10-14 23:57:34.136  1011  1039 E AndroidRuntime: 	at android.os.HandlerThread.run(HandlerThread.java:85)
