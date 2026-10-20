@@ -1,0 +1,16 @@
+product:
+  type: kmp/lib
+  platforms: [android, iosArm64, iosSimulatorArm64]
+
+# Raw coordinates, not $libs: the @aar packaging below is observed only in this form.
+dependencies:
+  # Generated code uses kotlinx.atomicfu. The library alone is enough, no compiler plugin.
+  - org.jetbrains.kotlinx:atomicfu:0.33.0
+
+dependencies@android:
+  # The AAR ships libjnidispatch.so for the Android ABIs.
+  - net.java.dev.jna:jna:5.18.1@aar
+
+test-dependencies@android:
+  # The plain JAR: the host-JVM test needs JNA's desktop natives, which the AAR lacks.
+  - net.java.dev.jna:jna:5.18.1

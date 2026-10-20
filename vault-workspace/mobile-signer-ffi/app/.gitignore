@@ -6,3 +6,7 @@
 !**/module.xcodeproj/project.xcworkspace/
 **/xcshareddata/WorkspaceSettings.xcsettings
 xcuserdata
+
+/mobileSignerFfi/cinterop@ios/*_link.def
+/mobileSignerFfi/testResources@android/
+/androidApp/jniLibs/
