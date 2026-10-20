@@ -11,7 +11,7 @@ You own `vault-workspace/mobile-signer-ffi`: the borrower's phone-side wallet an
 - **Vault signer (multisig)**, for BTC pledged to a loan: UniFFI interface exposing `vault-core`'s key derivation and PSBT signing to Kotlin/Swift. This is the original, narrower scope this module used to be — it's now half the job, not all of it.
 - **`app/`**: demo app (React Native or Flutter — pick one; core logic is in Rust either way) covering all 12 screens from the design.
 
-**Current status**: only the vault-signer half has any code (`rust/src/lib.rs` — 3 mock functions, no `uniffi` yet). The hot-wallet half hasn't been started at all — that's the single biggest gap in this module. Check `docs/05-progress-and-next-steps.md` before assuming otherwise.
+**Current status**: only the vault-signer half has any code (`rust/src/lib.rs` exports four functions through UniFFI. `compute_vault_address_multisig` uses the real generalized `vault-core` API and the other three are mocks. The Kotlin bindings live in `app/mobileSignerFfi`, see `vault-workspace/mobile-signer-ffi/README.md`). The hot-wallet half hasn't been started at all — that's the single biggest gap in this module. Check `docs/05-progress-and-next-steps.md` before assuming otherwise.
 
 ## Start from the existing design, don't redesign from scratch
 
@@ -27,7 +27,7 @@ You own `vault-workspace/mobile-signer-ffi`: the borrower's phone-side wallet an
 
 ## Dependency on vault-core (vault-signer half only)
 
-You don't need `vault-core` to be finished to start the hot-wallet half or the UI/UX — that's independent work. For the vault-signer half specifically: mock the UniFFI interface and build against it from term 1 week 1 (per `docs/00-capstone-brief.md` §4); wire up the real binding once `vault-core`'s descriptor/PSBT interface stabilizes (~week 7-10).
+You don't need `vault-core` to be finished to start the hot-wallet half or the UI/UX — that's independent work. For the vault-signer half specifically: mock the UniFFI interface and build against it from term 1 week 1 (per `docs/00-capstone-brief.md` §4); wire up the real binding once `vault-core`'s descriptor/PSBT interface stabilizes (~week 7-10). That is done for the generalized multisig API (2026-10-20). The three-party functions still sit on `vault-core` mocks, so their real binding waits for those mocks to be replaced.
 
 ## Scope reality check — MVP vs. stretch
 
