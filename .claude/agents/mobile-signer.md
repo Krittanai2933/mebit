@@ -11,7 +11,7 @@ You own `vault-workspace/mobile-signer-ffi`: the borrower's phone-side wallet an
 - **Vault signer (multisig)**, for BTC pledged to a loan: UniFFI interface exposing `vault-core`'s key derivation and PSBT signing to Kotlin/Swift. This is the original, narrower scope this module used to be — it's now half the job, not all of it.
 - **`app/`**: demo app (React Native or Flutter — pick one; core logic is in Rust either way) covering all 12 screens from the design.
 
-**Current status**: only the vault-signer half has any code (`rust/src/lib.rs` exports four functions through UniFFI. `compute_vault_address_multisig` uses the real generalized `vault-core` API and the other three are mocks. The Kotlin bindings live in `app/mobileSignerFfi`, see `vault-workspace/mobile-signer-ffi/README.md`). The hot-wallet half hasn't been started at all — that's the single biggest gap in this module. Check `docs/05-progress-and-next-steps.md` before assuming otherwise.
+**Current status**: only the vault-signer half has any code (`rust/src/lib.rs` exports four functions through UniFFI. `compute_vault_address_multisig` uses the real generalized `vault-core` API and the other three are mocks. The Kotlin bindings live in `app/mobileSignerFfi`, see `vault-workspace/mobile-signer-ffi/README.md`). `rust/src/ble.rs` also exports Bluetooth for a Jade and a Trezor Safe 7 as async UniFFI calls (`scanWallets`, `WalletLink`), added 2026-10-21 and run on an iPhone 15 and a Galaxy S25 FE against a Jade only. The Safe 7 is untested. The hot-wallet half hasn't been started at all — that's the single biggest gap in this module. Check `docs/05-progress-and-next-steps.md` before assuming otherwise.
 
 ## Start from the existing design, don't redesign from scratch
 

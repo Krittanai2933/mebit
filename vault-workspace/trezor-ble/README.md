@@ -81,8 +81,8 @@ Sources:
 **Advertising.** The service UUID and Trezor's company id `0x0F29` (followed by flags, color, and a model code: 6 for the Safe 7) sit in the **scan response**, so scanning is unfiltered.
 - A bonded Safe 7 advertises with a whitelist: only hosts it is bonded with see it. To pair a new host, choose **Pair new device** on the Safe 7.
 - **Asleep, it can't be found.** A Safe 7 that goes to sleep with no host connected turns its Bluetooth radio off (`ble_suspend` in `core/embed/io/ble/stm32/ble.c`). The user must wake it before a scan, so an app should say so. On hardware, both scans made while it slept found nothing.
-- The Safe 7 rotates its Bluetooth address (LE privacy), and iOS shows apps only a per-app id. So a device is never identified by its address: identity is the two checks above, and the credential.
-- The advertised name isn't stable either. Its suffix changed on 12 of 13 reconnections (`Trezor Safe 7 (0R4)`, `(4B6)`, `(2G8)`…). `ConnectOptions::device` can tell apart the devices of one scan, nothing more.
+- The Safe 7 rotates its Bluetooth address (LE privacy), and iOS shows apps only a per-app id. So a device is never identified by its address: identity is the two checks above, and the credential. A host that is bonded to the Safe 7 resolves the changing address and sees one id. A host that is not bonded sees a new id, which was measured changing inside one pairing session (14 s on an iPhone, 20 s on a Mac).
+- The advertised name isn't stable either. Its suffix changed on 12 of 13 reconnections (`Trezor Safe 7 (0R4)`, `(4B6)`, `(2G8)`…). `ConnectOptions::device` can tell apart the devices of one scan, nothing more. With `ConnectOptions::device_is_hint` (the mobile wrapper sets it, the harness has `--device-is-hint`), a selector that matches nothing falls back to the only Safe 7 in range, never to one of several. On a Mac with a real stale id, the strict form ended in `NotFound` while the new device was visible before and after, and `--device-is-hint` connected (`docs/04-open-items.md` item 36).
 
 **Busy.** When the Safe 7 won't take a connection, its BLE chip answers in the old codec v1 with `Failure("Device locked or busy")`. That is reported as `DeviceBusy`.
 
@@ -159,7 +159,7 @@ Runs so far: 2026-10-01, Safe 7 firmware 2.12.5 with the test phrase, macOS 26.6
 | HW-14 | fresh pairing (`--credential-file` pointing at a new file). At the code prompt type `12345`, then `12345a`, then the real code | the harness asks again each time and the Safe 7 stays on its code screen; pairing finishes with no new approval and no reconnect. Typing malformed codes only ends with `timed out waiting for the pairing code` about five minutes after the first prompt | not run yet (unit-tested only: `trezor-ble` driver tests, and `a_malformed_code_leaves_the_pairing_waiting_for_the_right_one` in `vault-core`) |
 
 **Not verifiable here:**
-- iOS and Android: they need the Phase 1 UniFFI wrapper and an app.
+- iOS and Android: `mobile-signer-ffi` now wraps this crate for both (`docs/05-progress-and-next-steps.md`), and a Safe 7 (firmware 2.13.0) ran on an iPhone 15 and on a POCO X3 NFC (Android 11) on 2026-10-23: first pairing, a bonded run, a cancelled connect and `info`, MTU 247 on both. It has not run on the Galaxy S25 FE or any other phone (`docs/04-open-items.md` items 30 and 33).
 - A second BLE-capable Trezor model (refusal is covered by unit tests).
 - Several Safe 7s in range (covered by unit tests).
 
@@ -167,6 +167,8 @@ Runs so far: 2026-10-01, Safe 7 firmware 2.12.5 with the test phrase, macOS 26.6
 
 - **`no Bluetooth devices seen at all`.** The terminal has no Bluetooth permission. On macOS: System Settings → Privacy & Security → Bluetooth.
 - **`no Trezor Safe 7 among the N devices seen`.** Wake the Safe 7: asleep, it turns Bluetooth off. For a host it isn't bonded with, open Bluetooth on the Safe 7 and choose **Pair new device**: a bonded Safe 7 is visible only to hosts it is bonded with.
+- **`the Bluetooth pairing was not completed`.** The OS pairing request was declined or not confirmed in about 30 seconds (CoreBluetooth words it "Encryption is insufficient"). Confirm it on the host and on the Safe 7, or choose Pair new device first, then retry. Seen on an iPhone 15 with both prompts left alone.
+- **`the Safe 7 dropped the link while connecting`.** Android's way of reporting a declined or unconfirmed pairing. Same remedy. Seen on a POCO X3 NFC when the notification was cancelled.
 - **`cancelled on the Trezor` during pairing, without declining.** The code screen was touched: its only button cancels pairing.
 - **`BondRemoved`, or pairing that keeps failing after a wipe.**
   1. Forget the Safe 7 in the host's Bluetooth settings.
@@ -176,17 +178,19 @@ Runs so far: 2026-10-01, Safe 7 firmware 2.12.5 with the test phrase, macOS 26.6
 
 ## Mobile notes (Phase 1)
 
-- **iOS.** Add `NSBluetoothAlwaysUsageDescription` to `Info.plist`. CoreBluetooth negotiates the MTU itself. `connect()` checks it is at least 247. Untested on a phone.
+- **iOS.** Add `NSBluetoothAlwaysUsageDescription` to `Info.plist`. CoreBluetooth negotiates the MTU itself. `connect()` checks it is at least 247. The key is in `mobile-signer-ffi/app/iosApp/src/Info.plist`. Ran against a Safe 7 on an iPhone 15 (2026-10-23): the MTU settled at 247.
 - **Android.**
   - Permissions: `BLUETOOTH_SCAN` (`neverForLocation`) and `BLUETOOTH_CONNECT` on API 31+; location on API ≤ 30.
   - btleplug's droidplug needs its Java side bundled, `btleplug::platform::init(env)` called through JNI, and ProGuard rules (btleplug's README).
-  - btleplug 0.13 requests MTU 517 when connecting. **0.11 doesn't**, which is why `jade-ble` moved to 0.13 as well: one Android build can't carry two btleplug versions (`docs/04-open-items.md` item 18).
+  - The app side (manifest, `System.loadLibrary`, the Java files, R8 rules) is in `mobile-signer-ffi/README.md`.
+  - btleplug 0.13 requests MTU 517 when connecting (seen on a Galaxy S25 FE with a Jade: the exchange resolved to 517. With a Safe 7 on a POCO X3 NFC, Android 11, the stack settled at 247 after the 517 request). **0.11 doesn't**, which is why `jade-ble` moved to 0.13 as well: one Android build can't carry two btleplug versions (`docs/04-open-items.md` item 18).
 - **Lifecycle.** A link may drop when the app goes to the background. Every call reports `Disconnected` or `Timeout`. Reconnect with the stored credential; the user then confirms on the Safe 7.
 
 ## Known issues
 
 - **btleplug 0.13.3** is pinned for its CoreBluetooth fixes: `discover_services()` hangs, event-thread panics, operations that never resolve (#486–#489), and Android JNI crashes. It also requests MTU 517 on Android.
 - **Device authenticity is not checked.** A fake peripheral claiming to be a `T3W1` passes both model checks, and could hand over its own xpub when a vault is set up. Only Trezor's `AuthenticateDevice` (certificate chains from the device's secure elements) could tell. It is required before real funds, so use the Safe 7 on test networks with the test phrase until then: `docs/04-open-items.md` item 19.
+- **Keep new code in `src/lib.rs`.** `trezor-hw-test` hashes only that file as its evidence of the build (`docs/04-open-items.md` item 32). A scan or connect whose future is dropped stops its scan and disconnects a link that was still coming up, through a `mod cleanup` that also exists in `jade-ble`.
 - **Dropping a call's future midway** leaves the device out of step. The next call says so (`Abandoned`): reconnect.
 
 ## Real testnet4 wallet verification
