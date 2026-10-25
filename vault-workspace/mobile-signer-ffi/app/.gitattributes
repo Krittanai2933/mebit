@@ -10,3 +10,6 @@ kotlin text eol=lf
 
 mobileSignerFfi/src*/com/mebit/ffi/signer/mobile_signer_ffi.*.kt linguist-generated=true
 mobileSignerFfi/cinterop@ios/include/mobile_signer_ffi.h linguist-generated=true
+
+mobileSignerFfi/src@android/com/nonpolynomial/** linguist-vendored
+mobileSignerFfi/src@android/io/github/gedgygedgy/** linguist-vendored

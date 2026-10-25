@@ -4,17 +4,21 @@
 #
 # Usage: ffi.sh build | bindings | check | test | apk | clean
 #   build  Build the Rust library for the host and every declared Kotlin target, regenerate the
-#          committed Kotlin bindings, write the git-ignored files the Kotlin build needs, and assert
-#          the iOS minos and the Android 16 KB alignment. Idempotent: run it after cloning and after
-#          any change under vault-core/ or mobile-signer-ffi/rust/, then commit what it changed.
-#   bindings  Regenerate and sync the committed Kotlin bindings only, with no iOS or Android build. For a
-#          quick refresh of what gets committed, and for a host that cannot run build. The native libraries
-#          stay as they were, so run build before any Kotlin test of a changed export or doc comment.
-#          Needs cargo and python3. Only macOS was tried.
-#   check  Regenerate the bindings into a temp dir and diff them against the committed ones; also
-#          fail when a Kotlin golden address is absent from rust/src/lib.rs, the two JNA versions in
-#          module.yaml differ, or a file named like a generated one was not written by the bindgen. Writes nothing under app/ or rust/ (cargo builds into vault-workspace/target,
-#          where the first run also installs the pinned bindgen). Needs cargo and python3. Only macOS was tried.
+#          committed Kotlin bindings, vendor btleplug's Android Java, write the git-ignored files the
+#          Kotlin build needs, and assert the iOS minos and the Android 16 KB alignment. Idempotent: run
+#          it after cloning and after any change under vault-core/, jade-ble/, trezor-ble/ or
+#          mobile-signer-ffi/rust/, then commit what it changed.
+#   bindings  Regenerate and sync the committed Kotlin bindings and the vendored Java only, with no iOS or
+#          Android build. For a quick refresh of what gets committed, and for a host that cannot run build.
+#          The native libraries stay as they were, so run build before any Kotlin test of a changed export
+#          or doc comment. Needs cargo and python3. Only macOS was tried.
+#   check  Regenerate the bindings into a temp dir, apply scripts/patch_bindings.py, and diff them
+#          against the committed ones; also diff the vendored btleplug Java and THIRD_PARTY_NOTICES.md
+#          against the btleplug version cargo resolves; fail when a Kotlin golden address is absent from
+#          rust/src/lib.rs, the two JNA versions in module.yaml differ, or a file named like a generated
+#          one was not written by the bindgen. Writes nothing under app/ or rust/ (cargo builds into
+#          vault-workspace/target, where the first run also installs the pinned bindgen). Needs cargo
+#          and python3. Only macOS was tried.
 #          This is the guard against stale bindings: iOS generated code has no load-time API check, and
 #          UniFFI checksums cover the exported functions but not the error enum.
 #   test   build, then cargo test, then the Kotlin tests: android on the host JVM, iosSimulatorArm64
@@ -36,6 +40,7 @@
 #   C src@android/com/mebit/ffi/signer/mobile_signer_ffi.android.kt
 #   C src@ios/com/mebit/ffi/signer/mobile_signer_ffi.native.kt
 #   C cinterop@ios/include/mobile_signer_ffi.h
+#   C src@android/com/nonpolynomial/, src@android/io/github/gedgygedgy/   btleplug's Android Java (28 files), THIRD_PARTY_NOTICES.md
 #   I cinterop@ios/mobile_signer_ffi_link.def          absolute library paths + a hash of the .a files
 #   I testResources@android/darwin-<arch>/libmobile_signer_ffi.dylib   host library on the host-JVM test classpath
 #   I ../androidApp/jniLibs/<abi>/libmobile_signer_ffi.so   created by apk, refreshed by build
@@ -44,7 +49,9 @@
 #   I vault-workspace/target/android-ndk-27.1.12297006/...               cargo-ndk objects
 #   I vault-workspace/target/jniLibs/<abi>/libmobile_signer_ffi.so       staged, 16 KB aligned
 #   I vault-workspace/target/tools/bin/gobley-uniffi-bindgen             pinned, installed on first use
-# Only these four files are overwritten, and never hand-edit them. Files beside them are left alone.
+# Of the generated files, the android and native ones are the bindgen's output plus scripts/patch_bindings.py
+# (one function, the cancellation leak). Only the files marked C are overwritten, and none is to be hand-edited.
+# Files beside them are left alone.
 set -euo pipefail
 
 GOBLEY=0.3.7                  # built on uniffi_bindgen =0.29.4 (seen in its install log)
@@ -78,8 +85,8 @@ usage() {
 
 preflight() {
   need cargo "install Rust: https://rustup.rs"
-  grep -qx "uniffi = \"=$UNIFFI\"" "$FFI/rust/Cargo.toml" \
-    || die "rust/Cargo.toml must pin uniffi = \"=$UNIFFI\" (gobley-uniffi-bindgen $GOBLEY is built on it); bump both together"
+  grep -qE "^uniffi = (\"=${UNIFFI//./\\.}\"|\{ *version = \"=${UNIFFI//./\\.}\"[^}]*\})$" "$FFI/rust/Cargo.toml" \
+    || die "rust/Cargo.toml must pin uniffi to =$UNIFFI (gobley-uniffi-bindgen $GOBLEY is built on it); bump both together"
   grep -qxF 'platforms: [android, iosArm64, iosSimulatorArm64]' <(sed 's/^ *//' "$MOD/module.yaml") \
     || die "$MODULE/module.yaml platforms changed; this script builds Rust for exactly android, iosArm64, iosSimulatorArm64"
   awk '/^\[/ { exit } /^package_name *=/ { found = 1 } END { exit !found }' "$FFI/rust/uniffi.toml" \
@@ -87,8 +94,8 @@ preflight() {
   [ "$(sed -n 's/^cdylib_name *= *"\(.*\)"$/\1/p' "$FFI/rust/uniffi.toml")" = "$NS" ] \
     || die "rust/uniffi.toml: cdylib_name must be \"$NS\", the library file stem"
   # Doc comments become KDoc, and Kotlin block comments nest: a stray /* inside one swallows the rest of the file.
-  if grep -nE '^[[:space:]]*//[/!].*(/\*|\*/)' "$FFI/rust/src/lib.rs" >&2; then
-    die "rust/src/lib.rs: a doc comment contains /* or */ (lines above); reword it"
+  if grep -rnE --include='*.rs' '^[[:space:]]*//[/!].*(/\*|\*/)' "$FFI/rust/src" >&2; then
+    die "rust/src: a doc comment contains /* or */ (lines above); reword it"
   fi
   PKG=$(sed -n 's/^package_name *= *"\(.*\)"$/\1/p' "$FFI/rust/uniffi.toml")
   [ -n "$PKG" ] || die "rust/uniffi.toml: could not read package_name"
@@ -111,6 +118,8 @@ guard_synced_values() {
   need python3 "install Python 3 (macOS: xcode-select --install)"
   python3 -I "$FFI/scripts/address_oracle.py" > "$TMP/oracle.log" 2>&1 \
     || { cat "$TMP/oracle.log" >&2; die "scripts/address_oracle.py failed (output above): the golden addresses in rust/src/lib.rs disagree with its independent BIP-32/67 derivation, or the script could not run"; }
+  python3 -I "$FFI/scripts/test_patch_bindings.py" > "$TMP/patchtest.log" 2>&1 \
+    || { cat "$TMP/patchtest.log" >&2; die "scripts/test_patch_bindings.py failed (output above): scripts/patch_bindings.py no longer patches exactly once or no longer fails closed"; }
   aar=$(sed -n 's/^ *- net\.java\.dev\.jna:jna:\([0-9.]*\)@aar$/\1/p' "$MOD/module.yaml")
   jar=$(sed -n 's/^ *- net\.java\.dev\.jna:jna:\([0-9.]*\)$/\1/p' "$MOD/module.yaml")
   [ -n "$aar" ] && [ "$aar" = "$jar" ] || die "$MODULE/module.yaml: the JNA AAR ('$aar') and JAR ('$jar') versions must be equal"
@@ -137,6 +146,10 @@ nativeInterop/cinterop/headers/$NS/$NS.h"
   cp -R "$gen/androidMain/kotlin/$PKG_DIR/." "$TMP/mirror/src@android/$PKG_DIR/"
   cp -R "$gen/nativeMain/kotlin/$PKG_DIR/." "$TMP/mirror/src@ios/$PKG_DIR/"
   cp "$gen/nativeInterop/cinterop/headers/$NS/$NS.h" "$TMP/mirror/cinterop@ios/include/"
+  # Gobley 0.3.7 leaks an async call's Rust future when the caller is cancelled before the call starts, and
+  # the object the future holds can then never drop. Exact text once per file, or stop (README, Pitfalls).
+  python3 -I "$FFI/scripts/patch_bindings.py" "$TMP/mirror/src@android/$PKG_DIR/$NS.android.kt" "$TMP/mirror/src@ios/$PKG_DIR/$NS.native.kt" \
+    || die "scripts/patch_bindings.py failed (reason above). If Gobley's uniffiRustCallAsync is no longer the 0.3.7 text, review the cancellation leak (README, Pitfalls), then update or delete the script"
   guard_no_stray_generated
 }
 
@@ -182,6 +195,8 @@ write_link_def() {
   cat > "$def.new" <<EOF
 # rust-libs-sha256 = $(cat "$dev/lib$NS.a" "$sim/lib$NS.a" | shasum -a 256 | cut -d' ' -f1)
 package = $NS.link
+# btleplug uses CoreBluetooth data symbols, and rustc does not embed the framework in a staticlib.
+linkerOpts = -framework CoreBluetooth
 staticLibraries.ios_arm64 = lib$NS.a
 libraryPaths.ios_arm64 = $dev
 staticLibraries.ios_simulator_arm64 = lib$NS.a
@@ -253,21 +268,106 @@ guard_no_stray_generated() {
   [ -z "$stray" ] || die "not written by the bindgen but named like its output:$stray (delete or rename them)"
 }
 
+# btleplug's Android half is Java that the app must compile itself.
+JAVA_ROOTS="com/nonpolynomial io/github/gedgygedgy"
+
+stage_btleplug_java() {
+  local meta dir version root
+  meta=$(cd "$WS" && cargo metadata --format-version 1 --filter-platform aarch64-linux-android) || die "cargo metadata failed"
+  { read -r dir; read -r version; } < <(python3 -I -c '
+import json, os, sys
+found = [p for p in json.load(sys.stdin)["packages"] if p["name"] == "btleplug"]
+assert len(found) == 1, "expected one btleplug in the lock, got %d" % len(found)
+print(os.path.dirname(found[0]["manifest_path"]))
+print(found[0]["version"])' <<<"$meta") || die "could not find btleplug in cargo metadata"
+  local src=$dir/src/droidplug/java/src/main/java
+  [ -d "$src" ] && [ -f "$dir/LICENSE.md" ] || die "btleplug $version has no Android Java under $src, or no LICENSE.md"
+  [ "$(cd "$src" && find . -type f ! -name '*.java' | wc -l | tr -d ' ')" = 0 ] || die "$src holds a file that is not Java"
+  [ "$(cd "$src" && find . -mindepth 1 -maxdepth 1 -type d | sed 's|^\./||' | sort | tr '\n' ' ')" = "com io " ] \
+    || die "btleplug $version: the Java tree no longer starts with com/ and io/; update JAVA_ROOTS"
+  rm -rf "$TMP/java"; mkdir -p "$TMP/java"
+  for root in $JAVA_ROOTS; do mkdir -p "$TMP/java/$root"; cp -R "$src/$root/." "$TMP/java/$root/"; done
+  [ "$(find "$TMP/java" -type f | wc -l | tr -d ' ')" = "$(find "$src" -type f | wc -l | tr -d ' ')" ] \
+    || die "btleplug $version: Java files outside JAVA_ROOTS ($JAVA_ROOTS)"
+  {
+    echo "# Third-party notices"
+    echo
+    echo "## btleplug $version"
+    echo
+    echo "Its Android Java sources are copied into \`src@android/\` (\`com/nonpolynomial\` and \`io/github/gedgygedgy\`)"
+    echo "by \`scripts/ffi.sh\`. Do not edit them: \`ffi.sh check\` diffs them against the crate. Its licence follows."
+    echo
+    cat "$dir/LICENSE.md"
+    echo
+    echo "---"
+    echo
+    echo "## jni-utils-rs"
+    echo
+    echo "btleplug $version carries jni-utils-rs 0.1.1's Java classes (\`io/github/gedgygedgy\`) and its own licence"
+    echo "file does not name their authors. The licence of jni-utils-rs follows."
+    echo
+    cat <<'JNI_UTILS_LICENSE'
+Copyright 2021-2022 Gedgy Gedgy, Kyle Machulis <kyle@nonpolynomial.com>
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+JNI_UTILS_LICENSE
+  } > "$TMP/notices.md"
+}
+
+sync_btleplug_java() {
+  local root
+  for root in $JAVA_ROOTS; do
+    rm -rf "${MOD:?}/src@android/$root"; mkdir -p "$MOD/src@android/$root"
+    cp -R "$TMP/java/$root/." "$MOD/src@android/$root/"
+  done
+  cmp -s "$TMP/notices.md" "$MOD/THIRD_PARTY_NOTICES.md" || cp "$TMP/notices.md" "$MOD/THIRD_PARTY_NOTICES.md"
+}
+
+diff_btleplug_java() {
+  local root drift=0
+  for root in $JAVA_ROOTS; do diff -ru "$MOD/src@android/$root" "$TMP/java/$root" || drift=1; done
+  diff -u "$MOD/THIRD_PARTY_NOTICES.md" "$TMP/notices.md" || drift=1
+  [ $drift = 0 ] || die "the vendored btleplug Java is stale: run scripts/ffi.sh build and commit the result"
+}
+
 cmd_build() {
   [ "$(uname)" = Darwin ] || die "build needs macOS: the iOS libraries need Xcode"
   case $WS in *' '*) die "the iOS link def is space-separated; move the checkout to a path without spaces: $WS" ;; esac
-  preflight; build_host_cdylib; generate
+  preflight; build_host_cdylib; generate; stage_btleplug_java
   # Everything that depends on the new Rust switches over only after every native build has passed, so a
   # missing NDK leaves the committed bindings and the iOS link def as they were.
   ios; android; host_test_lib
   write_link_def
-  sync_generated
+  sync_generated; sync_btleplug_java
   refresh_apk_libs
 }
 
 cmd_bindings() {
-  preflight; build_host_cdylib; generate
-  sync_generated
+  preflight; build_host_cdylib; generate; stage_btleplug_java
+  sync_generated; sync_btleplug_java
   # The host library was just rebuilt, and an Android host test loads its copy: leaving it old would fail the
   # checksum after any doc-comment edit. The iOS and Android libraries are what stays stale.
   if [ "$(uname)" = Darwin ]; then host_test_lib; fi
@@ -275,13 +375,14 @@ cmd_bindings() {
 }
 
 cmd_check() {
-  preflight; build_host_cdylib; generate
+  preflight; build_host_cdylib; generate; stage_btleplug_java
   local f drift=0
   for f in $(generated_files); do
     diff -u "$MOD/$f" "$TMP/mirror/$f" || drift=1
   done
   [ $drift = 0 ] || die "committed bindings are stale: run scripts/ffi.sh build and commit the result"
-  echo "ffi.sh check: committed bindings match rust/src"
+  diff_btleplug_java
+  echo "ffi.sh check: committed bindings match rust/src, and the vendored Java matches btleplug"
 }
 
 booted_simulators() { xcrun simctl list devices booted | grep -Eo '[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}' || true; }
@@ -348,7 +449,7 @@ cmd_apk() {
 ffi.sh apk: copied $ABIS into app/androidApp/jniLibs (git-ignored). Any androidApp build now packages them.
   Only these ABIs have the library. The Toolchain can warn "Incomplete native libraries" for the others
   (armeabi-v7a, x86, ...). To silence it, list the ABIs in settings.android.abiFilters of androidApp/module.yaml
-  yourself; this script never edits that file. No androidApp code calls the library yet.
+  yourself; this script never edits that file.
 EOF
 }
 

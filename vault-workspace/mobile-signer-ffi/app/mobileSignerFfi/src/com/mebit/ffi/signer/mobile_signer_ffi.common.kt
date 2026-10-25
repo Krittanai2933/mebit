@@ -103,6 +103,335 @@ public object NoPointer
 
 
 
+
+
+/**
+ * Asks the user for the six digits a Trezor Safe 7 shows while pairing (not its PIN).
+ * Return null if the user gives up, and never throw: an exception cannot be mapped, so the
+ * connect fails with `InternalException`. It may be asked again on one connect when an answer
+ * is not six digits. A Jade never asks.
+ */
+public interface PairingCodes {
+    
+    public suspend fun `pairingCode`(): kotlin.String?
+    
+    public companion object
+}
+
+
+/**
+ * Asks the user for the six digits a Trezor Safe 7 shows while pairing (not its PIN).
+ * Return null if the user gives up, and never throw: an exception cannot be mapped, so the
+ * connect fails with `InternalException`. It may be asked again on one connect when an answer
+ * is not six digits. A Jade never asks.
+ */
+public expect open class PairingCodesImpl: Disposable, PairingCodes {
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("ConvertSecondaryConstructorToPrimary")
+    public constructor(noPointer: NoPointer)
+
+    
+
+    override fun destroy()
+    override fun close()
+
+    
+    public override suspend fun `pairingCode`(): kotlin.String?
+    
+
+    
+    public companion object
+}
+
+
+
+
+/**
+ * A link to one wallet that `scan_wallets` found. Make it, call `connect`, close it when done.
+ *
+ * A task owns the device and this object sends it requests, so a cancelled call never leaves
+ * the device half-way through an exchange. Closing this object starts the disconnect, once no
+ * call is still running on it, and returns before the link is down: cancel the call first, and
+ * use `disconnect()` to wait. A link connects once: after a failed or cancelled `connect`,
+ * make a new one.
+ *
+ * A call made on a coroutine that is already cancelled throws before it starts and leaves
+ * nothing behind, so `close()` still releases the link. Wrap a call that must run after a
+ * cancel, such as `disconnect()` to wait for the link to be down, in `withContext(NonCancellable)`.
+ */
+public interface WalletLinkInterface {
+    
+    /**
+     * Connects to the wallet, pairs if it must, and checks the wallet is what it says.
+     * Cancelling while it runs leaves nothing that closing the link cannot end: measured with a
+     * Jade, unit-tested with a fake central for a Safe 7. A Jade that fails disconnects in the
+     * background, a Safe 7 before this returns.
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public suspend fun `connect`(`codes`: PairingCodes)
+    
+    /**
+     * Ends the link and waits until it is down, also when a failure or another call is
+     * already ending it. A request in flight finishes first. It does nothing until `connect`
+     * has returned: cancel a `connect` that is still running instead.
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public suspend fun `disconnect`()
+    
+    /**
+     * Name, firmware and what only this vendor reports. Cancelling stops only the wait:
+     * the wallet finishes the exchange and the link stays usable.
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public suspend fun `info`(): WalletInfo
+    
+    public companion object
+}
+
+
+/**
+ * A link to one wallet that `scan_wallets` found. Make it, call `connect`, close it when done.
+ *
+ * A task owns the device and this object sends it requests, so a cancelled call never leaves
+ * the device half-way through an exchange. Closing this object starts the disconnect, once no
+ * call is still running on it, and returns before the link is down: cancel the call first, and
+ * use `disconnect()` to wait. A link connects once: after a failed or cancelled `connect`,
+ * make a new one.
+ *
+ * A call made on a coroutine that is already cancelled throws before it starts and leaves
+ * nothing behind, so `close()` still releases the link. Wrap a call that must run after a
+ * cancel, such as `disconnect()` to wait for the link to be down, in `withContext(NonCancellable)`.
+ */
+public expect open class WalletLink: Disposable, WalletLinkInterface {
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    /**
+     * Makes a link that is not connected yet. It exists before `connect` starts, so a
+     * `connect` cancelled at any moment leaves nothing that cannot be closed.
+     */
+    public constructor(noPointer: NoPointer)
+
+    
+    /**
+     * Makes a link that is not connected yet. It exists before `connect` starts, so a
+     * `connect` cancelled at any moment leaves nothing that cannot be closed.
+     */
+    public constructor(`wallet`: FoundWallet)
+
+    override fun destroy()
+    override fun close()
+
+    
+    /**
+     * Connects to the wallet, pairs if it must, and checks the wallet is what it says.
+     * Cancelling while it runs leaves nothing that closing the link cannot end: measured with a
+     * Jade, unit-tested with a fake central for a Safe 7. A Jade that fails disconnects in the
+     * background, a Safe 7 before this returns.
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public override suspend fun `connect`(`codes`: PairingCodes)
+    
+    /**
+     * Ends the link and waits until it is down, also when a failure or another call is
+     * already ending it. A request in flight finishes first. It does nothing until `connect`
+     * has returned: cancel a `connect` that is still running instead.
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public override suspend fun `disconnect`()
+    
+    /**
+     * Name, firmware and what only this vendor reports. Cancelling stops only the wait:
+     * the wallet finishes the exchange and the link stays usable.
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public override suspend fun `info`(): WalletInfo
+    
+
+    
+    public companion object
+}
+
+
+
+
+/**
+ * A wallet a scan saw. Pass it to `WalletLink` unchanged.
+ */
+
+public data class FoundWallet (
+    var `kind`: WalletKind, 
+    /**
+     * The platform's handle for the device, stable while the app runs. Use it as a list key.
+     */
+    var `id`: kotlin.String, 
+    /**
+     * The advertised name, e.g. `Jade 1a2b3c`.
+     */
+    var `name`: kotlin.String
+) {
+    public companion object
+}
+
+
+
+/**
+ * Who answered on a connected link.
+ */
+
+public data class WalletInfo (
+    var `name`: kotlin.String, 
+    /**
+     * The firmware version, e.g. `1.0.41`.
+     */
+    var `firmware`: kotlin.String, 
+    var `details`: WalletDetails
+) {
+    public companion object
+}
+
+
+
+
+
+/**
+ * Every failure a Bluetooth export returns.
+ *
+ * Flat, like `MobileSignerError`: Kotlin branches on the subclass, and `message` is the
+ * vendor crate's own text, which says what to do. Kotlin reads variants by position, so
+ * append new ones and run `scripts/ffi.sh build`.
+ */
+public sealed class BleException(message: String): kotlin.Exception(message) {
+    
+    /**
+     * This build or this process cannot use Bluetooth. On Android, `System.loadLibrary`
+     * did not run before the first Bluetooth call.
+     */
+    public class Unsupported(message: String) : BleException(message)
+    
+    /**
+     * The OS refused Bluetooth to this app. Android: ask for the permissions again.
+     * iOS: Settings.
+     */
+    public class PermissionDenied(message: String) : BleException(message)
+    
+    /**
+     * There is no usable adapter: on Android, Bluetooth is fully off or missing, and the scanner
+     * is null. An Android adapter that stays in `BLE_ON` after the switch is turned off scans
+     * nothing and gives `NotFound` instead. iOS never reports this (read from btleplug's source,
+     * not run): with Bluetooth off, a scan finds nothing and fails as `NotFound`.
+     */
+    public class BluetoothOff(message: String) : BleException(message)
+    
+    /**
+     * No wallet of that kind was seen. The message says whether anything was seen at all.
+     * With Bluetooth off, iOS ends up here too (read from btleplug's source, not run), and so
+     * does an Android adapter in `BLE_ON`. On Android 11 and below, so does a missing location
+     * permission or Location switched off.
+     */
+    public class NotFound(message: String) : BleException(message)
+    
+    /**
+     * Not a wallet this app supports: another Trezor model, older firmware, no wallet service.
+     */
+    public class WrongDevice(message: String) : BleException(message)
+    
+    /**
+     * Nobody typed the pairing code, or the wallet's own cancel button ended pairing.
+     */
+    public class PairingCancelled(message: String) : BleException(message)
+    
+    /**
+     * Pairing did not finish. The Safe 7 refused the code, or the OS pairing was declined or not
+     * confirmed in time, which iOS reports as this error for a Safe 7. Elsewhere that case
+     * arrives as `Disconnected` while connecting, or as `Timeout` after a Jade's stalled service
+     * discovery, with a hint in the text. A Jade on Android holds its pairing request in the
+     * first request after connect, and a declined one ends that request as `Disconnected` or
+     * `Timeout` with the same hint. A Jade that lost power gives the same errors.
+     */
+    public class PairingFailed(message: String) : BleException(message)
+    
+    /**
+     * The wallet forgot this phone's Bluetooth bond (a Safe 7 that was restored or removed the
+     * phone, a Jade that paired other hosts): forget it in Settings and connect again. Android
+     * can re-pair by itself instead of raising this.
+     */
+    public class BondRemoved(message: String) : BleException(message)
+    
+    /**
+     * The request was refused, by the wallet (declined, locked, busy, not set up) or before
+     * it was sent. The link stays usable.
+     */
+    public class Refused(message: String) : BleException(message)
+    
+    /**
+     * A step took too long. For a Jade, a service discovery that stalls, or on Android a first
+     * request that stalls, can be a pairing request that nobody answered, and the text says so.
+     */
+    public class Timeout(message: String) : BleException(message)
+    
+    /**
+     * The link is down or closed. Connect again. While connecting, or in a Jade's first request
+     * on Android, it can mean a pairing request that nobody confirmed in time, and the text says
+     * so. A Jade that lost power drops the link the same way, so the text is a hint, not a
+     * diagnosis.
+     */
+    public class Disconnected(message: String) : BleException(message)
+    
+    /**
+     * Any other Bluetooth failure: connecting, MTU, GATT.
+     */
+    public class Link(message: String) : BleException(message)
+    
+    /**
+     * A bug, or a wallet out of step with this app. Connect again, and report it.
+     */
+    public class Protocol(message: String) : BleException(message)
+    
+}
+
+
+
+
+
+
+public enum class JadeState {
+    
+    /**
+     * No wallet on the device.
+     */
+    UNINIT,
+    /**
+     * A recovery phrase entered but not saved behind a PIN yet.
+     */
+    UNSAVED,
+    /**
+     * A saved wallet, not unlocked over this link.
+     */
+    LOCKED,
+    /**
+     * Unlocked over this link.
+     */
+    READY,
+    /**
+     * A Temporary Signer wallet, forgotten on reboot.
+     */
+    TEMP;
+    public companion object
+}
+
+
+
+
+
+
+
 /**
  * Every failure an export returns.
  *
@@ -154,6 +483,70 @@ public sealed class MobileSignerException(message: String): kotlin.Exception(mes
 
 
 
+
+/**
+ * What only one vendor reports. The variant is the vendor.
+ */
+
+public sealed class WalletDetails {
+    
+    public data class Jade(
+        /**
+         * `JADE_V2C` is a Jade Core.
+         */
+        val `board`: kotlin.String,
+        val `state`: JadeState,
+        /**
+         * `MAIN` or `TEST` once the wallet is pinned to a network type, `ALL` before.
+         */
+        val `networks`: kotlin.String,
+    ) : WalletDetails() {
+    }
+    
+    /**
+     * Read once, during connect.
+     */
+    public data class TrezorSafe7(
+        /**
+         * Always `T3W1`.
+         */
+        val `internalModel`: kotlin.String,
+        /**
+         * Random per device, regenerated by a wipe.
+         */
+        val `deviceId`: kotlin.String?,
+        val `label`: kotlin.String?,
+        /**
+         * The link's ATT MTU, at least 247.
+         */
+        val `mtu`: kotlin.UShort,
+    ) : WalletDetails() {
+    }
+    
+}
+
+
+
+
+
+
+
+
+public enum class WalletKind {
+    
+    JADE,
+    TREZOR_SAFE7;
+    public companion object
+}
+
+
+
+
+
+
+
+
+
 /**
  * MOCK, legacy three-party (borrower/platform/lender) 2-of-3 lending vault.
  * Returns `"tb1q"` + hex of a Rust `DefaultHasher` digest: not a Bitcoin
@@ -184,6 +577,19 @@ public expect fun `computeVaultAddressMultisig`(`xpubs`: List<kotlin.String>, `t
  * `"{account_xpub}/m/48'/0'/0'/2'/{index}"`, not a public key.
  */
 public expect fun `deriveBorrowerPubkey`(`accountXpub`: kotlin.String, `index`: kotlin.UInt): kotlin.String
+
+/**
+ * How many `WalletLink` objects exist in this process. For tests, not a stable API: a link
+ * that a call kept alive after `close()` still counts here.
+ */
+public expect fun `liveWalletLinks`(): kotlin.ULong
+
+/**
+ * Scans for a few seconds and lists the wallets of `kind` in range.
+ * Cancelling stops the scan.
+ */
+@Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+public expect suspend fun `scanWallets`(`kind`: WalletKind): List<FoundWallet>
 
 /**
  * MOCK. Returns `"MOCK_SIG[{loan_id}:{output count}:{borrower_pubkey}]"`. Signs

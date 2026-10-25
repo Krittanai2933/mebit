@@ -19,6 +19,18 @@ package com.mebit.ffi.signer
 import com.sun.jna.Library
 import com.sun.jna.Native
 import com.sun.jna.Structure
+import android.os.Build
+import androidx.annotation.RequiresApi
+import kotlin.coroutines.resume
+import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.IO
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 
 
 internal typealias Pointer = com.sun.jna.Pointer
@@ -887,6 +899,59 @@ internal typealias UniffiForeignFutureStructVoidUniffiByValue = UniffiForeignFut
 internal interface UniffiForeignFutureCompleteVoid: com.sun.jna.Callback {
     public fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructVoidUniffiByValue,)
 }
+internal interface UniffiCallbackInterfacePairingCodesMethod0: com.sun.jna.Callback {
+    public fun callback(`uniffiHandle`: Long,`uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,`uniffiCallbackData`: Long,`uniffiOutReturn`: UniffiForeignFuture,)
+}
+@Structure.FieldOrder("pairingCode", "uniffiFree")
+internal open class UniffiVTableCallbackInterfacePairingCodesStruct(
+    @JvmField public var `pairingCode`: UniffiCallbackInterfacePairingCodesMethod0?,
+    @JvmField public var `uniffiFree`: UniffiCallbackInterfaceFree?,
+) : com.sun.jna.Structure() {
+    internal constructor(): this(
+        
+        `pairingCode` = null,
+        
+        `uniffiFree` = null,
+        
+    )
+
+    internal class UniffiByValue(
+        `pairingCode`: UniffiCallbackInterfacePairingCodesMethod0?,
+        `uniffiFree`: UniffiCallbackInterfaceFree?,
+    ): UniffiVTableCallbackInterfacePairingCodes(`pairingCode`,`uniffiFree`,), Structure.ByValue
+}
+
+internal typealias UniffiVTableCallbackInterfacePairingCodes = UniffiVTableCallbackInterfacePairingCodesStruct
+
+internal fun UniffiVTableCallbackInterfacePairingCodes.uniffiSetValue(other: UniffiVTableCallbackInterfacePairingCodes) {
+    `pairingCode` = other.`pairingCode`
+    `uniffiFree` = other.`uniffiFree`
+}
+internal fun UniffiVTableCallbackInterfacePairingCodes.uniffiSetValue(other: UniffiVTableCallbackInterfacePairingCodesUniffiByValue) {
+    `pairingCode` = other.`pairingCode`
+    `uniffiFree` = other.`uniffiFree`
+}
+
+internal typealias UniffiVTableCallbackInterfacePairingCodesUniffiByValue = UniffiVTableCallbackInterfacePairingCodesStruct.UniffiByValue
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1001,7 +1066,28 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_derive_borrower_pubkey() != 16439.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
+        if (uniffi_mobile_signer_ffi_checksum_func_live_wallet_links() != 38905.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_scan_wallets() != 29092.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
         if (uniffi_mobile_signer_ffi_checksum_func_sign_psbt() != 37769.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code() != 55814.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_method_walletlink_connect() != 15741.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_method_walletlink_disconnect() != 59990.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_method_walletlink_info() != 62108.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_constructor_walletlink_new() != 63717.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
     }
@@ -1017,7 +1103,28 @@ internal object IntegrityCheckingUniffiLib : Library {
     external fun uniffi_mobile_signer_ffi_checksum_func_derive_borrower_pubkey(
     ): Short
     @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_live_wallet_links(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_scan_wallets(
+    ): Short
+    @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_sign_psbt(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_method_walletlink_connect(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_method_walletlink_disconnect(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_method_walletlink_info(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_constructor_walletlink_new(
     ): Short
     @JvmStatic
     external fun ffi_mobile_signer_ffi_uniffi_contract_version(
@@ -1033,7 +1140,58 @@ internal object UniffiLib : Library {
         Native.register(UniffiLib::class.java, findLibraryName("mobile_signer_ffi"))
         // No need to check the contract version and checksums, since 
         // we already did that with `IntegrityCheckingUniffiLib` above.
+        uniffiCallbackInterfacePairingCodes.register(this)
     }
+    // The Cleaner for the whole library
+    internal val CLEANER: UniffiCleaner by lazy {
+        UniffiCleaner.create()
+    }
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_clone_pairingcodes(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Pointer?
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_free_pairingcodes(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_init_callback_vtable_pairingcodes(
+        `vtable`: UniffiVTableCallbackInterfacePairingCodes,
+    ): Unit
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_method_pairingcodes_pairing_code(
+        `ptr`: Pointer?,
+    ): Long
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_clone_walletlink(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Pointer?
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_free_walletlink(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_constructor_walletlink_new(
+        `wallet`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Pointer?
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_method_walletlink_connect(
+        `ptr`: Pointer?,
+        `codes`: Pointer?,
+    ): Long
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_method_walletlink_disconnect(
+        `ptr`: Pointer?,
+    ): Long
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_method_walletlink_info(
+        `ptr`: Pointer?,
+    ): Long
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_func_compute_vault_address(
         `borrowerPubkey`: RustBufferByValue,
@@ -1053,6 +1211,14 @@ internal object UniffiLib : Library {
         `index`: Int,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_live_wallet_links(
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Long
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_scan_wallets(
+        `kind`: RustBufferByValue,
+    ): Long
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_func_sign_psbt(
         `psbtJson`: RustBufferByValue,
@@ -1335,6 +1501,96 @@ public fun uniffiEnsureInitialized() {
 
 // Public interface members begin here.
 
+internal const val IDX_CALLBACK_FREE = 0
+// Callback return codes
+internal const val UNIFFI_CALLBACK_SUCCESS = 0
+internal const val UNIFFI_CALLBACK_ERROR = 1
+internal const val UNIFFI_CALLBACK_UNEXPECTED_ERROR = 2
+
+public abstract class FfiConverterCallbackInterface<CallbackInterface: Any>: FfiConverter<CallbackInterface, Long> {
+    internal val handleMap = UniffiHandleMap<CallbackInterface>()
+
+    internal fun drop(handle: Long) {
+        handleMap.remove(handle)
+    }
+
+    override fun lift(value: Long): CallbackInterface {
+        return handleMap.get(value)
+    }
+
+    override fun read(buf: ByteBuffer): CallbackInterface = lift(buf.getLong())
+
+    override fun lower(value: CallbackInterface): Long = handleMap.insert(value)
+
+    override fun allocationSize(value: CallbackInterface): ULong = 8UL
+
+    override fun write(value: CallbackInterface, buf: ByteBuffer) {
+        buf.putLong(lower(value))
+    }
+}
+// The cleaner interface for Object finalization code to run.
+// This is the entry point to any implementation that we're using.
+//
+// The cleaner registers disposables and returns cleanables, so now we are
+// defining a `UniffiCleaner` with a `UniffiClenaer.Cleanable` to abstract the
+// different implementations available at compile time.
+public interface UniffiCleaner {
+    public interface Cleanable {
+        public fun clean()
+    }
+
+    public fun register(resource: Any, disposable: Disposable): UniffiCleaner.Cleanable
+
+    public companion object
+}
+// The fallback Jna cleaner, which is available for both Android, and the JVM.
+private class UniffiJnaCleaner : UniffiCleaner {
+    private val cleaner = com.sun.jna.internal.Cleaner.getCleaner()
+
+    override fun register(resource: Any, disposable: Disposable): UniffiCleaner.Cleanable =
+        UniffiJnaCleanable(cleaner.register(resource, UniffiCleanerAction(disposable)))
+}
+
+private class UniffiJnaCleanable(
+    private val cleanable: com.sun.jna.internal.Cleaner.Cleanable,
+) : UniffiCleaner.Cleanable {
+    override fun clean() = cleanable.clean()
+}
+
+private class UniffiCleanerAction(private val disposable: Disposable): Runnable {
+    override fun run() {
+        disposable.destroy()
+    }
+}
+
+// The SystemCleaner, available from API Level 33.
+// Some API Level 33 OSes do not support using it, so we require API Level 34.
+@RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+private class AndroidSystemCleaner : UniffiCleaner {
+    private val cleaner = android.system.SystemCleaner.cleaner()
+
+    override fun register(resource: Any, disposable: Disposable): UniffiCleaner.Cleanable =
+        AndroidSystemCleanable(cleaner.register(resource, UniffiCleanerAction(disposable)))
+}
+
+@RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+private class AndroidSystemCleanable(
+    private val cleanable: java.lang.ref.Cleaner.Cleanable,
+) : UniffiCleaner.Cleanable {
+    override fun clean() = cleanable.clean()
+}
+
+private fun UniffiCleaner.Companion.create(): UniffiCleaner {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        try {
+            return AndroidSystemCleaner()
+        } catch (_: IllegalAccessError) {
+            // (For Compose preview) Fallback to UniffiJnaCleaner if AndroidSystemCleaner is
+            // unavailable, even for API level 34 or higher.
+        }
+    }
+    return UniffiJnaCleaner()
+}
 
 
 public object FfiConverterUByte: FfiConverter<UByte, Byte> {
@@ -1358,6 +1614,27 @@ public object FfiConverterUByte: FfiConverter<UByte, Byte> {
 }
 
 
+public object FfiConverterUShort: FfiConverter<UShort, Short> {
+    override fun lift(value: Short): UShort {
+        return value.toUShort()
+    }
+
+    override fun read(buf: ByteBuffer): UShort {
+        return lift(buf.getShort())
+    }
+
+    override fun lower(value: UShort): Short {
+        return value.toShort()
+    }
+
+    override fun allocationSize(value: UShort): ULong = 2UL
+
+    override fun write(value: UShort, buf: ByteBuffer) {
+        buf.putShort(value.toShort())
+    }
+}
+
+
 public object FfiConverterUInt: FfiConverter<UInt, Int> {
     override fun lift(value: Int): UInt {
         return value.toUInt()
@@ -1375,6 +1652,27 @@ public object FfiConverterUInt: FfiConverter<UInt, Int> {
 
     override fun write(value: UInt, buf: ByteBuffer) {
         buf.putInt(value.toInt())
+    }
+}
+
+
+public object FfiConverterULong: FfiConverter<ULong, Long> {
+    override fun lift(value: Long): ULong {
+        return value.toULong()
+    }
+
+    override fun read(buf: ByteBuffer): ULong {
+        return lift(buf.getLong())
+    }
+
+    override fun lower(value: ULong): Long {
+        return value.toLong()
+    }
+
+    override fun allocationSize(value: ULong): ULong = 8UL
+
+    override fun write(value: ULong, buf: ByteBuffer) {
+        buf.putLong(value.toLong())
     }
 }
 
@@ -1424,6 +1722,604 @@ public object FfiConverterString: FfiConverter<String, RustBufferByValue> {
         val encoded = value.encodeToByteArray(throwOnInvalidSequence = true)
         buf.putInt(encoded.size)
         buf.put(encoded)
+    }
+}
+
+
+
+/**
+ * Asks the user for the six digits a Trezor Safe 7 shows while pairing (not its PIN).
+ * Return null if the user gives up, and never throw: an exception cannot be mapped, so the
+ * connect fails with `InternalException`. It may be asked again on one connect when an answer
+ * is not six digits. A Jade never asks.
+ */
+public actual open class PairingCodesImpl: Disposable, PairingCodes {
+
+    public constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiPointerDestroyer(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    public actual constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiPointerDestroyer(null))
+    }
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed: kotlinx.atomicfu.AtomicBoolean = kotlinx.atomicfu.atomic(false)
+    private val callCounter: kotlinx.atomicfu.AtomicLong = kotlinx.atomicfu.atomic(1L)
+
+    private val lock = kotlinx.atomicfu.locks.ReentrantLock()
+
+    private fun <T> synchronized(block: () -> T): T {
+        lock.lock()
+        try {
+            return block()
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    actual override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    actual override fun close() {
+        synchronized { this.destroy() }
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.value
+            if (c == 0L) {
+                throw IllegalStateException("${this::class::simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this::class::simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiPointerDestroyer(private val pointer: Pointer?) : Disposable {
+        override fun destroy() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.uniffi_mobile_signer_ffi_fn_free_pairingcodes(ptr, status)
+                }
+            }
+        }
+    }
+
+    public fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall { status ->
+            UniffiLib.uniffi_mobile_signer_ffi_fn_clone_pairingcodes(pointer!!, status)
+        }!!
+    }
+
+    
+    public actual override suspend fun `pairingCode`(): kotlin.String? {
+        return uniffiRustCallAsync(
+            callWithPointer { thisPtr ->
+                UniffiLib.uniffi_mobile_signer_ffi_fn_method_pairingcodes_pairing_code(
+                    thisPtr,
+                )
+            },
+            { future, callback, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+            { future, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_complete_rust_buffer(future, continuation) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_free_rust_buffer(future) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_cancel_rust_buffer(future) },
+            // lift function
+            { FfiConverterOptionalString.lift(it) },
+            // Error FFI converter
+            UniffiNullRustCallStatusErrorHandler,
+        )
+    }
+
+
+    
+    
+    public actual companion object
+    
+}
+
+
+
+
+
+public object FfiConverterTypePairingCodes: FfiConverter<PairingCodes, Pointer> {
+    internal val handleMap = UniffiHandleMap<PairingCodes>()
+
+    override fun lower(value: PairingCodes): Pointer {
+        return handleMap.insert(value).toPointer()
+    }
+
+    override fun lift(value: Pointer): PairingCodes {
+        return PairingCodesImpl(value)
+    }
+
+    override fun read(buf: ByteBuffer): PairingCodes {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(buf.getLong().toPointer())
+    }
+
+    override fun allocationSize(value: PairingCodes): ULong = 8UL
+
+    override fun write(value: PairingCodes, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(lower(value).toLong())
+    }
+}
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfacePairingCodes {
+    internal object `pairingCode`: UniffiCallbackInterfacePairingCodesMethod0 {
+        override fun callback (
+            `uniffiHandle`: Long,
+            `uniffiFutureCallback`: UniffiForeignFutureCompleteRustBuffer,
+            `uniffiCallbackData`: Long,
+            `uniffiOutReturn`: UniffiForeignFuture,
+        ) {
+            val uniffiObj = FfiConverterTypePairingCodes.handleMap.get(uniffiHandle)
+            val makeCall = suspend { ->
+                uniffiObj.`pairingCode`(
+                )
+            }
+            val uniffiHandleSuccess = { returnValue: kotlin.String? ->
+                val uniffiResult = UniffiForeignFutureStructRustBufferUniffiByValue(
+                    FfiConverterOptionalString.lower(returnValue),
+                    UniffiRustCallStatusHelper.allocValue()
+                )
+                uniffiResult.write()
+                uniffiFutureCallback.callback(uniffiCallbackData, uniffiResult)
+            }
+            val uniffiHandleError = { callStatus: UniffiRustCallStatusByValue ->
+                uniffiFutureCallback.callback(
+                    uniffiCallbackData,
+                    UniffiForeignFutureStructRustBufferUniffiByValue(
+                        RustBufferHelper.allocValue(),
+                        callStatus,
+                    ),
+                )
+            }
+
+            uniffiOutReturn.uniffiSetValue(
+                uniffiTraitInterfaceCallAsync(
+                    makeCall,
+                    uniffiHandleSuccess,
+                    uniffiHandleError
+                )
+            )
+        }
+    }
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypePairingCodes.handleMap.remove(handle)
+        }
+    }
+
+    internal val vtable = UniffiVTableCallbackInterfacePairingCodes(
+        `pairingCode`,
+        uniffiFree,
+    )
+
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_mobile_signer_ffi_fn_init_callback_vtable_pairingcodes(vtable)
+    }
+}
+
+
+
+/**
+ * A link to one wallet that `scan_wallets` found. Make it, call `connect`, close it when done.
+ *
+ * A task owns the device and this object sends it requests, so a cancelled call never leaves
+ * the device half-way through an exchange. Closing this object starts the disconnect, once no
+ * call is still running on it, and returns before the link is down: cancel the call first, and
+ * use `disconnect()` to wait. A link connects once: after a failed or cancelled `connect`,
+ * make a new one.
+ *
+ * A call made on a coroutine that is already cancelled throws before it starts and leaves
+ * nothing behind, so `close()` still releases the link. Wrap a call that must run after a
+ * cancel, such as `disconnect()` to wait for the link to be down, in `withContext(NonCancellable)`.
+ */
+public actual open class WalletLink: Disposable, WalletLinkInterface {
+
+    public constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiPointerDestroyer(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    public actual constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiPointerDestroyer(null))
+    }
+    /**
+     * Makes a link that is not connected yet. It exists before `connect` starts, so a
+     * `connect` cancelled at any moment leaves nothing that cannot be closed.
+     */
+    public actual constructor(`wallet`: FoundWallet) : this(
+        uniffiRustCall { uniffiRustCallStatus ->
+            UniffiLib.uniffi_mobile_signer_ffi_fn_constructor_walletlink_new(
+                FfiConverterTypeFoundWallet.lower(`wallet`),
+                uniffiRustCallStatus,
+            )
+        }!!
+    )
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed: kotlinx.atomicfu.AtomicBoolean = kotlinx.atomicfu.atomic(false)
+    private val callCounter: kotlinx.atomicfu.AtomicLong = kotlinx.atomicfu.atomic(1L)
+
+    private val lock = kotlinx.atomicfu.locks.ReentrantLock()
+
+    private fun <T> synchronized(block: () -> T): T {
+        lock.lock()
+        try {
+            return block()
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    actual override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    actual override fun close() {
+        synchronized { this.destroy() }
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.value
+            if (c == 0L) {
+                throw IllegalStateException("${this::class::simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this::class::simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiPointerDestroyer(private val pointer: Pointer?) : Disposable {
+        override fun destroy() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.uniffi_mobile_signer_ffi_fn_free_walletlink(ptr, status)
+                }
+            }
+        }
+    }
+
+    public fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall { status ->
+            UniffiLib.uniffi_mobile_signer_ffi_fn_clone_walletlink(pointer!!, status)
+        }!!
+    }
+
+    
+    /**
+     * Connects to the wallet, pairs if it must, and checks the wallet is what it says.
+     * Cancelling while it runs leaves nothing that closing the link cannot end: measured with a
+     * Jade, unit-tested with a fake central for a Safe 7. A Jade that fails disconnects in the
+     * background, a Safe 7 before this returns.
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public actual override suspend fun `connect`(`codes`: PairingCodes) {
+        return uniffiRustCallAsync(
+            callWithPointer { thisPtr ->
+                UniffiLib.uniffi_mobile_signer_ffi_fn_method_walletlink_connect(
+                    thisPtr,
+                    FfiConverterTypePairingCodes.lower(`codes`),
+                )
+            },
+            { future, callback, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_poll_void(future, callback, continuation) },
+            { future, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_complete_void(future, continuation) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_free_void(future) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_cancel_void(future) },
+            // lift function
+            { Unit },
+            
+            // Error FFI converter
+            BleExceptionErrorHandler,
+        )
+    }
+
+    /**
+     * Ends the link and waits until it is down, also when a failure or another call is
+     * already ending it. A request in flight finishes first. It does nothing until `connect`
+     * has returned: cancel a `connect` that is still running instead.
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public actual override suspend fun `disconnect`() {
+        return uniffiRustCallAsync(
+            callWithPointer { thisPtr ->
+                UniffiLib.uniffi_mobile_signer_ffi_fn_method_walletlink_disconnect(
+                    thisPtr,
+                )
+            },
+            { future, callback, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_poll_void(future, callback, continuation) },
+            { future, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_complete_void(future, continuation) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_free_void(future) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_cancel_void(future) },
+            // lift function
+            { Unit },
+            
+            // Error FFI converter
+            BleExceptionErrorHandler,
+        )
+    }
+
+    /**
+     * Name, firmware and what only this vendor reports. Cancelling stops only the wait:
+     * the wallet finishes the exchange and the link stays usable.
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public actual override suspend fun `info`(): WalletInfo {
+        return uniffiRustCallAsync(
+            callWithPointer { thisPtr ->
+                UniffiLib.uniffi_mobile_signer_ffi_fn_method_walletlink_info(
+                    thisPtr,
+                )
+            },
+            { future, callback, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+            { future, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_complete_rust_buffer(future, continuation) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_free_rust_buffer(future) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_cancel_rust_buffer(future) },
+            // lift function
+            { FfiConverterTypeWalletInfo.lift(it) },
+            // Error FFI converter
+            BleExceptionErrorHandler,
+        )
+    }
+
+
+    
+    
+    public actual companion object
+    
+}
+
+
+
+
+
+public object FfiConverterTypeWalletLink: FfiConverter<WalletLink, Pointer> {
+
+    override fun lower(value: WalletLink): Pointer {
+        return value.uniffiClonePointer()
+    }
+
+    override fun lift(value: Pointer): WalletLink {
+        return WalletLink(value)
+    }
+
+    override fun read(buf: ByteBuffer): WalletLink {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(buf.getLong().toPointer())
+    }
+
+    override fun allocationSize(value: WalletLink): ULong = 8UL
+
+    override fun write(value: WalletLink, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(lower(value).toLong())
+    }
+}
+
+
+
+
+public object FfiConverterTypeFoundWallet: FfiConverterRustBuffer<FoundWallet> {
+    override fun read(buf: ByteBuffer): FoundWallet {
+        return FoundWallet(
+            FfiConverterTypeWalletKind.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FoundWallet): ULong = (
+            FfiConverterTypeWalletKind.allocationSize(value.`kind`) +
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`name`)
+    )
+
+    override fun write(value: FoundWallet, buf: ByteBuffer) {
+        FfiConverterTypeWalletKind.write(value.`kind`, buf)
+        FfiConverterString.write(value.`id`, buf)
+        FfiConverterString.write(value.`name`, buf)
+    }
+}
+
+
+
+
+public object FfiConverterTypeWalletInfo: FfiConverterRustBuffer<WalletInfo> {
+    override fun read(buf: ByteBuffer): WalletInfo {
+        return WalletInfo(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeWalletDetails.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: WalletInfo): ULong = (
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterString.allocationSize(value.`firmware`) +
+            FfiConverterTypeWalletDetails.allocationSize(value.`details`)
+    )
+
+    override fun write(value: WalletInfo, buf: ByteBuffer) {
+        FfiConverterString.write(value.`name`, buf)
+        FfiConverterString.write(value.`firmware`, buf)
+        FfiConverterTypeWalletDetails.write(value.`details`, buf)
+    }
+}
+
+
+
+
+public object BleExceptionErrorHandler : UniffiRustCallStatusErrorHandler<BleException> {
+    override fun lift(errorBuf: RustBufferByValue): BleException = FfiConverterTypeBleError.lift(errorBuf)
+}
+
+public object FfiConverterTypeBleError : FfiConverterRustBuffer<BleException> {
+    override fun read(buf: ByteBuffer): BleException {
+        return when (buf.getInt()) {
+            1 -> BleException.Unsupported(FfiConverterString.read(buf))
+            2 -> BleException.PermissionDenied(FfiConverterString.read(buf))
+            3 -> BleException.BluetoothOff(FfiConverterString.read(buf))
+            4 -> BleException.NotFound(FfiConverterString.read(buf))
+            5 -> BleException.WrongDevice(FfiConverterString.read(buf))
+            6 -> BleException.PairingCancelled(FfiConverterString.read(buf))
+            7 -> BleException.PairingFailed(FfiConverterString.read(buf))
+            8 -> BleException.BondRemoved(FfiConverterString.read(buf))
+            9 -> BleException.Refused(FfiConverterString.read(buf))
+            10 -> BleException.Timeout(FfiConverterString.read(buf))
+            11 -> BleException.Disconnected(FfiConverterString.read(buf))
+            12 -> BleException.Link(FfiConverterString.read(buf))
+            13 -> BleException.Protocol(FfiConverterString.read(buf))
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: BleException): ULong {
+        return 4UL
+    }
+
+    override fun write(value: BleException, buf: ByteBuffer) {
+        when (value) {
+            is BleException.Unsupported -> {
+                buf.putInt(1)
+                Unit
+            }
+            is BleException.PermissionDenied -> {
+                buf.putInt(2)
+                Unit
+            }
+            is BleException.BluetoothOff -> {
+                buf.putInt(3)
+                Unit
+            }
+            is BleException.NotFound -> {
+                buf.putInt(4)
+                Unit
+            }
+            is BleException.WrongDevice -> {
+                buf.putInt(5)
+                Unit
+            }
+            is BleException.PairingCancelled -> {
+                buf.putInt(6)
+                Unit
+            }
+            is BleException.PairingFailed -> {
+                buf.putInt(7)
+                Unit
+            }
+            is BleException.BondRemoved -> {
+                buf.putInt(8)
+                Unit
+            }
+            is BleException.Refused -> {
+                buf.putInt(9)
+                Unit
+            }
+            is BleException.Timeout -> {
+                buf.putInt(10)
+                Unit
+            }
+            is BleException.Disconnected -> {
+                buf.putInt(11)
+                Unit
+            }
+            is BleException.Link -> {
+                buf.putInt(12)
+                Unit
+            }
+            is BleException.Protocol -> {
+                buf.putInt(13)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+public object FfiConverterTypeJadeState: FfiConverterRustBuffer<JadeState> {
+    override fun read(buf: ByteBuffer): JadeState = try {
+        JadeState.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: JadeState): ULong = 4UL
+
+    override fun write(value: JadeState, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
     }
 }
 
@@ -1484,6 +2380,118 @@ public object FfiConverterTypeMobileSignerError : FfiConverterRustBuffer<MobileS
 
 
 
+
+public object FfiConverterTypeWalletDetails : FfiConverterRustBuffer<WalletDetails>{
+    override fun read(buf: ByteBuffer): WalletDetails {
+        return when(buf.getInt()) {
+            1 -> WalletDetails.Jade(
+                FfiConverterString.read(buf),
+                FfiConverterTypeJadeState.read(buf),
+                FfiConverterString.read(buf),
+                )
+            2 -> WalletDetails.TrezorSafe7(
+                FfiConverterString.read(buf),
+                FfiConverterOptionalString.read(buf),
+                FfiConverterOptionalString.read(buf),
+                FfiConverterUShort.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: WalletDetails): ULong = when(value) {
+        is WalletDetails.Jade -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`board`)
+                + FfiConverterTypeJadeState.allocationSize(value.`state`)
+                + FfiConverterString.allocationSize(value.`networks`)
+            )
+        }
+        is WalletDetails.TrezorSafe7 -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`internalModel`)
+                + FfiConverterOptionalString.allocationSize(value.`deviceId`)
+                + FfiConverterOptionalString.allocationSize(value.`label`)
+                + FfiConverterUShort.allocationSize(value.`mtu`)
+            )
+        }
+    }
+
+    override fun write(value: WalletDetails, buf: ByteBuffer) {
+        when(value) {
+            is WalletDetails.Jade -> {
+                buf.putInt(1)
+                FfiConverterString.write(value.`board`, buf)
+                FfiConverterTypeJadeState.write(value.`state`, buf)
+                FfiConverterString.write(value.`networks`, buf)
+                Unit
+            }
+            is WalletDetails.TrezorSafe7 -> {
+                buf.putInt(2)
+                FfiConverterString.write(value.`internalModel`, buf)
+                FfiConverterOptionalString.write(value.`deviceId`, buf)
+                FfiConverterOptionalString.write(value.`label`, buf)
+                FfiConverterUShort.write(value.`mtu`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+public object FfiConverterTypeWalletKind: FfiConverterRustBuffer<WalletKind> {
+    override fun read(buf: ByteBuffer): WalletKind = try {
+        WalletKind.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: WalletKind): ULong = 4UL
+
+    override fun write(value: WalletKind, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?> {
+    override fun read(buf: ByteBuffer): kotlin.String? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterString.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.String?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterString.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.String?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
 public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
     override fun read(buf: ByteBuffer): List<kotlin.String> {
         val len = buf.getInt()
@@ -1505,6 +2513,42 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
         }
     }
 }
+
+
+
+
+public object FfiConverterSequenceTypeFoundWallet: FfiConverterRustBuffer<List<FoundWallet>> {
+    override fun read(buf: ByteBuffer): List<FoundWallet> {
+        val len = buf.getInt()
+        return List<FoundWallet>(len) {
+            FfiConverterTypeFoundWallet.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FoundWallet>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.sumOf { FfiConverterTypeFoundWallet.allocationSize(it) }
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FoundWallet>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFoundWallet.write(it, buf)
+        }
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
 
 
 /**
@@ -1564,6 +2608,39 @@ public actual fun `deriveBorrowerPubkey`(`accountXpub`: kotlin.String, `index`: 
 }
 
 /**
+ * How many `WalletLink` objects exist in this process. For tests, not a stable API: a link
+ * that a call kept alive after `close()` still counts here.
+ */
+public actual fun `liveWalletLinks`(): kotlin.ULong {
+    return FfiConverterULong.lift(uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_live_wallet_links(
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * Scans for a few seconds and lists the wallets of `kind` in range.
+ * Cancelling stops the scan.
+ */
+@Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+public actual suspend fun `scanWallets`(`kind`: WalletKind): List<FoundWallet> {
+    return uniffiRustCallAsync(
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_scan_wallets(
+            FfiConverterTypeWalletKind.lower(`kind`),
+        ),
+        { future, callback, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_free_rust_buffer(future) },
+        { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_cancel_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceTypeFoundWallet.lift(it) },
+        // Error FFI converter
+        BleExceptionErrorHandler,
+    )
+}
+
+/**
  * MOCK. Returns `"MOCK_SIG[{loan_id}:{output count}:{borrower_pubkey}]"`. Signs
  * nothing and runs no policy check (`PolicyEngine::authorize` is not called).
  */
@@ -1580,3 +2657,121 @@ public actual fun `signPsbt`(`psbtJson`: kotlin.String, `borrowerPubkey`: kotlin
 
 
 // Async support
+
+internal const val UNIFFI_RUST_FUTURE_POLL_READY = 0.toByte()
+internal const val UNIFFI_RUST_FUTURE_POLL_MAYBE_READY = 1.toByte()
+
+internal val uniffiContinuationHandleMap = UniffiHandleMap<CancellableContinuation<Byte>>()
+
+// FFI type for Rust future continuations
+internal suspend fun<T, F, E: kotlin.Exception> uniffiRustCallAsync(
+    rustFuture: Long,
+    pollFunc: (Long, UniffiRustFutureContinuationCallback, Long) -> Unit,
+    completeFunc: (Long, UniffiRustCallStatus) -> F,
+    freeFunc: (Long) -> Unit,
+    cancelFunc: (Long) -> Unit,
+    liftFunc: (F) -> T,
+    errorHandler: UniffiRustCallStatusErrorHandler<E>
+): T {
+    // Patched by scripts/patch_bindings.py. Gobley freed the future in a finally inside withContext.
+    // withContext throws without running its block when the caller is cancelled first (already, or
+    // while the block waits for Dispatchers.IO), so that finally never ran and the future, with the
+    // object it holds, leaked. withContext returns or throws only after its block has ended or was
+    // never started, so freeing here runs exactly once on every path.
+    try {
+        return withContext(Dispatchers.IO) {
+            do {
+                val pollResult = suspendCancellableCoroutine<Byte> { continuation ->
+                    val handle = uniffiContinuationHandleMap.insert(continuation)
+                    continuation.invokeOnCancellation {
+                        cancelFunc(rustFuture)
+                    }
+                    pollFunc(
+                        rustFuture,
+                        uniffiRustFutureContinuationCallbackCallback,
+                        handle
+                    )
+                }
+            } while (pollResult != UNIFFI_RUST_FUTURE_POLL_READY);
+
+            return@withContext liftFunc(
+                uniffiRustCallWithError(errorHandler) { status -> completeFunc(rustFuture, status) }
+            )
+        }
+    } finally {
+        freeFunc(rustFuture)
+    }
+}
+internal inline fun<T> uniffiTraitInterfaceCallAsync(
+    crossinline makeCall: suspend () -> T,
+    crossinline handleSuccess: (T) -> Unit,
+    crossinline handleError: (UniffiRustCallStatusByValue) -> Unit,
+): UniffiForeignFutureUniffiByValue {
+    // Using `GlobalScope` is labeled as a "delicate API" and generally discouraged in Kotlin programs, since it breaks structured concurrency.
+    // However, our parent task is a Rust future, so we're going to need to break structure concurrency in any case.
+    //
+    // Uniffi does its best to support structured concurrency across the FFI.
+    // If the Rust future is dropped, `uniffiForeignFutureFreeImpl` is called, which will cancel the Kotlin coroutine if it's still running.
+    @OptIn(DelicateCoroutinesApi::class)
+    val job = GlobalScope.launch {
+        try {
+            handleSuccess(makeCall())
+        } catch(e: kotlin.Exception) {
+            val status = UniffiRustCallStatusByValue(
+                UNIFFI_CALL_UNEXPECTED_ERROR,
+                FfiConverterString.lower(e.toString()),
+            )
+            handleError(status)
+        }
+    }
+    val handle = uniffiForeignFutureHandleMap.insert(job)
+    return UniffiForeignFutureUniffiByValue(handle, uniffiForeignFutureFreeImpl)
+}
+
+internal inline fun<T, reified E: Throwable> uniffiTraitInterfaceCallAsyncWithError(
+    crossinline makeCall: suspend () -> T,
+    crossinline handleSuccess: (T) -> Unit,
+    crossinline handleError: (UniffiRustCallStatusByValue) -> Unit,
+    crossinline lowerError: (E) -> RustBufferByValue,
+): UniffiForeignFutureUniffiByValue {
+    // See uniffiTraitInterfaceCallAsync for details on `DelicateCoroutinesApi`
+    @OptIn(DelicateCoroutinesApi::class)
+    val job = GlobalScope.launch {
+        try {
+            handleSuccess(makeCall())
+        } catch(e: kotlin.Exception) {
+            if (e is E) {
+                val status = UniffiRustCallStatusByValue(
+                    UNIFFI_CALL_ERROR,
+                    lowerError(e),
+                )
+                handleError(status)
+            } else {
+                val status = UniffiRustCallStatusByValue(
+                    UNIFFI_CALL_UNEXPECTED_ERROR,
+                    FfiConverterString.lower(e.toString()),
+                )
+                handleError(status)
+            }
+        }
+    }
+    val handle = uniffiForeignFutureHandleMap.insert(job)
+    return UniffiForeignFutureUniffiByValue(handle, uniffiForeignFutureFreeImpl)
+}
+
+internal val uniffiForeignFutureHandleMap = UniffiHandleMap<Job>()
+
+internal object uniffiRustFutureContinuationCallbackCallback: UniffiRustFutureContinuationCallback {
+    override fun callback(data: Long, pollResult: Byte) {
+        uniffiContinuationHandleMap.remove(data).resume(pollResult)
+    }
+}
+
+internal object uniffiForeignFutureFreeImpl: UniffiForeignFutureFree {
+    override fun callback(handle: Long) {
+        val job = uniffiForeignFutureHandleMap.remove(handle)
+        if (!job.isCompleted) {
+            job.cancel()
+        }
+    }
+}

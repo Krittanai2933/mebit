@@ -21,6 +21,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = "3.3"
 zeroize = "1"
+async-trait = "0.1"
 jade-ble = { path = "../jade-ble" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "signal", "test-util"] }
 

@@ -18,6 +18,8 @@
         <string>$(MARKETING_VERSION)</string>
         <key>CFBundleVersion</key>
         <string>$(CURRENT_PROJECT_VERSION)</string>
+        <key>NSBluetoothAlwaysUsageDescription</key>
+        <string>mebit talks to your hardware wallet over Bluetooth.</string>
         <key>UILaunchScreen</key>
         <dict/>
         <key>UIApplicationSupportsIndirectInputEvents</key>

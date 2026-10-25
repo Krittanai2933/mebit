@@ -3,6 +3,8 @@ product:
   platforms: [android, iosArm64, iosSimulatorArm64]
 
 dependencies:
+  - //mobileSignerFfi
+  - org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0
   - $compose.runtime
   - $compose.foundation
   - $compose.material3

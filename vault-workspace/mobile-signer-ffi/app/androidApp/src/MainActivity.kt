@@ -6,9 +6,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
+import com.mebit.app.ble.loadBleLibraryIfPackaged
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        // First, before any FFI call: JNA never runs JNI_OnLoad, which starts btleplug.
+        loadBleLibraryIfPackaged()
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContent {

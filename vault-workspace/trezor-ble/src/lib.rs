@@ -117,6 +117,16 @@ pub enum TrezorBleError {
     )]
     BondRemoved,
 
+    /// The OS asked this host to pair and the request was declined or not
+    /// confirmed in time. CoreBluetooth words it "Encryption is insufficient"
+    /// (seen on an iPhone 15 with both prompts left unanswered).
+    #[error(
+        "the Bluetooth pairing was not completed: confirm the pairing request on this device and \
+         on the Safe 7 within about 30 seconds. If the Safe 7 shows none, choose Pair new device \
+         in its Bluetooth menu, then connect again"
+    )]
+    PairingNotConfirmed,
+
     #[error("Bluetooth: {0}")]
     Ble(btleplug::Error),
 
@@ -125,6 +135,14 @@ pub enum TrezorBleError {
 
     #[error("the Trezor disconnected")]
     Disconnected,
+
+    /// The link dropped before the connection was ready. Android reports a
+    /// declined or timed out OS pairing this way and says nothing more.
+    #[error(
+        "the Safe 7 dropped the link while connecting. If a pairing request was waiting, it was \
+         not confirmed in time. Confirm it on this device and on the Safe 7, then connect again"
+    )]
+    DisconnectedWhileConnecting,
 
     #[error("pairing cancelled: no code was entered")]
     PairingCancelled,
@@ -143,15 +161,21 @@ impl From<btleplug::Error> for TrezorBleError {
             btleplug::Error::PermissionDenied => Self::PermissionDenied,
             btleplug::Error::NoAdapterAvailable => Self::NoAdapter,
             btleplug::Error::NotConnected => Self::Disconnected,
-            other
-                if other
-                    .to_string()
-                    .contains("Peer removed pairing information") =>
-            {
-                Self::BondRemoved
-            }
-            other => Self::Ble(other),
+            // CoreBluetooth hands btleplug only the localized text, so these match English.
+            other => match other.to_string() {
+                text if text.contains("Peer removed pairing information") => Self::BondRemoved,
+                text if text.contains("Encryption is insufficient") => Self::PairingNotConfirmed,
+                _ => Self::Ble(other),
+            },
         }
+    }
+}
+
+/// A link that drops before the connection is ready is most likely a pairing nobody confirmed.
+fn while_connecting(error: TrezorBleError) -> TrezorBleError {
+    match error {
+        TrezorBleError::Disconnected => TrezorBleError::DisconnectedWhileConnecting,
+        other => other,
     }
 }
 
@@ -201,9 +225,10 @@ impl TrezorBleError {
             Self::MissingCharacteristic(_) => ErrorKind::MissingCharacteristic,
             Self::LinkUnsuitable { .. } => ErrorKind::LinkUnsuitable,
             Self::BondRemoved => ErrorKind::BondRemoved,
+            Self::PairingNotConfirmed => ErrorKind::PairingFailed,
             Self::Ble(_) => ErrorKind::ConnectionFailed,
             Self::Timeout(_) => ErrorKind::Timeout,
-            Self::Disconnected => ErrorKind::Disconnected,
+            Self::Disconnected | Self::DisconnectedWhileConnecting => ErrorKind::Disconnected,
             Self::PairingCancelled => ErrorKind::PairingCancelled,
             Self::Abandoned => ErrorKind::ProtocolError,
             Self::Trezor(VaultCoreError::Trezor(error)) => trezor_kind(error),
@@ -267,6 +292,14 @@ pub struct ConnectOptions {
     /// Which device, when several are in range: a [`FoundDevice::id`], or
     /// its name or the end of it. `None` takes the only one in range.
     pub device: Option<String>,
+    /// Set when `device` came from an earlier scan. A Safe 7 changes its id
+    /// and name suffix when its pairing screen is reopened, so that id can be
+    /// stale by the time `connect` scans again. Then, if nothing matches and
+    /// exactly one Safe 7 is in range, take it. Several candidates still end
+    /// in [`TrezorBleError::NotFound`], and the pairing screens show on the
+    /// device actually reached. Leave it off when the user named the device by
+    /// hand, so that a wrong name is an error and not another device.
+    pub device_is_hint: bool,
     pub scan: Duration,
 }
 
@@ -378,12 +411,24 @@ impl TrezorBle {
         let adapter = adapter().await?;
         let events = adapter.events().await?;
         let (found, seen) = scan_for_trezors(&adapter, options.scan).await?;
-        let (device, peripheral) = select(found, seen, options.device.as_deref())?;
+        let (device, peripheral) = select(
+            found,
+            seen,
+            options.device.as_deref(),
+            options.device_is_hint,
+        )?;
         let name = device.name.clone().unwrap_or_else(|| device.id.clone());
 
+        // Armed before `Radio::open` connects: CoreBluetooth keeps a dropped
+        // connect queued, and a future dropped from here to the hand-out
+        // (the pairing prompt included) would skip every close below.
+        let link = Cleanup::link(&peripheral);
         let mut radio = match Radio::open(peripheral, events, &name).await {
             Ok(radio) => radio,
-            Err(error) => return Err(error),
+            Err(error) => {
+                link.disarm();
+                return Err(while_connecting(error));
+            }
         };
         let cancel = Canceller::default();
         let outcome = async {
@@ -395,24 +440,29 @@ impl TrezorBle {
             Ok(TrezorEvent::Connected {
                 identity,
                 new_credential,
-            }) => Ok(Connection {
-                device: Self {
-                    radio,
-                    name,
-                    session,
-                    identity,
-                    cancel,
-                    busy: false,
-                },
-                new_credential,
-            }),
+            }) => {
+                link.disarm();
+                Ok(Connection {
+                    device: Self {
+                        radio,
+                        name,
+                        session,
+                        identity,
+                        cancel,
+                        busy: false,
+                    },
+                    new_credential,
+                })
+            }
             Ok(other) => {
                 radio.close().await;
+                link.disarm();
                 Err(unexpected(other))
             }
             Err(error) => {
                 radio.close().await;
-                Err(error)
+                link.disarm();
+                Err(while_connecting(error))
             }
         }
     }
@@ -831,14 +881,24 @@ async fn adapter() -> Result<Adapter, TrezorBleError> {
 /// Scans for `scan` and returns the devices advertising the Trezor service
 /// (or Trezor's company id), less those advertising another model's code;
 /// and how many named devices were seen in all.
-async fn scan_for_trezors(
-    adapter: &Adapter,
+async fn scan_for_trezors<C: Central + 'static>(
+    adapter: &C,
     scan: Duration,
-) -> Result<(Vec<(FoundDevice, Peripheral)>, usize), TrezorBleError> {
+) -> Result<(Vec<(FoundDevice, C::Peripheral)>, usize), TrezorBleError> {
+    let scanning = Cleanup::scan(adapter);
     // Unfiltered, as jade-ble: the service UUID is in the scan response
     // only, which not every platform's filter looks at.
     adapter.start_scan(ScanFilter::default()).await?;
     tokio::time::sleep(scan).await;
+    let listed = trezors_in_range(adapter).await;
+    adapter.stop_scan().await?;
+    scanning.disarm();
+    listed
+}
+
+async fn trezors_in_range<C: Central>(
+    adapter: &C,
+) -> Result<(Vec<(FoundDevice, C::Peripheral)>, usize), TrezorBleError> {
     let mut found = Vec::new();
     let mut seen = 0;
     for peripheral in adapter.peripherals().await? {
@@ -855,9 +915,70 @@ async fn scan_for_trezors(
             found.push((device, peripheral));
         }
     }
-    adapter.stop_scan().await?;
     Ok((found, seen))
 }
+
+/// Radio work that btleplug stops neither when a future is dropped nor on an early `?`: a scan, or a
+/// link still coming up. Only setup work gets a guard, so `arm` stays private to this module.
+mod cleanup {
+    use std::future::Future;
+    use std::pin::Pin;
+
+    use btleplug::api::{Central, Peripheral as _};
+    use btleplug::platform::Peripheral;
+    use tokio::runtime::Handle;
+
+    use super::LINK_TIMEOUT;
+
+    pub(super) struct Cleanup {
+        work: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
+        // Taken at arm time, inside a poll: a drop from a plain thread (a Kotlin
+        // cleaner) has no runtime of its own.
+        runtime: Handle,
+    }
+
+    impl Cleanup {
+        pub(super) fn scan<C: Central + 'static>(adapter: &C) -> Self {
+            let adapter = adapter.clone();
+            Self::arm(async move {
+                let _ = adapter.stop_scan().await;
+            })
+        }
+
+        pub(super) fn link(peripheral: &Peripheral) -> Self {
+            let peripheral = peripheral.clone();
+            Self::arm(async move {
+                let _ = tokio::time::timeout(LINK_TIMEOUT, peripheral.disconnect()).await;
+            })
+        }
+
+        pub(super) fn disarm(mut self) {
+            self.work = None;
+        }
+
+        fn arm(work: impl Future<Output = ()> + Send + 'static) -> Self {
+            Self {
+                work: Some(Box::pin(work)),
+                runtime: Handle::current(),
+            }
+        }
+
+        #[cfg(test)]
+        pub(super) fn arm_for_test(work: impl Future<Output = ()> + Send + 'static) -> Self {
+            Self::arm(work)
+        }
+    }
+
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let Some(work) = self.work.take() else {
+                return;
+            };
+            self.runtime.spawn(work);
+        }
+    }
+}
+use cleanup::Cleanup;
 
 fn is_candidate(properties: &PeripheralProperties) -> bool {
     let advertises_service = properties
@@ -874,15 +995,16 @@ fn is_candidate(properties: &PeripheralProperties) -> bool {
 }
 
 /// Picks the device whose id or name matches `wanted` (a name may be given
-/// by its end), or, without `wanted`, the only one.
+/// by its end), or, without `wanted`, the only one. With `hint`, a `wanted`
+/// that matches nothing falls back to the only device in range.
 fn select<T>(
     found: Vec<(FoundDevice, T)>,
     seen: usize,
     wanted: Option<&str>,
+    hint: bool,
 ) -> Result<(FoundDevice, T), TrezorBleError> {
-    let mut matching: Vec<_> = found
-        .into_iter()
-        .filter(|(device, _)| {
+    let (mut matching, mut others): (Vec<_>, Vec<_>) =
+        found.into_iter().partition(|(device, _)| {
             wanted.is_none_or(|wanted| {
                 device.id == wanted
                     || device
@@ -890,8 +1012,10 @@ fn select<T>(
                         .as_deref()
                         .is_some_and(|name| name.ends_with(wanted))
             })
-        })
-        .collect();
+        });
+    if matching.is_empty() && hint && others.len() == 1 {
+        return Ok(others.remove(0));
+    }
     match matching.len() {
         0 => Err(TrezorBleError::NotFound { seen }),
         1 => Ok(matching.remove(0)),
@@ -975,6 +1099,10 @@ fn unexpected(event: TrezorEvent) -> TrezorBleError {
 }
 
 #[cfg(test)]
+#[path = "../../jade-ble/src/fake_btle.rs"]
+mod fake_btle;
+
+#[cfg(test)]
 mod tests {
     use std::collections::{HashMap, VecDeque};
     use std::sync::Mutex;
@@ -996,7 +1124,7 @@ mod tests {
     #[test]
     fn picks_the_only_trezor_or_the_one_asked_for() {
         let one = vec![device("A1", Some("Trezor Safe 7"))];
-        assert_eq!(select(one, 5, None).unwrap().0.id, "A1");
+        assert_eq!(select(one, 5, None, false).unwrap().0.id, "A1");
 
         let two = || {
             vec![
@@ -1005,11 +1133,14 @@ mod tests {
             ]
         };
         assert!(
-            matches!(select(two(), 5, None), Err(TrezorBleError::MultipleFound(names)) if names.len() == 2)
+            matches!(select(two(), 5, None, false), Err(TrezorBleError::MultipleFound(names)) if names.len() == 2)
         );
-        assert_eq!(select(two(), 5, Some("B2")).unwrap().0.id, "B2");
-        assert_eq!(select(two(), 5, Some("My Trezor")).unwrap().0.id, "B2");
-        assert_eq!(select(two(), 5, Some("Safe 7")).unwrap().0.id, "A1");
+        assert_eq!(select(two(), 5, Some("B2"), false).unwrap().0.id, "B2");
+        assert_eq!(
+            select(two(), 5, Some("My Trezor"), false).unwrap().0.id,
+            "B2"
+        );
+        assert_eq!(select(two(), 5, Some("Safe 7"), false).unwrap().0.id, "A1");
 
         // Two devices with the same name can still be told apart by id.
         let twins = vec![
@@ -1017,7 +1148,7 @@ mod tests {
             device("B2", Some("Trezor Safe 7")),
         ];
         assert!(matches!(
-            select(twins, 5, Some("Trezor Safe 7")),
+            select(twins, 5, Some("Trezor Safe 7"), false),
             Err(TrezorBleError::MultipleFound(_))
         ));
     }
@@ -1025,13 +1156,67 @@ mod tests {
     #[test]
     fn nothing_found_says_why() {
         assert!(matches!(
-            select::<()>(Vec::new(), 4, None),
+            select::<()>(Vec::new(), 4, None, false),
             Err(TrezorBleError::NotFound { seen: 4 })
         ));
-        let none = select::<()>(Vec::new(), 0, None).unwrap_err().to_string();
+        let none = select::<()>(Vec::new(), 0, None, false)
+            .unwrap_err()
+            .to_string();
         assert!(none.contains("Bluetooth permission"), "{none}");
-        let wrong = select(vec![device("A1", Some("Trezor Safe 7"))], 3, Some("ffff"));
+        let wrong = select(
+            vec![device("A1", Some("Trezor Safe 7"))],
+            3,
+            Some("ffff"),
+            false,
+        );
         assert!(matches!(wrong, Err(TrezorBleError::NotFound { seen: 3 })));
+    }
+
+    #[test]
+    fn a_stale_hint_falls_back_to_the_only_device() {
+        let one = vec![device("A1", Some("Trezor Safe 7 (6T5)"))];
+        assert_eq!(select(one, 5, Some("stale"), true).unwrap().0.id, "A1");
+    }
+
+    #[test]
+    fn a_stale_hint_never_picks_among_several() {
+        let two = vec![
+            device("A1", Some("Trezor Safe 7 (6T5)")),
+            device("B2", Some("Trezor Safe 7 (7G0)")),
+        ];
+        assert!(matches!(
+            select(two, 5, Some("stale"), true),
+            Err(TrezorBleError::NotFound { seen: 5 })
+        ));
+    }
+
+    #[test]
+    fn a_match_beats_the_fallback() {
+        let two = || {
+            vec![
+                device("A1", Some("Trezor Safe 7 (6T5)")),
+                device("B2", Some("Trezor Safe 7 (7G0)")),
+            ]
+        };
+        assert_eq!(select(two(), 5, Some("B2"), true).unwrap().0.id, "B2");
+        assert_eq!(select(two(), 5, Some("(7G0)"), true).unwrap().0.id, "B2");
+        // Two matches stay ambiguous, hint or not.
+        let twins = vec![
+            device("A1", Some("Trezor Safe 7")),
+            device("B2", Some("Trezor Safe 7")),
+        ];
+        assert!(matches!(
+            select(twins, 5, Some("Trezor Safe 7"), true),
+            Err(TrezorBleError::MultipleFound(_))
+        ));
+    }
+
+    #[test]
+    fn a_hint_with_nothing_in_range_is_not_found() {
+        assert!(matches!(
+            select::<()>(Vec::new(), 2, Some("stale"), true),
+            Err(TrezorBleError::NotFound { seen: 2 })
+        ));
     }
 
     fn properties(services: &[&str], data: Option<Vec<u8>>) -> PeripheralProperties {
@@ -1118,6 +1303,14 @@ mod tests {
                 ErrorKind::BondRemoved,
             ),
             (
+                btleplug::Error::RuntimeError("Encryption is insufficient.".into()).into(),
+                ErrorKind::PairingFailed,
+            ),
+            (
+                btleplug::Error::RuntimeError("GATT 133".into()).into(),
+                ErrorKind::ConnectionFailed,
+            ),
+            (
                 btleplug::Error::DeviceNotFound.into(),
                 ErrorKind::ConnectionFailed,
             ),
@@ -1143,6 +1336,10 @@ mod tests {
             ),
             (TrezorBleError::Timeout("x"), ErrorKind::Timeout),
             (TrezorBleError::Disconnected, ErrorKind::Disconnected),
+            (
+                TrezorBleError::DisconnectedWhileConnecting,
+                ErrorKind::Disconnected,
+            ),
             (
                 TrezorBleError::PairingCancelled,
                 ErrorKind::PairingCancelled,
@@ -1204,6 +1401,44 @@ mod tests {
         for (error, kind) in cases {
             assert_eq!(error.kind(), kind, "{error}");
         }
+    }
+
+    #[test]
+    fn an_unconfirmed_pairing_has_its_own_error() {
+        let ble = |text: &str| TrezorBleError::from(btleplug::Error::RuntimeError(text.into()));
+        assert!(matches!(
+            ble("Encryption is insufficient."),
+            TrezorBleError::PairingNotConfirmed
+        ));
+        assert!(matches!(
+            ble("Peer removed pairing information"),
+            TrezorBleError::BondRemoved
+        ));
+        // Anything else stays the raw Bluetooth error.
+        assert!(matches!(
+            ble("The connection has timed out unexpectedly."),
+            TrezorBleError::Ble(_)
+        ));
+        let advice = TrezorBleError::PairingNotConfirmed.to_string();
+        assert!(advice.contains("Pair new device"), "{advice}");
+    }
+
+    #[test]
+    fn only_a_plain_disconnect_gains_the_pairing_hint() {
+        assert!(matches!(
+            while_connecting(TrezorBleError::Disconnected),
+            TrezorBleError::DisconnectedWhileConnecting
+        ));
+        assert!(matches!(
+            while_connecting(TrezorBleError::Timeout("subscribing")),
+            TrezorBleError::Timeout("subscribing")
+        ));
+        assert!(matches!(
+            while_connecting(TrezorBleError::BondRemoved),
+            TrezorBleError::BondRemoved
+        ));
+        let hint = TrezorBleError::DisconnectedWhileConnecting.to_string();
+        assert!(hint.contains("pairing request"), "{hint}");
     }
 
     #[test]
@@ -1422,6 +1657,107 @@ mod tests {
             tries.abs_diff(paced) <= 1,
             "{tries} tries, about {paced} expected"
         );
+    }
+
+    #[tokio::test]
+    async fn cleanup_runs_only_while_armed() {
+        use std::sync::atomic::AtomicUsize;
+
+        let ran = Arc::new(AtomicUsize::new(0));
+        let count = || {
+            let ran = ran.clone();
+            async move {
+                ran.fetch_add(1, Ordering::SeqCst);
+            }
+        };
+        Cleanup::arm_for_test(count()).disarm();
+        let armed = Cleanup::arm_for_test(count());
+        let holder = tokio::spawn(async move {
+            let _armed = armed;
+            std::future::pending::<()>().await
+        });
+        tokio::task::yield_now().await;
+        holder.abort();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while ran.load(Ordering::SeqCst) < 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the armed cleanup ran when its future was dropped");
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            1,
+            "the disarmed cleanup never ran"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dropped_scan_stops_the_scan() {
+        use crate::fake_btle::FakeCentral;
+
+        let central = FakeCentral::default();
+        let scanning = tokio::spawn({
+            let central = central.clone();
+            async move { scan_for_trezors(&central, Duration::from_secs(3600)).await }
+        });
+        wait_for(|| central.calls() == ["start_scan"]).await;
+        scanning.abort();
+        wait_for(|| central.calls() == ["start_scan", "stop_scan"]).await;
+    }
+
+    #[tokio::test]
+    async fn a_failed_listing_stops_the_scan() {
+        use crate::fake_btle::{FakeCentral, FakePeripheral};
+
+        let central = FakeCentral {
+            devices: vec![FakePeripheral(Err("the radio dropped".into()))],
+            ..Default::default()
+        };
+        assert!(scan_for_trezors(&central, Duration::ZERO).await.is_err());
+        settle().await;
+        assert_eq!(central.calls(), ["start_scan", "stop_scan"]);
+    }
+
+    #[tokio::test]
+    async fn a_finished_scan_stops_the_scan_once() {
+        use crate::fake_btle::FakeCentral;
+
+        let central = FakeCentral::default();
+        assert!(scan_for_trezors(&central, Duration::ZERO).await.is_ok());
+        settle().await;
+        assert_eq!(central.calls(), ["start_scan", "stop_scan"]);
+    }
+
+    /// Lets a cleanup the code under test spawned run, so a stop that should not happen shows.
+    async fn settle() {
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_runs_from_a_plain_thread() {
+        use std::sync::atomic::AtomicBool;
+
+        let ran = Arc::new(AtomicBool::new(false));
+        let armed = Cleanup::arm_for_test({
+            let ran = ran.clone();
+            async move { ran.store(true, Ordering::SeqCst) }
+        });
+        // Gobley frees objects on the caller of `close()` or a GC thread: no runtime there.
+        std::thread::spawn(move || drop(armed)).join().unwrap();
+        wait_for(|| ran.load(Ordering::SeqCst)).await;
+    }
+
+    async fn wait_for(done: impl Fn() -> bool) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !done() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("never happened");
     }
 
     /// UniFFI wraps objects in `Arc` and runs their futures on a runtime it

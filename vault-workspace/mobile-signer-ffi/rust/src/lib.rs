@@ -1,9 +1,12 @@
 //! UniFFI exports over `vault-core` for the Kotlin Multiplatform app in `../app/mobileSignerFfi`.
 //! Every exported signature and every `///` doc comment on an export feeds a UniFFI checksum.
-//! `MobileSignerError` does not, and Kotlin reads its variants by position, so after changing it
-//! run `scripts/ffi.sh build`. Only `scripts/ffi.sh check` sees that drift.
+//! No exported error, record or enum does, and Kotlin reads their variants and fields by
+//! position, so after changing one run `scripts/ffi.sh build`. Only `scripts/ffi.sh check` sees
+//! that drift.
 
 uniffi::setup_scaffolding!();
+
+pub mod ble;
 
 use std::str::FromStr;
 
@@ -430,25 +433,53 @@ mod tests {
         );
         let checksums = [
             (
-                "compute_vault_address",
+                "func_compute_vault_address",
                 uniffi_mobile_signer_ffi_checksum_func_compute_vault_address(),
             ),
             (
-                "compute_vault_address_multisig",
+                "func_compute_vault_address_multisig",
                 uniffi_mobile_signer_ffi_checksum_func_compute_vault_address_multisig(),
             ),
             (
-                "derive_borrower_pubkey",
+                "func_derive_borrower_pubkey",
                 uniffi_mobile_signer_ffi_checksum_func_derive_borrower_pubkey(),
             ),
             (
-                "sign_psbt",
+                "func_sign_psbt",
                 uniffi_mobile_signer_ffi_checksum_func_sign_psbt(),
+            ),
+            (
+                "func_scan_wallets",
+                ble::uniffi_mobile_signer_ffi_checksum_func_scan_wallets(),
+            ),
+            (
+                "func_live_wallet_links",
+                ble::uniffi_mobile_signer_ffi_checksum_func_live_wallet_links(),
+            ),
+            (
+                "constructor_walletlink_new",
+                ble::uniffi_mobile_signer_ffi_checksum_constructor_walletlink_new(),
+            ),
+            (
+                "method_walletlink_connect",
+                ble::uniffi_mobile_signer_ffi_checksum_method_walletlink_connect(),
+            ),
+            (
+                "method_walletlink_info",
+                ble::uniffi_mobile_signer_ffi_checksum_method_walletlink_info(),
+            ),
+            (
+                "method_walletlink_disconnect",
+                ble::uniffi_mobile_signer_ffi_checksum_method_walletlink_disconnect(),
+            ),
+            (
+                "method_pairingcodes_pairing_code",
+                ble::uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(),
             ),
         ];
         for (name, checksum) in checksums {
             let check =
-                format!("uniffi_mobile_signer_ffi_checksum_func_{name}() != {checksum}.toShort()");
+                format!("uniffi_mobile_signer_ffi_checksum_{name}() != {checksum}.toShort()");
             assert!(
                 kotlin.contains(&check),
                 "committed Kotlin is stale for {name}: run scripts/ffi.sh bindings, or build on macOS"
@@ -456,7 +487,7 @@ mod tests {
         }
         let in_kotlin = kotlin
             .lines()
-            .filter(|line| line.contains("checksum_func_") && line.contains(" != "))
+            .filter(|line| line.contains("_checksum_") && line.contains(" != "))
             .count();
         assert_eq!(
             in_kotlin,

@@ -52,6 +52,11 @@ struct Args {
     #[arg(long)]
     device: Option<String>,
 
+    /// Treat --device as a hint from an earlier scan: if it matches nothing
+    /// and exactly one Safe 7 is in range, connect to that one
+    #[arg(long, requires = "device")]
+    device_is_hint: bool,
+
     #[arg(long, default_value_t = 5)]
     scan_secs: u64,
 
@@ -218,6 +223,7 @@ async fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
         },
         credential,
         device: args.device.clone(),
+        device_is_hint: args.device_is_hint,
         scan,
     };
     eprintln!("Scanning {} s for a Safe 7…", args.scan_secs);
@@ -743,6 +749,7 @@ async fn run_device(
         },
         credential,
         device: args.device.clone(),
+        device_is_hint: args.device_is_hint,
         scan: Duration::from_secs(args.scan_secs),
     };
     eprintln!("Wake the enrolled Safe 7 and approve the testnet4 request on its screen.");
