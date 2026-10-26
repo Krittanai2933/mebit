@@ -1,6 +1,7 @@
 board	path	eyebrow	binding	status	pr	notes	visual
 Welcome	welcome	WELCOME	ui	wired	B		baselines-ready
 KeySource	onboarding/key-source	NEW WALLET	uniffi+ui	wired	B	generateSoftwareMultisigKey	baselines-ready
+ImportSeed	onboarding/import-seed	IMPORT SEED	uniffi+ui	wired	B	restoreSoftwareMultisigKey; Penpot board pending	baselines-ready
 KeyCreated	onboarding/key-created	KEY CREATED	ui	wired	B		baselines-ready
 BackupWords	onboarding/backup-words	BACKUP	ui	wired	B		baselines-ready
 VerifyWords	onboarding/verify-words	VERIFY WORDS	ui	wired	B		baselines-ready
@@ -9,7 +10,7 @@ HomeFirstRun	home/first-run	HOME	ui	wired	B		baselines-ready
 HwBackupConfirm	onboarding/hw-backup-confirm	HW BACKUP	ui	wired	B		baselines-ready
 AddKey	keys/add	ADD KEY	uniffi+ui	wired	C	three sources	baselines-ready
 PairMebitOther	keys/pair-mebit	PAIR DEVICE	ui	live	C	paste/share BSMS or xpub; cta_pair_demo for CI; docs/04 #26	baselines-ready
-HardwareWallet	keys/hardware	HARDWARE WALLET	mock+uniffi	mocked	C	demo enroll; real WalletLink unlock/xpub in FFI	baselines-ready
+HardwareWallet	keys/hardware	HARDWARE WALLET	uniffi	live	C	BLE scan/connect/unlock/xpub; demo cta_hw_demo_*	baselines-ready
 VerifyKey	keys/verify	VERIFY KEY	ui	wired	C	mismatch does not save	baselines-ready
 Keyring	keys/keyring	KEYRING	ui	wired	C		baselines-ready
 KeyringFirstVault	keys/keyring-first-vault	NEW VAULT	ui	wired	C		baselines-ready
@@ -29,16 +30,16 @@ T16InvalidMn	critical/t16-mn	POLICY	ui	wired	D		baselines-ready
 T17CountMismatch	critical/t17	COMPOSE VAULT	ui	wired	D		baselines-ready
 T18BackendError	critical/t18	CONFIRM VAULT	ui	wired	D		baselines-ready
 T20VaultActions	critical/t20	VAULT ACTIONS	ui	wired	E	BSMS + demo health	baselines-ready
-S1HomeSingleSig	send/s1	SINGLE-SIG	mock	mocked	F	chain balance	baselines-ready
+S1HomeSingleSig	send/s1	SINGLE-SIG	uniffi	live	F	hotWalletSnapshot / demo fixture	baselines-ready
 S2ReceiveBackupGate	send/s2	RECEIVE	ui	wired	F		baselines-ready
-S3Receive	send/s3	RECEIVE	mock	mocked	F	address	baselines-ready
-S4Send	send/s4	SEND	mock	mocked	F	fees	baselines-ready
-S5ReviewSign	send/s5	REVIEW & SIGN	mock	mocked	F	sign/broadcast	baselines-ready
-S6Sent	send/s6	SENT	mock	mocked	F		baselines-ready
-S6SentSlip	send/s6b	SENT · SLIP	mock	mocked	F		baselines-ready
-S6SentBlock	send/s6c	SENT · BLOCK	mock	mocked	F		baselines-ready
-S6SentPoster	send/s6d	SENT · POSTER	mock	mocked	F		baselines-ready
-M1SendVault	send/m1	SEND · VAULT	mock	mocked	G		baselines-ready
-M2CollectSignatures	send/m2	COLLECT SIGNATURES	mock	mocked	G		baselines-ready
-M3SignOnJade	send/m3	SIGN ON JADE	mock	mocked	G	no live sign_psbt FFI	baselines-ready
-M4ReadyToBroadcast	send/m4	READY TO BROADCAST	mock	mocked	G		baselines-ready
+S3Receive	send/s3	RECEIVE	uniffi	live	F	hotReceiveAddress	baselines-ready
+S4Send	send/s4	SEND	ui	wired	F	fees	baselines-ready
+S5ReviewSign	send/s5	REVIEW & SIGN	uniffi	live	F	hotSend when live	baselines-ready
+S6Sent	send/s6	SENT	ui	wired	F		baselines-ready
+S6SentSlip	send/s6b	SENT · SLIP	ui	wired	F		baselines-ready
+S6SentBlock	send/s6c	SENT · BLOCK	ui	wired	F		baselines-ready
+S6SentPoster	send/s6d	SENT · POSTER	ui	wired	F		baselines-ready
+M1SendVault	send/m1	SEND · VAULT	ui	wired	G		baselines-ready
+M2CollectSignatures	send/m2	COLLECT SIGNATURES	ui	wired	G	policyAllowsSign gate	baselines-ready
+M3SignOnJade	send/m3	SIGN ON JADE	uniffi	live	G	WalletLink.signPsbt; cta_m3_signed demo	baselines-ready
+M4ReadyToBroadcast	send/m4	READY TO BROADCAST	ui	wired	G		baselines-ready
