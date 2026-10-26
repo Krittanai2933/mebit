@@ -22,6 +22,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.OnboardingSession
+import com.mebit.app.data.SendDraft
+import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.VaultDraft
 import com.mebit.app.feature.keys.AddKeyScreen
 import com.mebit.app.feature.keys.HardwareWalletScreen
@@ -54,6 +56,12 @@ import com.mebit.app.feature.vault.T20VaultActionsScreen
 import com.mebit.app.feature.vault.VaultCreatedScreen
 import com.mebit.app.feature.vault.VaultDetailScreen
 import com.mebit.app.feature.vault.VaultListScreen
+import com.mebit.app.feature.send.S1HomeSingleSigScreen
+import com.mebit.app.feature.send.S2ReceiveBackupGateScreen
+import com.mebit.app.feature.send.S3ReceiveScreen
+import com.mebit.app.feature.send.S4SendScreen
+import com.mebit.app.feature.send.S5ReviewSignScreen
+import com.mebit.app.feature.send.S6SentScreen
 import com.mebit.app.ui.components.ScreenStub
 
 private val ImplementedRoutes = setOf(
@@ -87,6 +95,15 @@ private val ImplementedRoutes = setOf(
     MovieRoute.T17CountMismatch,
     MovieRoute.T18BackendError,
     MovieRoute.T20VaultActions,
+    MovieRoute.S1HomeSingleSig,
+    MovieRoute.S2ReceiveBackupGate,
+    MovieRoute.S3Receive,
+    MovieRoute.S4Send,
+    MovieRoute.S5ReviewSign,
+    MovieRoute.S6Sent,
+    MovieRoute.S6SentSlip,
+    MovieRoute.S6SentBlock,
+    MovieRoute.S6SentPoster,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -98,6 +115,8 @@ fun MebitNavHost() {
     val session = remember { OnboardingSession() }
     val keyring = remember { KeyringStore() }
     val vaultDraft = remember { VaultDraft() }
+    val singleSig = remember { SingleSigWallet() }
+    val sendDraft = remember { SendDraft() }
     val current = backStack.last()
 
     fun navigate(route: MovieRoute) {
@@ -304,6 +323,72 @@ fun MebitNavHost() {
         )
         current == MovieRoute.T20VaultActions -> T20VaultActionsScreen(
             draft = vaultDraft,
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.S1HomeSingleSig -> S1HomeSingleSigScreen(
+            wallet = singleSig,
+            onReceive = { navigate(MovieRoute.S2ReceiveBackupGate) },
+            onSend = { navigate(MovieRoute.S4Send) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.S2ReceiveBackupGate -> S2ReceiveBackupGateScreen(
+            session = session,
+            onBackedUp = { navigate(MovieRoute.S3Receive) },
+            onGoBackup = { navigate(MovieRoute.BackupWords) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.S3Receive -> S3ReceiveScreen(
+            wallet = singleSig,
+            onDone = { navigate(MovieRoute.S1HomeSingleSig) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.S4Send -> S4SendScreen(
+            wallet = singleSig,
+            draft = sendDraft,
+            onContinue = { navigate(MovieRoute.S5ReviewSign) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.S5ReviewSign -> S5ReviewSignScreen(
+            wallet = singleSig,
+            draft = sendDraft,
+            onSigned = { navigate(MovieRoute.S6Sent) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.S6Sent -> S6SentScreen(
+            wallet = singleSig,
+            draft = sendDraft,
+            variant = "default",
+            onHome = { navigate(MovieRoute.S1HomeSingleSig) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.S6SentSlip -> S6SentScreen(
+            wallet = singleSig,
+            draft = sendDraft,
+            variant = "slip",
+            onHome = { navigate(MovieRoute.S1HomeSingleSig) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.S6SentBlock -> S6SentScreen(
+            wallet = singleSig,
+            draft = sendDraft,
+            variant = "block",
+            onHome = { navigate(MovieRoute.S1HomeSingleSig) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.S6SentPoster -> S6SentScreen(
+            wallet = singleSig,
+            draft = sendDraft,
+            variant = "poster",
+            onHome = { navigate(MovieRoute.S1HomeSingleSig) },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
