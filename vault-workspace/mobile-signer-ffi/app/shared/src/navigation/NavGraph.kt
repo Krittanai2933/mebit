@@ -22,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.OnboardingSession
+import com.mebit.app.data.MultisigSendDraft
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.VaultDraft
@@ -62,6 +63,10 @@ import com.mebit.app.feature.send.S3ReceiveScreen
 import com.mebit.app.feature.send.S4SendScreen
 import com.mebit.app.feature.send.S5ReviewSignScreen
 import com.mebit.app.feature.send.S6SentScreen
+import com.mebit.app.feature.send.M1SendVaultScreen
+import com.mebit.app.feature.send.M2CollectSignaturesScreen
+import com.mebit.app.feature.send.M3SignOnJadeScreen
+import com.mebit.app.feature.send.M4ReadyToBroadcastScreen
 import com.mebit.app.ui.components.ScreenStub
 
 private val ImplementedRoutes = setOf(
@@ -104,6 +109,10 @@ private val ImplementedRoutes = setOf(
     MovieRoute.S6SentSlip,
     MovieRoute.S6SentBlock,
     MovieRoute.S6SentPoster,
+    MovieRoute.M1SendVault,
+    MovieRoute.M2CollectSignatures,
+    MovieRoute.M3SignOnJade,
+    MovieRoute.M4ReadyToBroadcast,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -117,6 +126,7 @@ fun MebitNavHost() {
     val vaultDraft = remember { VaultDraft() }
     val singleSig = remember { SingleSigWallet() }
     val sendDraft = remember { SendDraft() }
+    val multisigSend = remember { MultisigSendDraft() }
     val current = backStack.last()
 
     fun navigate(route: MovieRoute) {
@@ -389,6 +399,35 @@ fun MebitNavHost() {
             draft = sendDraft,
             variant = "poster",
             onHome = { navigate(MovieRoute.S1HomeSingleSig) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.M1SendVault -> M1SendVaultScreen(
+            vault = vaultDraft.selectedVault(),
+            draft = multisigSend,
+            onContinue = { navigate(MovieRoute.M2CollectSignatures) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.M2CollectSignatures -> M2CollectSignaturesScreen(
+            vault = vaultDraft.selectedVault(),
+            store = keyring,
+            draft = multisigSend,
+            onSignJade = { navigate(MovieRoute.M3SignOnJade) },
+            onReady = { navigate(MovieRoute.M4ReadyToBroadcast) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.M3SignOnJade -> M3SignOnJadeScreen(
+            draft = multisigSend,
+            onSigned = { navigate(MovieRoute.M2CollectSignatures) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.M4ReadyToBroadcast -> M4ReadyToBroadcastScreen(
+            vault = vaultDraft.selectedVault(),
+            draft = multisigSend,
+            onBroadcast = { navigate(MovieRoute.VaultDetail) },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
