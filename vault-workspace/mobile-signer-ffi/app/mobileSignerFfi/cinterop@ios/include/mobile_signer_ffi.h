@@ -168,11 +168,15 @@ void uniffi_mobile_signer_ffi_fn_free_walletlink(void * ptr, UniffiRustCallStatu
 );
 void * uniffi_mobile_signer_ffi_fn_constructor_walletlink_new(RustBuffer wallet, UniffiRustCallStatus *_Nonnull out_status
 );
+int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_account_xpub(void * ptr, RustBuffer derivationPath
+);
 int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_connect(void * ptr, void * codes
 );
 int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_disconnect(void * ptr
 );
 int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_info(void * ptr
+);
+int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_unlock(void * ptr
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_compute_vault_address(RustBuffer borrowerPubkey, RustBuffer platformPubkey, RustBuffer lenderPubkey, UniffiRustCallStatus *_Nonnull out_status
 );
@@ -180,8 +184,12 @@ RustBuffer uniffi_mobile_signer_ffi_fn_func_compute_vault_address_multisig(RustB
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_derive_borrower_pubkey(RustBuffer accountXpub, int32_t index, UniffiRustCallStatus *_Nonnull out_status
 );
+RustBuffer uniffi_mobile_signer_ffi_fn_func_generate_software_multisig_key(RustBuffer passphrase, RustBuffer network, int32_t account, UniffiRustCallStatus *_Nonnull out_status
+);
 int64_t uniffi_mobile_signer_ffi_fn_func_live_wallet_links(UniffiRustCallStatus *_Nonnull out_status
     
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_restore_software_multisig_key(RustBuffer mnemonicWords, RustBuffer passphrase, RustBuffer network, int32_t account, UniffiRustCallStatus *_Nonnull out_status
 );
 int64_t uniffi_mobile_signer_ffi_fn_func_scan_wallets(RustBuffer kind
 );
@@ -308,7 +316,13 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_compute_vault_address_multisig(vo
 int16_t uniffi_mobile_signer_ffi_checksum_func_derive_borrower_pubkey(void
     
 );
+int16_t uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key(void
+    
+);
 int16_t uniffi_mobile_signer_ffi_checksum_func_live_wallet_links(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_restore_software_multisig_key(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_func_scan_wallets(void
@@ -320,6 +334,9 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_sign_psbt(void
 int16_t uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(void
     
 );
+int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_account_xpub(void
+    
+);
 int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_connect(void
     
 );
@@ -327,6 +344,9 @@ int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_disconnect(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_info(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_unlock(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_constructor_walletlink_new(void

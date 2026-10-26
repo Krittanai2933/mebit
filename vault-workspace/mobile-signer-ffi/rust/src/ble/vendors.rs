@@ -2,17 +2,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bitcoin::Network;
+use bitcoin::bip32::DerivationPath;
 use jade_ble::{JadeBle, JadeBleError};
 use trezor_ble::{ConnectOptions, ErrorKind, TrezorBle, TrezorBleError};
 use vault_core::error::VaultCoreError;
 use vault_core::hw::jade::{self as jade, JadeError};
+use vault_core::hw::trezor::XpubOptions;
 
 use super::{
-    BleError, FoundWallet, JadeState, PairingCodes, Running, Wallet, WalletDetails, WalletInfo,
-    WalletKind, platform,
+    BleError, FoundWallet, HwAccountKey, JadeState, PairingCodes, Running, Wallet, WalletDetails,
+    WalletInfo, WalletKind, derivation_path_string, parse_derivation_path, platform,
 };
 
-// shortcut: testnet only. Add a network parameter with the first xpub or signing export.
+// shortcut: testnet only. Connect pins the Jade and the Safe 7 to testnet4, the same
+// network as `KeyNetwork::Test`. A mainnet wallet needs a network argument on connect.
 const NETWORK: Network = Network::Testnet4;
 // shortcut: one window for every scan, untuned on phones (Android scans in its low-power mode).
 // Tune it on hardware. Make it a parameter only if a screen needs to choose.
@@ -118,6 +121,21 @@ impl Wallet for JadeBle {
         })
     }
 
+    async fn unlock(&mut self) -> Result<(), BleError> {
+        Ok(JadeBle::unlock(self).await?)
+    }
+
+    async fn xpub(&mut self, path: &str) -> Result<HwAccountKey, BleError> {
+        let path = parse_derivation_path(path)?;
+        let master = JadeBle::xpub(self, &DerivationPath::master()).await?;
+        let account = JadeBle::xpub(self, &path).await?;
+        Ok(HwAccountKey {
+            xpub: account.to_string(),
+            master_fingerprint: master.fingerprint().to_string(),
+            derivation_path: derivation_path_string(&path),
+        })
+    }
+
     async fn disconnect(self) -> Result<(), BleError> {
         Ok(JadeBle::disconnect(self).await?)
     }
@@ -135,6 +153,21 @@ impl Wallet for TrezorBle {
                 label: identity.label.clone(),
                 mtu: self.mtu(),
             },
+        })
+    }
+
+    async fn unlock(&mut self) -> Result<(), BleError> {
+        Ok(())
+    }
+
+    async fn xpub(&mut self, path: &str) -> Result<HwAccountKey, BleError> {
+        let path = parse_derivation_path(path)?;
+        let account = TrezorBle::xpub(self, &path, XpubOptions::default()).await?;
+        Ok(HwAccountKey {
+            // `as_shown` can be a SLIP-132 form such as `vpub`. Address export accepts `xpub` and `tpub` only.
+            xpub: account.xpub.to_string(),
+            master_fingerprint: account.master_fingerprint.to_string(),
+            derivation_path: derivation_path_string(&path),
         })
     }
 

@@ -4,9 +4,11 @@
 )]
 
 use std::future::Future;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
+use bitcoin::bip32::DerivationPath;
 use tokio::sync::{mpsc, oneshot};
 
 mod platform;
@@ -33,6 +35,17 @@ pub struct FoundWallet {
     pub id: String,
     /// The advertised name, e.g. `Jade 1a2b3c`.
     pub name: String,
+}
+
+/// An account extended public key read from a hardware wallet.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct HwAccountKey {
+    /// `xpub` on mainnet, `tpub` on test networks. Not a SLIP-132 form.
+    pub xpub: String,
+    /// Master key fingerprint, 8 lowercase hex characters.
+    pub master_fingerprint: String,
+    /// The path the key was derived on, such as `m/48'/1'/0'/2'`.
+    pub derivation_path: String,
 }
 
 /// Who answered on a connected link.
@@ -221,7 +234,25 @@ pub fn live_wallet_links() -> u64 {
 
 enum Request {
     Info(oneshot::Sender<Result<WalletInfo, BleError>>),
+    Unlock(oneshot::Sender<Result<(), BleError>>),
+    Xpub {
+        path: String,
+        reply: oneshot::Sender<Result<HwAccountKey, BleError>>,
+    },
     Disconnect(oneshot::Sender<Result<(), BleError>>),
+}
+
+fn parse_derivation_path(path: &str) -> Result<DerivationPath, BleError> {
+    DerivationPath::from_str(path)
+        .map_err(|error| BleError::Refused(format!("invalid derivation path: {error}")))
+}
+
+fn derivation_path_string(path: &DerivationPath) -> String {
+    if path.is_master() {
+        "m".to_owned()
+    } else {
+        format!("m/{path}")
+    }
 }
 
 #[uniffi::export(async_runtime = "tokio")]
@@ -255,6 +286,30 @@ impl WalletLink {
     /// the wallet finishes the exchange and the link stays usable.
     pub async fn info(&self) -> Result<WalletInfo, BleError> {
         self.running.get().ok_or_else(closed)?.info().await
+    }
+
+    /// Unlocks the wallet for this connection.
+    ///
+    /// A Jade asks for its PIN on the device, unless it is a Temporary Signer.
+    /// A Safe 7 has no separate unlock. Connect already opened the session, so
+    /// this returns immediately. Cancelling stops only the wait. A refusal
+    /// leaves the link up.
+    pub async fn unlock(&self) -> Result<(), BleError> {
+        self.running.get().ok_or_else(closed)?.unlock().await
+    }
+
+    /// The account extended public key at `derivation_path`.
+    ///
+    /// `derivation_path` is a BIP-32 path such as `m/48'/1'/0'/2'`. An unreadable
+    /// path is refused and the link stays up. A Jade must be unlocked first.
+    /// The master fingerprint is 8 lowercase hex characters. Cancelling stops
+    /// only the wait. A refusal leaves the link up.
+    pub async fn account_xpub(&self, derivation_path: String) -> Result<HwAccountKey, BleError> {
+        self.running
+            .get()
+            .ok_or_else(closed)?
+            .account_xpub(derivation_path)
+            .await
     }
 
     /// Ends the link and waits until it is down, also when a failure or another call is
@@ -309,6 +364,22 @@ impl Running {
         answer.await.map_err(|_| closed())?
     }
 
+    async fn unlock(&self) -> Result<(), BleError> {
+        let (reply, answer) = oneshot::channel();
+        self.requests
+            .send(Request::Unlock(reply))
+            .map_err(|_| closed())?;
+        answer.await.map_err(|_| closed())?
+    }
+
+    async fn account_xpub(&self, path: String) -> Result<HwAccountKey, BleError> {
+        let (reply, answer) = oneshot::channel();
+        self.requests
+            .send(Request::Xpub { path, reply })
+            .map_err(|_| closed())?;
+        answer.await.map_err(|_| closed())?
+    }
+
     async fn disconnect(&self) -> Result<(), BleError> {
         let (reply, answer) = oneshot::channel();
         // A refused send means the task is already ending the link.
@@ -321,6 +392,8 @@ impl Running {
 
 trait Wallet: Send + 'static {
     fn info(&mut self) -> impl Future<Output = Result<WalletInfo, BleError>> + Send;
+    fn unlock(&mut self) -> impl Future<Output = Result<(), BleError>> + Send;
+    fn xpub(&mut self, path: &str) -> impl Future<Output = Result<HwAccountKey, BleError>> + Send;
     fn disconnect(self) -> impl Future<Output = Result<(), BleError>> + Send;
 }
 
@@ -336,6 +409,28 @@ async fn serve(
     }
 }
 
+/// Drives one device call. Returns true when the link should disconnect.
+///
+/// A caller that already left does not put its request on the device.
+async fn drive_call<T>(
+    reply: oneshot::Sender<Result<T, BleError>>,
+    link_dropped: &mut oneshot::Receiver<()>,
+    call: impl Future<Output = Result<T, BleError>>,
+) -> bool {
+    if reply.is_closed() {
+        return false;
+    }
+    let outcome = tokio::select! {
+        outcome = call => outcome,
+        _ = &mut *link_dropped => return true,
+    };
+    let lost = outcome
+        .as_ref()
+        .is_err_and(|error| !error.leaves_link_usable());
+    let _ = reply.send(outcome);
+    lost
+}
+
 /// Owns the inbox, so it is closed on return and queued requests fail before the disconnect starts.
 async fn answer_requests<W: Wallet>(
     mut wallet: W,
@@ -345,19 +440,17 @@ async fn answer_requests<W: Wallet>(
     while let Some(request) = inbox.recv().await {
         match request {
             Request::Info(reply) => {
-                // The caller is gone: do not put its request on the device.
-                if reply.is_closed() {
-                    continue;
+                if drive_call(reply, &mut link_dropped, wallet.info()).await {
+                    break;
                 }
-                let outcome = tokio::select! {
-                    outcome = wallet.info() => outcome,
-                    _ = &mut link_dropped => break,
-                };
-                let lost = outcome
-                    .as_ref()
-                    .is_err_and(|error| !error.leaves_link_usable());
-                let _ = reply.send(outcome);
-                if lost {
+            }
+            Request::Unlock(reply) => {
+                if drive_call(reply, &mut link_dropped, wallet.unlock()).await {
+                    break;
+                }
+            }
+            Request::Xpub { path, reply } => {
+                if drive_call(reply, &mut link_dropped, wallet.xpub(&path)).await {
                     break;
                 }
             }
@@ -381,6 +474,7 @@ mod tests {
         log: Log,
         /// When set, the link goes down only once this fires.
         link_goes_down: Option<oneshot::Receiver<()>>,
+        account_key: HwAccountKey,
     }
 
     impl Wallet for FakeWallet {
@@ -389,6 +483,17 @@ mod tests {
             let answer = self.answers.recv().await.unwrap_or_else(|| Err(closed()));
             self.log.lock().unwrap().push("answered");
             answer
+        }
+
+        async fn unlock(&mut self) -> Result<(), BleError> {
+            self.log.lock().unwrap().push("unlock");
+            Ok(())
+        }
+
+        async fn xpub(&mut self, path: &str) -> Result<HwAccountKey, BleError> {
+            parse_derivation_path(path)?;
+            self.log.lock().unwrap().push("xpub");
+            Ok(self.account_key.clone())
         }
 
         async fn disconnect(self) -> Result<(), BleError> {
@@ -428,6 +533,7 @@ mod tests {
             answers,
             log: log.clone(),
             link_goes_down,
+            account_key: hw_account_key(),
         };
         (wallet, answer, log)
     }
@@ -443,6 +549,14 @@ mod tests {
             .await
             .unwrap();
         (link, answer, log)
+    }
+
+    fn hw_account_key() -> HwAccountKey {
+        HwAccountKey {
+            xpub: "tpub-from-the-wallet".into(),
+            master_fingerprint: "73c5da0a".into(),
+            derivation_path: "m/48'/1'/0'/2'".into(),
+        }
     }
 
     fn jade_info() -> WalletInfo {
@@ -618,6 +732,34 @@ mod tests {
         assert_eq!(logged(&log), ["info", "answered"]);
         answer.send(Ok(jade_info())).unwrap();
         assert_eq!(link.info().await, Ok(jade_info()));
+    }
+
+    #[tokio::test]
+    async fn unlock_then_xpub_returns_the_wallet_key() {
+        let (link, _answer, log) = fake().await;
+        assert_eq!(link.unlock().await, Ok(()));
+        assert_eq!(
+            link.account_xpub("m/48'/1'/0'/2'".into()).await.unwrap(),
+            hw_account_key()
+        );
+        assert_eq!(logged(&log), ["unlock", "xpub"]);
+    }
+
+    #[tokio::test]
+    async fn an_invalid_derivation_path_is_refused_and_the_link_stays() {
+        let (link, answer, log) = fake().await;
+        let err = link.account_xpub("nope".into()).await.unwrap_err();
+        assert!(matches!(err, BleError::Refused(text) if text.contains("invalid derivation path")));
+        assert_eq!(logged(&log), Vec::<&str>::new());
+        answer.send(Ok(jade_info())).unwrap();
+        assert_eq!(link.info().await, Ok(jade_info()));
+    }
+
+    #[test]
+    fn a_hardened_path_is_written_with_an_apostrophe() {
+        let path = parse_derivation_path("m/48h/1h/0h/2h").unwrap();
+        assert_eq!(derivation_path_string(&path), "m/48'/1'/0'/2'");
+        assert_eq!(derivation_path_string(&DerivationPath::master()), "m");
     }
 
     async fn settle() {

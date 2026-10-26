@@ -1018,6 +1018,14 @@ internal typealias UniffiVTableCallbackInterfacePairingCodesUniffiByValue = Unif
 
 
 
+
+
+
+
+
+
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -1066,7 +1074,13 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_derive_borrower_pubkey() != 16439.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
+        if (uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key() != 291.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
         if (uniffi_mobile_signer_ffi_checksum_func_live_wallet_links() != 38905.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_restore_software_multisig_key() != 52876.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_scan_wallets() != 29092.toShort()) {
@@ -1078,6 +1092,9 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code() != 55814.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
+        if (uniffi_mobile_signer_ffi_checksum_method_walletlink_account_xpub() != 61385.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
         if (uniffi_mobile_signer_ffi_checksum_method_walletlink_connect() != 15741.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
@@ -1085,6 +1102,9 @@ internal object IntegrityCheckingUniffiLib : Library {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_method_walletlink_info() != 62108.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_method_walletlink_unlock() != 26656.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_constructor_walletlink_new() != 63717.toShort()) {
@@ -1103,7 +1123,13 @@ internal object IntegrityCheckingUniffiLib : Library {
     external fun uniffi_mobile_signer_ffi_checksum_func_derive_borrower_pubkey(
     ): Short
     @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key(
+    ): Short
+    @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_live_wallet_links(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_restore_software_multisig_key(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_scan_wallets(
@@ -1115,6 +1141,9 @@ internal object IntegrityCheckingUniffiLib : Library {
     external fun uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(
     ): Short
     @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_method_walletlink_account_xpub(
+    ): Short
+    @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_method_walletlink_connect(
     ): Short
     @JvmStatic
@@ -1122,6 +1151,9 @@ internal object IntegrityCheckingUniffiLib : Library {
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_method_walletlink_info(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_method_walletlink_unlock(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_constructor_walletlink_new(
@@ -1180,6 +1212,11 @@ internal object UniffiLib : Library {
         uniffiCallStatus: UniffiRustCallStatus,
     ): Pointer?
     @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_method_walletlink_account_xpub(
+        `ptr`: Pointer?,
+        `derivationPath`: RustBufferByValue,
+    ): Long
+    @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_method_walletlink_connect(
         `ptr`: Pointer?,
         `codes`: Pointer?,
@@ -1190,6 +1227,10 @@ internal object UniffiLib : Library {
     ): Long
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_method_walletlink_info(
+        `ptr`: Pointer?,
+    ): Long
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_method_walletlink_unlock(
         `ptr`: Pointer?,
     ): Long
     @JvmStatic
@@ -1212,9 +1253,24 @@ internal object UniffiLib : Library {
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_generate_software_multisig_key(
+        `passphrase`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        `account`: Int,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_func_live_wallet_links(
         uniffiCallStatus: UniffiRustCallStatus,
     ): Long
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_restore_software_multisig_key(
+        `mnemonicWords`: RustBufferByValue,
+        `passphrase`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        `account`: Int,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_func_scan_wallets(
         `kind`: RustBufferByValue,
@@ -2056,6 +2112,34 @@ public actual open class WalletLink: Disposable, WalletLinkInterface {
 
     
     /**
+     * The account extended public key at `derivation_path`.
+     *
+     * `derivation_path` is a BIP-32 path such as `m/48'/1'/0'/2'`. An unreadable
+     * path is refused and the link stays up. A Jade must be unlocked first.
+     * The master fingerprint is 8 lowercase hex characters. Cancelling stops
+     * only the wait. A refusal leaves the link up.
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public actual override suspend fun `accountXpub`(`derivationPath`: kotlin.String): HwAccountKey {
+        return uniffiRustCallAsync(
+            callWithPointer { thisPtr ->
+                UniffiLib.uniffi_mobile_signer_ffi_fn_method_walletlink_account_xpub(
+                    thisPtr,
+                    FfiConverterString.lower(`derivationPath`),
+                )
+            },
+            { future, callback, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+            { future, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_complete_rust_buffer(future, continuation) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_free_rust_buffer(future) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_cancel_rust_buffer(future) },
+            // lift function
+            { FfiConverterTypeHwAccountKey.lift(it) },
+            // Error FFI converter
+            BleExceptionErrorHandler,
+        )
+    }
+
+    /**
      * Connects to the wallet, pairs if it must, and checks the wallet is what it says.
      * Cancelling while it runs leaves nothing that closing the link cannot end: measured with a
      * Jade, unit-tested with a fake central for a Safe 7. A Jade that fails disconnects in the
@@ -2130,6 +2214,34 @@ public actual open class WalletLink: Disposable, WalletLinkInterface {
         )
     }
 
+    /**
+     * Unlocks the wallet for this connection.
+     *
+     * A Jade asks for its PIN on the device, unless it is a Temporary Signer.
+     * A Safe 7 has no separate unlock. Connect already opened the session, so
+     * this returns immediately. Cancelling stops only the wait. A refusal
+     * leaves the link up.
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public actual override suspend fun `unlock`() {
+        return uniffiRustCallAsync(
+            callWithPointer { thisPtr ->
+                UniffiLib.uniffi_mobile_signer_ffi_fn_method_walletlink_unlock(
+                    thisPtr,
+                )
+            },
+            { future, callback, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_poll_void(future, callback, continuation) },
+            { future, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_complete_void(future, continuation) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_free_void(future) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_cancel_void(future) },
+            // lift function
+            { Unit },
+            
+            // Error FFI converter
+            BleExceptionErrorHandler,
+        )
+    }
+
 
     
     
@@ -2188,6 +2300,59 @@ public object FfiConverterTypeFoundWallet: FfiConverterRustBuffer<FoundWallet> {
         FfiConverterTypeWalletKind.write(value.`kind`, buf)
         FfiConverterString.write(value.`id`, buf)
         FfiConverterString.write(value.`name`, buf)
+    }
+}
+
+
+
+
+public object FfiConverterTypeHwAccountKey: FfiConverterRustBuffer<HwAccountKey> {
+    override fun read(buf: ByteBuffer): HwAccountKey {
+        return HwAccountKey(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: HwAccountKey): ULong = (
+            FfiConverterString.allocationSize(value.`xpub`) +
+            FfiConverterString.allocationSize(value.`masterFingerprint`) +
+            FfiConverterString.allocationSize(value.`derivationPath`)
+    )
+
+    override fun write(value: HwAccountKey, buf: ByteBuffer) {
+        FfiConverterString.write(value.`xpub`, buf)
+        FfiConverterString.write(value.`masterFingerprint`, buf)
+        FfiConverterString.write(value.`derivationPath`, buf)
+    }
+}
+
+
+
+
+public object FfiConverterTypeSoftwareAccountKey: FfiConverterRustBuffer<SoftwareAccountKey> {
+    override fun read(buf: ByteBuffer): SoftwareAccountKey {
+        return SoftwareAccountKey(
+            FfiConverterSequenceString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SoftwareAccountKey): ULong = (
+            FfiConverterSequenceString.allocationSize(value.`mnemonicWords`) +
+            FfiConverterString.allocationSize(value.`masterFingerprint`) +
+            FfiConverterString.allocationSize(value.`xpub`) +
+            FfiConverterString.allocationSize(value.`derivationPath`)
+    )
+
+    override fun write(value: SoftwareAccountKey, buf: ByteBuffer) {
+        FfiConverterSequenceString.write(value.`mnemonicWords`, buf)
+        FfiConverterString.write(value.`masterFingerprint`, buf)
+        FfiConverterString.write(value.`xpub`, buf)
+        FfiConverterString.write(value.`derivationPath`, buf)
     }
 }
 
@@ -2326,6 +2491,24 @@ public object FfiConverterTypeJadeState: FfiConverterRustBuffer<JadeState> {
 
 
 
+
+public object FfiConverterTypeKeyNetwork: FfiConverterRustBuffer<KeyNetwork> {
+    override fun read(buf: ByteBuffer): KeyNetwork = try {
+        KeyNetwork.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: KeyNetwork): ULong = 4UL
+
+    override fun write(value: KeyNetwork, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
 public object MobileSignerExceptionErrorHandler : UniffiRustCallStatusErrorHandler<MobileSignerException> {
     override fun lift(errorBuf: RustBufferByValue): MobileSignerException = FfiConverterTypeMobileSignerError.lift(errorBuf)
 }
@@ -2339,6 +2522,7 @@ public object FfiConverterTypeMobileSignerError : FfiConverterRustBuffer<MobileS
             4 -> MobileSignerException.DuplicateXpub(FfiConverterString.read(buf))
             5 -> MobileSignerException.InvalidThreshold(FfiConverterString.read(buf))
             6 -> MobileSignerException.VaultCore(FfiConverterString.read(buf))
+            7 -> MobileSignerException.InvalidMnemonic(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
@@ -2371,6 +2555,10 @@ public object FfiConverterTypeMobileSignerError : FfiConverterRustBuffer<MobileS
             }
             is MobileSignerException.VaultCore -> {
                 buf.putInt(6)
+                Unit
+            }
+            is MobileSignerException.InvalidMnemonic -> {
+                buf.putInt(7)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -2608,12 +2796,52 @@ public actual fun `deriveBorrowerPubkey`(`accountXpub`: kotlin.String, `index`: 
 }
 
 /**
+ * A new 24-word BIP-39 mnemonic and its BIP-48 P2WSH account key.
+ *
+ * `passphrase` may be empty. `Main` derives an `xpub` at `m/48'/0'/account'/2'`.
+ * `Test` derives a `tpub` at `m/48'/1'/account'/2'` on testnet4.
+ * The words are returned once, in `mnemonic_words`.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `generateSoftwareMultisigKey`(`passphrase`: kotlin.String, `network`: KeyNetwork, `account`: kotlin.UInt): SoftwareAccountKey {
+    return FfiConverterTypeSoftwareAccountKey.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_generate_software_multisig_key(
+            FfiConverterString.lower(`passphrase`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterUInt.lower(`account`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
  * How many `WalletLink` objects exist in this process. For tests, not a stable API: a link
  * that a call kept alive after `close()` still counts here.
  */
 public actual fun `liveWalletLinks`(): kotlin.ULong {
     return FfiConverterULong.lift(uniffiRustCall { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_live_wallet_links(
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The BIP-48 P2WSH account key for an existing BIP-39 mnemonic.
+ *
+ * `mnemonic_words` is the 12, 15, 18, 21 or 24 words, or one string that
+ * already joins them with spaces. The record echoes the normalized words.
+ * `passphrase`, `network` and `account` mean the same as in
+ * `generate_software_multisig_key`.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `restoreSoftwareMultisigKey`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `account`: kotlin.UInt): SoftwareAccountKey {
+    return FfiConverterTypeSoftwareAccountKey.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_restore_software_multisig_key(
+            FfiConverterSequenceString.lower(`mnemonicWords`),
+            FfiConverterString.lower(`passphrase`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterUInt.lower(`account`),
             uniffiRustCallStatus,
         )
     })

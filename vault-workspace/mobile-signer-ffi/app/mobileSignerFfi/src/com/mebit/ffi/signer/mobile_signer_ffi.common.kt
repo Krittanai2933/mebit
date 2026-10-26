@@ -166,6 +166,17 @@ public expect open class PairingCodesImpl: Disposable, PairingCodes {
 public interface WalletLinkInterface {
     
     /**
+     * The account extended public key at `derivation_path`.
+     *
+     * `derivation_path` is a BIP-32 path such as `m/48'/1'/0'/2'`. An unreadable
+     * path is refused and the link stays up. A Jade must be unlocked first.
+     * The master fingerprint is 8 lowercase hex characters. Cancelling stops
+     * only the wait. A refusal leaves the link up.
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public suspend fun `accountXpub`(`derivationPath`: kotlin.String): HwAccountKey
+    
+    /**
      * Connects to the wallet, pairs if it must, and checks the wallet is what it says.
      * Cancelling while it runs leaves nothing that closing the link cannot end: measured with a
      * Jade, unit-tested with a fake central for a Safe 7. A Jade that fails disconnects in the
@@ -188,6 +199,17 @@ public interface WalletLinkInterface {
      */
     @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
     public suspend fun `info`(): WalletInfo
+    
+    /**
+     * Unlocks the wallet for this connection.
+     *
+     * A Jade asks for its PIN on the device, unless it is a Temporary Signer.
+     * A Safe 7 has no separate unlock. Connect already opened the session, so
+     * this returns immediately. Cancelling stops only the wait. A refusal
+     * leaves the link up.
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public suspend fun `unlock`()
     
     public companion object
 }
@@ -230,6 +252,17 @@ public expect open class WalletLink: Disposable, WalletLinkInterface {
 
     
     /**
+     * The account extended public key at `derivation_path`.
+     *
+     * `derivation_path` is a BIP-32 path such as `m/48'/1'/0'/2'`. An unreadable
+     * path is refused and the link stays up. A Jade must be unlocked first.
+     * The master fingerprint is 8 lowercase hex characters. Cancelling stops
+     * only the wait. A refusal leaves the link up.
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public override suspend fun `accountXpub`(`derivationPath`: kotlin.String): HwAccountKey
+    
+    /**
      * Connects to the wallet, pairs if it must, and checks the wallet is what it says.
      * Cancelling while it runs leaves nothing that closing the link cannot end: measured with a
      * Jade, unit-tested with a fake central for a Safe 7. A Jade that fails disconnects in the
@@ -253,6 +286,17 @@ public expect open class WalletLink: Disposable, WalletLinkInterface {
     @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
     public override suspend fun `info`(): WalletInfo
     
+    /**
+     * Unlocks the wallet for this connection.
+     *
+     * A Jade asks for its PIN on the device, unless it is a Temporary Signer.
+     * A Safe 7 has no separate unlock. Connect already opened the session, so
+     * this returns immediately. Cancelling stops only the wait. A refusal
+     * leaves the link up.
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public override suspend fun `unlock`()
+    
 
     
     public companion object
@@ -275,6 +319,53 @@ public data class FoundWallet (
      * The advertised name, e.g. `Jade 1a2b3c`.
      */
     var `name`: kotlin.String
+) {
+    public companion object
+}
+
+
+
+/**
+ * An account extended public key read from a hardware wallet.
+ */
+
+public data class HwAccountKey (
+    /**
+     * `xpub` on mainnet, `tpub` on test networks. Not a SLIP-132 form.
+     */
+    var `xpub`: kotlin.String, 
+    /**
+     * Master key fingerprint, 8 lowercase hex characters.
+     */
+    var `masterFingerprint`: kotlin.String, 
+    /**
+     * The path the key was derived on, such as `m/48'/1'/0'/2'`.
+     */
+    var `derivationPath`: kotlin.String
+) {
+    public companion object
+}
+
+
+
+/**
+ * A 24-word BIP-39 mnemonic and the BIP-48 P2WSH account key derived from it.
+ *
+ * `mnemonic_words` is the one copy of the secret that crosses into Kotlin.
+ * Store it, then drop this record.
+ */
+
+public data class SoftwareAccountKey (
+    var `mnemonicWords`: List<kotlin.String>, 
+    /**
+     * Master key fingerprint, 8 lowercase hex characters.
+     */
+    var `masterFingerprint`: kotlin.String, 
+    var `xpub`: kotlin.String, 
+    /**
+     * `m/48'/coin'/account'/2'`, coin 0 on `Main` and coin 1 on `Test`.
+     */
+    var `derivationPath`: kotlin.String
 ) {
     public companion object
 }
@@ -431,6 +522,24 @@ public enum class JadeState {
 
 
 
+/**
+ * Bitcoin mainnet, or testnet4. Testnet4 matches the network the Bluetooth
+ * link already uses.
+ */
+
+
+public enum class KeyNetwork {
+    
+    MAIN,
+    TEST;
+    public companion object
+}
+
+
+
+
+
+
 
 /**
  * Every failure an export returns.
@@ -478,6 +587,12 @@ public sealed class MobileSignerException(message: String): kotlin.Exception(mes
      * The text is `VaultCoreError`'s own `Display`, which already names its source.
      */
     public class VaultCore(message: String) : MobileSignerException(message)
+    
+    /**
+     * The words are not a BIP-39 mnemonic. The text names a word index or a count,
+     * never the words.
+     */
+    public class InvalidMnemonic(message: String) : MobileSignerException(message)
     
 }
 
@@ -579,10 +694,31 @@ public expect fun `computeVaultAddressMultisig`(`xpubs`: List<kotlin.String>, `t
 public expect fun `deriveBorrowerPubkey`(`accountXpub`: kotlin.String, `index`: kotlin.UInt): kotlin.String
 
 /**
+ * A new 24-word BIP-39 mnemonic and its BIP-48 P2WSH account key.
+ *
+ * `passphrase` may be empty. `Main` derives an `xpub` at `m/48'/0'/account'/2'`.
+ * `Test` derives a `tpub` at `m/48'/1'/account'/2'` on testnet4.
+ * The words are returned once, in `mnemonic_words`.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `generateSoftwareMultisigKey`(`passphrase`: kotlin.String, `network`: KeyNetwork, `account`: kotlin.UInt): SoftwareAccountKey
+
+/**
  * How many `WalletLink` objects exist in this process. For tests, not a stable API: a link
  * that a call kept alive after `close()` still counts here.
  */
 public expect fun `liveWalletLinks`(): kotlin.ULong
+
+/**
+ * The BIP-48 P2WSH account key for an existing BIP-39 mnemonic.
+ *
+ * `mnemonic_words` is the 12, 15, 18, 21 or 24 words, or one string that
+ * already joins them with spaces. The record echoes the normalized words.
+ * `passphrase`, `network` and `account` mean the same as in
+ * `generate_software_multisig_key`.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `restoreSoftwareMultisigKey`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `account`: kotlin.UInt): SoftwareAccountKey
 
 /**
  * Scans for a few seconds and lists the wallets of `kind` in range.

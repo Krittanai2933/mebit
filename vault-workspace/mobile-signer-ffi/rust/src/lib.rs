@@ -10,10 +10,15 @@ pub mod ble;
 
 use std::str::FromStr;
 
+use bip39::Mnemonic;
+use bitcoin::secp256k1::Secp256k1;
 use bitcoin::{Network, NetworkKind, bip32::Xpub};
 use vault_core::derivation;
 use vault_core::descriptor::{self, PartyPubkeys};
 use vault_core::error::VaultCoreError;
+use vault_core::keys::{
+    self, ScriptType, account_multisig_xpub_from_mnemonic, generate_master_xpriv, generate_seed,
+};
 use vault_core::psbt::UnsignedPsbt;
 
 /// Every failure an export returns.
@@ -58,6 +63,11 @@ pub enum MobileSignerError {
     /// The text is `VaultCoreError`'s own `Display`, which already names its source.
     #[error("{0}")]
     VaultCore(String),
+
+    /// The words are not a BIP-39 mnemonic. The text names a word index or a count,
+    /// never the words.
+    #[error("invalid mnemonic: {0}")]
+    InvalidMnemonic(String),
 }
 
 impl From<VaultCoreError> for MobileSignerError {
@@ -65,9 +75,41 @@ impl From<VaultCoreError> for MobileSignerError {
         let text = e.to_string();
         match e {
             VaultCoreError::Threshold(_) => Self::InvalidThreshold(text),
+            VaultCoreError::Mnemonic(_) => Self::InvalidMnemonic(text),
             _ => Self::VaultCore(text),
         }
     }
+}
+
+/// Bitcoin mainnet, or testnet4. Testnet4 matches the network the Bluetooth
+/// link already uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum KeyNetwork {
+    Main,
+    Test,
+}
+
+impl KeyNetwork {
+    fn bitcoin(self) -> Network {
+        match self {
+            Self::Main => Network::Bitcoin,
+            Self::Test => Network::Testnet4,
+        }
+    }
+}
+
+/// A 24-word BIP-39 mnemonic and the BIP-48 P2WSH account key derived from it.
+///
+/// `mnemonic_words` is the one copy of the secret that crosses into Kotlin.
+/// Store it, then drop this record.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct SoftwareAccountKey {
+    pub mnemonic_words: Vec<String>,
+    /// Master key fingerprint, 8 lowercase hex characters.
+    pub master_fingerprint: String,
+    pub xpub: String,
+    /// `m/48'/coin'/account'/2'`, coin 0 on `Main` and coin 1 on `Test`.
+    pub derivation_path: String,
 }
 
 /// MOCK. vault-core's `derive_child_pubkey` is a format string: this returns
@@ -134,6 +176,81 @@ pub fn compute_vault_address_multisig(
         None => unreachable!("build_multisig_descriptor rejects an empty key list"),
     };
     Ok(descriptor::derive_address_at(&descriptor, 0, network)?.to_string())
+}
+
+/// A new 24-word BIP-39 mnemonic and its BIP-48 P2WSH account key.
+///
+/// `passphrase` may be empty. `Main` derives an `xpub` at `m/48'/0'/account'/2'`.
+/// `Test` derives a `tpub` at `m/48'/1'/account'/2'` on testnet4.
+/// The words are returned once, in `mnemonic_words`.
+#[uniffi::export]
+pub fn generate_software_multisig_key(
+    passphrase: String,
+    network: KeyNetwork,
+    account: u32,
+) -> Result<SoftwareAccountKey, MobileSignerError> {
+    let entropy = keys::generate_entropy()?;
+    let mnemonic = keys::generate_mnemonic(&entropy)?;
+    drop(entropy);
+    software_account_key(&mnemonic, &passphrase, network, account)
+}
+
+/// The BIP-48 P2WSH account key for an existing BIP-39 mnemonic.
+///
+/// `mnemonic_words` is the 12, 15, 18, 21 or 24 words, or one string that
+/// already joins them with spaces. The record echoes the normalized words.
+/// `passphrase`, `network` and `account` mean the same as in
+/// `generate_software_multisig_key`.
+#[uniffi::export]
+pub fn restore_software_multisig_key(
+    mnemonic_words: Vec<String>,
+    passphrase: String,
+    network: KeyNetwork,
+    account: u32,
+) -> Result<SoftwareAccountKey, MobileSignerError> {
+    let mnemonic = Mnemonic::parse_normalized(&mnemonic_words.join(" "))
+        .map_err(|error| MobileSignerError::InvalidMnemonic(error.to_string()))?;
+    software_account_key(&mnemonic, &passphrase, network, account)
+}
+
+fn software_account_key(
+    mnemonic: &Mnemonic,
+    passphrase: &str,
+    network: KeyNetwork,
+    account: u32,
+) -> Result<SoftwareAccountKey, MobileSignerError> {
+    let network = network.bitcoin();
+    let (mut account_xpriv, xpub) = account_multisig_xpub_from_mnemonic(
+        mnemonic,
+        passphrase,
+        network,
+        account,
+        ScriptType::P2wsh,
+    )?;
+    // `Xpriv` is `Copy`. This is the one account-key copy this function owns.
+    account_xpriv.private_key.non_secure_erase();
+
+    let secp = Secp256k1::new();
+    let mut master = generate_master_xpriv(network, &generate_seed(mnemonic, passphrase))?;
+    let master_fingerprint = master.fingerprint(&secp).to_string();
+    master.private_key.non_secure_erase();
+
+    Ok(SoftwareAccountKey {
+        mnemonic_words: mnemonic.words().map(str::to_owned).collect(),
+        master_fingerprint,
+        xpub: xpub.to_string(),
+        derivation_path: personal_multisig_path(network, account),
+    })
+}
+
+// Same path `account_multisig_xpub_from_mnemonic` derives for `ScriptType::P2wsh`.
+// Coin 0 is Bitcoin and coin 1 is every other network, matching keys.rs.
+fn personal_multisig_path(network: Network, account: u32) -> String {
+    let coin = match network {
+        Network::Bitcoin => 0,
+        Network::Testnet | Network::Testnet4 | Network::Signet | Network::Regtest => 1,
+    };
+    format!("m/48'/{coin}'/{account}'/2'")
 }
 
 // Base58 decoding is quadratic. Measured in a release build: 0.09 s at 10,000 characters and 7.3 s at 100,000.
@@ -426,6 +543,120 @@ mod tests {
         );
     }
 
+    // BIP-39 English vector, 32 zero bytes, passphrase "TREZOR". The master xprv is
+    // that vector's published key. Account xpubs are derived from it here with
+    // bitcoin's CKDpriv, not by calling the functions under test.
+    const ABANDON_ART: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+    const ABANDON_MASTER_XPRV: &str = "xprv9s21ZrQH143K32qBagUJAMU2LsHg3ka7jqMcV98Y7gVeVyNStwYS3U7yVVoDZ4btbRNf4h6ibWpY22iRmXq35qgLs79f312g2kj5539ebPM";
+
+    fn phrase_words(phrase: &str) -> Vec<String> {
+        phrase.split_whitespace().map(str::to_owned).collect()
+    }
+
+    fn xpub_at(xprv: &str, path: &str) -> (String, String) {
+        use bitcoin::bip32::{DerivationPath, Xpriv};
+        let mut master = Xpriv::from_str(xprv).unwrap();
+        let secp = Secp256k1::signing_only();
+        let fingerprint = master.fingerprint(&secp).to_string();
+        let account = master
+            .derive_priv(&secp, &DerivationPath::from_str(path).unwrap())
+            .unwrap();
+        let xpub = Xpub::from_priv(&secp, &account).to_string();
+        master.private_key.non_secure_erase();
+        (fingerprint, xpub)
+    }
+
+    #[test]
+    fn restore_matches_the_bip39_trezor_vector() {
+        let words = phrase_words(ABANDON_ART);
+        let (fingerprint, xpub) = xpub_at(ABANDON_MASTER_XPRV, "m/48'/0'/0'/2'");
+        let key =
+            restore_software_multisig_key(words.clone(), "TREZOR".into(), KeyNetwork::Main, 0)
+                .unwrap();
+        assert_eq!(key.mnemonic_words, words);
+        assert_eq!(key.master_fingerprint, fingerprint);
+        assert_eq!(key.master_fingerprint.len(), 8);
+        assert!(
+            key.master_fingerprint
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
+        assert_eq!(key.xpub, xpub);
+        assert_eq!(key.derivation_path, "m/48'/0'/0'/2'");
+
+        let account_one =
+            restore_software_multisig_key(words, "TREZOR".into(), KeyNetwork::Main, 1).unwrap();
+        let (_, xpub_one) = xpub_at(ABANDON_MASTER_XPRV, "m/48'/0'/1'/2'");
+        assert_eq!(account_one.derivation_path, "m/48'/0'/1'/2'");
+        assert_eq!(account_one.xpub, xpub_one);
+        assert_ne!(account_one.xpub, xpub);
+
+        let test = restore_software_multisig_key(
+            vec![ABANDON_ART.into()],
+            "TREZOR".into(),
+            KeyNetwork::Test,
+            0,
+        )
+        .unwrap();
+        assert_eq!(test.mnemonic_words.len(), 24);
+        assert_eq!(
+            test.mnemonic_words.first().map(String::as_str),
+            Some("abandon")
+        );
+        assert_eq!(test.mnemonic_words.last().map(String::as_str), Some("art"));
+        assert_eq!(test.master_fingerprint, fingerprint);
+        assert_eq!(test.derivation_path, "m/48'/1'/0'/2'");
+        assert!(test.xpub.starts_with("tpub"), "{}", test.xpub);
+        assert_ne!(test.xpub, xpub);
+    }
+
+    #[test]
+    fn generate_and_restore_agree_on_fingerprint_and_xpub() {
+        let generated =
+            generate_software_multisig_key("mebit".into(), KeyNetwork::Test, 3).unwrap();
+        assert_eq!(generated.mnemonic_words.len(), 24);
+        assert_eq!(generated.derivation_path, "m/48'/1'/3'/2'");
+        assert!(generated.xpub.starts_with("tpub"), "{}", generated.xpub);
+        assert_eq!(generated.master_fingerprint.len(), 8);
+        let restored = restore_software_multisig_key(
+            generated.mnemonic_words.clone(),
+            "mebit".into(),
+            KeyNetwork::Test,
+            3,
+        )
+        .unwrap();
+        assert_eq!(restored.master_fingerprint, generated.master_fingerprint);
+        assert_eq!(restored.xpub, generated.xpub);
+        assert_eq!(restored.derivation_path, generated.derivation_path);
+        assert_eq!(restored.mnemonic_words, generated.mnemonic_words);
+
+        let main = generate_software_multisig_key(String::new(), KeyNetwork::Main, 0).unwrap();
+        assert_eq!(main.derivation_path, "m/48'/0'/0'/2'");
+        assert!(main.xpub.starts_with("xpub"), "{}", main.xpub);
+    }
+
+    #[test]
+    fn a_bad_mnemonic_names_the_problem_and_not_the_word() {
+        let mut words = vec!["abandon".to_string(); 12];
+        words[3] = "notaword".into();
+        let err =
+            restore_software_multisig_key(words, String::new(), KeyNetwork::Test, 0).unwrap_err();
+        assert!(matches!(err, MobileSignerError::InvalidMnemonic(_)));
+        let text = err.to_string();
+        assert!(text.contains("unknown word"), "{text}");
+        assert!(!text.contains("notaword"), "{text}");
+
+        let range = restore_software_multisig_key(
+            phrase_words(ABANDON_ART),
+            "TREZOR".into(),
+            KeyNetwork::Main,
+            1 << 31,
+        )
+        .unwrap_err();
+        assert!(matches!(range, MobileSignerError::VaultCore(_)));
+        assert!(range.to_string().contains("BIP-32"), "{range}");
+    }
+
     #[test]
     fn committed_android_bindings_match_the_exports() {
         let kotlin = include_str!(
@@ -449,6 +680,14 @@ mod tests {
                 uniffi_mobile_signer_ffi_checksum_func_sign_psbt(),
             ),
             (
+                "func_generate_software_multisig_key",
+                uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key(),
+            ),
+            (
+                "func_restore_software_multisig_key",
+                uniffi_mobile_signer_ffi_checksum_func_restore_software_multisig_key(),
+            ),
+            (
                 "func_scan_wallets",
                 ble::uniffi_mobile_signer_ffi_checksum_func_scan_wallets(),
             ),
@@ -467,6 +706,14 @@ mod tests {
             (
                 "method_walletlink_info",
                 ble::uniffi_mobile_signer_ffi_checksum_method_walletlink_info(),
+            ),
+            (
+                "method_walletlink_unlock",
+                ble::uniffi_mobile_signer_ffi_checksum_method_walletlink_unlock(),
+            ),
+            (
+                "method_walletlink_account_xpub",
+                ble::uniffi_mobile_signer_ffi_checksum_method_walletlink_account_xpub(),
             ),
             (
                 "method_walletlink_disconnect",
