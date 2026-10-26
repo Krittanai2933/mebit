@@ -68,33 +68,46 @@ class KeyringStore {
         }
     }
 
-    /** Mock mebit-on-other-device until docs/04 #26. */
-    fun startMebitOtherMock() {
+    /** Mock mebit-on-other-device until docs/04 #26 (real tpub so vault FFI works). */
+    fun startMebitOtherMock(network: KeyNetwork = KeyNetwork.TEST) {
         clearError()
-        pending = PendingKey(
-            label = "mebit · เครื่องอื่น (mock)",
-            fingerprint = "A1B2C3D4",
-            xpub = "tpub_mock_mebit_other",
-            derivationPath = "m/48'/1'/0'/2'",
-            source = KeySourceLabel.MebitOther,
-        )
+        try {
+            val key = generateSoftwareMultisigKey("", network, (keys.size + 17).toUInt())
+            pending = PendingKey(
+                label = "mebit · เครื่องอื่น (mock)",
+                fingerprint = key.masterFingerprint,
+                xpub = key.xpub,
+                derivationPath = key.derivationPath,
+                source = KeySourceLabel.MebitOther,
+            )
+        } catch (e: Exception) {
+            lastError = e.message
+            pending = null
+        }
     }
 
-    /** Demo HW enrollment without live BLE (simulator-safe). */
-    fun startHardwareMock(source: KeySourceLabel, fingerprint: String) {
+    /** Demo HW enrollment without live BLE — real account key, HW label. */
+    fun startHardwareMock(source: KeySourceLabel, network: KeyNetwork = KeyNetwork.TEST) {
         clearError()
         require(source == KeySourceLabel.Jade || source == KeySourceLabel.TrezorSafe7)
-        pending = PendingKey(
-            label = when (source) {
-                KeySourceLabel.Jade -> "Jade · BLE"
-                KeySourceLabel.TrezorSafe7 -> "Trezor Safe 7 · BLE"
-                KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")
-            },
-            fingerprint = fingerprint,
-            xpub = "tpub_mock_${source.name.lowercase()}",
-            derivationPath = "m/48'/1'/0'/2'",
-            source = source,
-        )
+        try {
+            val account = (keys.size + if (source == KeySourceLabel.Jade) 31 else 47).toUInt()
+            val key = generateSoftwareMultisigKey("", network, account)
+            pending = PendingKey(
+                label = when (source) {
+                    KeySourceLabel.Jade -> "Jade · BLE"
+                    KeySourceLabel.TrezorSafe7 -> "Trezor Safe 7 · BLE"
+                    KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")
+                },
+                fingerprint = key.masterFingerprint,
+                xpub = key.xpub,
+                derivationPath = key.derivationPath,
+                source = source,
+            )
+        } catch (e: Exception) {
+            lastError = e.message
+            pending = null
+        }
     }
 
     /**

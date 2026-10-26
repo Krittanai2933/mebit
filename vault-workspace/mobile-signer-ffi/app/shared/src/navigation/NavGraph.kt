@@ -22,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.OnboardingSession
+import com.mebit.app.data.VaultDraft
 import com.mebit.app.feature.keys.AddKeyScreen
 import com.mebit.app.feature.keys.HardwareWalletScreen
 import com.mebit.app.feature.keys.KeyringFirstVaultScreen
@@ -42,6 +43,14 @@ import com.mebit.app.feature.onboarding.KeyCreatedScreen
 import com.mebit.app.feature.onboarding.KeySourceScreen
 import com.mebit.app.feature.onboarding.VerifyWordsScreen
 import com.mebit.app.feature.onboarding.WelcomeScreen
+import com.mebit.app.feature.vault.ChooseKeysScreen
+import com.mebit.app.feature.vault.PolicyScreen
+import com.mebit.app.feature.vault.ReviewScreen
+import com.mebit.app.feature.vault.T16InvalidMnScreen
+import com.mebit.app.feature.vault.T16PolicyDecayingScreen
+import com.mebit.app.feature.vault.T17CountMismatchScreen
+import com.mebit.app.feature.vault.T18BackendErrorScreen
+import com.mebit.app.feature.vault.VaultCreatedScreen
 import com.mebit.app.ui.components.ScreenStub
 
 private val ImplementedRoutes = setOf(
@@ -59,11 +68,19 @@ private val ImplementedRoutes = setOf(
     MovieRoute.VerifyKey,
     MovieRoute.Keyring,
     MovieRoute.KeyringFirstVault,
+    MovieRoute.Policy,
+    MovieRoute.ChooseKeys,
+    MovieRoute.Review,
+    MovieRoute.VaultCreated,
     MovieRoute.T13UnsupportedModel,
     MovieRoute.T14VerifyMismatch,
     MovieRoute.T15KeyringEmpty,
     MovieRoute.T15UnverifiedFirst,
     MovieRoute.T15DeleteBlocked,
+    MovieRoute.T16PolicyDecaying,
+    MovieRoute.T16InvalidMn,
+    MovieRoute.T17CountMismatch,
+    MovieRoute.T18BackendError,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -74,6 +91,7 @@ fun MebitNavHost() {
     var importing by remember { mutableStateOf(false) }
     val session = remember { OnboardingSession() }
     val keyring = remember { KeyringStore() }
+    val vaultDraft = remember { VaultDraft() }
     val current = backStack.last()
 
     fun navigate(route: MovieRoute) {
@@ -194,6 +212,36 @@ fun MebitNavHost() {
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
+        current == MovieRoute.Policy -> PolicyScreen(
+            draft = vaultDraft,
+            onContinue = { navigate(MovieRoute.ChooseKeys) },
+            onDecaying = { navigate(MovieRoute.T16PolicyDecaying) },
+            onInvalidMn = { navigate(MovieRoute.T16InvalidMn) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.ChooseKeys -> ChooseKeysScreen(
+            draft = vaultDraft,
+            store = keyring,
+            onContinue = { navigate(MovieRoute.Review) },
+            onCountMismatch = { navigate(MovieRoute.T17CountMismatch) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.Review -> ReviewScreen(
+            draft = vaultDraft,
+            store = keyring,
+            onCreated = { navigate(MovieRoute.VaultCreated) },
+            onBackendError = { navigate(MovieRoute.T18BackendError) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.VaultCreated -> VaultCreatedScreen(
+            draft = vaultDraft,
+            onOpenVaults = { navigate(MovieRoute.VaultList) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
         current == MovieRoute.T13UnsupportedModel -> T13UnsupportedModelScreen(
             onBack = onBack,
             onOpenCatalog = openCatalog,
@@ -213,6 +261,23 @@ fun MebitNavHost() {
             onOpenCatalog = openCatalog,
         )
         current == MovieRoute.T15DeleteBlocked -> T15DeleteBlockedScreen(
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.T16PolicyDecaying -> T16PolicyDecayingScreen(
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.T16InvalidMn -> T16InvalidMnScreen(
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.T17CountMismatch -> T17CountMismatchScreen(
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.T18BackendError -> T18BackendErrorScreen(
+            onRetry = { navigate(MovieRoute.Review) },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )

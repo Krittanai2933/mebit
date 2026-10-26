@@ -80,8 +80,12 @@ fun PairMebitOtherScreen(
         Spacer(modifier = Modifier.height(20.dp))
         PrimaryCta("จำลองจับคู่สำเร็จ", "cta_pair_mock", {
             store.startMebitOtherMock()
-            onPaired()
+            if (store.pending != null) onPaired()
         })
+        store.lastError?.let {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("error"))
+        }
     }
 }
 
@@ -107,13 +111,13 @@ fun HardwareWalletScreen(
         )
         Spacer(modifier = Modifier.height(20.dp))
         PrimaryCta("จำลอง Jade", "cta_hw_jade", {
-            store.startHardwareMock(KeySourceLabel.Jade, "JD01F00D")
-            onEnrolled()
+            store.startHardwareMock(KeySourceLabel.Jade)
+            if (store.pending != null) onEnrolled()
         })
         Spacer(modifier = Modifier.height(8.dp))
         PrimaryCta("จำลอง Trezor Safe 7", "cta_hw_trezor", {
-            store.startHardwareMock(KeySourceLabel.TrezorSafe7, "TRZ7SAFE")
-            onEnrolled()
+            store.startHardwareMock(KeySourceLabel.TrezorSafe7)
+            if (store.pending != null) onEnrolled()
         })
         Spacer(modifier = Modifier.height(8.dp))
         SecondaryCta("จำลองรุ่นอื่น (Unsupported)", "cta_hw_unsupported", onUnsupported)
