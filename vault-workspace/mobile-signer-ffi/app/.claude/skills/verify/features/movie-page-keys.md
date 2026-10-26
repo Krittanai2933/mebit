@@ -27,4 +27,4 @@ Preconditions:
 ## Gotchas
 
 - Match path needs typing the expected fingerprint into `id:observed_fp` or using `id:cta_fill_expected` then `id:cta_verify_match`.
-- mebit_other pairing is mocked (docs/04 #26).
+- Pair another mebit by pasting three lines (fingerprint, xpub, path) or BSMS 1.0 into `id:pair_paste`, then `id:cta_pair_paste`. `id:cta_pair_demo` still stages a fixture key when the run has no paste. No QR. docs/04 item 26.

@@ -8,7 +8,7 @@ AppLock	onboarding/app-lock	APP LOCK	ui	wired	B	demo lock	baselines-ready
 HomeFirstRun	home/first-run	HOME	ui	wired	B		baselines-ready
 HwBackupConfirm	onboarding/hw-backup-confirm	HW BACKUP	ui	wired	B		baselines-ready
 AddKey	keys/add	ADD KEY	uniffi+ui	wired	C	three sources	baselines-ready
-PairMebitOther	keys/pair-mebit	PAIR DEVICE	mock	mocked	C	docs/04 #26	baselines-ready
+PairMebitOther	keys/pair-mebit	PAIR DEVICE	ui	live	C	paste/share BSMS or xpub; cta_pair_demo for CI; docs/04 #26	baselines-ready
 HardwareWallet	keys/hardware	HARDWARE WALLET	mock+uniffi	mocked	C	demo enroll; real WalletLink unlock/xpub in FFI	baselines-ready
 VerifyKey	keys/verify	VERIFY KEY	ui	wired	C	mismatch does not save	baselines-ready
 Keyring	keys/keyring	KEYRING	ui	wired	C		baselines-ready
@@ -16,7 +16,7 @@ KeyringFirstVault	keys/keyring-first-vault	NEW VAULT	ui	wired	C		baselines-ready
 Policy	vault/policy	POLICY · 1/3	ui	wired	D	personal_custody only	baselines-ready
 ChooseKeys	vault/choose-keys	POLICY · 2/3	ui	wired	D		baselines-ready
 Review	vault/review	POLICY · 3/3	uniffi+ui	wired	D	computeVaultAddressMultisig	baselines-ready
-VaultCreated	vault/created	VAULT CREATED	mock+ui	mocked	D	BSMS file text; no BIP-129 FFI; not QR	baselines-ready
+VaultCreated	vault/created	VAULT CREATED	ui	live	D	BSMS 1.0 with key origin; file not QR	baselines-ready
 VaultList	vaults	VAULTS	ui	wired	E		baselines-ready
 VaultDetail	vaults/detail	VAULT DETAIL	ui	wired	E		baselines-ready
 T13UnsupportedModel	critical/t13	UNSUPPORTED MODEL	ui	wired	C	Safe 7 / Jade only	baselines-ready
