@@ -50,7 +50,10 @@ import com.mebit.app.feature.vault.T16InvalidMnScreen
 import com.mebit.app.feature.vault.T16PolicyDecayingScreen
 import com.mebit.app.feature.vault.T17CountMismatchScreen
 import com.mebit.app.feature.vault.T18BackendErrorScreen
+import com.mebit.app.feature.vault.T20VaultActionsScreen
 import com.mebit.app.feature.vault.VaultCreatedScreen
+import com.mebit.app.feature.vault.VaultDetailScreen
+import com.mebit.app.feature.vault.VaultListScreen
 import com.mebit.app.ui.components.ScreenStub
 
 private val ImplementedRoutes = setOf(
@@ -72,6 +75,8 @@ private val ImplementedRoutes = setOf(
     MovieRoute.ChooseKeys,
     MovieRoute.Review,
     MovieRoute.VaultCreated,
+    MovieRoute.VaultList,
+    MovieRoute.VaultDetail,
     MovieRoute.T13UnsupportedModel,
     MovieRoute.T14VerifyMismatch,
     MovieRoute.T15KeyringEmpty,
@@ -81,6 +86,7 @@ private val ImplementedRoutes = setOf(
     MovieRoute.T16InvalidMn,
     MovieRoute.T17CountMismatch,
     MovieRoute.T18BackendError,
+    MovieRoute.T20VaultActions,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -242,6 +248,21 @@ fun MebitNavHost() {
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
+        current == MovieRoute.VaultList -> VaultListScreen(
+            draft = vaultDraft,
+            onOpenDetail = { navigate(MovieRoute.VaultDetail) },
+            onCreate = { navigate(MovieRoute.KeyringFirstVault) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.VaultDetail -> VaultDetailScreen(
+            draft = vaultDraft,
+            onReceive = { /* address on this screen is the receive path */ },
+            onSend = { navigate(MovieRoute.M1SendVault) },
+            onActions = { navigate(MovieRoute.T20VaultActions) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
         current == MovieRoute.T13UnsupportedModel -> T13UnsupportedModelScreen(
             onBack = onBack,
             onOpenCatalog = openCatalog,
@@ -278,6 +299,11 @@ fun MebitNavHost() {
         )
         current == MovieRoute.T18BackendError -> T18BackendErrorScreen(
             onRetry = { navigate(MovieRoute.Review) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        current == MovieRoute.T20VaultActions -> T20VaultActionsScreen(
+            draft = vaultDraft,
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )

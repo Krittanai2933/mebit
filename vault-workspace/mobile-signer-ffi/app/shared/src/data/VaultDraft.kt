@@ -37,6 +37,13 @@ class VaultDraft {
     var bsms: String by mutableStateOf("")
         private set
     val created = mutableStateListOf<CreatedVault>()
+    var selectedVaultId: String? by mutableStateOf(null)
+
+    fun selectVault(id: String) {
+        selectedVaultId = id
+    }
+
+    fun selectedVault(): CreatedVault? = created.find { it.id == selectedVaultId } ?: created.lastOrNull()
 
     fun setMn(newM: Int, newN: Int): Boolean {
         lastError = null
@@ -92,18 +99,18 @@ class VaultDraft {
         }
         val fps = selectedIds.mapNotNull { id -> store.keys.find { it.id == id }?.fingerprint }
         fps.forEach { store.markUsedInVault(it) }
-        created.add(
-            CreatedVault(
-                id = "vault_${created.size + 1}",
-                name = "Vault ${created.size + 1}",
-                m = m,
-                n = n,
-                policy = policy,
-                address = address,
-                bsms = bsms,
-                keyFingerprints = fps,
-            ),
+        val vault = CreatedVault(
+            id = "vault_${created.size + 1}",
+            name = "Vault ${created.size + 1}",
+            m = m,
+            n = n,
+            policy = policy,
+            address = address,
+            bsms = bsms,
+            keyFingerprints = fps,
         )
+        created.add(vault)
+        selectedVaultId = vault.id
         return true
     }
 

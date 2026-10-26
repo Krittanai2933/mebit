@@ -203,6 +203,116 @@ fun VaultCreatedScreen(
 }
 
 @Composable
+fun VaultListScreen(
+    draft: VaultDraft,
+    onOpenDetail: () -> Unit,
+    onCreate: () -> Unit,
+    onBack: (() -> Unit)?,
+    onOpenCatalog: () -> Unit,
+) {
+    MebitScreen(
+        eyebrow = "VAULTS",
+        title = "Vault ของคุณ",
+        onBack = onBack,
+        onOpenCatalog = onOpenCatalog,
+        tag = "screen_vaults",
+    ) {
+        Text(
+            text = "personal_custody",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        if (draft.created.isEmpty()) {
+            Text("ยังไม่มี Vault", modifier = Modifier.testTag("vaults_empty"))
+        } else {
+            draft.created.forEach { vault ->
+                Text(vault.name, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "${vault.m}-of-${vault.n} · ${vault.address.take(16)}…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                SecondaryCta("เปิด ${vault.name}", "cta_open_${vault.id}", {
+                    draft.selectVault(vault.id)
+                    onOpenDetail()
+                })
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        PrimaryCta("สร้าง Vault ใหม่", "cta_new_vault", onCreate)
+    }
+}
+
+@Composable
+fun VaultDetailScreen(
+    draft: VaultDraft,
+    onReceive: () -> Unit,
+    onSend: () -> Unit,
+    onActions: () -> Unit,
+    onBack: (() -> Unit)?,
+    onOpenCatalog: () -> Unit,
+) {
+    val vault = draft.selectedVault()
+    MebitScreen(
+        eyebrow = "VAULT DETAIL",
+        title = vault?.name ?: "รายละเอียด Vault",
+        onBack = onBack,
+        onOpenCatalog = onOpenCatalog,
+        tag = "screen_vaults/detail",
+    ) {
+        if (vault == null) {
+            Text("ยังไม่ได้เลือก Vault", color = MaterialTheme.colorScheme.error)
+            return@MebitScreen
+        }
+        Text("${vault.m}-of-${vault.n} · personal_custody", style = MaterialTheme.typography.bodyLarge)
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(vault.address, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("detail_address"))
+        Spacer(modifier = Modifier.height(8.dp))
+        Text("keys · ${vault.keyFingerprints.joinToString()}", style = MaterialTheme.typography.bodySmall)
+        Spacer(modifier = Modifier.height(20.dp))
+        PrimaryCta("รับ", "cta_vault_receive", onReceive)
+        Spacer(modifier = Modifier.height(8.dp))
+        SecondaryCta("ส่ง (multisig)", "cta_vault_send", onSend)
+        Spacer(modifier = Modifier.height(8.dp))
+        SecondaryCta("การกระทำ · BSMS", "cta_vault_actions", onActions)
+    }
+}
+
+@Composable
+fun T20VaultActionsScreen(
+    draft: VaultDraft,
+    onBack: (() -> Unit)?,
+    onOpenCatalog: () -> Unit,
+) {
+    val vault = draft.selectedVault()
+    MebitScreen(
+        eyebrow = "VAULT ACTIONS",
+        title = "การกระทำของ Vault",
+        onBack = onBack,
+        onOpenCatalog = onOpenCatalog,
+        tag = "screen_critical/t20",
+    ) {
+        Text("BSMS · health check", style = MaterialTheme.typography.bodyLarge)
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = vault?.bsms ?: "ยังไม่มี BSMS — สร้าง Vault ก่อน",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.testTag("t20_bsms"),
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = if (vault != null) "health · ok (demo)" else "health · n/a",
+            modifier = Modifier.testTag("t20_health"),
+        )
+        Spacer(modifier = Modifier.height(20.dp))
+        PrimaryCta("กลับ", "cta_t20_back", { onBack?.invoke() })
+    }
+}
+
+@Composable
 fun T16PolicyDecayingScreen(
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
