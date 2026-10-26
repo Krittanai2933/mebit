@@ -1,17 +1,28 @@
-Movie Page KMP — final report
-==============================
+Movie Page KMP — final report (STACK-READY)
+==========================================
 Boards: 43 / 43 implemented (exhaustive when(current) in NavGraph)
 Import seed: overlay flag (no dedicated Penpot board)
+T12 / T19: absent from Penpot Movie Page (skipped per plan)
 
 Hard locks honored:
 - KMP Compose (not RN)
 - Jade BLE-only / Trezor Safe 7 + UnsupportedModel (T13)
-- Thai + EN uppercase eyebrows
+- Thai primary + EN uppercase eyebrows
 - AddKey three sources; VerifyKey mismatch does not save
 - personal_custody only (decaying → T16)
 - Vault Created = BSMS file text, not QR
 
-Stacked PRs:
+Binding summary (see movie-page-coverage.tsv):
+- Wired UniFFI: software generate/restore, computeVaultAddressMultisig, WalletLink unlock/xpub (FFI present; UI HW path demo-mocked)
+- Mocked: mebit_other transport (#26), BSMS bytes (no BIP-129), S*/M* chain+PSBT
+
+Open risks:
+- docs/04 #26 mebit_other transport
+- No BIP-129 BSMS encoder in Rust
+- No live Electrum/UTXO/fee; no WalletLink.sign_psbt for M3
+- Official HW logos → JD/TRZ copy only
+
+Stacked PRs (operator lands):
 - #17 UniFFI software keys + HW unlock/xpub
 - #18 theme + route shell
 - #19 00.* onboarding
@@ -20,6 +31,17 @@ Stacked PRs:
 - #22 vault list/detail + T20
 - #23 single-sig S*
 - #24 multisig M*
-- #25 (this) coverage + exhaustive nav
+- #25 coverage + exhaustive nav + verify recipes
 
-Build: ./kotlin build -m shared from vault-workspace/mobile-signer-ffi/app
+Unit evidence:
+- cargo test -p mobile-signer-ffi --lib → 48 passed
+- ./kotlin test -m shared → MovieRouteTest + PlatformTest passed
+
+Live evidence:
+- verify feature recipes under app/.claude/skills/verify/features/movie-page-*.md
+- Android root enables testTagsAsResourceId for id: selectors
+- verify.sh start: ready (Pixel_5 / Medium_Phone), apk installed, MainActivity launched
+- verify.sh see WELCOME: FAIL — emulator-5580 exited immediately after ready (adb device not found; emulator.log ColorBuffer/gfxstream). Host instability; recipes remain the live gate when emulator holds. Evidence: build/verify/20261026-171048/
+
+Build: ./kotlin build -m shared|androidApp from vault-workspace/mobile-signer-ffi/app
+Status: STACK-READY (operator merge; live lanes blocked by host emulator crash post-start)

@@ -40,9 +40,14 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## Features
 
-- [Home greeting](./home-greeting.md) covers the only screen today. A button shows and hides the Compose logo and a greeting that names the platform.
+- [Home greeting](./home-greeting.md) covers the legacy template button/greeting (kept for launch smoke).
 - [App launch](./app-launch.md) covers opening the app from the launcher icon, what survives leaving it, a cold start, and the iOS launch.
+- [Movie Page welcome](./movie-page-welcome.md) covers Welcome, catalog, and create CTA.
+- [Movie Page onboarding](./movie-page-onboarding.md) covers 00.* software key → backup → home.
+- [Movie Page keys](./movie-page-keys.md) covers AddKey three sources, T13, T14.
+- [Movie Page vault](./movie-page-vault.md) covers policy → BSMS file → list/detail/T20.
+- [Movie Page send](./movie-page-send.md) covers S* and M* (mocked chain/PSBT).
 
 ## Not mapped yet
 
-The app is the stock Kotlin Multiplatform template. The screens in `docs/09-wallet-mvp-buildplan.md` (add a key, pair a hardware wallet, create a vault, receive and send) do not exist in it. Add one feature file per screen when it lands, and give its controls a `contentDescription` or `testTag` so `desc:` or `id:` can find them.
+Lending / loan dashboard screens are out of Movie Page scope. Live HW unlock+xpub smoke needs a Jade or Safe 7 on BLE.
