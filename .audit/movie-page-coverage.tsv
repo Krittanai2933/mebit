@@ -1,6 +1,7 @@
 board	path	eyebrow	binding	status	pr	notes
 Welcome	welcome	WELCOME	ui	wired	B	
 KeySource	onboarding/key-source	NEW WALLET	uniffi+ui	wired	B	generateSoftwareMultisigKey
+ImportSeed	onboarding/import-seed	IMPORT SEED	uniffi+ui	wired	B	restoreSoftwareMultisigKey; Penpot board pending
 KeyCreated	onboarding/key-created	KEY CREATED	ui	wired	B	
 BackupWords	onboarding/backup-words	BACKUP	ui	wired	B	
 VerifyWords	onboarding/verify-words	VERIFY WORDS	ui	wired	B	
@@ -8,15 +9,15 @@ AppLock	onboarding/app-lock	APP LOCK	ui	wired	B	demo lock
 HomeFirstRun	home/first-run	HOME	ui	wired	B	
 HwBackupConfirm	onboarding/hw-backup-confirm	HW BACKUP	ui	wired	B	
 AddKey	keys/add	ADD KEY	uniffi+ui	wired	C	three sources
-PairMebitOther	keys/pair-mebit	PAIR DEVICE	mock	mocked	C	docs/04 #26
-HardwareWallet	keys/hardware	HARDWARE WALLET	mock+uniffi	mocked	C	demo enroll; real WalletLink unlock/xpub in FFI
+PairMebitOther	keys/pair-mebit	PAIR DEVICE	ui	live	C	paste/share BSMS or xpub; cta_pair_demo for CI; docs/04 #26
+HardwareWallet	keys/hardware	HARDWARE WALLET	uniffi	live	C	BLE scan/connect/unlock/xpub; demo cta_hw_demo_*
 VerifyKey	keys/verify	VERIFY KEY	ui	wired	C	mismatch does not save
 Keyring	keys/keyring	KEYRING	ui	wired	C	
 KeyringFirstVault	keys/keyring-first-vault	NEW VAULT	ui	wired	C	
 Policy	vault/policy	POLICY · 1/3	ui	wired	D	personal_custody only
 ChooseKeys	vault/choose-keys	POLICY · 2/3	ui	wired	D	
 Review	vault/review	POLICY · 3/3	uniffi+ui	wired	D	computeVaultAddressMultisig
-VaultCreated	vault/created	VAULT CREATED	mock+ui	mocked	D	BSMS file text; no BIP-129 FFI; not QR
+VaultCreated	vault/created	VAULT CREATED	ui	live	D	BSMS 1.0 with key origin; file not QR
 VaultList	vaults	VAULTS	ui	wired	E	
 VaultDetail	vaults/detail	VAULT DETAIL	ui	wired	E	
 T13UnsupportedModel	critical/t13	UNSUPPORTED MODEL	ui	wired	C	Safe 7 / Jade only
@@ -29,16 +30,16 @@ T16InvalidMn	critical/t16-mn	POLICY	ui	wired	D
 T17CountMismatch	critical/t17	COMPOSE VAULT	ui	wired	D	
 T18BackendError	critical/t18	CONFIRM VAULT	ui	wired	D	
 T20VaultActions	critical/t20	VAULT ACTIONS	ui	wired	E	BSMS + demo health
-S1HomeSingleSig	send/s1	SINGLE-SIG	mock	mocked	F	chain balance
+S1HomeSingleSig	send/s1	SINGLE-SIG	uniffi	live	F	hotWalletSnapshot / demo fixture
 S2ReceiveBackupGate	send/s2	RECEIVE	ui	wired	F	
-S3Receive	send/s3	RECEIVE	mock	mocked	F	address
-S4Send	send/s4	SEND	mock	mocked	F	fees
-S5ReviewSign	send/s5	REVIEW & SIGN	mock	mocked	F	sign/broadcast
-S6Sent	send/s6	SENT	mock	mocked	F	
-S6SentSlip	send/s6b	SENT · SLIP	mock	mocked	F	
-S6SentBlock	send/s6c	SENT · BLOCK	mock	mocked	F	
-S6SentPoster	send/s6d	SENT · POSTER	mock	mocked	F	
-M1SendVault	send/m1	SEND · VAULT	mock	mocked	G	
-M2CollectSignatures	send/m2	COLLECT SIGNATURES	mock	mocked	G	
-M3SignOnJade	send/m3	SIGN ON JADE	mock	mocked	G	no live sign_psbt FFI
-M4ReadyToBroadcast	send/m4	READY TO BROADCAST	mock	mocked	G	
+S3Receive	send/s3	RECEIVE	uniffi	live	F	hotReceiveAddress
+S4Send	send/s4	SEND	ui	wired	F	fees
+S5ReviewSign	send/s5	REVIEW & SIGN	uniffi	live	F	hotSend when live
+S6Sent	send/s6	SENT	ui	wired	F	
+S6SentSlip	send/s6b	SENT · SLIP	ui	wired	F	
+S6SentBlock	send/s6c	SENT · BLOCK	ui	wired	F	
+S6SentPoster	send/s6d	SENT · POSTER	ui	wired	F	
+M1SendVault	send/m1	SEND · VAULT	ui	wired	G	
+M2CollectSignatures	send/m2	COLLECT SIGNATURES	ui	wired	G	policyAllowsSign gate
+M3SignOnJade	send/m3	SIGN ON JADE	uniffi	live	G	WalletLink.signPsbt; cta_m3_signed demo
+M4ReadyToBroadcast	send/m4	READY TO BROADCAST	ui	wired	G	

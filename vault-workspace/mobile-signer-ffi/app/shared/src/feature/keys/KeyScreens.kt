@@ -14,6 +14,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.KeySourceLabel
 import com.mebit.app.data.KeyringStore
@@ -97,6 +99,8 @@ fun HardwareWalletScreen(
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
+    val busy = store.hardwareBusy
     MebitScreen(
         eyebrow = "HARDWARE WALLET",
         title = "เชื่อมต่ออุปกรณ์",
@@ -105,19 +109,58 @@ fun HardwareWalletScreen(
         tag = "screen_keys/hardware",
     ) {
         Text(
-            text = "Jade และ Trezor Safe 7 · Bluetooth เท่านั้น (ไม่มีกล้อง/QR) · หน้านี้เป็น demo enrollment เมื่อยังไม่มีอุปกรณ์จริง",
+            text = "Jade และ Trezor Safe 7 ผ่าน BLE จริง · บน emulator ที่ไม่มีวิทยุ ใช้ปุ่มจำลอง",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.height(20.dp))
-        PrimaryCta("จำลอง Jade", "cta_hw_jade", {
-            store.startHardwareMock(KeySourceLabel.Jade)
-            if (store.pending != null) onEnrolled()
+        PrimaryCta(
+            label = "เชื่อมต่อ Jade",
+            tag = "cta_hw_jade",
+            onClick = {
+                scope.launch {
+                    store.startHardwareLive(KeySourceLabel.Jade)
+                    if (store.pending != null) onEnrolled()
+                }
+            },
+            enabled = !busy,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        PrimaryCta(
+            label = "เชื่อมต่อ Trezor Safe 7",
+            tag = "cta_hw_trezor",
+            onClick = {
+                scope.launch {
+                    store.startHardwareLive(KeySourceLabel.TrezorSafe7)
+                    if (store.pending != null) onEnrolled()
+                }
+            },
+            enabled = !busy,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = store.pairingCode,
+            onValueChange = { store.pairingCode = it },
+            modifier = Modifier.fillMaxWidth().testTag("hw_pairing_code"),
+            label = { Text("รหัส 6 หลักบน Trezor") },
+        )
+        if (busy) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("กำลังเชื่อมต่อ พิมพ์รหัสบน Trezor ถ้าเครื่องขอ", modifier = Modifier.testTag("hw_busy"))
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        SecondaryCta("จำลอง Jade", "cta_hw_demo_jade", {
+            if (!store.hardwareBusy) {
+                store.startHardwareMock(KeySourceLabel.Jade)
+                if (store.pending != null) onEnrolled()
+            }
         })
         Spacer(modifier = Modifier.height(8.dp))
-        PrimaryCta("จำลอง Trezor Safe 7", "cta_hw_trezor", {
-            store.startHardwareMock(KeySourceLabel.TrezorSafe7)
-            if (store.pending != null) onEnrolled()
+        SecondaryCta("จำลอง Trezor Safe 7", "cta_hw_demo_trezor", {
+            if (!store.hardwareBusy) {
+                store.startHardwareMock(KeySourceLabel.TrezorSafe7)
+                if (store.pending != null) onEnrolled()
+            }
         })
         Spacer(modifier = Modifier.height(8.dp))
         SecondaryCta("จำลองรุ่นอื่น (Unsupported)", "cta_hw_unsupported", onUnsupported)

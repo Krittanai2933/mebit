@@ -4,8 +4,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.mebit.ffi.signer.BleException
 import com.mebit.ffi.signer.KeyNetwork
+import com.mebit.ffi.signer.PairingCodes
+import com.mebit.ffi.signer.WalletKind
+import com.mebit.ffi.signer.WalletLink
 import com.mebit.ffi.signer.generateSoftwareMultisigKey
+import com.mebit.ffi.signer.scanWallets
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 enum class KeySourceLabel {
     ThisDevice,
@@ -44,6 +53,12 @@ class KeyringStore {
     var lastError: String? by mutableStateOf(null)
         private set
     var lastMismatch: Boolean by mutableStateOf(false)
+        private set
+
+    /** Six digits a Trezor Safe 7 shows while pairing. A Jade never reads this. */
+    var pairingCode: String by mutableStateOf("")
+
+    var hardwareBusy: Boolean by mutableStateOf(false)
         private set
 
     fun clearError() {
@@ -110,6 +125,58 @@ class KeyringStore {
         }
     }
 
+    /** Live BLE enroll. A wrong model sets [lastError] and leaves the unsupported-model screen as its own action. */
+    suspend fun startHardwareLive(source: KeySourceLabel) {
+        require(source == KeySourceLabel.Jade || source == KeySourceLabel.TrezorSafe7)
+        if (hardwareBusy) return
+        hardwareBusy = true
+        clearError()
+        pending = null
+        val kind = when (source) {
+            KeySourceLabel.Jade -> WalletKind.JADE
+            KeySourceLabel.TrezorSafe7 -> WalletKind.TREZOR_SAFE7
+            KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")
+        }
+        val codes = FieldPairingCodes(
+            jade = source == KeySourceLabel.Jade,
+            read = { pairingCode },
+            consume = { pairingCode = "" },
+        )
+        try {
+            val found = scanWallets(kind).firstOrNull()
+                ?: throw BleException.NotFound("ไม่พบอุปกรณ์ในระยะ")
+            if (found.kind != kind) {
+                throw BleException.WrongDevice("อุปกรณ์นี้ไม่ใช่ ${hardwareName(source)}")
+            }
+            val link = WalletLink(found)
+            try {
+                link.connect(codes)
+                link.unlock()
+                val key = link.accountXpub(TESTNET_MULTISIG_ACCOUNT)
+                pending = PendingKey(
+                    label = "${hardwareName(source)} · ${found.name}",
+                    fingerprint = key.masterFingerprint,
+                    xpub = key.xpub,
+                    derivationPath = key.derivationPath,
+                    source = source,
+                )
+            } finally {
+                withContext(NonCancellable) {
+                    runCatching { link.disconnect() }
+                }
+                link.close()
+            }
+        } catch (e: CancellationException) {
+            pending = null
+            throw e
+        } catch (e: Exception) {
+            lastError = e.message ?: "เชื่อมต่อไม่สำเร็จ"
+            pending = null
+        } finally {
+            hardwareBusy = false
+        }
+    }
+
     /**
      * Confirm fingerprint. Mismatch clears pending and does not save.
      * @return true if saved
@@ -173,4 +240,35 @@ class KeyringStore {
     }
 
     fun verifiedCount(): Int = keys.count { it.verified }
+}
+
+/** BIP-48 P2WSH account on testnet. Coin type 1, account 0, script type 2. */
+internal const val TESTNET_MULTISIG_ACCOUNT = "m/48'/1'/0'/2'"
+
+private fun hardwareName(source: KeySourceLabel): String = when (source) {
+    KeySourceLabel.Jade -> "Jade"
+    KeySourceLabel.TrezorSafe7 -> "Trezor Safe 7"
+    KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")
+}
+
+/**
+ * Jade returns null. A Safe 7 shows its digits during connect, so this waits until [read]
+ * is six digits, then [consume] clears them so the next ask does not resend the same code.
+ */
+internal class FieldPairingCodes(
+    private val jade: Boolean,
+    private val read: () -> String,
+    private val consume: () -> Unit,
+) : PairingCodes {
+    override suspend fun pairingCode(): String? {
+        if (jade) return null
+        while (true) {
+            val code = read().trim()
+            if (code.length == 6 && code.all(Char::isDigit)) {
+                consume()
+                return code
+            }
+            delay(200)
+        }
+    }
 }
