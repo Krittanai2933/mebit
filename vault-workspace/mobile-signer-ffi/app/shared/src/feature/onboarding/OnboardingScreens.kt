@@ -114,7 +114,7 @@ fun ImportSeedScreen(
         tag = "screen_onboarding/import-seed",
     ) {
         Text(
-            text = "วางหรือพิมพ์คำสำรอง แล้วกู้เข้าคลังกุญแจ (ยังไม่ใช่การนำเข้า Vault ทั้งชุด)",
+            text = "พิมพ์หรือวาง 24 คำตามลำดับ แล้วกู้กุญแจเข้าเครื่องนี้",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

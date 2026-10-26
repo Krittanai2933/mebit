@@ -6,9 +6,11 @@ import kotlin.test.assertTrue
 
 class MovieRouteTest {
     @Test
-    fun coversFortyThreeMoviePageBoards() {
-        assertEquals(43, MovieRoute.entries.size)
+    fun coversFortyFourMoviePageBoards() {
+        assertEquals(44, MovieRoute.entries.size)
         assertEquals(MovieRoute.Welcome, MovieRoute.start)
+        assertEquals("onboarding/import-seed", MovieRoute.ImportSeed.path)
+        assertEquals("IMPORT SEED", MovieRoute.ImportSeed.eyebrow)
     }
 
     @Test

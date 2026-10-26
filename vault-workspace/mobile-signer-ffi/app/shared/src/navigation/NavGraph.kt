@@ -75,7 +75,6 @@ private val ImplementedRoutes = MovieRoute.entries.toSet()
 fun MebitNavHost() {
     val backStack = remember { mutableStateListOf(MovieRoute.start) }
     var catalogOpen by remember { mutableStateOf(false) }
-    var importing by remember { mutableStateOf(false) }
     val session = remember { OnboardingSession() }
     val keyring = remember { KeyringStore() }
     val vaultDraft = remember { VaultDraft() }
@@ -85,7 +84,6 @@ fun MebitNavHost() {
     val current = backStack.last()
 
     fun navigate(route: MovieRoute) {
-        importing = false
         if (route == MovieRoute.Keyring || route == MovieRoute.KeyringFirstVault) {
             keyring.importVerifiedFromOnboarding(session)
         }
@@ -93,27 +91,16 @@ fun MebitNavHost() {
     }
 
     fun goBack() {
-        if (importing) {
-            importing = false
-            return
-        }
         if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
 
-    val onBack: (() -> Unit)? = if (backStack.size > 1 || importing) ({ goBack() }) else null
+    val onBack: (() -> Unit)? = if (backStack.size > 1) ({ goBack() }) else null
     val openCatalog = { catalogOpen = true }
 
-    if (importing) {
-        ImportSeedScreen(
-            session = session,
-            onRestored = { navigate(MovieRoute.KeyCreated) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-    } else when (current) {
+    when (current) {
         MovieRoute.Welcome -> WelcomeScreen(
             onCreate = { navigate(MovieRoute.KeySource) },
-            onImport = { importing = true },
+            onImport = { navigate(MovieRoute.ImportSeed) },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
@@ -121,6 +108,12 @@ fun MebitNavHost() {
             session = session,
             onPhone = { navigate(MovieRoute.KeyCreated) },
             onHardware = { navigate(MovieRoute.HwBackupConfirm) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        MovieRoute.ImportSeed -> ImportSeedScreen(
+            session = session,
+            onRestored = { navigate(MovieRoute.KeyCreated) },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )

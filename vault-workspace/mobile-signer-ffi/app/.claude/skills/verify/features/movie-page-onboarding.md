@@ -27,4 +27,4 @@ Preconditions:
 ## Gotchas
 
 - Verify chips are shuffled; capture word list from backup PNGs/XML before tapping.
-- Import path uses Welcome → นำเข้า (`id:cta_import`) and is not a separate MovieRoute.
+- Welcome → นำเข้า (`id:cta_import`) opens `MovieRoute.ImportSeed` (`id:screen_onboarding/import-seed`).

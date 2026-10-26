@@ -18,6 +18,12 @@ enum class MovieRoute(
         "เก็บกุญแจดอกแรกไว้ที่ไหน",
         "มือถือ · Hardware wallet",
     ),
+    ImportSeed(
+        "onboarding/import-seed",
+        "IMPORT SEED",
+        "นำเข้า 24 คำ",
+        "พิมพ์หรือวาง 24 คำตามลำดับ แล้วกู้กุญแจเข้าเครื่องนี้",
+    ),
     KeyCreated(
         "onboarding/key-created",
         "KEY CREATED",
