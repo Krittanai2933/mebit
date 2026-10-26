@@ -1,0 +1,44 @@
+board	path	eyebrow	binding	status	pr	notes	visual
+Welcome	welcome	WELCOME	ui	wired	B		baselines-ready
+KeySource	onboarding/key-source	NEW WALLET	uniffi+ui	wired	B	generateSoftwareMultisigKey	baselines-ready
+KeyCreated	onboarding/key-created	KEY CREATED	ui	wired	B		baselines-ready
+BackupWords	onboarding/backup-words	BACKUP	ui	wired	B		baselines-ready
+VerifyWords	onboarding/verify-words	VERIFY WORDS	ui	wired	B		baselines-ready
+AppLock	onboarding/app-lock	APP LOCK	ui	wired	B	demo lock	baselines-ready
+HomeFirstRun	home/first-run	HOME	ui	wired	B		baselines-ready
+HwBackupConfirm	onboarding/hw-backup-confirm	HW BACKUP	ui	wired	B		baselines-ready
+AddKey	keys/add	ADD KEY	uniffi+ui	wired	C	three sources	baselines-ready
+PairMebitOther	keys/pair-mebit	PAIR DEVICE	mock	mocked	C	docs/04 #26	baselines-ready
+HardwareWallet	keys/hardware	HARDWARE WALLET	mock+uniffi	mocked	C	demo enroll; real WalletLink unlock/xpub in FFI	baselines-ready
+VerifyKey	keys/verify	VERIFY KEY	ui	wired	C	mismatch does not save	baselines-ready
+Keyring	keys/keyring	KEYRING	ui	wired	C		baselines-ready
+KeyringFirstVault	keys/keyring-first-vault	NEW VAULT	ui	wired	C		baselines-ready
+Policy	vault/policy	POLICY · 1/3	ui	wired	D	personal_custody only	baselines-ready
+ChooseKeys	vault/choose-keys	POLICY · 2/3	ui	wired	D		baselines-ready
+Review	vault/review	POLICY · 3/3	uniffi+ui	wired	D	computeVaultAddressMultisig	baselines-ready
+VaultCreated	vault/created	VAULT CREATED	mock+ui	mocked	D	BSMS file text; no BIP-129 FFI; not QR	baselines-ready
+VaultList	vaults	VAULTS	ui	wired	E		baselines-ready
+VaultDetail	vaults/detail	VAULT DETAIL	ui	wired	E		baselines-ready
+T13UnsupportedModel	critical/t13	UNSUPPORTED MODEL	ui	wired	C	Safe 7 / Jade only	baselines-ready
+T14VerifyMismatch	critical/t14	VERIFY KEY	ui	wired	C		baselines-ready
+T15KeyringEmpty	critical/t15-empty	KEYRING	ui	wired	C		baselines-ready
+T15UnverifiedFirst	critical/t15-unverified	KEYRING	ui	wired	C		baselines-ready
+T15DeleteBlocked	critical/t15-delete	KEYRING	ui	wired	C		baselines-ready
+T16PolicyDecaying	critical/t16-decaying	POLICY · ADVANCED	ui	wired	D	rejected path	baselines-ready
+T16InvalidMn	critical/t16-mn	POLICY	ui	wired	D		baselines-ready
+T17CountMismatch	critical/t17	COMPOSE VAULT	ui	wired	D		baselines-ready
+T18BackendError	critical/t18	CONFIRM VAULT	ui	wired	D		baselines-ready
+T20VaultActions	critical/t20	VAULT ACTIONS	ui	wired	E	BSMS + demo health	baselines-ready
+S1HomeSingleSig	send/s1	SINGLE-SIG	mock	mocked	F	chain balance	baselines-ready
+S2ReceiveBackupGate	send/s2	RECEIVE	ui	wired	F		baselines-ready
+S3Receive	send/s3	RECEIVE	mock	mocked	F	address	baselines-ready
+S4Send	send/s4	SEND	mock	mocked	F	fees	baselines-ready
+S5ReviewSign	send/s5	REVIEW & SIGN	mock	mocked	F	sign/broadcast	baselines-ready
+S6Sent	send/s6	SENT	mock	mocked	F		baselines-ready
+S6SentSlip	send/s6b	SENT · SLIP	mock	mocked	F		baselines-ready
+S6SentBlock	send/s6c	SENT · BLOCK	mock	mocked	F		baselines-ready
+S6SentPoster	send/s6d	SENT · POSTER	mock	mocked	F		baselines-ready
+M1SendVault	send/m1	SEND · VAULT	mock	mocked	G		baselines-ready
+M2CollectSignatures	send/m2	COLLECT SIGNATURES	mock	mocked	G		baselines-ready
+M3SignOnJade	send/m3	SIGN ON JADE	mock	mocked	G	no live sign_psbt FFI	baselines-ready
+M4ReadyToBroadcast	send/m4	READY TO BROADCAST	mock	mocked	G		baselines-ready

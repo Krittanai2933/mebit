@@ -7,6 +7,7 @@
 uniffi::setup_scaffolding!();
 
 pub mod ble;
+pub mod hot_wallet;
 
 use std::str::FromStr;
 
@@ -688,6 +689,18 @@ mod tests {
                 uniffi_mobile_signer_ffi_checksum_func_restore_software_multisig_key(),
             ),
             (
+                "func_hot_receive_address",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_receive_address(),
+            ),
+            (
+                "func_hot_send",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_send(),
+            ),
+            (
+                "func_hot_wallet_snapshot",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_wallet_snapshot(),
+            ),
+            (
                 "func_scan_wallets",
                 ble::uniffi_mobile_signer_ffi_checksum_func_scan_wallets(),
             ),
@@ -714,6 +727,10 @@ mod tests {
             (
                 "method_walletlink_account_xpub",
                 ble::uniffi_mobile_signer_ffi_checksum_method_walletlink_account_xpub(),
+            ),
+            (
+                "method_walletlink_sign_psbt",
+                ble::uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_psbt(),
             ),
             (
                 "method_walletlink_disconnect",

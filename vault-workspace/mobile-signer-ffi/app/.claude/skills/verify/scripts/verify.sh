@@ -117,11 +117,18 @@ cmd_start() {
   # -cores: headless runs render in software on the host, and a 1 vCPU guest (the Medium Phone AVD here) starved
   # while it booted. In 15 fresh-clone starts that failed 4 times, with ANRs in 10 of the 15. With 4 vCPUs it was
   # 0 failures and no ANR in 15. The AVD's own setting stays untouched.
-  nohup "$EMULATOR" -avd "$AVD" -port "$PORT" -read-only -no-snapshot -no-audio -no-boot-anim -no-metrics -no-window \
-    -cores "${VERIFY_CORES:-4}" < /dev/null > "$RUN/emulator.log" 2>&1 &
+  # -gpu: default swiftshader_indirect — host gfxstream/ANGLE has died post-boot with
+  # "Failed to find ColorBuffer" on this machine (headless and -gpu host). Override with VERIFY_GPU.
+  # VERIFY_EMU_WINDOW=1 drops -no-window for local debugging.
+  local gpu=${VERIFY_GPU:-swiftshader_indirect}
+  local window_flag=-no-window
+  [ -n "${VERIFY_EMU_WINDOW:-}" ] && window_flag=
+  # shellcheck disable=SC2086
+  nohup "$EMULATOR" -avd "$AVD" -port "$PORT" -read-only -no-snapshot -no-audio -no-boot-anim -no-metrics \
+    $window_flag -gpu "$gpu" -cores "${VERIFY_CORES:-4}" < /dev/null > "$RUN/emulator.log" 2>&1 &
   EMU_PID=$!
   printf 'RUN=%q\nSERIAL=%q\nPORT=%q\nAVD=%q\nEMU_PID=%q\n' "$RUN" "$SERIAL" "$PORT" "$AVD" "$EMU_PID" > "$STATE"
-  echo "emulator $AVD booting as $SERIAL (pid $EMU_PID); building meanwhile"
+  echo "emulator $AVD booting as $SERIAL (pid $EMU_PID, gpu=$gpu); building meanwhile"
 
   # Two starts in the same second can both pass the check above. The serial then leads to the winner's
   # emulator, so make sure the port is ours before touching the device.
@@ -172,8 +179,23 @@ cmd_start() {
   done
   [ -n "$ok" ] || { ui list "$f" >&2 2> /dev/null; fail "the emulator is not responding, or a system dialog covers the app. Run verify.sh start again; the build is warm now"; }
 
+  # Post-ready alive check: gfx ColorBuffer crashes often kill the guest right after first UI dump.
+  local alive_i=0
+  while [ "$alive_i" -lt 15 ]; do
+    emu_alive || {
+      tail -20 "$RUN/emulator.log" >&2
+      fail "emulator died within ${alive_i}s after UI ready (often 'Failed to find ColorBuffer'). Try VERIFY_GPU=swiftshader_indirect (default) or VERIFY_EMU_WINDOW=1. Log: $RUN/emulator.log"
+    }
+    [ "$(adbs get-state 2> /dev/null)" = device ] || {
+      tail -20 "$RUN/emulator.log" >&2
+      fail "adb lost $SERIAL within ${alive_i}s after UI ready. Log: $RUN/emulator.log"
+    }
+    sleep 1
+    alive_i=$((alive_i + 1))
+  done
+
   meta "$RUN/meta.txt" "apk_sha256=$(sha "$(built_apk)")" \
-    "device=$(adbs shell getprop ro.product.model | tr -d '\r') api=$(adbs shell getprop ro.build.version.sdk | tr -d '\r') avd=$AVD vcpus=$(adbs shell nproc | tr -d '\r')"
+    "device=$(adbs shell getprop ro.product.model | tr -d '\r') api=$(adbs shell getprop ro.build.version.sdk | tr -d '\r') avd=$AVD vcpus=$(adbs shell nproc | tr -d '\r') gpu=$gpu"
   step start "$SERIAL" "$AVD"
   echo "ready: $SERIAL runs $PKG. Evidence goes to $RUN"
 }
@@ -537,6 +559,8 @@ usage: verify.sh COMMAND [ARGS]
   ios-see SELECTOR        wait for an element on the simulator; ios-gone waits for it to disappear
 SELECTOR is [text|desc|id][~]:VALUE, default text; "~" means contains. Example: tap "text~:Click me"
 On iOS text and desc both match the accessibility label, and id matches the accessibility identifier.
+Env (Android start): VERIFY_AVD, VERIFY_PORT, VERIFY_CORES, VERIFY_GPU (default swiftshader_indirect),
+  VERIFY_EMU_WINDOW=1 (show emulator window; drops -no-window).
 A physical iPhone: VERIFY_IOS_DEVICE=<udid> VERIFY_IOS_TEAM=<team id> [VERIFY_IOS_BUNDLE_ID=<id>] verify.sh ios-start
   (ios-stop removes the app from the phone, and the developer must then be trusted again; VERIFY_IOS_KEEP_APP=1 keeps it)
 EOF

@@ -239,6 +239,11 @@ enum Request {
         path: String,
         reply: oneshot::Sender<Result<HwAccountKey, BleError>>,
     },
+    SignPsbt {
+        psbt_base64: String,
+        signer_fingerprint: String,
+        reply: oneshot::Sender<Result<String, BleError>>,
+    },
     Disconnect(oneshot::Sender<Result<(), BleError>>),
 }
 
@@ -312,6 +317,25 @@ impl WalletLink {
             .await
     }
 
+    /// Has the hardware wallet sign `psbt_base64` for `signer_fingerprint`.
+    ///
+    /// `psbt_base64` is a BIP-174 PSBT. `signer_fingerprint` is 8 lowercase hex
+    /// characters (the vault key's master fingerprint). Jade must be unlocked
+    /// first. Returns the signed PSBT as base64. Callers must run spend policy
+    /// before this (vault-core policy against real PSBTs is still Term-2 work;
+    /// the app checks destination and amount at the UI boundary today).
+    pub async fn sign_psbt(
+        &self,
+        psbt_base64: String,
+        signer_fingerprint: String,
+    ) -> Result<String, BleError> {
+        self.running
+            .get()
+            .ok_or_else(closed)?
+            .sign_psbt(psbt_base64, signer_fingerprint)
+            .await
+    }
+
     /// Ends the link and waits until it is down, also when a failure or another call is
     /// already ending it. A request in flight finishes first. It does nothing until `connect`
     /// has returned: cancel a `connect` that is still running instead.
@@ -380,6 +404,22 @@ impl Running {
         answer.await.map_err(|_| closed())?
     }
 
+    async fn sign_psbt(
+        &self,
+        psbt_base64: String,
+        signer_fingerprint: String,
+    ) -> Result<String, BleError> {
+        let (reply, answer) = oneshot::channel();
+        self.requests
+            .send(Request::SignPsbt {
+                psbt_base64,
+                signer_fingerprint,
+                reply,
+            })
+            .map_err(|_| closed())?;
+        answer.await.map_err(|_| closed())?
+    }
+
     async fn disconnect(&self) -> Result<(), BleError> {
         let (reply, answer) = oneshot::channel();
         // A refused send means the task is already ending the link.
@@ -394,6 +434,11 @@ trait Wallet: Send + 'static {
     fn info(&mut self) -> impl Future<Output = Result<WalletInfo, BleError>> + Send;
     fn unlock(&mut self) -> impl Future<Output = Result<(), BleError>> + Send;
     fn xpub(&mut self, path: &str) -> impl Future<Output = Result<HwAccountKey, BleError>> + Send;
+    fn sign_psbt(
+        &mut self,
+        psbt_base64: &str,
+        signer_fingerprint: &str,
+    ) -> impl Future<Output = Result<String, BleError>> + Send;
     fn disconnect(self) -> impl Future<Output = Result<(), BleError>> + Send;
 }
 
@@ -454,6 +499,21 @@ async fn answer_requests<W: Wallet>(
                     break;
                 }
             }
+            Request::SignPsbt {
+                psbt_base64,
+                signer_fingerprint,
+                reply,
+            } => {
+                if drive_call(
+                    reply,
+                    &mut link_dropped,
+                    wallet.sign_psbt(&psbt_base64, &signer_fingerprint),
+                )
+                .await
+                {
+                    break;
+                }
+            }
             Request::Disconnect(reply) => return (wallet, Some(reply)),
         }
     }
@@ -494,6 +554,15 @@ mod tests {
             parse_derivation_path(path)?;
             self.log.lock().unwrap().push("xpub");
             Ok(self.account_key.clone())
+        }
+
+        async fn sign_psbt(
+            &mut self,
+            _psbt_base64: &str,
+            _signer_fingerprint: &str,
+        ) -> Result<String, BleError> {
+            self.log.lock().unwrap().push("sign_psbt");
+            Ok("cHNidP8BAfake_signed".into())
         }
 
         async fn disconnect(self) -> Result<(), BleError> {

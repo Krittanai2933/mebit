@@ -18,6 +18,7 @@ import androidx.compose.runtime.setValue
 import com.mebit.app.data.CustodyPolicy
 import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.VaultDraft
+import com.mebit.app.ui.components.InfoCard
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
@@ -38,14 +39,9 @@ fun PolicyScreen(
         title = "Vault นี้ใช้กุญแจแบบไหน",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
+        subtitle = "personal_custody เท่านั้นใน Movie Page · decaying / timelock เป็น critical boards",
         tag = "screen_vault/policy",
     ) {
-        Text(
-            text = "personal_custody เท่านั้นใน Movie Page · decaying / timelock เป็น critical boards",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
         FilterChip(
             selected = draft.policy == CustodyPolicy.PersonalCustody,
             onClick = { draft.policy = CustodyPolicy.PersonalCustody },
@@ -90,14 +86,9 @@ fun ChooseKeysScreen(
         title = "เลือกกุญแจ",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
+        subtitle = "เลือก ${draft.n} ดอกสำหรับ ${draft.m}-of-${draft.n} · เลือกแล้ว ${draft.selectedIds.size}",
         tag = "screen_vault/choose-keys",
     ) {
-        Text(
-            text = "เลือก ${draft.n} ดอกสำหรับ ${draft.m}-of-${draft.n} · เลือกแล้ว ${draft.selectedIds.size}",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(12.dp))
         verified.forEach { key ->
             val selected = key.id in draft.selectedIds
             FilterChip(
@@ -141,13 +132,9 @@ fun ReviewScreen(
         title = "ตรวจก่อนสร้าง",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
+        subtitle = "${draft.m}-of-${draft.n} · ${draft.policy.name}",
         tag = "screen_vault/review",
     ) {
-        Text(
-            text = "${draft.m}-of-${draft.n} · ${draft.policy.name}",
-            style = MaterialTheme.typography.bodyLarge,
-        )
-        Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = if (ready) "address · ${draft.address}" else "descriptor ยังไม่พร้อม",
             style = MaterialTheme.typography.bodyMedium,
@@ -179,10 +166,23 @@ fun VaultCreatedScreen(
     MebitScreen(
         eyebrow = "VAULT CREATED",
         title = "Vault พร้อมใช้งาน",
+        subtitle = vault?.let { "${it.m}-of-${it.n} · ที่อยู่แรก" } ?: "ที่อยู่แรกจะแสดงหลังสร้าง Vault",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         tag = "screen_vault/created",
     ) {
+        InfoCard(
+            eyebrow = "VAULT HEALTH CHECK",
+            title = "ตรวจสุขภาพ Vault ทุก 90 วัน",
+            body = "เราจะเตือนให้ทดลองเซ็นด้วยกุญแจทุกใบ เพื่อยืนยันว่ายังใช้งานได้จริง",
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        InfoCard(
+            eyebrow = "BACKUP / EXPORT",
+            title = "สำรองข้อมูล Vault",
+            body = "ส่งออกเป็นไฟล์ BSMS (ไม่มี seed) เก็บไว้นอกแอปเพื่อกู้คืน",
+        )
+        Spacer(modifier = Modifier.height(12.dp))
         Text(
             text = "ส่งออก BSMS เป็นไฟล์ · ไม่ใช่ QR",
             style = MaterialTheme.typography.bodyLarge,
@@ -198,7 +198,7 @@ fun VaultCreatedScreen(
             modifier = Modifier.testTag("bsms_body"),
         )
         Spacer(modifier = Modifier.height(20.dp))
-        PrimaryCta("ดูรายการ Vault", "cta_open_vaults", onOpenVaults)
+        PrimaryCta("เข้าใช้งาน Vault", "cta_open_vaults", onOpenVaults)
     }
 }
 
@@ -215,14 +215,9 @@ fun VaultListScreen(
         title = "Vault ของคุณ",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
+        subtitle = "personal_custody",
         tag = "screen_vaults",
     ) {
-        Text(
-            text = "personal_custody",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Spacer(modifier = Modifier.height(12.dp))
         if (draft.created.isEmpty()) {
             Text("ยังไม่มี Vault", modifier = Modifier.testTag("vaults_empty"))
         } else {
@@ -259,6 +254,7 @@ fun VaultDetailScreen(
     MebitScreen(
         eyebrow = "VAULT DETAIL",
         title = vault?.name ?: "รายละเอียด Vault",
+        subtitle = vault?.let { "${it.m}-of-${it.n} · personal_custody" },
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         tag = "screen_vaults/detail",
@@ -267,8 +263,6 @@ fun VaultDetailScreen(
             Text("ยังไม่ได้เลือก Vault", color = MaterialTheme.colorScheme.error)
             return@MebitScreen
         }
-        Text("${vault.m}-of-${vault.n} · personal_custody", style = MaterialTheme.typography.bodyLarge)
-        Spacer(modifier = Modifier.height(8.dp))
         Text(vault.address, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("detail_address"))
         Spacer(modifier = Modifier.height(8.dp))
         Text("keys · ${vault.keyFingerprints.joinToString()}", style = MaterialTheme.typography.bodySmall)
@@ -295,17 +289,18 @@ fun T20VaultActionsScreen(
         onOpenCatalog = onOpenCatalog,
         tag = "screen_critical/t20",
     ) {
-        Text("BSMS · health check", style = MaterialTheme.typography.bodyLarge)
-        Spacer(modifier = Modifier.height(12.dp))
-        Text(
-            text = vault?.bsms ?: "ยังไม่มี BSMS — สร้าง Vault ก่อน",
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.testTag("t20_bsms"),
+        InfoCard(
+            eyebrow = "VAULT HEALTH CHECK",
+            title = "ตรวจสุขภาพ Vault",
+            body = if (vault != null) "health · ok (demo)" else "health · n/a",
+            modifier = Modifier.testTag("t20_health"),
         )
         Spacer(modifier = Modifier.height(12.dp))
-        Text(
-            text = if (vault != null) "health · ok (demo)" else "health · n/a",
-            modifier = Modifier.testTag("t20_health"),
+        InfoCard(
+            eyebrow = "BACKUP / EXPORT",
+            title = "ส่งออกไฟล์ BSMS",
+            body = vault?.bsms ?: "ยังไม่มี BSMS — สร้าง Vault ก่อน",
+            modifier = Modifier.testTag("t20_bsms"),
         )
         Spacer(modifier = Modifier.height(20.dp))
         PrimaryCta("กลับ", "cta_t20_back", { onBack?.invoke() })
@@ -322,13 +317,9 @@ fun T16PolicyDecayingScreen(
         title = "decaying multisig",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
+        subtitle = "mutually exclusive กับ timelock · ไม่อยู่ใน personal_custody MVP",
         tag = "screen_critical/t16-decaying",
     ) {
-        Text(
-            text = "mutually exclusive กับ timelock · ไม่อยู่ใน personal_custody MVP",
-            style = MaterialTheme.typography.bodyLarge,
-        )
-        Spacer(modifier = Modifier.height(20.dp))
         PrimaryCta("กลับ", "cta_t16_decaying_back", { onBack?.invoke() })
     }
 }
@@ -380,10 +371,9 @@ fun T18BackendErrorScreen(
         title = "สร้าง Vault ไม่สำเร็จ",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
+        subtitle = "ลองอีกครั้ง",
         tag = "screen_critical/t18",
     ) {
-        Text("ลองอีกครั้ง", style = MaterialTheme.typography.bodyLarge)
-        Spacer(modifier = Modifier.height(20.dp))
         PrimaryCta("ลองใหม่", "cta_t18_retry", onRetry)
     }
 }

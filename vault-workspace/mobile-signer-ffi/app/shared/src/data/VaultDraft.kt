@@ -115,16 +115,25 @@ class VaultDraft {
     }
 
     private fun buildBsms(m: Int, n: Int, keys: List<SavedKey>, address: String): String {
-        val header = "BSMS 1.0"
-        val descriptor = "wsh(sortedmulti($m,${keys.joinToString(",") { it.xpub }}))"
+        require(keys.size == n)
+        val descriptor = "wsh(sortedmulti($m,${keys.joinToString(",") { descriptorKey(it) }}))"
         val pathLines = keys.joinToString("\n") { "${it.fingerprint} ${it.derivationPath}" }
         return listOf(
-            header,
+            "BSMS 1.0",
             descriptor,
             pathLines,
             "/0/*,/1/*",
             "# mebit personal_custody · receive[0]=$address",
             "# export=file · not QR",
         ).joinToString("\n")
+    }
+
+    /** Key origin when the fingerprint and path are known. Otherwise the bare xpub. */
+    private fun descriptorKey(key: SavedKey): String {
+        val fingerprint = key.fingerprint.trim().lowercase()
+        val path = key.derivationPath.trim().removePrefix("m/")
+        val fingerprintOk = Regex("^[0-9a-f]{8}$").matches(fingerprint)
+        val pathOk = Regex("^\\d+'?(/\\d+'?)+$").matches(path)
+        return if (fingerprintOk && pathOk) "[$fingerprint/$path]${key.xpub}" else key.xpub
     }
 }

@@ -287,6 +287,7 @@ fun MebitNavHost() {
         )
         MovieRoute.S1HomeSingleSig -> S1HomeSingleSigScreen(
             wallet = singleSig,
+            session = session,
             onReceive = { navigate(MovieRoute.S2ReceiveBackupGate) },
             onSend = { navigate(MovieRoute.S4Send) },
             onBack = onBack,
@@ -301,6 +302,7 @@ fun MebitNavHost() {
         )
         MovieRoute.S3Receive -> S3ReceiveScreen(
             wallet = singleSig,
+            session = session,
             onDone = { navigate(MovieRoute.S1HomeSingleSig) },
             onBack = onBack,
             onOpenCatalog = openCatalog,
@@ -314,6 +316,7 @@ fun MebitNavHost() {
         )
         MovieRoute.S5ReviewSign -> S5ReviewSignScreen(
             wallet = singleSig,
+            session = session,
             draft = sendDraft,
             onSigned = { navigate(MovieRoute.S6Sent) },
             onBack = onBack,

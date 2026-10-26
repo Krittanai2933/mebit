@@ -64,7 +64,7 @@ enum class MovieRoute(
         "keys/pair-mebit",
         "PAIR DEVICE",
         "จับคู่เครื่องอื่น",
-        "Mock จนกว่า docs/04 #26 ตัดสินใจ",
+        "วาง xpub หรือ BSMS 1.0 ไม่ใช้ QR",
     ),
     HardwareWallet(
         "keys/hardware",

@@ -5,25 +5,26 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.OnboardingSession
+import com.mebit.app.ui.components.HwChip
+import com.mebit.app.ui.components.InfoCard
 import com.mebit.app.ui.components.MebitScreen
+import com.mebit.app.ui.components.OptionCard
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
 
@@ -37,19 +38,15 @@ fun WelcomeScreen(
     MebitScreen(
         eyebrow = "WELCOME",
         title = "Bitcoin ของคุณ\nKey อยู่ในมือคุณ",
+        subtitle = "กุญแจเดียว หรือหลายกุญแจ · คุณถือเองทุกดอก",
+        dark = true,
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         tag = "screen_welcome",
     ) {
-        Text(
-            text = "กุญแจเดียว หรือหลายกุญแจ · คุณถือเองทุกดอก",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(24.dp))
-        PrimaryCta("สร้างกระเป๋าใหม่", "cta_create", onCreate)
+        PrimaryCta("สร้างกระเป๋าใหม่", "cta_create", onCreate, darkSurface = true)
         Spacer(modifier = Modifier.height(8.dp))
-        SecondaryCta("นำเข้ากระเป๋าเดิม", "cta_import", onImport)
+        SecondaryCta("นำเข้ากระเป๋าเดิม", "cta_import", onImport, darkSurface = true)
     }
 }
 
@@ -64,32 +61,33 @@ fun KeySourceScreen(
     MebitScreen(
         eyebrow = "NEW WALLET",
         title = "เก็บกุญแจดอกแรกไว้ที่ไหน",
+        subtitle = "กุญแจคือสิ่งที่ใช้เซ็นอนุมัติการจ่ายเงิน เพิ่มดอกอื่นหรือยกระดับเป็น Vault ได้ทีหลัง",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         tag = "screen_onboarding/key-source",
     ) {
-        Text(
-            text = "กุญแจคือสิ่งที่ใช้เซ็นอนุมัติการจ่ายเงิน เพิ่มดอกอื่นหรือยกระดับเป็น Vault ได้ทีหลัง",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        OptionCard(
+            title = "มือถือเครื่องนี้",
+            body = "สร้างกุญแจใหม่ในชิปของเครื่อง สำรองด้วย 24 คำ",
+            tag = "cta_phone",
+            onClick = {
+                session.generateThisDevice()
+                if (session.lastError == null && session.words.isNotEmpty()) onPhone()
+            },
         )
-        Spacer(modifier = Modifier.height(20.dp))
-        PrimaryCta("มือถือเครื่องนี้", "cta_phone", {
-            session.generateThisDevice()
-            if (session.lastError == null && session.words.isNotEmpty()) onPhone()
-        })
+        Spacer(modifier = Modifier.height(12.dp))
+        OptionCard(
+            title = "Hardware wallet",
+            body = "กุญแจอยู่บนอุปกรณ์ตลอด มือถือแค่ดูยอดและส่งให้อุปกรณ์เซ็น · เชื่อมผ่าน Bluetooth",
+            tag = "cta_hardware",
+            chips = listOf("Jade", "Trezor Safe 7"),
+            onClick = onHardware,
+        )
+        Spacer(modifier = Modifier.height(16.dp))
         Text(
-            text = "สร้างกุญแจใหม่ในชิปของเครื่อง สำรองด้วย 24 คำ",
+            text = "ไม่แน่ใจ? เริ่มจากมือถือก่อน แล้วค่อยเพิ่ม Jade หรือ Trezor เป็นกุญแจดอกที่สองตอนยกระดับเป็น Vault",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
-        )
-        SecondaryCta("Hardware wallet", "cta_hardware", onHardware)
-        Text(
-            text = "Trezor Safe 7 · Jade · เชื่อมผ่าน Bluetooth",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp),
         )
         session.lastError?.let {
             Spacer(modifier = Modifier.height(12.dp))
@@ -109,16 +107,11 @@ fun ImportSeedScreen(
     MebitScreen(
         eyebrow = "IMPORT SEED",
         title = "นำเข้า 24 คำ",
+        subtitle = "พิมพ์หรือวาง 24 คำตามลำดับ แล้วกู้กุญแจเข้าเครื่องนี้",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         tag = "screen_onboarding/import-seed",
     ) {
-        Text(
-            text = "พิมพ์หรือวาง 24 คำตามลำดับ แล้วกู้กุญแจเข้าเครื่องนี้",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
         OutlinedTextField(
             value = draft,
             onValueChange = { draft = it },
@@ -151,6 +144,7 @@ fun KeyCreatedScreen(
         title = "สร้างกุญแจแล้ว",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
+        subtitle = "กุญแจดอกนี้เก็บอยู่ในชิปความปลอดภัยของเครื่องนี้เท่านั้น ไม่ถูกส่งออกไปที่ไหน รวมถึง mebit",
         tag = "screen_onboarding/key-created",
     ) {
         Text(
@@ -164,9 +158,10 @@ fun KeyCreatedScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "สำรอง 24 คำก่อนรับเงินครั้งแรก",
-            style = MaterialTheme.typography.bodyLarge,
+        InfoCard(
+            eyebrow = "BACKUP",
+            title = "สำรอง 24 คำก่อนรับเงินครั้งแรก",
+            body = "ถ้าเครื่องหายหรือพัง 24 คำนี้คือทางเดียวที่จะกู้กระเป๋าคืน mebit กู้ให้ไม่ได้ เพราะเราไม่ได้ถือกุญแจของคุณ",
         )
         Spacer(modifier = Modifier.height(20.dp))
         PrimaryCta("สำรองเลย", "cta_backup", onBackup)
@@ -185,14 +180,9 @@ fun BackupWordsScreen(
         title = "จด 24 คำสำรอง",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
+        subtitle = "เรียงตามลำดับเลข ใครได้คำเหล่านี้ไปจะใช้เงินในกระเป๋าได้ทันที ห้ามถ่ายภาพหน้าจอหรือเก็บในแชต",
         tag = "screen_onboarding/backup-words",
     ) {
-        Text(
-            text = "เขียนลงกระดาษ อย่าถ่ายรูป และอย่าเก็บในคลาวด์",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
         session.words.forEachIndexed { index, word ->
             Text(
                 text = "${index + 1}. $word",
@@ -277,14 +267,9 @@ fun AppLockScreen(
         title = "ล็อกแอป",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
+        subtitle = "เปิด Face ID หรือรหัสผ่านเครื่องเพื่อเปิด mebit (demo เปิดทันทีบนหน้านี้)",
         tag = "screen_onboarding/app-lock",
     ) {
-        Text(
-            text = "เปิด Face ID หรือรหัสผ่านเครื่องเพื่อเปิด mebit (demo เปิดทันทีบนหน้านี้)",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(20.dp))
         PrimaryCta("เปิดการล็อก", "cta_enable_lock", {
             session.markAppLockEnabled()
             onContinue()
@@ -308,6 +293,7 @@ fun HomeFirstRunScreen(
         title = "จะเริ่มใช้แบบไหน",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
+        subtitle = "เลือกตอนนี้ หรือสร้าง Vault ทีหลังก็ได้",
         tag = "screen_home/first-run",
     ) {
         if (!session.backupConfirmed) {
@@ -318,26 +304,21 @@ fun HomeFirstRunScreen(
             )
             Spacer(modifier = Modifier.height(12.dp))
         }
-        Text(
-            text = "เลือกตอนนี้ หรือสร้าง Vault ทีหลังก็ได้",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        OptionCard(
+            title = "กระเป๋ากุญแจเดียว",
+            body = "พร้อมใช้ · รับ-ส่งได้ทันที",
+            tag = "cta_singlesig",
+            onClick = onSingleSig,
         )
-        Spacer(modifier = Modifier.height(20.dp))
-        PrimaryCta("กระเป๋ากุญแจเดียว", "cta_singlesig", onSingleSig)
-        Text(
-            text = "พร้อมใช้ · รับ-ส่งได้ทันที",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+        Spacer(modifier = Modifier.height(12.dp))
+        OptionCard(
+            title = "Vault หลายกุญแจ",
+            body = "เพิ่ม Jade, Trezor Safe 7 หรือมือถืออีกเครื่อง",
+            tag = "cta_vault",
+            chips = listOf("Jade", "Trezor Safe 7"),
+            onClick = onVault,
         )
-        SecondaryCta("Vault หลายกุญแจ", "cta_vault", onVault)
-        Text(
-            text = "เพิ่ม Jade, Trezor Safe 7 หรือมือถืออีกเครื่อง",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
-        )
+        Spacer(modifier = Modifier.height(12.dp))
         SecondaryCta("ไว้ทีหลัง", "cta_later", onLater)
     }
 }
@@ -353,16 +334,13 @@ fun HwBackupConfirmScreen(
         title = "ยืนยันสำรองบนอุปกรณ์",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
+        subtitle = "Jade / Trezor Safe 7 เก็บ seed บนเครื่อง · mebit เชื่อมผ่าน Bluetooth เท่านั้น (ไม่มีกล้อง)",
         tag = "screen_onboarding/hw-backup-confirm",
     ) {
-        Text(
-            text = "Jade / Trezor Safe 7 เก็บ seed บนเครื่อง · mebit เชื่อมผ่าน Bluetooth เท่านั้น (ไม่มีกล้อง)",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        Text("JD · Jade", style = MaterialTheme.typography.titleMedium)
-        Text("TRZ · Trezor Safe 7", style = MaterialTheme.typography.titleMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            HwChip("Jade")
+            HwChip("Trezor Safe 7")
+        }
         Spacer(modifier = Modifier.height(20.dp))
         PrimaryCta("เข้าใจแล้ว", "cta_hw_backup_done", onDone)
     }

@@ -83,7 +83,7 @@ class KeyringStore {
         }
     }
 
-    /** Mock mebit-on-other-device until docs/04 #26 (real tpub so vault FFI works). */
+    /** Real tpub for a CI run that has no pasted fixture. */
     fun startMebitOtherMock(network: KeyNetwork = KeyNetwork.TEST) {
         clearError()
         try {
@@ -98,6 +98,22 @@ class KeyringStore {
         } catch (e: Exception) {
             lastError = e.message
             pending = null
+        }
+    }
+
+    /**
+     * Paste or share for docs/04 #26. No QR.
+     * A bad paste clears [pending] and sets [lastError].
+     */
+    fun startMebitOtherFromPaste(text: String): Boolean {
+        clearError()
+        pending = null
+        return try {
+            pending = parseExternalKeyPaste(text)
+            true
+        } catch (e: IllegalArgumentException) {
+            lastError = e.message
+            false
         }
     }
 

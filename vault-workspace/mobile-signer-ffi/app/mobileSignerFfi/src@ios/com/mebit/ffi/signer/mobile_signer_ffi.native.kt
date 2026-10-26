@@ -1294,6 +1294,14 @@ internal val UniffiVTableCallbackInterfacePairingCodesUniffiByValue.`uniffiFree`
 
 
 
+
+
+
+
+
+
+
+
 internal object UniffiLib {
     init {
             uniffiCallbackInterfacePairingCodes.register(this)
@@ -1372,6 +1380,15 @@ internal object UniffiLib {
     ): Long = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_method_walletlink_info(
         `ptr`,
     )
+    fun uniffi_mobile_signer_ffi_fn_method_walletlink_sign_psbt(
+        `ptr`: Pointer?,
+        `psbtBase64`: RustBufferByValue,
+        `signerFingerprint`: RustBufferByValue,
+    ): Long = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_method_walletlink_sign_psbt(
+        `ptr`,
+        `psbtBase64`,
+        `signerFingerprint`,
+    )
     fun uniffi_mobile_signer_ffi_fn_method_walletlink_unlock(
         `ptr`: Pointer?,
     ): Long = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_method_walletlink_unlock(
@@ -1415,6 +1432,41 @@ internal object UniffiLib {
         `passphrase`,
         `network`,
         `account`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_func_hot_receive_address(
+        `mnemonicWords`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        `index`: Int,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_receive_address(
+        `mnemonicWords`,
+        `network`,
+        `index`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_func_hot_send(
+        `mnemonicWords`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        `destination`: RustBufferByValue,
+        `amountSats`: Long,
+        `feeSats`: Long,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_send(
+        `mnemonicWords`,
+        `network`,
+        `destination`,
+        `amountSats`,
+        `feeSats`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_func_hot_wallet_snapshot(
+        `mnemonicWords`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_wallet_snapshot(
+        `mnemonicWords`,
+        `network`,
         uniffiCallStatus,
     )
     fun uniffi_mobile_signer_ffi_fn_func_live_wallet_links(
@@ -1829,6 +1881,15 @@ internal object UniffiLib {
     fun uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key(
     )
+    fun uniffi_mobile_signer_ffi_checksum_func_hot_receive_address(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_receive_address(
+    )
+    fun uniffi_mobile_signer_ffi_checksum_func_hot_send(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_send(
+    )
+    fun uniffi_mobile_signer_ffi_checksum_func_hot_wallet_snapshot(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_wallet_snapshot(
+    )
     fun uniffi_mobile_signer_ffi_checksum_func_live_wallet_links(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_live_wallet_links(
     )
@@ -1855,6 +1916,9 @@ internal object UniffiLib {
     )
     fun uniffi_mobile_signer_ffi_checksum_method_walletlink_info(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_method_walletlink_info(
+    )
+    fun uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_psbt(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_psbt(
     )
     fun uniffi_mobile_signer_ffi_checksum_method_walletlink_unlock(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_method_walletlink_unlock(
@@ -2528,6 +2592,36 @@ public actual open class WalletLink: Disposable, WalletLinkInterface {
     }
 
     /**
+     * Has the hardware wallet sign `psbt_base64` for `signer_fingerprint`.
+     *
+     * `psbt_base64` is a BIP-174 PSBT. `signer_fingerprint` is 8 lowercase hex
+     * characters (the vault key's master fingerprint). Jade must be unlocked
+     * first. Returns the signed PSBT as base64. Callers must run spend policy
+     * before this (vault-core policy against real PSBTs is still Term-2 work;
+     * the app checks destination and amount at the UI boundary today).
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public actual override suspend fun `signPsbt`(`psbtBase64`: kotlin.String, `signerFingerprint`: kotlin.String): kotlin.String {
+        return uniffiRustCallAsync(
+            callWithPointer { thisPtr ->
+                UniffiLib.uniffi_mobile_signer_ffi_fn_method_walletlink_sign_psbt(
+                    thisPtr,
+                    FfiConverterString.lower(`psbtBase64`),
+                    FfiConverterString.lower(`signerFingerprint`),
+                )
+            },
+            { future, callback, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+            { future, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_complete_rust_buffer(future, continuation) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_free_rust_buffer(future) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_cancel_rust_buffer(future) },
+            // lift function
+            { FfiConverterString.lift(it) },
+            // Error FFI converter
+            BleExceptionErrorHandler,
+        )
+    }
+
+    /**
      * Unlocks the wallet for this connection.
      *
      * A Jade asks for its PIN on the device, unless it is a Temporary Signer.
@@ -2613,6 +2707,50 @@ public object FfiConverterTypeFoundWallet: FfiConverterRustBuffer<FoundWallet> {
         FfiConverterTypeWalletKind.write(value.`kind`, buf)
         FfiConverterString.write(value.`id`, buf)
         FfiConverterString.write(value.`name`, buf)
+    }
+}
+
+
+
+
+public object FfiConverterTypeHotSendResult: FfiConverterRustBuffer<HotSendResult> {
+    override fun read(buf: ByteBuffer): HotSendResult {
+        return HotSendResult(
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: HotSendResult): ULong = (
+            FfiConverterString.allocationSize(value.`txid`)
+    )
+
+    override fun write(value: HotSendResult, buf: ByteBuffer) {
+        FfiConverterString.write(value.`txid`, buf)
+    }
+}
+
+
+
+
+public object FfiConverterTypeHotWalletSnapshot: FfiConverterRustBuffer<HotWalletSnapshot> {
+    override fun read(buf: ByteBuffer): HotWalletSnapshot {
+        return HotWalletSnapshot(
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterTypeKeyNetwork.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: HotWalletSnapshot): ULong = (
+            FfiConverterString.allocationSize(value.`receiveAddress`) +
+            FfiConverterULong.allocationSize(value.`balanceSats`) +
+            FfiConverterTypeKeyNetwork.allocationSize(value.`network`)
+    )
+
+    override fun write(value: HotWalletSnapshot, buf: ByteBuffer) {
+        FfiConverterString.write(value.`receiveAddress`, buf)
+        FfiConverterULong.write(value.`balanceSats`, buf)
+        FfiConverterTypeKeyNetwork.write(value.`network`, buf)
     }
 }
 
@@ -3122,6 +3260,52 @@ public actual fun `generateSoftwareMultisigKey`(`passphrase`: kotlin.String, `ne
             FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
             FfiConverterUInt.lower(`account`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * First receive address at BIP-84 index `index` (usually 0).
+ */
+@Throws(MobileSignerException::class)
+public actual fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `network`: KeyNetwork, `index`: kotlin.UInt): kotlin.String {
+    return FfiConverterString.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_receive_address(
+            FfiConverterSequenceString.lower(`mnemonicWords`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterUInt.lower(`index`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * Build, sign (BIP-84 index 0 key), and broadcast a payment. Fee is absolute sats.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `hotSend`(`mnemonicWords`: List<kotlin.String>, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeSats`: kotlin.ULong): HotSendResult {
+    return FfiConverterTypeHotSendResult.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_send(
+            FfiConverterSequenceString.lower(`mnemonicWords`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterString.lower(`destination`),
+            FfiConverterULong.lower(`amountSats`),
+            FfiConverterULong.lower(`feeSats`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * Confirmed + mempool balance for receive index 0 via Esplora.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `network`: KeyNetwork): HotWalletSnapshot {
+    return FfiConverterTypeHotWalletSnapshot.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_wallet_snapshot(
+            FfiConverterSequenceString.lower(`mnemonicWords`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,
         )
     })

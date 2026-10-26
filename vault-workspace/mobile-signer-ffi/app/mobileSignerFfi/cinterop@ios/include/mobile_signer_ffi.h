@@ -176,6 +176,8 @@ int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_disconnect(void * ptr
 );
 int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_info(void * ptr
 );
+int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_sign_psbt(void * ptr, RustBuffer psbtBase64, RustBuffer signerFingerprint
+);
 int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_unlock(void * ptr
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_compute_vault_address(RustBuffer borrowerPubkey, RustBuffer platformPubkey, RustBuffer lenderPubkey, UniffiRustCallStatus *_Nonnull out_status
@@ -185,6 +187,12 @@ RustBuffer uniffi_mobile_signer_ffi_fn_func_compute_vault_address_multisig(RustB
 RustBuffer uniffi_mobile_signer_ffi_fn_func_derive_borrower_pubkey(RustBuffer accountXpub, int32_t index, UniffiRustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_generate_software_multisig_key(RustBuffer passphrase, RustBuffer network, int32_t account, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_receive_address(RustBuffer mnemonicWords, RustBuffer network, int32_t index, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_send(RustBuffer mnemonicWords, RustBuffer network, RustBuffer destination, int64_t amountSats, int64_t feeSats, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_wallet_snapshot(RustBuffer mnemonicWords, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
 );
 int64_t uniffi_mobile_signer_ffi_fn_func_live_wallet_links(UniffiRustCallStatus *_Nonnull out_status
     
@@ -319,6 +327,15 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_derive_borrower_pubkey(void
 int16_t uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key(void
     
 );
+int16_t uniffi_mobile_signer_ffi_checksum_func_hot_receive_address(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_hot_send(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_hot_wallet_snapshot(void
+    
+);
 int16_t uniffi_mobile_signer_ffi_checksum_func_live_wallet_links(void
     
 );
@@ -344,6 +361,9 @@ int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_disconnect(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_info(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_psbt(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_unlock(void

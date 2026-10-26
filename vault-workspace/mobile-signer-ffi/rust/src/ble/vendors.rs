@@ -1,8 +1,10 @@
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use bitcoin::Network;
-use bitcoin::bip32::DerivationPath;
+use bitcoin::Psbt;
+use bitcoin::bip32::{DerivationPath, Fingerprint};
 use jade_ble::{JadeBle, JadeBleError};
 use trezor_ble::{ConnectOptions, ErrorKind, TrezorBle, TrezorBleError};
 use vault_core::error::VaultCoreError;
@@ -136,6 +138,17 @@ impl Wallet for JadeBle {
         })
     }
 
+    async fn sign_psbt(
+        &mut self,
+        psbt_base64: &str,
+        signer_fingerprint: &str,
+    ) -> Result<String, BleError> {
+        let psbt = parse_psbt_base64(psbt_base64)?;
+        let signer = parse_fingerprint(signer_fingerprint)?;
+        let signed = JadeBle::sign_psbt(self, &psbt, signer).await?;
+        Ok(signed.to_string())
+    }
+
     async fn disconnect(self) -> Result<(), BleError> {
         Ok(JadeBle::disconnect(self).await?)
     }
@@ -171,9 +184,32 @@ impl Wallet for TrezorBle {
         })
     }
 
+    async fn sign_psbt(
+        &mut self,
+        psbt_base64: &str,
+        signer_fingerprint: &str,
+    ) -> Result<String, BleError> {
+        let psbt = parse_psbt_base64(psbt_base64)?;
+        let signer = parse_fingerprint(signer_fingerprint)?;
+        let signed = TrezorBle::sign_psbt(self, &psbt, signer).await?;
+        Ok(signed.to_string())
+    }
+
     async fn disconnect(self) -> Result<(), BleError> {
         Ok(TrezorBle::disconnect(self).await?)
     }
+}
+
+fn parse_psbt_base64(psbt_base64: &str) -> Result<Psbt, BleError> {
+    Psbt::from_str(psbt_base64.trim()).map_err(|error| {
+        BleError::Refused(format!("invalid PSBT base64: {error}"))
+    })
+}
+
+fn parse_fingerprint(hex: &str) -> Result<Fingerprint, BleError> {
+    Fingerprint::from_str(hex.trim()).map_err(|error| {
+        BleError::Refused(format!("invalid signer fingerprint: {error}"))
+    })
 }
 
 impl From<jade::JadeState> for JadeState {

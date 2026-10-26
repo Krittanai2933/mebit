@@ -67,6 +67,7 @@ fun PairMebitOtherScreen(
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
+    var paste by remember { mutableStateOf("") }
     MebitScreen(
         eyebrow = "PAIR DEVICE",
         title = "จับคู่เครื่องอื่น",
@@ -75,12 +76,24 @@ fun PairMebitOtherScreen(
         tag = "screen_keys/pair-mebit",
     ) {
         Text(
-            text = "Mock จนกว่า docs/04 #26 ตัดสินใจช่องทาง · กดจำลองจับคู่แล้วไปยืนยัน fingerprint",
+            text = "วาง fingerprint, xpub และ path จากเครื่องอื่น หรือวาง BSMS 1.0",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(modifier = Modifier.height(20.dp))
-        PrimaryCta("จำลองจับคู่สำเร็จ", "cta_pair_mock", {
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = paste,
+            onValueChange = { paste = it },
+            modifier = Modifier.fillMaxWidth().testTag("pair_paste"),
+            minLines = 4,
+            label = { Text("ข้อความจากเครื่องอื่น") },
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        PrimaryCta("นำเข้าจากข้อความ", "cta_pair_paste", {
+            if (store.startMebitOtherFromPaste(paste)) onPaired()
+        })
+        Spacer(modifier = Modifier.height(8.dp))
+        SecondaryCta("จำลองจับคู่", "cta_pair_demo", {
             store.startMebitOtherMock()
             if (store.pending != null) onPaired()
         })

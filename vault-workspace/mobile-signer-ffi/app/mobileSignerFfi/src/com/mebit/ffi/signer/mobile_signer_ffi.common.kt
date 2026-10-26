@@ -201,6 +201,18 @@ public interface WalletLinkInterface {
     public suspend fun `info`(): WalletInfo
     
     /**
+     * Has the hardware wallet sign `psbt_base64` for `signer_fingerprint`.
+     *
+     * `psbt_base64` is a BIP-174 PSBT. `signer_fingerprint` is 8 lowercase hex
+     * characters (the vault key's master fingerprint). Jade must be unlocked
+     * first. Returns the signed PSBT as base64. Callers must run spend policy
+     * before this (vault-core policy against real PSBTs is still Term-2 work;
+     * the app checks destination and amount at the UI boundary today).
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public suspend fun `signPsbt`(`psbtBase64`: kotlin.String, `signerFingerprint`: kotlin.String): kotlin.String
+    
+    /**
      * Unlocks the wallet for this connection.
      *
      * A Jade asks for its PIN on the device, unless it is a Temporary Signer.
@@ -287,6 +299,18 @@ public expect open class WalletLink: Disposable, WalletLinkInterface {
     public override suspend fun `info`(): WalletInfo
     
     /**
+     * Has the hardware wallet sign `psbt_base64` for `signer_fingerprint`.
+     *
+     * `psbt_base64` is a BIP-174 PSBT. `signer_fingerprint` is 8 lowercase hex
+     * characters (the vault key's master fingerprint). Jade must be unlocked
+     * first. Returns the signed PSBT as base64. Callers must run spend policy
+     * before this (vault-core policy against real PSBTs is still Term-2 work;
+     * the app checks destination and amount at the UI boundary today).
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public override suspend fun `signPsbt`(`psbtBase64`: kotlin.String, `signerFingerprint`: kotlin.String): kotlin.String
+    
+    /**
      * Unlocks the wallet for this connection.
      *
      * A Jade asks for its PIN on the device, unless it is a Temporary Signer.
@@ -319,6 +343,26 @@ public data class FoundWallet (
      * The advertised name, e.g. `Jade 1a2b3c`.
      */
     var `name`: kotlin.String
+) {
+    public companion object
+}
+
+
+
+
+public data class HotSendResult (
+    var `txid`: kotlin.String
+) {
+    public companion object
+}
+
+
+
+
+public data class HotWalletSnapshot (
+    var `receiveAddress`: kotlin.String, 
+    var `balanceSats`: kotlin.ULong, 
+    var `network`: KeyNetwork
 ) {
     public companion object
 }
@@ -702,6 +746,24 @@ public expect fun `deriveBorrowerPubkey`(`accountXpub`: kotlin.String, `index`: 
  */
 @Throws(MobileSignerException::class)
 public expect fun `generateSoftwareMultisigKey`(`passphrase`: kotlin.String, `network`: KeyNetwork, `account`: kotlin.UInt): SoftwareAccountKey
+
+/**
+ * First receive address at BIP-84 index `index` (usually 0).
+ */
+@Throws(MobileSignerException::class)
+public expect fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `network`: KeyNetwork, `index`: kotlin.UInt): kotlin.String
+
+/**
+ * Build, sign (BIP-84 index 0 key), and broadcast a payment. Fee is absolute sats.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `hotSend`(`mnemonicWords`: List<kotlin.String>, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeSats`: kotlin.ULong): HotSendResult
+
+/**
+ * Confirmed + mempool balance for receive index 0 via Esplora.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `network`: KeyNetwork): HotWalletSnapshot
 
 /**
  * How many `WalletLink` objects exist in this process. For tests, not a stable API: a link
