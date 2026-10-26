@@ -1,7 +1,7 @@
 board	path	eyebrow	binding	status	pr	notes
 Welcome	welcome	WELCOME	ui	wired	B	
 KeySource	onboarding/key-source	NEW WALLET	uniffi+ui	wired	B	generateSoftwareMultisigKey
-ImportSeed	onboarding/import-seed	IMPORT SEED	uniffi+ui	wired	B	restoreSoftwareMultisigKey; Penpot board pending
+ImportSeed	onboarding/import-seed	IMPORT SEED	uniffi+ui	wired	B	restoreSoftwareMultisigKey; Penpot board 2067de56-df70-80bd-8008-d9703fd167f8
 KeyCreated	onboarding/key-created	KEY CREATED	ui	wired	B	
 BackupWords	onboarding/backup-words	BACKUP	ui	wired	B	
 VerifyWords	onboarding/verify-words	VERIFY WORDS	ui	wired	B	

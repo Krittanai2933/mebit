@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Copy FCVision-*.otf into Compose font resources when those files exist.
-# Exit 0 when the source directory has none. check_fonts.py remains the pixel-zero gate.
+# Copy Kanit-*.ttf into Compose font resources when those files exist.
+# Exit 0 when the source directory has none. check_fonts.py remains the font gate.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -26,16 +26,20 @@ mkdir -p "$DEST"
 
 shopt -s nullglob
 copied=0
-for src in "$SRC"/FCVision-*.otf; do
+for src in "$SRC"/Kanit-*.ttf; do
   base="$(basename "$src")"
-  stem="${base#FCVision-}"
-  stem="${stem%.otf}"
+  # Skip license text if ever named oddly
+  case "$base" in
+    *OFL*) continue ;;
+  esac
+  stem="${base#Kanit-}"
+  stem="${stem%.ttf}"
   lower="$(printf '%s' "$stem" | tr '[:upper:]' '[:lower:]')"
-  cp "$src" "$DEST/fc_vision_${lower}.otf"
-  echo "vendored $base -> fc_vision_${lower}.otf"
+  cp "$src" "$DEST/kanit_${lower}.ttf"
+  echo "vendored $base -> kanit_${lower}.ttf"
   copied=$((copied + 1))
 done
 
 if [ "$copied" -eq 0 ]; then
-  echo "No FCVision-*.otf in $SRC. Type.kt stays on SansSerif."
+  echo "No Kanit-*.ttf in $SRC."
 fi

@@ -37,7 +37,7 @@ private val MebitShapes = Shapes(
 fun MebitTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = MebitLightColors,
-        typography = MebitTypography,
+        typography = mebitTypography(),
         shapes = MebitShapes,
         content = content,
     )

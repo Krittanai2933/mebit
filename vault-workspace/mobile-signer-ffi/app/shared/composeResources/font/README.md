@@ -1,11 +1,12 @@
-# Vendored FC Vision for Compose
+# Vendored Kanit for Compose
 
-`visual-parity/scripts/vendor_fonts.sh` copies OTFs from `design-reference/fonts/` into this directory when they exist:
+`visual-parity/scripts/vendor_fonts.sh` copies TTFs from `design-reference/fonts/`:
 
-- `fc_vision_light.otf`
-- `fc_vision_regular.otf`
-- `fc_vision_medium.otf`
-- `fc_vision_semibold.otf`
-- `fc_vision_bold.otf`
+- `kanit_light.ttf`
+- `kanit_regular.ttf`
+- `kanit_medium.ttf`
+- `kanit_semibold.ttf`
+- `kanit_bold.ttf`
 
-Then update `src/ui/theme/Type.kt` to load `Res.font.*`.
+`src/ui/theme/Type.kt` loads `Res.font.kanit_*` (OFL — see
+`design-reference/fonts/Kanit-OFL.txt`).

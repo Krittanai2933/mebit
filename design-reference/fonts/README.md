@@ -1,29 +1,31 @@
-# FC Vision (Fontcraft)
+# Kanit (Cadson Demak) — shipping typeface
 
-Official Mapboss/mebit typeface. Required for Movie Page pixel-zero parity.
+Commercial-safe OFL Thai + Latin sans. Replaces FC Vision for the app
+because FC Vision’s available cut is non-commercial.
 
-Drop these files here (operator):
+Files (vendored from https://github.com/google/fonts/tree/main/ofl/kanit):
 
-- `FCVision-Light.otf`
-- `FCVision-Regular.otf`
-- `FCVision-Italic.otf`
-- `FCVision-Medium.otf`
-- `FCVision-SemiBold.otf`
-- `FCVision-Bold.otf`
-- `FCVision-ExtraBold.otf`
+- `Kanit-Light.ttf`
+- `Kanit-Regular.ttf`
+- `Kanit-Medium.ttf`
+- `Kanit-SemiBold.ttf`
+- `Kanit-Bold.ttf`
+- `Kanit-OFL.txt` — SIL Open Font License
 
-Then run `vault-workspace/mobile-signer-ffi/app/visual-parity/scripts/vendor_fonts.sh`.
-It copies each present file to:
+Run `vault-workspace/mobile-signer-ffi/app/visual-parity/scripts/vendor_fonts.sh`
+to copy into Compose:
 
 ```
 vault-workspace/mobile-signer-ffi/app/shared/composeResources/font/
-  fc_vision_light.otf
-  fc_vision_regular.otf
-  fc_vision_medium.otf
-  fc_vision_semibold.otf
-  fc_vision_bold.otf
+  kanit_light.ttf
+  kanit_regular.ttf
+  kanit_medium.ttf
+  kanit_semibold.ttf
+  kanit_bold.ttf
 ```
 
-Wire `Type.kt` to `FontFamily(Font(Res.font.fc_vision_…))`. Until then
-`visual-parity/scripts/check_fonts.py` exits 1 and no route may claim
-`visual=pixel-zero`.
+`Type.kt` loads `Res.font.kanit_*`. `check_fonts.py` exits 0 when the
+files above exist.
+
+Mapboss Penpot Movie Page still uses FC Vision — layout/color parity only;
+do not claim glyph-level pixel-zero against those baselines.

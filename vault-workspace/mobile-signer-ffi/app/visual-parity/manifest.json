@@ -9,17 +9,18 @@
   },
   "fontGate": {
     "requiredFiles": [
-      "design-reference/fonts/FCVision-Regular.otf",
-      "design-reference/fonts/FCVision-Medium.otf",
-      "design-reference/fonts/FCVision-SemiBold.otf",
-      "design-reference/fonts/FCVision-Bold.otf"
+      "design-reference/fonts/Kanit-Regular.ttf",
+      "design-reference/fonts/Kanit-Medium.ttf",
+      "design-reference/fonts/Kanit-SemiBold.ttf",
+      "design-reference/fonts/Kanit-Bold.ttf",
+      "design-reference/fonts/Kanit-Light.ttf"
     ],
-    "rule": "No route may claim visual=pixel-zero until fonts are present and check_fonts.py exits 0."
+    "rule": "Shipping typeface is Kanit (OFL). Fonts must be present and check_fonts.py exits 0. Pixel-zero vs Penpot FC Vision baselines is not claimed."
   },
   "routes": [
     {"path": "welcome", "boardName": "00 Welcome", "boardId": "bb000499-7ca1-801a-8008-d8fca7267d65"},
     {"path": "onboarding/key-source", "boardName": "00.0 Key Source", "boardId": "bb000499-7ca1-801a-8008-d8fca726353b"},
-    {"path": "onboarding/import-seed", "boardName": "Import Seed", "boardId": "pending-penpot-import-seed"},
+    {"path": "onboarding/import-seed", "boardName": "Import Seed", "boardId": "2067de56-df70-80bd-8008-d9703fd167f8"},
     {"path": "onboarding/key-created", "boardName": "00.1 Key Created", "boardId": "bb000499-7ca1-801a-8008-d8fca7263772"},
     {"path": "onboarding/backup-words", "boardName": "00.2 Backup Words", "boardId": "bb000499-7ca1-801a-8008-d8fca7263616"},
     {"path": "onboarding/verify-words", "boardName": "00.3 Verify Words", "boardId": "bb000499-7ca1-801a-8008-d8fca72635e8"},

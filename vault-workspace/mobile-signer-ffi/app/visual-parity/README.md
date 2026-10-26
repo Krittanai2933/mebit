@@ -1,6 +1,7 @@
-# Movie Page visual parity (pixel-zero)
+# Movie Page visual parity
 
-Penpot Movie Page is source of truth. App moves to Penpot — never edit boards to pass diffs.
+Penpot Movie Page is layout/color source of truth. App ships **Kanit** (OFL);
+Penpot boards use FC Vision — do not claim glyph-level pixel-zero.
 
 ## Layout
 
@@ -13,8 +14,8 @@ Penpot Movie Page is source of truth. App moves to Penpot — never edit boards 
 | `scripts/crop.py` | Status-bar + home-indicator crop |
 | `scripts/svg_to_baseline.py` | Penpot SVG → cropped baseline |
 | `scripts/diff.py` | Exact RGBA compare (any pixel → exit 1) |
-| `scripts/check_fonts.py` | FC Vision gate — blocks pixel-zero claims |
-| `scripts/vendor_fonts.sh` | Copy `FCVision-*.otf` into `composeResources/font/` when the files exist |
+| `scripts/check_fonts.py` | Kanit gate |
+| `scripts/vendor_fonts.sh` | Copy `Kanit-*.ttf` into `composeResources/font/` |
 | `scripts/capture_status.sh` | Run `status.py` and `check_fonts.py` |
 | `scripts/diff.sh` | fonts + `--all` diff |
 
@@ -36,28 +37,26 @@ Same crop for baselines and captures. No mid-migration crop tweaks.
 
 ## App capture (Paparazzi / Roborazzi)
 
-Prefer Android JVM screenshot of each screen at **width 402dp**, height = cropped content (789dp), locked density. Wire under `androidApp` when FC Vision is vendored:
+Prefer Android JVM screenshot of each screen at **width 402dp**, height = cropped content (789dp), locked density:
 
-1. Drop OTFs → `design-reference/fonts/` + `shared/composeResources/font/`
-2. Wire `Type.kt` to `Res.font.fc_vision_*`
+1. Kanit already in `design-reference/fonts/` + `shared/composeResources/font/`
+2. `Type.kt` uses `Res.font.kanit_*`
 3. Add Paparazzi or Roborazzi module rendering each route composable
 4. Write PNGs into `captures/<route>.png` (same naming as baselines: `/` → `__`)
-5. `./scripts/diff.sh`
+5. `./scripts/diff.sh` — expect glyph deltas vs Penpot FC Vision baselines
 
-`verify.sh` emulator recipes stay for live smoke only — not the zero-diff gate.
+`verify.sh` emulator recipes stay for live smoke only.
 
 ## Font gate
 
 ```bash
-python3 scripts/check_fonts.py   # exit 1 until OTFs land
+python3 scripts/check_fonts.py   # exit 0 when Kanit TTFs present
 ```
-
-No PR may set matrix `visual=pixel-zero` while this fails.
 
 ## Self-check
 
 ```bash
 # Diff tool identity (baseline vs copy of itself) must report delta 0
-cp baselines/keys__add.png captures/keys__add.png
-python3 scripts/diff.py --path keys/add
+cp baselines/keys__add.png /tmp/keys__add.png
+python3 scripts/diff.py baselines/keys__add.png /tmp/keys__add.png
 ```

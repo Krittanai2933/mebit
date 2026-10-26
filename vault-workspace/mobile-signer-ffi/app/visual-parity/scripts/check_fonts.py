@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""FC Vision font gate. Exit 1 if required OTFs are missing.
+"""Kanit font gate. Exit 1 if required TTFs are missing.
 
-Any PR that claims visual=pixel-zero must pass this gate.
+Any PR that claims visual=pixel-zero must pass this gate (layout parity only —
+Kanit ≠ Penpot FC Vision glyphs).
 """
 from __future__ import annotations
 
@@ -29,12 +30,12 @@ def main() -> int:
         if not p.is_file():
             missing.append(str(p))
     if missing:
-        print("FC Vision fonts missing — pixel-zero claims forbidden:")
+        print("Kanit fonts missing — visual font gate failed:")
         for m in missing:
             print(f"  - {m}")
-        print("Operator: drop OTFs into design-reference/fonts/ then re-run.")
+        print("Operator: drop TTFs into design-reference/fonts/ then re-run vendor_fonts.sh.")
         return 1
-    print("FC Vision fonts present.")
+    print("Kanit fonts present.")
     return 0
 
 

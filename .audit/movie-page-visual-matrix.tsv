@@ -1,7 +1,7 @@
 board	path	eyebrow	binding	status	pr	notes	visual
 Welcome	welcome	WELCOME	ui	wired	B		baselines-ready
 KeySource	onboarding/key-source	NEW WALLET	uniffi+ui	wired	B	generateSoftwareMultisigKey	baselines-ready
-ImportSeed	onboarding/import-seed	IMPORT SEED	uniffi+ui	wired	B	restoreSoftwareMultisigKey; Penpot board pending	baselines-ready
+ImportSeed	onboarding/import-seed	IMPORT SEED	uniffi+ui	wired	B	restoreSoftwareMultisigKey; Penpot 2067de56…167f8	baselines-ready
 KeyCreated	onboarding/key-created	KEY CREATED	ui	wired	B		baselines-ready
 BackupWords	onboarding/backup-words	BACKUP	ui	wired	B		baselines-ready
 VerifyWords	onboarding/verify-words	VERIFY WORDS	ui	wired	B		baselines-ready

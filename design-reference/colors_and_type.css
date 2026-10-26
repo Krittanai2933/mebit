@@ -4,25 +4,20 @@
    ============================================================ */
 
 /* ---- Fonts ----------------------------------------------------
-   FC Vision (Fontcraft) — the official Mapboss typeface, used for
-   EVERYTHING: display, headings, body and labels. Covers Latin + Thai.
-   Files in /fonts. Weights mapped: Light 300, Regular 400, Medium 500,
-   SemiBold 600, Bold 700, ExtraBold 800 (+ Italic 400).
+   Kanit (Cadson Demak, OFL) — shipping app typeface (Thai + Latin).
+   Mapboss Penpot historically used FC Vision (non-commercial for us);
+   app/layout parity uses Kanit. Weights: Light 300 … Bold 700.
 --------------------------------------------------------------- */
-@font-face { font-family:'FC Vision'; font-weight:300; font-style:normal;
-  src:url('fonts/FCVision-Light.otf') format('opentype'); font-display:swap; }
-@font-face { font-family:'FC Vision'; font-weight:400; font-style:normal;
-  src:url('fonts/FCVision-Regular.otf') format('opentype'); font-display:swap; }
-@font-face { font-family:'FC Vision'; font-weight:400; font-style:italic;
-  src:url('fonts/FCVision-Italic.otf') format('opentype'); font-display:swap; }
-@font-face { font-family:'FC Vision'; font-weight:500; font-style:normal;
-  src:url('fonts/FCVision-Medium.otf') format('opentype'); font-display:swap; }
-@font-face { font-family:'FC Vision'; font-weight:600; font-style:normal;
-  src:url('fonts/FCVision-SemiBold.otf') format('opentype'); font-display:swap; }
-@font-face { font-family:'FC Vision'; font-weight:700; font-style:normal;
-  src:url('fonts/FCVision-Bold.otf') format('opentype'); font-display:swap; }
-@font-face { font-family:'FC Vision'; font-weight:800; font-style:normal;
-  src:url('fonts/FCVision-ExtraBold.otf') format('opentype'); font-display:swap; }
+@font-face { font-family:'Kanit'; font-weight:300; font-style:normal;
+  src:url('fonts/Kanit-Light.ttf') format('truetype'); font-display:swap; }
+@font-face { font-family:'Kanit'; font-weight:400; font-style:normal;
+  src:url('fonts/Kanit-Regular.ttf') format('truetype'); font-display:swap; }
+@font-face { font-family:'Kanit'; font-weight:500; font-style:normal;
+  src:url('fonts/Kanit-Medium.ttf') format('truetype'); font-display:swap; }
+@font-face { font-family:'Kanit'; font-weight:600; font-style:normal;
+  src:url('fonts/Kanit-SemiBold.ttf') format('truetype'); font-display:swap; }
+@font-face { font-family:'Kanit'; font-weight:700; font-style:normal;
+  src:url('fonts/Kanit-Bold.ttf') format('truetype'); font-display:swap; }
 
 :root {
   /* ---------- Brand greens ---------- */
@@ -71,10 +66,10 @@
   --hairline:       var(--mb-gray-200);
   --hairline-dark:  rgba(255,255,255,0.14);
 
-  /* ---------- Type families (all FC Vision — the official typeface) ---------- */
-  --font-display:   'FC Vision', system-ui, sans-serif;
-  --font-body:      'FC Vision', system-ui, sans-serif;
-  --font-label:     'FC Vision', system-ui, sans-serif;
+  /* ---------- Type families (Kanit OFL — shipping) ---------- */
+  --font-display:   'Kanit', system-ui, sans-serif;
+  --font-body:      'Kanit', system-ui, sans-serif;
+  --font-label:     'Kanit', system-ui, sans-serif;
 
   /* ---------- Radii ---------- */
   --radius-sm:   8px;
@@ -100,7 +95,7 @@
    scale down with rem/clamp for screen UI)
    ============================================================ */
 
-.mb-display {            /* hero title — FC Vision, big & airy           */
+.mb-display {            /* hero title — Kanit, big & airy               */
   font-family: var(--font-display);
   font-weight: 400;
   font-size: 128px;
@@ -126,7 +121,7 @@
   font-size: 40px;
   line-height: 1.1;
 }
-.mb-eyebrow {            /* small geometric label — FC Vision           */
+.mb-eyebrow {            /* small geometric label — Kanit               */
   font-family: var(--font-label);
   font-weight: 600;
   font-size: 22px;
