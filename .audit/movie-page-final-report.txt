@@ -1,0 +1,25 @@
+Movie Page KMP — final report
+==============================
+Boards: 43 / 43 implemented (exhaustive when(current) in NavGraph)
+Import seed: overlay flag (no dedicated Penpot board)
+
+Hard locks honored:
+- KMP Compose (not RN)
+- Jade BLE-only / Trezor Safe 7 + UnsupportedModel (T13)
+- Thai + EN uppercase eyebrows
+- AddKey three sources; VerifyKey mismatch does not save
+- personal_custody only (decaying → T16)
+- Vault Created = BSMS file text, not QR
+
+Stacked PRs:
+- #17 UniFFI software keys + HW unlock/xpub
+- #18 theme + route shell
+- #19 00.* onboarding
+- #20 key enrollment + T13–T15
+- #21 policy → BSMS + T16–T18
+- #22 vault list/detail + T20
+- #23 single-sig S*
+- #24 multisig M*
+- #25 (this) coverage + exhaustive nav
+
+Build: ./kotlin build -m shared from vault-workspace/mobile-signer-ffi/app
