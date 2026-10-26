@@ -119,14 +119,9 @@ fun HardwareWalletScreen(
         title = "เชื่อมต่ออุปกรณ์",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
+        subtitle = "Jade และ Trezor Safe 7 ผ่าน BLE จริง · บน emulator ที่ไม่มีวิทยุ ใช้ปุ่มจำลอง",
         tag = "screen_keys/hardware",
     ) {
-        Text(
-            text = "Jade และ Trezor Safe 7 ผ่าน BLE จริง · บน emulator ที่ไม่มีวิทยุ ใช้ปุ่มจำลอง",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(20.dp))
         PrimaryCta(
             label = "เชื่อมต่อ Jade",
             tag = "cta_hw_jade",
