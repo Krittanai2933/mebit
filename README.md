@@ -32,6 +32,11 @@ mebit/
 ├── .claude/
 │   ├── agents/           # one subagent per module — responsibilities, tech, dependencies
 │   └── skills/           # shared knowledge: Bitcoin fundamentals, policy review, testnet workflow, design tokens
+├── .agents/
+│   └── skills            # symlink to .claude/skills, for tools that read only .agents/skills
+├── AGENTS.md             # shared instructions for every coding agent
+├── CLAUDE.md             # stub that imports AGENTS.md
+├── scripts/              # check-agent-context.py checks the agent files
 └── README.md             # this file
 ```
 
@@ -51,10 +56,11 @@ Every crate under `vault-workspace/` has its own `README.md` with its owner, dep
 
 `vault-core` is the critical path — every other module depends on it. Its policy engine is the single highest-risk piece of code in the project, which is why it kept a dedicated second owner even when the team shrank from 5 to 4 (see `.claude/skills/policy-engine-review/SKILL.md`). `mobile-signer-ffi` carries the most work of any single module now that its scope includes a full `bdk`-based hot wallet on top of the multisig vault signer — see `docs/01-architecture.md` and `docs/00-capstone-brief.md` §3.3 for why, and lean on the MVP-vs-stretch screen split there if the team is short on time. Person 3 juggles three modules — timed to stagger rather than overlap (see the `platform-services` agent), but worth checking in on more often than the others.
 
-## Working with Claude Code on this project
+## Working with coding agents on this project
 
-`.claude/agents/` has one subagent per person/scope: `vault-core-descriptor`, `vault-core-policy`, `platform-services` (custody-service + lender-signer-cli + monitor-service), and `mobile-signer`. Use the one matching what you're working on — e.g. from the `vault-core` directory, or by asking for "the vault-core agent." `.claude/skills/` has knowledge shared across modules (Bitcoin fundamentals, the policy-engine adversarial review checklist, the testnet workflow, and the mebit design tokens).
+`AGENTS.md` holds the shared instructions. Codex, Cursor, Kimi and other coding agents read it directly, and `CLAUDE.md` is a stub that imports it so Claude Code loads the same text. Edit the shared text in `AGENTS.md`.
 
+`.claude/agents/` has one brief per person/scope: `vault-core-descriptor`, `vault-core-policy`, `platform-services` (custody-service + lender-signer-cli + monitor-service), and `mobile-signer`. Use the one matching what you're working on. Claude Code runs them as subagents, for example from the `vault-core` directory or by asking for "the vault-core agent", and any other agent reads the matching file first, as `AGENTS.md` says. `.claude/skills/` has knowledge shared across modules (Bitcoin fundamentals, the policy-engine adversarial review checklist, the testnet workflow, and the mebit design tokens), and `.agents/skills` links to it for tools that read only that path. After editing any of these files, run `python3 -I scripts/check-agent-context.py`.
 ## Explicitly out of scope
 
 Legal/regulatory compliance and the lender's fund/NAV ledger are the company's responsibility, not this team's — see `docs/00-capstone-brief.md` §1.

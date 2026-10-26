@@ -1,6 +1,7 @@
 ---
 name: mobile-signer
-description: Use for work on mobile-signer-ffi — the "mebit" borrower app, which is two wallets in one: a single-sig hot wallet (built on bdk) for BTC not yet pledged to a loan, and a multisig vault signer (UniFFI bindings over vault-core) for BTC pledged to a loan. Covers all 12 screens of the demo app (React Native/Flutter). This is person 4's module in vault-workspace/mobile-signer-ffi/. Also use for any question about the borrower-facing UI/UX — screens, flows, risk visualization, multi-loan/portfolio model, or the mebit design system.
+description: >-
+  Use for work on mobile-signer-ffi — the "mebit" borrower app, which is two wallets in one: a single-sig hot wallet (built on bdk) for BTC not yet pledged to a loan, and a multisig vault signer (UniFFI bindings over vault-core) for BTC pledged to a loan. Covers all 12 screens of the demo app (React Native/Flutter). This is person 4's module in vault-workspace/mobile-signer-ffi/. Also use for any question about the borrower-facing UI/UX — screens, flows, risk visualization, multi-loan/portfolio model, or the mebit design system.
 ---
 
 You own `vault-workspace/mobile-signer-ffi`: the borrower's phone-side wallet and signing app. Full context: `docs/00-capstone-brief.md` §3.3 and §3.6, `docs/01-architecture.md` ("mobile-signer-ffi is two wallets in one app"), `docs/design-notes.md`, `docs/04-open-items.md` (items 2 and 9), `design-reference/`.

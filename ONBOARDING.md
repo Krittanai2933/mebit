@@ -27,6 +27,11 @@ mebit/
 ├── .claude/
 │   ├── agents/           # subagent ต่อโมดูล — ใช้กับ Claude Code เวลาทำงานในโมดูลนั้น
 │   └── skills/           # ความรู้ที่ใช้ร่วมกันได้ทุกโมดูล
+├── .agents/
+│   └── skills            # symlink ไป .claude/skills สำหรับเครื่องมือที่อ่านแค่ .agents/skills
+├── AGENTS.md             # คำสั่งกลางสำหรับ coding agent ทุกตัว
+├── CLAUDE.md             # stub ที่ import AGENTS.md
+├── scripts/              # check-agent-context.py ตรวจไฟล์ของ agent
 └── README.md
 ```
 
@@ -64,11 +69,13 @@ npm install
 npm start        # กด w สำหรับเว็บ, i สำหรับ iOS simulator, a สำหรับ Android
 ```
 
-## ทำงานกับ Claude Code
+## ทำงานกับ coding agent
 
-ในโฟลเดอร์นี้มี Claude Code agent และ skill เตรียมไว้ให้แล้ว:
+ในโฟลเดอร์นี้มี agent และ skill เตรียมไว้ให้แล้ว:
 - `.claude/agents/` — 1 agent ต่อคน/ขอบเขตงาน (`vault-core-descriptor`, `vault-core-policy`, `platform-services`, `mobile-signer`) ใช้ agent ที่ตรงกับโมดูลที่กำลังทำ
 - `.claude/skills/` — ความรู้ร่วม: `bitcoin-fundamentals` (พื้นฐาน Bitcoin), `policy-engine-review` (checklist รีวิว policy engine), `testnet-workflow` (วิธีทดสอบบน testnet), `design-tokens` (ดีไซน์ระบบของแอป)
+
+`AGENTS.md` เป็นไฟล์คำสั่งกลาง Codex, Cursor, Kimi และ coding agent ตัวอื่นอ่านไฟล์นี้ตรง ๆ ส่วน `CLAUDE.md` เป็น stub ที่ import ไฟล์นั้นให้ Claude Code โหลดข้อความเดียวกัน ดังนั้นให้แก้ข้อความกลางที่ `AGENTS.md` ที่เดียว Claude Code ใช้ agent ใน `.claude/agents/` เป็น subagent ได้เลย ส่วน agent ตัวอื่นให้อ่านไฟล์ที่ตรงกับโมดูลตามตารางใน `AGENTS.md` และ `.agents/skills` เป็น symlink ไป `.claude/skills` สำหรับเครื่องมือที่อ่านแค่ path นั้น หลังแก้ไฟล์เหล่านี้ให้รัน `python3 -I scripts/check-agent-context.py`
 
 ## กฎที่ต้องรู้ก่อนเริ่ม
 

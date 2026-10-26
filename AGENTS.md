@@ -1,4 +1,4 @@
-# mebit — project guide for Claude Code
+# mebit — project guide for coding agents
 
 Bitcoin self-custody product for Thai users, built by a 4-person capstone team. Originally scoped as a lending product (2-of-3 multisig vault: borrower / platform / lender; no single party can move collateral alone) — as of 2026-08-25 the priority flipped to **wallet-first**: ship general self-custody (M-of-N, any key holder) before buy-sell and lending. Lending is still a real leg of the product, layered on top of the wallet once it's proven.
 
@@ -9,8 +9,26 @@ Start with [`docs/07-product-vision-mebit.md`](docs/07-product-vision-mebit.md) 
 - `docs/` — numbered doc set (`00`-`09`); see `docs/00-README.md` for what's current vs. lending-specific
 - `design-reference/` — mebit/Mapboss design tokens + logos (for `mobile-signer-ffi`)
 - `vault-workspace/` — the Rust workspace; `cargo build`/`cargo test` from here. Seven crates (`vault-core`, `custody-service`, `lender-signer-cli`, `mobile-signer-ffi`, `monitor-service`, `jade-ble`, `trezor-ble`), each with its own `README.md` with owner/deps/responsibilities. `jade-ble` and `trezor-ble` sit outside `default-members` (btleplug needs libdbus on Linux): reach them with `-p jade-ble` / `-p trezor-ble`. vault-core's Trezor protocol is behind its non-default `trezor` feature (`cargo test -p vault-core --features trezor`). Don't run cargo commands from the repo root, there's no top-level `Cargo.toml`.
-- `.claude/agents/` — one subagent per module, split across the 4-person team: `vault-core-descriptor`, `vault-core-policy` (both work in `vault-core/src/lib.rs`), `platform-services` (`custody-service` + `lender-signer-cli` + `monitor-service`), `mobile-signer` (`mobile-signer-ffi`). Prefer the matching agent when working inside a specific module.
-- `.claude/skills/` — shared knowledge usable from any module: `bitcoin-fundamentals`, `policy-engine-review`, `testnet-workflow`, `design-tokens`.
+- `.claude/`, `.agents/skills` and `scripts/` hold the agent context and its check. See Agent context below.
+
+## Agent context
+
+Module briefs live in `.claude/agents/` and skills in `.claude/skills/`. Claude Code loads both itself and runs each brief as a subagent, so prefer the matching one when working inside a module. Any other agent reads the matching brief before working in that module, and a skill when its description fits the task. Edit skills under `.claude/skills/` only, because `.agents/skills` is a link to it for tools that read just that path. Keep module rules out of nested `AGENTS.md` files, because Claude Code ignores them.
+
+| Brief | Covers |
+|---|---|
+| `.claude/agents/vault-core-descriptor.md` | `vault-core/src/lib.rs`, descriptor and derivation |
+| `.claude/agents/vault-core-policy.md` | `vault-core/src/lib.rs`, PSBT and policy |
+| `.claude/agents/platform-services.md` | `custody-service`, `lender-signer-cli`, `monitor-service` |
+| `.claude/agents/mobile-signer.md` | `mobile-signer-ffi` |
+
+Skills (each one's `description` says when to use it):
+
+- `.claude/skills/bitcoin-fundamentals/SKILL.md`
+- `.claude/skills/policy-engine-review/SKILL.md`
+- `.claude/skills/testnet-workflow/SKILL.md`
+- `.claude/skills/design-tokens/SKILL.md`
+- `vault-workspace/mobile-signer-ffi/app/.claude/skills/verify/SKILL.md` drives the mobile app on an emulator or simulator and applies only under `vault-workspace/mobile-signer-ffi/app`. Agents that read only `.agents/skills` do not list it, so read it before verifying app changes.
 
 ## Module dependency order
 
@@ -31,6 +49,7 @@ Start with [`docs/07-product-vision-mebit.md`](docs/07-product-vision-mebit.md) 
 - State machine transitions (in `custody-service`) must be idempotent — resubmitting the same signing request must not double-spend.
 - Don't build UniFFI/mobile app scaffolding speculatively ahead of `vault-core`'s interface stabilizing — mock it instead (see `vault-workspace/mobile-signer-ffi/README.md`).
 - When a doc spec and the existing code disagree (e.g. derivation path format, field types) and it's not obviously a typo, don't pick one yourself — flag it as an open item in `docs/04-open-items.md` and ask, per the pattern already used there.
+- After editing `AGENTS.md`, `CLAUDE.md`, a skill or a brief, run `python3 -I scripts/check-agent-context.py`. It exits 1 and names the fix for each problem.
 
 ## Out of scope
 
