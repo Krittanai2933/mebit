@@ -2,16 +2,23 @@ package com.mebit.app.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val MbTeal = Color(0xFF007368)
-val MbTealDeep = Color(0xFF003E38)
-val MbGreen = Color(0xFF009B68)
-val MbGreenLeaf = Color(0xFF4DB848)
-val MbGreen900 = Color(0xFF06312D)
-val MbYellow = Color(0xFFFCC330)
-val MbOrange = Color(0xFFF8981C)
-val MbInk = Color(0xFF1E1E1E)
-val MbGray700 = Color(0xFF4B4B4B)
-val MbGray100 = Color(0xFFE9EEED)
-val MbGray200 = Color(0xFFDFDFDF)
-val MbMintTint = Color(0xFFF2F8F7)
+/**
+ * Movie Page palette (Penpot SoT), not the older mint/teal lending wash.
+ * Sampled from boards Welcome / Add Key / Vault Created.
+ */
+val MbNavy = Color(0xFF042C49)
+val MbNavyInk = Color(0xFF0E1116)
+val MbEyebrow = Color(0xFFC2700F)
+val MbGold = Color(0xFFFBB552)
+val MbBody = Color(0xFF5B6472)
+val MbMuted = Color(0xFF2A313C)
+val MbPage = Color(0xFFF6F7F9)
+val MbBorder = Color(0xFFE4E8EE)
+val MbChip = Color(0xFFEEF1F5)
+val MbSuccess = Color(0xFF1B7A4B)
+val MbBtcOrange = Color(0xFFF7931A)
 val MbWhite = Color(0xFFFFFFFF)
+
+/** Legacy brand tokens kept for non–Movie Page surfaces. */
+val MbTeal = Color(0xFF007368)
+val MbMintTint = Color(0xFFF2F8F7)

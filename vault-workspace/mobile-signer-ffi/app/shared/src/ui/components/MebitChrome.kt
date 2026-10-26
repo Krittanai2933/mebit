@@ -49,7 +49,7 @@ fun MebitScreen(
             Text(
                 text = eyebrow,
                 style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
+                color = MaterialTheme.colorScheme.tertiary,
                 modifier = Modifier.testTag("eyebrow"),
             )
             Spacer(modifier = Modifier.height(12.dp))
