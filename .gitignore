@@ -7,3 +7,8 @@ Cargo.lock
 /vault-workspace/mobile-signer-ffi/app/build/
 
 .DS_Store
+
+# local agent / IDE tooling
+.codex/
+.cursor/
+.mcp.json
