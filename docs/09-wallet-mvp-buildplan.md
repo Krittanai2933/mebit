@@ -58,7 +58,7 @@ Ledger, Coldcard, BitBox02, การรองรับ USB ทั้งหม�
 
 ### Phase 2 — ใส่ UI เต็มตามดีไซน์ที่ยืนยันแล้ว
 
-Implement ทั้ง 11 หน้าตามดีไซน์ Claude Design ที่ตรวจแล้ว (เพิ่มกุญแจ → จับคู่/hardware wallet → ยืนยันกุญแจ → คลังกุญแจ → เลือก Policy 3 ขั้น → Vault สร้างสำเร็จ → เลือก Vault → รายละเอียด Vault) — งานเสี่ยงต่ำกว่า phase 0-1 มาก เพราะเป็น UI ประกบ engine ที่พิสูจน์แล้ว
+ใช้ Penpot Organize และ Organize · Design System เป็น source of truth สำหรับ UI ปัจจุบัน: ทำให้ครบ 7 user flows ได้แก่ Onboarding, Import existing seed, Add key · keyring, Create vault, Single-sig wallet, Vault send (multisig), และ Error & edge states. Inventory มี 105 screen boards, 378 navigate-to interactions และ 99 boards reachable จาก flow starts; แยก 6 boards ที่ยังเข้าไม่ถึงไว้เป็น coverage backlog (ดู docs/design-notes.md). เลิกใช้รายการ 11 หน้าจอจาก Claude Design เป็นขอบเขต Phase 2 เพราะเป็นต้นแบบ lending รุ่นก่อน.
 
 ### Phase 3 — advanced policy + เชื่อมขา lending
 

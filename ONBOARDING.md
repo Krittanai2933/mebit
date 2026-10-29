@@ -9,7 +9,7 @@
 3. [`docs/02-roles-and-responsibilities.md`](docs/02-roles-and-responsibilities.md) — ใครถือคีย์ไหน เซ็นคู่กับใครตอนไหน
 4. [`docs/03-flows.md`](docs/03-flows.md) — โฟลว์แบบละเอียด: onboarding, เปิด loan, คืนหลักประกัน, liquidation, fallback
 5. [`docs/04-open-items.md`](docs/04-open-items.md) — สิ่งที่ยังไม่ได้ตัดสินใจ — เช็คก่อนเชื่อว่าตัวเลข/กติกาไหนล็อกแล้ว
-6. [`docs/design-notes.md`](docs/design-notes.md) — ดีไซน์แอปฝั่งผู้กู้ (ถ้าอยู่ทีม mobile-signer-ffi ต้องอ่าน)
+6. [`docs/design-notes.md`](docs/design-notes.md) — current Penpot Organize wallet/custody flow และโน้ตดีไซน์ lending รุ่นก่อน (ทีม mobile-signer-ffi ควรอ่าน)
 7. [`docs/05-progress-and-next-steps.md`](docs/05-progress-and-next-steps.md) — **สถานะปัจจุบันจริงๆ ของแต่ละโมดูล และสิ่งที่ต้องทำต่อ** เช็คอันนี้ก่อนเริ่มงานทุกครั้งเพื่อไม่ให้ทำซ้ำกับที่มีอยู่แล้ว
 
 ## โครงสร้าง repo
