@@ -41,6 +41,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.formatBtc
 import com.mebit.app.ui.components.BottomActions
+import com.mebit.app.ui.components.IssueBanner
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbNavy
@@ -59,6 +60,8 @@ fun S5ReviewSignScreen(
 ) {
     val scope = rememberCoroutineScope()
     var refused by remember { mutableStateOf(false) }
+    // Kept local because Home sets wallet.lastError when its balance fetch fails, so it is stale when this screen opens.
+    var failed by remember { mutableStateOf(false) }
     val total = draft.amountSats + draft.feeSats
     MebitScreen(
         eyebrow = "SEND · ตรวจสอบ",
@@ -77,10 +80,12 @@ fun S5ReviewSignScreen(
                 primaryTag = "cta_s5_sign",
                 onPrimary = {
                     scope.launch {
+                        failed = false
                         // Face ID first when the app lock is on; nothing is signed on a refusal.
                         refused = !confirm()
-                        if (!refused && wallet.broadcast(session, draft.amountSats, draft.feeSats, draft.destination)) {
-                            onSigned()
+                        if (!refused) {
+                            failed = !wallet.broadcast(session, draft.amountSats, draft.feeSats, draft.destination)
+                            if (!failed) onSigned()
                         }
                     }
                 },
@@ -106,19 +111,27 @@ fun S5ReviewSignScreen(
             ReviewDivider()
             ReviewRow("คงเหลือ", "${formatBtc((wallet.balanceSats - total).coerceAtLeast(0))} BTC")
         }
-        if (refused) {
-            Spacer(modifier = Modifier.height(12.dp))
-            Text("ยืนยันตัวตนไม่สำเร็จ ลองอีกครั้ง", color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("sign_refused"))
+        reviewIssue(refused, failed)?.let {
+            Spacer(modifier = Modifier.height(20.dp))
+            IssueBanner("ส่งไม่สำเร็จ", it.message, it.tag)
         }
         if (total > wallet.balanceSats) {
             Spacer(modifier = Modifier.height(12.dp))
             Text("ยอดไม่พอ", color = MaterialTheme.colorScheme.error)
         }
-        wallet.lastError?.let {
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("error"))
-        }
     }
+}
+
+internal enum class ReviewIssue(val message: String, val tag: String) {
+    SignRefused("ยืนยันตัวตนไม่สำเร็จ ลองอีกครั้ง · ยังไม่มีอะไรถูกเซ็นหรือส่ง", "sign_refused"),
+    BroadcastFailed("ลองอีกครั้ง · ตรวจยอดคงเหลือก่อนส่งซ้ำ", "error"),
+}
+
+/** A refusal wins over a failed broadcast, because nothing was signed. */
+internal fun reviewIssue(refused: Boolean, failed: Boolean): ReviewIssue? = when {
+    refused -> ReviewIssue.SignRefused
+    failed -> ReviewIssue.BroadcastFailed
+    else -> null
 }
 
 /** Penpot 4.5: what leaves, in the first 4 decimals, and where to. The baht line is left out (no price feed). */

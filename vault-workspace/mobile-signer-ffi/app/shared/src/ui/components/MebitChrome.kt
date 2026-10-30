@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -306,6 +307,23 @@ fun InfoCard(
         Text(title, color = MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
         Spacer(modifier = Modifier.height(6.dp))
         Text(body, color = MbBody, fontSize = 11.5.sp, fontWeight = FontWeight.Light, lineHeight = 16.sp)
+    }
+}
+
+/** Penpot 4.5.1: the orange banner for a refused or failed send. Its height is a minimum so a wrapped message grows the box instead of clipping. */
+@Composable
+fun IssueBanner(title: String, message: String, tag: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 76.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(MbIconWash)
+            .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 14.dp),
+    ) {
+        Text(title, color = MbNavyInk, fontSize = 13.5.sp, fontWeight = FontWeight.Bold, lineHeight = 18.sp)
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(message, color = MbEyebrow, fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 15.sp, modifier = Modifier.testTag(tag))
     }
 }
 
