@@ -45,20 +45,20 @@ import com.mebit.app.ui.theme.MbIconWash
 /** Penpot Movie Page light scaffold (Add Key / Key Source / Vault Created). */
 @Composable
 fun MebitScreen(
-    eyebrow: String,
+    eyebrow: String?,
     title: String,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
     tag: String,
     subtitle: String? = null,
     dark: Boolean = false,
+    bottom: (@Composable ColumnScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val bg = if (dark) MbNavy else MbPage
     val titleColor = if (dark) MbWhite else MbNavyInk
     val eyebrowColor = if (dark) MbGold else MbEyebrow
     val bodyColor = if (dark) MbWhite.copy(alpha = 0.72f) else MbBody
-
     // Background edge-bleeds under system bars; content clears status / Dynamic Island / home indicator.
     Column(
         modifier = Modifier
@@ -71,20 +71,23 @@ fun MebitScreen(
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth(),
+            // No eyebrow and no back chip: keep the row's height so the title sits where the others do.
+            modifier = Modifier.fillMaxWidth().then(if (eyebrow == null) Modifier.height(36.dp) else Modifier),
         ) {
             if (onBack != null) {
                 BackChip(onClick = onBack, dark = dark)
                 Spacer(modifier = Modifier.width(12.dp))
             }
-            Text(
-                text = eyebrow.uppercase(),
-                color = eyebrowColor,
-                fontSize = 10.5.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 0.6.sp,
-                modifier = Modifier.testTag("eyebrow"),
-            )
+            if (eyebrow != null) {
+                Text(
+                    text = eyebrow.uppercase(),
+                    color = eyebrowColor,
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.6.sp,
+                    modifier = Modifier.testTag("eyebrow"),
+                )
+            }
         }
         Spacer(modifier = Modifier.height(16.dp))
         Column(
@@ -114,6 +117,7 @@ fun MebitScreen(
             Spacer(modifier = Modifier.height(20.dp))
             content()
         }
+        bottom?.invoke(this)
         TextButton(
             onClick = onOpenCatalog,
             modifier = Modifier.fillMaxWidth().testTag("open_catalog"),

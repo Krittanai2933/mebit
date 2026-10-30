@@ -20,6 +20,8 @@
         <string>$(CURRENT_PROJECT_VERSION)</string>
         <key>NSBluetoothAlwaysUsageDescription</key>
         <string>mebit talks to your hardware wallet over Bluetooth.</string>
+        <key>NSFaceIDUsageDescription</key>
+        <string>ใช้ Face ID เพื่อปลดล็อกแอป mebit และยืนยันการเซ็นส่งเงิน</string>
         <key>UILaunchScreen</key>
         <dict/>
         <key>UIApplicationSupportsIndirectInputEvents</key>

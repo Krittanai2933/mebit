@@ -4,7 +4,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,6 +24,9 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import com.mebit.app.data.AppLockState
 import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.MultisigSendDraft
@@ -44,6 +51,7 @@ import com.mebit.app.feature.onboarding.HwBackupConfirmScreen
 import com.mebit.app.feature.onboarding.ImportSeedScreen
 import com.mebit.app.feature.onboarding.KeyCreatedScreen
 import com.mebit.app.feature.onboarding.KeySourceScreen
+import com.mebit.app.feature.onboarding.LockMode
 import com.mebit.app.feature.onboarding.VerifyWordsScreen
 import com.mebit.app.feature.onboarding.WelcomeScreen
 import com.mebit.app.feature.vault.ChooseKeysScreen
@@ -67,6 +75,8 @@ import com.mebit.app.feature.send.M1SendVaultScreen
 import com.mebit.app.feature.send.M2CollectSignaturesScreen
 import com.mebit.app.feature.send.M3SignOnJadeScreen
 import com.mebit.app.feature.send.M4ReadyToBroadcastScreen
+import com.mebit.app.platformBiometrics
+import com.mebit.app.ui.theme.MbPage
 
 private val ImplementedRoutes = MovieRoute.entries.toSet()
 
@@ -81,7 +91,13 @@ fun MebitNavHost() {
     val singleSig = remember { SingleSigWallet() }
     val sendDraft = remember { SendDraft() }
     val multisigSend = remember { MultisigSendDraft() }
+    val biometrics = remember { platformBiometrics() }
+    val appLock = remember { AppLockState() }
     val current = backStack.last()
+
+    // More than a minute away locks the app again, once the user turned the lock on.
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { appLock.onBackground() }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { appLock.onForeground(session.appLockEnabled) }
 
     fun navigate(route: MovieRoute) {
         if (route == MovieRoute.Keyring || route == MovieRoute.KeyringFirstVault) {
@@ -113,7 +129,8 @@ fun MebitNavHost() {
         )
         MovieRoute.ImportSeed -> ImportSeedScreen(
             session = session,
-            onRestored = { navigate(MovieRoute.KeyCreated) },
+            // An import skips backup: the user typed the words from their own record.
+            onRestored = { navigate(MovieRoute.AppLock) },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
@@ -137,16 +154,17 @@ fun MebitNavHost() {
         )
         MovieRoute.AppLock -> AppLockScreen(
             session = session,
-            onContinue = { navigate(MovieRoute.HomeFirstRun) },
+            biometrics = biometrics,
+            mode = LockMode.Enable,
+            onDone = { navigate(MovieRoute.HomeFirstRun) },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
         MovieRoute.HomeFirstRun -> HomeFirstRunScreen(
             session = session,
+            wallet = singleSig,
             onSingleSig = { navigate(MovieRoute.S1HomeSingleSig) },
             onVault = { navigate(MovieRoute.KeyringFirstVault) },
-            onLater = { navigate(MovieRoute.VaultList) },
-            onBack = onBack,
             onOpenCatalog = openCatalog,
         )
         MovieRoute.HwBackupConfirm -> HwBackupConfirmScreen(
@@ -318,6 +336,7 @@ fun MebitNavHost() {
             wallet = singleSig,
             session = session,
             draft = sendDraft,
+            confirm = { appLock.confirm(biometrics, session.appLockEnabled, "ยืนยันการเซ็นส่งเงิน") },
             onSigned = { navigate(MovieRoute.S6Sent) },
             onBack = onBack,
             onOpenCatalog = openCatalog,
@@ -417,6 +436,25 @@ fun MebitNavHost() {
                     )
                 }
             }
+        }
+    }
+
+    if (appLock.locked) {
+        // Covers everything, swallows taps, and goes away only on Face ID or the device passcode.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MbPage)
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
+        ) {
+            AppLockScreen(
+                session = session,
+                biometrics = biometrics,
+                mode = LockMode.Unlock,
+                onDone = { appLock.unlock() },
+                onBack = null,
+                onOpenCatalog = {},
+            )
         }
     }
 }

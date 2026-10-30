@@ -21,6 +21,10 @@ class OnboardingSession {
         private set
     var derivationPath: String by mutableStateOf("")
         private set
+
+    /** The BIP-39 passphrase this key was derived with, empty for none. The hot wallet needs it too. */
+    var passphrase: String by mutableStateOf("")
+        private set
     var backupConfirmed: Boolean by mutableStateOf(false)
         private set
     var appLockEnabled: Boolean by mutableStateOf(false)
@@ -31,19 +35,33 @@ class OnboardingSession {
     fun generateThisDevice(passphrase: String = "", network: KeyNetwork = KeyNetwork.TEST) {
         lastError = null
         try {
-            applyKey(generateSoftwareMultisigKey(passphrase, network, 0u))
+            applyKey(generateSoftwareMultisigKey(passphrase, network, 0u), passphrase)
         } catch (e: Exception) {
             lastError = e.message
         }
     }
 
+    /** An imported key counts as backed up: the user typed the words from their own record. */
     fun restoreFromWords(words: List<String>, passphrase: String = "", network: KeyNetwork = KeyNetwork.TEST) {
         lastError = null
         try {
-            applyKey(restoreSoftwareMultisigKey(words, passphrase, network, 0u))
+            applyKey(restoreSoftwareMultisigKey(words, passphrase, network, 0u), passphrase)
+            backupConfirmed = true
         } catch (e: Exception) {
             lastError = e.message
         }
+    }
+
+    /** Forget the key, for an import the user rejected at the fingerprint check. */
+    fun clear() {
+        words = emptyList()
+        fingerprint = ""
+        xpub = ""
+        derivationPath = ""
+        passphrase = ""
+        backupConfirmed = false
+        appLockEnabled = false
+        lastError = null
     }
 
     fun markBackupConfirmed() {
@@ -54,11 +72,12 @@ class OnboardingSession {
         appLockEnabled = true
     }
 
-    private fun applyKey(key: SoftwareAccountKey) {
+    private fun applyKey(key: SoftwareAccountKey, passphrase: String) {
         words = key.mnemonicWords
         fingerprint = key.masterFingerprint
         xpub = key.xpub
         derivationPath = key.derivationPath
+        this.passphrase = passphrase
         backupConfirmed = false
     }
 }

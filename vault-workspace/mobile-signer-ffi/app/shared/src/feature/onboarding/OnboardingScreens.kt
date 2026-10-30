@@ -1,32 +1,55 @@
 package com.mebit.app.feature.onboarding
 
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.OnboardingSession
+import com.mebit.app.resources.Res
+import com.mebit.app.resources.mebit_logo
+import com.mebit.app.ui.components.BackChip
+import com.mebit.app.ui.components.CardFan
 import com.mebit.app.ui.components.HwChip
 import com.mebit.app.ui.components.InfoCard
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.OptionCard
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
+import com.mebit.app.ui.theme.MbGold
+import com.mebit.app.ui.theme.MbNavy
+import com.mebit.app.ui.theme.MbWhite
+import org.jetbrains.compose.resources.painterResource
 
 @Composable
 fun WelcomeScreen(
@@ -35,18 +58,67 @@ fun WelcomeScreen(
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
-    MebitScreen(
-        eyebrow = "WELCOME",
-        title = "Bitcoin ของคุณ\nKey อยู่ในมือคุณ",
-        subtitle = "กุญแจเดียว หรือหลายกุญแจ · คุณถือเองทุกดอก",
-        dark = true,
-        onBack = onBack,
-        onOpenCatalog = onOpenCatalog,
-        tag = "screen_welcome",
+    // Penpot Organize > 1.1 Welcome: logo and card fan on top, text and CTAs at the bottom, 28dp margins.
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MbNavy)
+            .safeDrawingPadding()
+            .padding(top = 14.dp)
+            .testTag("screen_welcome"),
     ) {
-        PrimaryCta("สร้างกระเป๋าใหม่", "cta_create", onCreate, darkSurface = true)
-        Spacer(modifier = Modifier.height(8.dp))
-        SecondaryCta("นำเข้ากระเป๋าเดิม", "cta_import", onImport, darkSurface = true)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 28.dp),
+        ) {
+            if (onBack != null) {
+                BackChip(onClick = onBack, dark = true)
+                Spacer(modifier = Modifier.width(12.dp))
+            }
+            Image(
+                painter = painterResource(Res.drawable.mebit_logo),
+                contentDescription = "mebit",
+                modifier = Modifier.size(width = 122.dp, height = 32.dp),
+            )
+        }
+        // The fan keeps its design size, stays top-aligned and bleeds off the right edge; on a short screen it gives up its shadow tail first.
+        Box(
+            modifier = Modifier.weight(1f).fillMaxWidth().padding(top = 10.dp).clipToBounds(),
+            contentAlignment = Alignment.TopStart,
+        ) {
+            CardFan(Modifier.wrapContentSize(Alignment.TopStart, unbounded = true))
+        }
+        Column(modifier = Modifier.padding(horizontal = 28.dp)) {
+            Text(
+                text = "กุญแจเดียว หรือหลายกุญแจ · คุณถือเองทุกดอก",
+                color = MbGold,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 17.sp,
+                letterSpacing = 0.4.sp,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "Bitcoin ของคุณ\nKey อยู่ในมือคุณ",
+                color = MbWhite,
+                fontSize = 40.sp,
+                fontWeight = FontWeight.Bold,
+                lineHeight = 46.sp,
+                letterSpacing = (-0.8).sp,
+            )
+            Spacer(modifier = Modifier.height(34.dp))
+            PrimaryCta("สร้างกระเป๋าใหม่", "cta_create", onCreate, darkSurface = true)
+            Spacer(modifier = Modifier.height(20.dp))
+            SecondaryCta("นำเข้ากระเป๋าเดิม", "cta_import", onImport, darkSurface = true)
+        }
+        // Penpot leaves 22dp under the CTAs above the home-indicator inset; the debug link lives in it so the CTAs keep their design position.
+        TextButton(
+            onClick = onOpenCatalog,
+            contentPadding = PaddingValues(0.dp),
+            modifier = Modifier.fillMaxWidth().height(22.dp).testTag("open_catalog"),
+        ) {
+            Text("รายการหน้าทั้งหมด (debug)", color = MbWhite.copy(alpha = 0.5f), fontSize = 12.sp)
+        }
     }
 }
 
@@ -89,42 +161,6 @@ fun KeySourceScreen(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        session.lastError?.let {
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("error"))
-        }
-    }
-}
-
-@Composable
-fun ImportSeedScreen(
-    session: OnboardingSession,
-    onRestored: () -> Unit,
-    onBack: (() -> Unit)?,
-    onOpenCatalog: () -> Unit,
-) {
-    var draft by remember { mutableStateOf("") }
-    MebitScreen(
-        eyebrow = "IMPORT SEED",
-        title = "นำเข้า 24 คำ",
-        subtitle = "พิมพ์หรือวาง 24 คำตามลำดับ แล้วกู้กุญแจเข้าเครื่องนี้",
-        onBack = onBack,
-        onOpenCatalog = onOpenCatalog,
-        tag = "screen_onboarding/import-seed",
-    ) {
-        OutlinedTextField(
-            value = draft,
-            onValueChange = { draft = it },
-            modifier = Modifier.fillMaxWidth().testTag("seed_input"),
-            minLines = 4,
-            label = { Text("24 คำ") },
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        PrimaryCta("กู้กุญแจ", "cta_restore", {
-            val words = draft.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
-            session.restoreFromWords(words)
-            if (session.lastError == null && session.words.isNotEmpty()) onRestored()
-        })
         session.lastError?.let {
             Spacer(modifier = Modifier.height(12.dp))
             Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("error"))
@@ -252,74 +288,6 @@ fun VerifyWordsScreen(
             Spacer(modifier = Modifier.height(12.dp))
             Text("ไม่ถูก · ลองใหม่", color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("verify_error"))
         }
-    }
-}
-
-@Composable
-fun AppLockScreen(
-    session: OnboardingSession,
-    onContinue: () -> Unit,
-    onBack: (() -> Unit)?,
-    onOpenCatalog: () -> Unit,
-) {
-    MebitScreen(
-        eyebrow = "APP LOCK",
-        title = "ล็อกแอป",
-        onBack = onBack,
-        onOpenCatalog = onOpenCatalog,
-        subtitle = "เปิด Face ID หรือรหัสผ่านเครื่องเพื่อเปิด mebit (demo เปิดทันทีบนหน้านี้)",
-        tag = "screen_onboarding/app-lock",
-    ) {
-        PrimaryCta("เปิดการล็อก", "cta_enable_lock", {
-            session.markAppLockEnabled()
-            onContinue()
-        })
-        Spacer(modifier = Modifier.height(8.dp))
-        SecondaryCta("ข้ามตอนนี้", "cta_skip_lock", onContinue)
-    }
-}
-
-@Composable
-fun HomeFirstRunScreen(
-    session: OnboardingSession,
-    onSingleSig: () -> Unit,
-    onVault: () -> Unit,
-    onLater: () -> Unit,
-    onBack: (() -> Unit)?,
-    onOpenCatalog: () -> Unit,
-) {
-    MebitScreen(
-        eyebrow = "HOME",
-        title = "จะเริ่มใช้แบบไหน",
-        onBack = onBack,
-        onOpenCatalog = onOpenCatalog,
-        subtitle = "เลือกตอนนี้ หรือสร้าง Vault ทีหลังก็ได้",
-        tag = "screen_home/first-run",
-    ) {
-        if (!session.backupConfirmed) {
-            Text(
-                text = "ยังไม่ได้สำรองกุญแจ · ต้องสำรอง 24 คำก่อนรับเงินครั้งแรก",
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-        }
-        OptionCard(
-            title = "กระเป๋ากุญแจเดียว",
-            body = "พร้อมใช้ · รับ-ส่งได้ทันที",
-            tag = "cta_singlesig",
-            onClick = onSingleSig,
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        OptionCard(
-            title = "Vault หลายกุญแจ",
-            body = "เพิ่ม Jade, Trezor Safe 7 หรือมือถืออีกเครื่อง",
-            tag = "cta_vault",
-            chips = listOf("Jade", "Trezor Safe 7"),
-            onClick = onVault,
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        SecondaryCta("ไว้ทีหลัง", "cta_later", onLater)
     }
 }
 

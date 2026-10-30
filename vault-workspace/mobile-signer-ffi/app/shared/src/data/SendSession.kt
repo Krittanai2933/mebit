@@ -32,7 +32,7 @@ class SingleSigWallet {
             return
         }
         try {
-            val snap = hotWalletSnapshot(session.words, network)
+            val snap = hotWalletSnapshot(session.words, session.passphrase, network)
             receiveAddress = snap.receiveAddress
             balanceSats = snap.balanceSats.toLong()
             live = true
@@ -49,7 +49,7 @@ class SingleSigWallet {
             return
         }
         try {
-            receiveAddress = hotReceiveAddress(session.words, network, index)
+            receiveAddress = hotReceiveAddress(session.words, session.passphrase, network, index)
             live = true
         } catch (e: Exception) {
             lastError = e.message
@@ -76,13 +76,14 @@ class SingleSigWallet {
         return try {
             val result = hotSend(
                 session.words,
+                session.passphrase,
                 network,
                 destination,
                 amountSats.toULong(),
                 feeSats.toULong(),
             )
             lastTxid = result.txid
-            val snap = hotWalletSnapshot(session.words, network)
+            val snap = hotWalletSnapshot(session.words, session.passphrase, network)
             balanceSats = snap.balanceSats.toLong()
             receiveAddress = snap.receiveAddress
             true

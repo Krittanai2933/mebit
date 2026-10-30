@@ -19,6 +19,9 @@ val MbIconWash = Color(0xFFFDEFDD)
 val MbSuccess = Color(0xFF1B7A4B)
 val MbBtcOrange = Color(0xFFF7931A)
 val MbWhite = Color(0xFFFFFFFF)
+val MbSlate = Color(0xFF8A93A1)
+val MbPick = Color(0xFFD5D9E0)
+val MbGreenWash = Color(0xFFE4F2EA)
 
 /** Legacy brand tokens kept for non–Movie Page surfaces. */
 val MbTeal = Color(0xFF007368)

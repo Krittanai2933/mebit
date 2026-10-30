@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Show / hide toggle of the passphrase field (Penpot Organize > 1B.4.3). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M2,12C5,6.5 8.5,4.5 12,4.5C15.5,4.5 19,6.5 22,12C19,17.5 15.5,19.5 12,19.5C8.5,19.5 5,17.5 2,12Z"
+        android:strokeColor="#8A93A1"
+        android:strokeWidth="1.6"
+        android:strokeLineJoin="round"/>
+    <path
+        android:fillColor="#8A93A1"
+        android:pathData="M12,9C13.657,9 15,10.343 15,12C15,13.657 13.657,15 12,15C10.343,15 9,13.657 9,12C9,10.343 10.343,9 12,9Z"/>
+</vector>

@@ -15,6 +15,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.SendDraft
@@ -22,6 +23,7 @@ import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
+import kotlinx.coroutines.launch
 
 @Composable
 fun S1HomeSingleSigScreen(
@@ -157,10 +159,13 @@ fun S5ReviewSignScreen(
     wallet: SingleSigWallet,
     session: OnboardingSession,
     draft: SendDraft,
+    confirm: suspend () -> Boolean,
     onSigned: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
+    var refused by remember { mutableStateOf(false) }
     MebitScreen(
         eyebrow = "REVIEW & SIGN",
         title = "ตรวจแล้วเซ็น",
@@ -176,11 +181,18 @@ fun S5ReviewSignScreen(
             if (wallet.live) "เซ็นและส่ง" else "เซ็นบนเครื่องนี้ (demo)",
             "cta_s5_sign",
             {
-                if (wallet.broadcast(session, draft.amountSats, draft.feeSats, draft.destination)) {
-                    onSigned()
+                scope.launch {
+                    // Face ID first when the app lock is on; nothing is signed on a refusal.
+                    refused = !confirm()
+                    if (!refused && wallet.broadcast(session, draft.amountSats, draft.feeSats, draft.destination)) {
+                        onSigned()
+                    }
                 }
             },
         )
+        if (refused) {
+            Text("ยืนยันตัวตนไม่สำเร็จ ลองอีกครั้ง", color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("sign_refused"))
+        }
         if (draft.amountSats + draft.feeSats > wallet.balanceSats) {
             Text("ยอดไม่พอ", color = MaterialTheme.colorScheme.error)
         }

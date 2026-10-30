@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penpot Organize > 1B.5 App Lock > Face ID tile > "Face ID glyph": corner brackets, eyes, nose, orange smile. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <path
+        android:pathData="M6,20L6,12C6,8.687,8.686,6,12,6L20,6M44,6L52,6C55.314,6,58,8.687,58,12L58,20M58,44L58,52C58,55.313,55.314,58,52,58L44,58M20,58L12,58C8.686,58,6,55.313,6,52L6,44"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+    <path
+        android:pathData="M22,24L22,29M42,24L42,29"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+    <path
+        android:pathData="M32,24L32,36L29,36"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+    <path
+        android:pathData="M23,44C28,48,36,48,41,44"
+        android:strokeColor="#F7931A"
+        android:strokeWidth="3.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+</vector>
