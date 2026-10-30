@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,43 +47,6 @@ import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbWhite
-
-@Composable
-fun S1HomeSingleSigScreen(
-    wallet: SingleSigWallet,
-    session: OnboardingSession,
-    onReceive: () -> Unit,
-    onSend: () -> Unit,
-    onBack: (() -> Unit)?,
-    onOpenCatalog: () -> Unit,
-) {
-    LaunchedEffect(session.words, session.fingerprint) {
-        wallet.bindSession(session)
-    }
-    MebitScreen(
-        eyebrow = "SINGLE-SIG",
-        title = "กระเป๋าใช้จ่าย",
-        onBack = onBack,
-        onOpenCatalog = onOpenCatalog,
-        tag = "screen_send/s1",
-    ) {
-        Text(
-            text = "ยอด · ${wallet.balanceSats} sats" + if (wallet.live) " · live" else " · demo",
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.testTag("ss_balance"),
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        SecondaryCta("รีเฟรชยอด", "cta_s1_refresh", { wallet.bindSession(session) })
-        Spacer(modifier = Modifier.height(20.dp))
-        PrimaryCta("รับ", "cta_s1_receive", onReceive)
-        Spacer(modifier = Modifier.height(8.dp))
-        SecondaryCta("ส่ง", "cta_s1_send", onSend)
-        wallet.lastError?.let {
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("error"))
-        }
-    }
-}
 
 @Composable
 fun S2ReceiveBackupGateScreen(

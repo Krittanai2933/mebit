@@ -316,7 +316,7 @@ fun MebitNavHost() {
                 sendDraft.reset()
                 navigate(MovieRoute.S4Send)
             },
-            onBack = onBack,
+            onVault = { navigate(MovieRoute.KeyringFirstVault) },
             onOpenCatalog = openCatalog,
         )
         MovieRoute.S2ReceiveBackupGate -> S2ReceiveBackupGateScreen(
