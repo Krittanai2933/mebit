@@ -21,6 +21,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,6 +43,8 @@ import com.mebit.app.resources.ic_chevron
 import com.mebit.app.resources.mebit_logo
 import com.mebit.app.ui.components.DebugLink
 import com.mebit.app.ui.theme.MbBody
+import com.mebit.app.ui.theme.MbSlate
+import com.mebit.app.ui.theme.MbChip
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbBtcOrange
 import com.mebit.app.ui.theme.MbEyebrow
@@ -84,6 +90,7 @@ internal fun SingleSigHome(
     LaunchedEffect(session.words, session.fingerprint, session.passphrase) {
         withContext(Dispatchers.Default) { wallet.bindSession(session) }
     }
+    var keyDetails by remember { mutableStateOf(false) }
     Box(modifier = Modifier.fillMaxSize().background(MbPage).testTag(tag)) {
         Box(modifier = Modifier.fillMaxWidth().height(350.dp).background(MbNavy))
         Column(modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 20.dp).padding(top = 4.dp)) {
@@ -123,7 +130,7 @@ internal fun SingleSigHome(
                 HomeAction("ส่ง", filled = false, tag = "cta_s1_send", modifier = Modifier.weight(1f), onClick = onSend)
             }
             Spacer(modifier = Modifier.height(58.dp))
-            KeyStatus(backedUp = session.backupConfirmed)
+            KeyStatus(backedUp = session.backupConfirmed, fingerprint = session.fingerprint, expanded = keyDetails, onToggle = { keyDetails = !keyDetails })
             Spacer(modifier = Modifier.height(14.dp))
             UpgradeCard(onVault)
             wallet.lastError?.let {
@@ -152,21 +159,50 @@ private fun HomeAction(label: String, filled: Boolean, tag: String, modifier: Mo
     }
 }
 
+/** Penpot 4.1 closed and 4.1.1 open: the same card, with the key's row under a divider. */
 @Composable
-private fun KeyStatus(backedUp: Boolean) {
+private fun KeyStatus(backedUp: Boolean, fingerprint: String, expanded: Boolean, onToggle: () -> Unit) {
     val card = RoundedCornerShape(16.dp)
-    Row(
-        modifier = Modifier.fillMaxWidth().height(52.dp).clip(card).background(MbWhite).border(1.dp, MbBorder, card).padding(horizontal = 15.dp).testTag("key_status"),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(8.dp).background(if (backedUp) MbSuccess else MbBtcOrange, CircleShape))
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(
-            text = "กุญแจ: iPhone ของฉัน · " + if (backedUp) "สำรองแล้ว" else "ยังไม่สำรอง",
-            color = MbBody,
-            fontSize = 12.sp,
-            lineHeight = 16.sp,
-        )
+    Column(modifier = Modifier.fillMaxWidth().clip(card).background(MbWhite).border(1.dp, MbBorder, card).testTag("key_status")) {
+        Row(modifier = Modifier.fillMaxWidth().height(52.dp).padding(start = 15.dp, end = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(8.dp).background(if (backedUp) MbSuccess else MbBtcOrange, CircleShape))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "กุญแจ: iPhone ของฉัน · " + if (backedUp) "สำรองแล้ว" else "ยังไม่สำรอง",
+                color = MbBody,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = if (expanded) "ซ่อน" else "รายละเอียด",
+                color = MbNavy,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 15.sp,
+                modifier = Modifier.clickable(role = Role.Button, onClick = onToggle).padding(bottom = 8.dp).testTag("key_details_toggle"),
+            )
+        }
+        if (expanded) {
+            Box(modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth().height(1.dp).background(MbBorder))
+            Row(modifier = Modifier.fillMaxWidth().height(63.dp).padding(start = 22.dp, end = 22.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(modifier = Modifier.size(28.dp).background(MbChip, CircleShape), contentAlignment = Alignment.Center) {
+                    Text("1", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text("iPhone ของฉัน", color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 19.sp)
+                    Text(
+                        text = "mebit บนเครื่องนี้ · " + fingerprint.chunked(4).joinToString(" ").ifBlank { "—" },
+                        color = MbSlate,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Light,
+                        lineHeight = 15.sp,
+                        modifier = Modifier.testTag("key_fingerprint"),
+                    )
+                }
+            }
+        }
     }
 }
 
