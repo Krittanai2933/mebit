@@ -42,6 +42,7 @@ import com.mebit.app.ui.theme.MbMuted
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbPage
+import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.app.ui.theme.MbIconWash
 
@@ -73,8 +74,8 @@ fun MebitScreen(
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                // No eyebrow and no back chip: keep the row's height so the title sits where the others do.
-                modifier = Modifier.fillMaxWidth().then(if (eyebrow == null) Modifier.height(36.dp) else Modifier),
+                // The row keeps the back chip's height with or without the chip, so the title sits where the boards put it.
+                modifier = Modifier.fillMaxWidth().height(36.dp),
             ) {
                 if (onBack != null) {
                     BackChip(onClick = onBack, dark = dark)
@@ -164,6 +165,7 @@ fun OptionCard(
     tag: String,
     onClick: () -> Unit,
     chips: List<String> = emptyList(),
+    chipsTrailing: String? = null,
     leading: @Composable (() -> Unit)? = null,
 ) {
     Row(
@@ -204,9 +206,12 @@ fun OptionCard(
                 lineHeight = 16.sp,
             )
             if (chips.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Spacer(modifier = Modifier.height(14.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     chips.forEach { HwChip(it) }
+                    if (chipsTrailing != null) {
+                        Text(text = chipsTrailing, color = MbSlate, fontSize = 11.5.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 4.dp))
+                    }
                 }
             }
         }
@@ -305,5 +310,31 @@ fun InfoCard(
         Text(title, color = MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
         Spacer(modifier = Modifier.height(6.dp))
         Text(body, color = MbBody, fontSize = 11.5.sp, fontWeight = FontWeight.Light, lineHeight = 16.sp)
+    }
+}
+
+/** The pair pinned at the foot of a screen: the primary pill and a text link under it. A null [onLink] leaves the link as plain text. */
+@Composable
+fun BottomActions(
+    primaryLabel: String,
+    primaryTag: String,
+    onPrimary: () -> Unit,
+    linkLabel: String,
+    linkTag: String,
+    onLink: (() -> Unit)?,
+    enabled: Boolean = true,
+) {
+    Spacer(modifier = Modifier.height(12.dp))
+    PrimaryCta(primaryLabel, primaryTag, onPrimary, enabled)
+    Spacer(modifier = Modifier.height(9.dp))
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(29.dp)
+            .then(if (onLink != null) Modifier.clickable(role = Role.Button, onClick = onLink) else Modifier)
+            .testTag(linkTag),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(linkLabel, color = MbNavy, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
     }
 }

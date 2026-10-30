@@ -110,6 +110,9 @@ fun MebitNavHost() {
         if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
 
+    // A backup started from the Home banner returns there. The create flow goes on to App Lock.
+    fun afterBackup() = navigate(if (MovieRoute.HomeFirstRun in backStack) MovieRoute.HomeFirstRun else MovieRoute.AppLock)
+
     val onBack: (() -> Unit)? = if (backStack.size > 1) ({ goBack() }) else null
     val openCatalog = { catalogOpen = true }
 
@@ -137,18 +140,19 @@ fun MebitNavHost() {
         MovieRoute.KeyCreated -> KeyCreatedScreen(
             session = session,
             onBackup = { navigate(MovieRoute.BackupWords) },
-            onBack = onBack,
+            onSkip = { navigate(MovieRoute.AppLock) },
             onOpenCatalog = openCatalog,
         )
         MovieRoute.BackupWords -> BackupWordsScreen(
             session = session,
             onVerifiedReady = { navigate(MovieRoute.VerifyWords) },
+            onSkip = { afterBackup() },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
         MovieRoute.VerifyWords -> VerifyWordsScreen(
             session = session,
-            onVerified = { navigate(MovieRoute.AppLock) },
+            onVerified = { afterBackup() },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )

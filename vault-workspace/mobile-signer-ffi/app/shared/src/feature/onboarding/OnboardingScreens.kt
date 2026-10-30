@@ -13,8 +13,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -26,13 +24,12 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.OnboardingSession
@@ -40,8 +37,6 @@ import com.mebit.app.resources.Res
 import com.mebit.app.resources.mebit_logo
 import com.mebit.app.ui.components.BackChip
 import com.mebit.app.ui.components.CardFan
-import com.mebit.app.ui.components.HwChip
-import com.mebit.app.ui.components.InfoCard
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.OptionCard
 import com.mebit.app.ui.components.PrimaryCta
@@ -50,6 +45,33 @@ import com.mebit.app.ui.theme.MbGold
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbWhite
 import org.jetbrains.compose.resources.painterResource
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextAlign
+import com.mebit.app.data.VerifyQuestion
+import com.mebit.app.data.verifyQuestions
+import com.mebit.app.resources.ic_tick_white
+import com.mebit.app.ui.components.BottomActions
+import com.mebit.app.ui.theme.MbBorder
+import com.mebit.app.ui.theme.MbBtcOrange
+import com.mebit.app.ui.theme.MbChip
+import com.mebit.app.ui.theme.MbEyebrow
+import com.mebit.app.ui.theme.MbIconWash
+import com.mebit.app.ui.theme.MbMuted
+import com.mebit.app.ui.theme.MbNavyInk
+import com.mebit.app.ui.theme.MbPage
+import com.mebit.app.ui.theme.MbPick
+import com.mebit.app.ui.theme.MbSlate
+import com.mebit.app.ui.theme.MbBody
 
 @Composable
 fun WelcomeScreen(
@@ -137,11 +159,27 @@ fun KeySourceScreen(
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         tag = "screen_onboarding/key-source",
+        bottom = {
+            Text(
+                text = "ไม่แน่ใจ? เริ่มจากมือถือก่อน แล้วค่อยเพิ่ม Jade หรือ Trezor เป็นกุญแจดอกที่สองตอนยกระดับเป็น Vault",
+                color = MbSlate,
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+            )
+            Spacer(modifier = Modifier.height(18.dp))
+        },
     ) {
+        Spacer(modifier = Modifier.height(9.dp))
         OptionCard(
             title = "มือถือเครื่องนี้",
             body = "สร้างกุญแจใหม่ในชิปของเครื่อง สำรองด้วย 24 คำ",
             tag = "cta_phone",
+            leading = {
+                Box(Modifier.size(44.dp)) {
+                    Box(Modifier.offset(15.dp, 10.dp).size(15.dp, 23.dp).border(2.dp, MbNavy, RoundedCornerShape(4.dp)))
+                }
+            },
             onClick = {
                 session.generateThisDevice()
                 if (session.lastError == null && session.words.isNotEmpty()) onPhone()
@@ -150,16 +188,17 @@ fun KeySourceScreen(
         Spacer(modifier = Modifier.height(12.dp))
         OptionCard(
             title = "Hardware wallet",
-            body = "กุญแจอยู่บนอุปกรณ์ตลอด มือถือแค่ดูยอดและส่งให้อุปกรณ์เซ็น · เชื่อมผ่าน Bluetooth",
+            body = "กุญแจอยู่บนอุปกรณ์ตลอด มือถือแค่ดูยอดและส่งให้อุปกรณ์เซ็น",
             tag = "cta_hardware",
             chips = listOf("Jade", "Trezor Safe 7"),
+            chipsTrailing = "เชื่อมผ่าน Bluetooth",
+            leading = {
+                Box(Modifier.size(44.dp)) {
+                    Box(Modifier.offset(11.dp, 16.dp).size(22.dp, 14.dp).border(2.dp, MbNavy, RoundedCornerShape(3.dp)))
+                    Box(Modifier.offset(27.dp, 21.dp).size(5.dp).background(MbBtcOrange, CircleShape))
+                }
+            },
             onClick = onHardware,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "ไม่แน่ใจ? เริ่มจากมือถือก่อน แล้วค่อยเพิ่ม Jade หรือ Trezor เป็นกุญแจดอกที่สองตอนยกระดับเป็น Vault",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         session.lastError?.let {
             Spacer(modifier = Modifier.height(12.dp))
@@ -172,35 +211,113 @@ fun KeySourceScreen(
 fun KeyCreatedScreen(
     session: OnboardingSession,
     onBackup: () -> Unit,
-    onBack: (() -> Unit)?,
+    onSkip: () -> Unit,
     onOpenCatalog: () -> Unit,
 ) {
     MebitScreen(
-        eyebrow = "KEY CREATED",
+        eyebrow = "NEW WALLET · ขั้น 1 / 3",
         title = "สร้างกุญแจแล้ว",
-        onBack = onBack,
+        // The key exists now, so there is nothing to go back to.
+        onBack = null,
         onOpenCatalog = onOpenCatalog,
         subtitle = "กุญแจดอกนี้เก็บอยู่ในชิปความปลอดภัยของเครื่องนี้เท่านั้น ไม่ถูกส่งออกไปที่ไหน รวมถึง mebit",
         tag = "screen_onboarding/key-created",
+        bottom = { BottomActions("สำรองตอนนี้", "cta_backup", onBackup, "ทำทีหลัง", "cta_skip_backup", onSkip) },
     ) {
-        Text(
-            text = "Fingerprint · " + session.fingerprint.ifBlank { "—" },
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.testTag("fingerprint"),
-        )
-        Text(
-            text = session.derivationPath.ifBlank { "m/48'/1'/0'/2'" },
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        InfoCard(
-            eyebrow = "BACKUP",
-            title = "สำรอง 24 คำก่อนรับเงินครั้งแรก",
-            body = "ถ้าเครื่องหายหรือพัง 24 คำนี้คือทางเดียวที่จะกู้กระเป๋าคืน mebit กู้ให้ไม่ได้ เพราะเราไม่ได้ถือกุญแจของคุณ",
+        Spacer(modifier = Modifier.height(19.dp))
+        KeyCard(
+            monogram = "iOS",
+            monogramInk = MbNavy,
+            title = "iPhone ของฉัน",
+            meta = "mebit บนเครื่องนี้ · " + session.fingerprint.chunked(4).joinToString(" ").ifBlank { "—" },
+            metaTag = "fingerprint",
+            badge = "ยังไม่สำรอง",
+            badgeInk = MbEyebrow,
+            badgeBackground = MbIconWash,
         )
         Spacer(modifier = Modifier.height(20.dp))
-        PrimaryCta("สำรองเลย", "cta_backup", onBackup)
+        NextStepCard()
+    }
+}
+
+/** Penpot 1.3 and 1.2.1 key card: monogram tile, name, one meta line and a status pill. */
+@Composable
+private fun KeyCard(
+    monogram: String,
+    monogramInk: Color,
+    title: String,
+    meta: String,
+    metaTag: String,
+    badge: String,
+    badgeInk: Color,
+    badgeBackground: Color,
+) {
+    val shape = RoundedCornerShape(20.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(84.dp)
+            .shadow(4.dp, shape, clip = false)
+            .clip(shape)
+            .background(MbWhite)
+            .border(1.dp, MbBorder, shape)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).background(MbIconWash),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(monogram, color = monogramInk, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(modifier = Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f).padding(bottom = 4.dp)) {
+            Text(title, color = MbNavyInk, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text(meta, color = MbSlate, fontSize = 12.5.sp, modifier = Modifier.testTag(metaTag))
+        }
+        Text(
+            text = badge,
+            color = badgeInk,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.clip(CircleShape).background(badgeBackground).padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+    }
+}
+
+@Composable
+private fun NextStepCard() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(190.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(MbChip)
+            .padding(start = 20.dp, end = 20.dp, top = 15.dp),
+    ) {
+        Text("ต่อไป · สำรองกุญแจ 24 คำ", color = MbEyebrow, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "ถ้าเครื่องหายหรือพัง 24 คำนี้คือทางเดียวที่จะกู้กระเป๋าคืน mebit กู้ให้ไม่ได้ เพราะเราไม่ได้ถือกุญแจของคุณ",
+            color = MbMuted,
+            fontSize = 14.sp,
+            lineHeight = 20.sp,
+        )
+        Spacer(modifier = Modifier.height(14.dp))
+        Bullet("ใช้เวลาราว 5 นาที", MbNavy, MbNavyInk, FontWeight.Medium)
+        Spacer(modifier = Modifier.height(6.dp))
+        Bullet("เตรียมกระดาษกับปากกา ห้ามถ่ายภาพหน้าจอ", MbNavy, MbNavyInk, FontWeight.Medium)
+        Spacer(modifier = Modifier.height(6.dp))
+        Bullet("ข้ามได้ แต่ต้องสำรองก่อนรับเงินครั้งแรก", MbBtcOrange, MbEyebrow, FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun Bullet(text: String, dot: Color, ink: Color, weight: FontWeight) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 2.dp)) {
+        Box(Modifier.size(6.dp).background(dot, CircleShape))
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(text, color = ink, fontSize = 13.5.sp, fontWeight = weight)
     }
 }
 
@@ -208,30 +325,59 @@ fun KeyCreatedScreen(
 fun BackupWordsScreen(
     session: OnboardingSession,
     onVerifiedReady: () -> Unit,
+    onSkip: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
     MebitScreen(
-        eyebrow = "BACKUP",
-        title = "จด 24 คำสำรอง",
+        eyebrow = "BACKUP · ขั้น 2 / 3",
+        title = "จด 24 คำนี้ลงกระดาษ",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         subtitle = "เรียงตามลำดับเลข ใครได้คำเหล่านี้ไปจะใช้เงินในกระเป๋าได้ทันที ห้ามถ่ายภาพหน้าจอหรือเก็บในแชต",
         tag = "screen_onboarding/backup-words",
+        bottom = {
+            BottomActions("จดครบแล้ว ไปยืนยัน", "cta_to_verify", onVerifiedReady, "ทำทีหลัง", "cta_skip_backup", onSkip, enabled = session.words.size >= 12)
+        },
     ) {
-        session.words.forEachIndexed { index, word ->
-            Text(
-                text = "${index + 1}. $word",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.testTag("word_$index"),
-            )
-        }
-        Spacer(modifier = Modifier.height(20.dp))
-        PrimaryCta("ฉันจดแล้ว · ยืนยันคำ", "cta_to_verify", onVerifiedReady, enabled = session.words.size >= 12)
+        Spacer(modifier = Modifier.height(19.dp))
+        WordGrid(session.words)
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+/** Penpot 1.4: the phrase in three columns of eight, numbered down each column like the Import grid. */
+@Composable
+private fun WordGrid(words: List<String>) {
+    val card = RoundedCornerShape(20.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(320.dp)
+            .clip(card)
+            .background(MbWhite)
+            .border(1.dp, MbBorder, card)
+            .padding(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        repeat(3) { column ->
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                repeat(8) { row ->
+                    val index = column * 8 + row
+                    val slot = RoundedCornerShape(10.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().height(30.dp).clip(slot).background(MbPage).padding(start = 10.dp, end = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text((index + 1).toString().padStart(2, '0'), color = MbSlate, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(14.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(words.getOrElse(index) { "" }, color = MbNavyInk, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, modifier = Modifier.testTag("word_$index"))
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun VerifyWordsScreen(
     session: OnboardingSession,
@@ -239,49 +385,49 @@ fun VerifyWordsScreen(
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
-    val targets = remember(session.words) {
-        listOf(0, 7, 15, 23).filter { it < session.words.size }
-    }
-    var step by remember { mutableStateOf(0) }
+    val quiz = remember(session.words) { verifyQuestions(session.words) }
+    val picks = remember(quiz) { mutableStateListOf<String?>().apply { repeat(quiz.size) { add(null) } } }
     var wrong by remember { mutableStateOf(false) }
-    val pool = remember(session.words, step) {
-        if (targets.isEmpty()) emptyList()
-        else {
-            val answer = session.words[targets[step]]
-            (session.words.shuffled().take(5) + answer).distinct().shuffled()
-        }
-    }
     MebitScreen(
-        eyebrow = "VERIFY WORDS",
-        title = if (targets.isEmpty()) "ไม่มีคำให้ยืนยัน" else "เลือกคำที่ ${targets[step] + 1}",
+        eyebrow = "BACKUP · ขั้น 2 / 3",
+        title = "ยืนยันว่าจดถูก",
+        subtitle = "ดูจากกระดาษที่จดไว้ แล้วเลือกคำให้ตรงกับเลขลำดับ",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         tag = "screen_onboarding/verify-words",
-    ) {
-        if (targets.isEmpty()) {
-            PrimaryCta("ต่อไป", "cta_skip_verify", onVerified)
-            return@MebitScreen
-        }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            pool.forEach { word ->
-                FilterChip(
-                    selected = false,
-                    onClick = {
-                        if (word == session.words[targets[step]]) {
-                            wrong = false
-                            if (step + 1 >= targets.size) {
-                                session.markBackupConfirmed()
-                                onVerified()
-                            } else {
-                                step += 1
-                            }
+        bottom = {
+            if (quiz.isEmpty()) {
+                PrimaryCta("ต่อไป", "cta_skip_verify", onVerified)
+            } else {
+                BottomActions(
+                    primaryLabel = "ยืนยัน",
+                    primaryTag = "cta_verify",
+                    onPrimary = {
+                        if (quiz.indices.all { picks[it] == quiz[it].answer }) {
+                            session.markBackupConfirmed()
+                            onVerified()
                         } else {
                             wrong = true
                         }
                     },
-                    label = { Text(word) },
-                    modifier = Modifier.testTag("chip_$word"),
+                    linkLabel = "กลับไปดูคำอีกครั้ง",
+                    linkTag = "cta_back_to_words",
+                    onLink = onBack,
+                    enabled = picks.none { it == null },
                 )
+            }
+        },
+    ) {
+        if (quiz.isEmpty()) {
+            Text("ไม่มีคำให้ยืนยัน", color = MbBody, fontSize = 13.sp)
+            return@MebitScreen
+        }
+        Spacer(modifier = Modifier.height(39.dp))
+        quiz.forEachIndexed { i, question ->
+            if (i > 0) Spacer(modifier = Modifier.height(12.dp))
+            QuestionCard(question, picks[i]) { word ->
+                picks[i] = word
+                wrong = false
             }
         }
         if (wrong) {
@@ -292,24 +438,98 @@ fun VerifyWordsScreen(
 }
 
 @Composable
+private fun QuestionCard(question: VerifyQuestion, picked: String?, onPick: (String) -> Unit) {
+    val card = RoundedCornerShape(20.dp)
+    val option = RoundedCornerShape(14.dp)
+    Column(
+        modifier = Modifier.fillMaxWidth().clip(card).background(MbWhite).border(1.dp, MbBorder, card).padding(16.dp),
+    ) {
+        Text("คำที่ " + (question.position + 1).toString().padStart(2, '0'), color = MbSlate, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            question.options.forEach { word ->
+                val on = word == picked
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(46.dp)
+                        .clip(option)
+                        .background(if (on) MbNavy else MbWhite)
+                        .then(if (on) Modifier else Modifier.border(1.dp, MbBorder, option))
+                        .clickable(role = Role.Button) { onPick(word) }
+                        .testTag("chip_$word"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(word, color = if (on) MbWhite else MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Penpot 1.2.1. The board's device card (name, Bluetooth address, "เชื่อมแล้ว") is left out: the app
+ * reaches this screen before it pairs the device, so there is nothing true to show in it yet.
+ */
+@Composable
 fun HwBackupConfirmScreen(
     onDone: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
+    var noted by remember { mutableStateOf(false) }
+    var kept by remember { mutableStateOf(false) }
     MebitScreen(
-        eyebrow = "HW BACKUP",
-        title = "ยืนยันสำรองบนอุปกรณ์",
+        eyebrow = "HARDWARE WALLET · ขั้น 2 / 3",
+        title = "สำรอง seed แล้วหรือยัง",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
-        subtitle = "Jade / Trezor Safe 7 เก็บ seed บนเครื่อง · mebit เชื่อมผ่าน Bluetooth เท่านั้น (ไม่มีกล้อง)",
+        subtitle = "seed ของอุปกรณ์อยู่บนตัวเครื่องเท่านั้น mebit มองไม่เห็นและกู้ให้ไม่ได้ ถ้าอุปกรณ์หายหรือพัง ต้องใช้ seed ที่จดไว้",
         tag = "screen_onboarding/hw-backup-confirm",
+        // The board's link points at a how-to the app does not have, so it stays plain text.
+        bottom = {
+            BottomActions("ยืนยัน ไปต่อ", "cta_hw_backup_done", onDone, "ยังไม่ได้สำรอง · ดูวิธีทำบน Jade", "hw_backup_howto", null, enabled = noted && kept)
+        },
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            HwChip("Jade")
-            HwChip("Trezor Safe 7")
+        Spacer(modifier = Modifier.height(19.dp))
+        val card = RoundedCornerShape(20.dp)
+        Column(
+            modifier = Modifier.fillMaxWidth().clip(card).background(MbWhite).border(1.dp, MbBorder, card).padding(horizontal = 16.dp, vertical = 17.dp),
+        ) {
+            CheckRow("จด seed ตอนตั้งค่าอุปกรณ์ครบทุกคำแล้ว", noted, "check_seed_noted") { noted = it }
+            Spacer(modifier = Modifier.height(17.dp))
+            Box(Modifier.padding(start = 38.dp).fillMaxWidth().height(1.dp).background(MbBorder))
+            Spacer(modifier = Modifier.height(16.dp))
+            CheckRow("เก็บกระดาษไว้คนละที่กับตัวอุปกรณ์", kept, "check_paper_apart") { kept = it }
         }
-        Spacer(modifier = Modifier.height(20.dp))
-        PrimaryCta("เข้าใจแล้ว", "cta_hw_backup_done", onDone)
+        Spacer(modifier = Modifier.height(14.dp))
+        Text(
+            text = "กระเป๋านี้รับเงินได้ทันที ส่งเงินต้องเชื่อม Jade มาเซ็นทุกครั้ง มือถือไม่ได้ถือกุญแจ",
+            color = MbMuted,
+            fontSize = 13.sp,
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MbChip).padding(horizontal = 16.dp, vertical = 12.dp),
+        )
+    }
+}
+
+@Composable
+private fun CheckRow(label: String, checked: Boolean, tag: String, onChange: (Boolean) -> Unit) {
+    val box = RoundedCornerShape(7.dp)
+    Row(
+        modifier = Modifier.fillMaxWidth().toggleable(value = checked, role = Role.Checkbox, onValueChange = onChange).testTag(tag),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .clip(box)
+                .background(if (checked) MbNavy else MbWhite)
+                .then(if (checked) Modifier else Modifier.border(1.5.dp, MbPick, box)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (checked) Image(painterResource(Res.drawable.ic_tick_white), contentDescription = null, modifier = Modifier.size(24.dp))
+        }
+        Spacer(modifier = Modifier.width(14.dp))
+        Text(label, color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.Medium)
     }
 }
