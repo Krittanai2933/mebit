@@ -312,7 +312,10 @@ fun MebitNavHost() {
             wallet = singleSig,
             session = session,
             onReceive = { navigate(MovieRoute.S2ReceiveBackupGate) },
-            onSend = { navigate(MovieRoute.S4Send) },
+            onSend = {
+                sendDraft.reset()
+                navigate(MovieRoute.S4Send)
+            },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
@@ -334,6 +337,7 @@ fun MebitNavHost() {
             wallet = singleSig,
             draft = sendDraft,
             onContinue = { navigate(MovieRoute.S5ReviewSign) },
+            onReceive = { navigate(if (session.backupConfirmed) MovieRoute.S3Receive else MovieRoute.S2ReceiveBackupGate) },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
@@ -342,7 +346,7 @@ fun MebitNavHost() {
             session = session,
             draft = sendDraft,
             confirm = { appLock.confirm(biometrics, session.appLockEnabled, "ยืนยันการเซ็นส่งเงิน") },
-            onSigned = { navigate(MovieRoute.S6Sent) },
+            onSigned = { navigate(MovieRoute.S6SentSlip) },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )

@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -29,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -50,7 +52,7 @@ import com.mebit.app.ui.theme.MbIconWash
 @Composable
 fun MebitScreen(
     eyebrow: String?,
-    title: String,
+    title: String?,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
     tag: String,
@@ -92,48 +94,39 @@ fun MebitScreen(
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(if (title == null) 13.dp else 16.dp))
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
             ) {
-                Text(
-                    text = title,
-                    color = titleColor,
-                    fontSize = 28.sp,
-                    fontWeight = FontWeight.Medium,
-                    lineHeight = 34.sp,
-                    modifier = Modifier.testTag("title"),
-                )
-                if (subtitle != null) {
-                    Spacer(modifier = Modifier.height(12.dp))
+                if (title != null) {
                     Text(
-                        text = subtitle,
-                        color = bodyColor,
-                        fontSize = 13.5.sp,
-                        fontWeight = FontWeight.Light,
-                        lineHeight = 20.sp,
+                        text = title,
+                        color = titleColor,
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Medium,
+                        lineHeight = 34.sp,
+                        modifier = Modifier.testTag("title"),
                     )
+                    if (subtitle != null) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = subtitle,
+                            color = bodyColor,
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.Light,
+                            lineHeight = 20.sp,
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(20.dp))
                 }
-                Spacer(modifier = Modifier.height(20.dp))
                 content()
             }
             bottom?.invoke(this)
         }
-        // Debug link floats in the home-indicator inset so it takes no layout space: the bottom block then ends where the boards end it.
-        Text(
-            text = "รายการหน้าทั้งหมด (debug)",
-            color = if (dark) MbWhite.copy(alpha = 0.5f) else MbBody,
-            fontSize = 11.sp,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .windowInsetsPadding(WindowInsets.systemBars)
-                .clickable(role = Role.Button, onClick = onOpenCatalog)
-                .padding(horizontal = 16.dp, vertical = 2.dp)
-                .testTag("open_catalog"),
-        )
+        DebugLink(onClick = onOpenCatalog, dark = dark)
     }
 }
 
@@ -323,6 +316,7 @@ fun BottomActions(
     linkTag: String,
     onLink: (() -> Unit)?,
     enabled: Boolean = true,
+    linkColor: Color = MbNavy,
 ) {
     Spacer(modifier = Modifier.height(12.dp))
     PrimaryCta(primaryLabel, primaryTag, onPrimary, enabled)
@@ -335,6 +329,22 @@ fun BottomActions(
             .testTag(linkTag),
         contentAlignment = Alignment.Center,
     ) {
-        Text(linkLabel, color = MbNavy, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Text(linkLabel, color = linkColor, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
     }
+}
+
+/** Debug-only link floating in the home-indicator inset, so it takes no layout space: the bottom block then ends where the boards end it. */
+@Composable
+fun BoxScope.DebugLink(onClick: () -> Unit, dark: Boolean = false) {
+    Text(
+        text = "รายการหน้าทั้งหมด (debug)",
+        color = if (dark) MbWhite.copy(alpha = 0.5f) else MbBody,
+        fontSize = 11.sp,
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .windowInsetsPadding(WindowInsets.systemBars)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 2.dp)
+            .testTag("open_catalog"),
+    )
 }

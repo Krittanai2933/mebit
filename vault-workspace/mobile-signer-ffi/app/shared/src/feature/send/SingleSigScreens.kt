@@ -5,10 +5,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -24,6 +22,32 @@ import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.sp
+import com.mebit.app.data.formatBtc
+import com.mebit.app.ui.components.BottomActions
+import com.mebit.app.ui.theme.MbBody
+import com.mebit.app.ui.theme.MbBorder
+import com.mebit.app.ui.theme.MbNavy
+import com.mebit.app.ui.theme.MbNavyInk
+import com.mebit.app.ui.theme.MbWhite
 
 @Composable
 fun S1HomeSingleSigScreen(
@@ -115,46 +139,6 @@ fun S3ReceiveScreen(
 }
 
 @Composable
-fun S4SendScreen(
-    wallet: SingleSigWallet,
-    draft: SendDraft,
-    onContinue: () -> Unit,
-    onBack: (() -> Unit)?,
-    onOpenCatalog: () -> Unit,
-) {
-    var amountText by remember { mutableStateOf(draft.amountSats.toString()) }
-    MebitScreen(
-        eyebrow = "SEND",
-        title = "ส่ง Bitcoin",
-        onBack = onBack,
-        onOpenCatalog = onOpenCatalog,
-        tag = "screen_send/s4",
-    ) {
-        Text("ใช้ได้ ${wallet.balanceSats} sats", style = MaterialTheme.typography.bodyMedium)
-        Spacer(modifier = Modifier.height(12.dp))
-        OutlinedTextField(
-            value = amountText,
-            onValueChange = { amountText = it },
-            label = { Text("จำนวน (sats)") },
-            modifier = Modifier.fillMaxWidth().testTag("s4_amount"),
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text("ค่าธรรมเนียม · ${draft.feeSats} sats", modifier = Modifier.testTag("s4_fee"))
-        SecondaryCta("fee เร็ว (1200)", "cta_fee_fast", { draft.setFeePreset(1200) })
-        Spacer(modifier = Modifier.height(8.dp))
-        SecondaryCta("fee ประหยัด (250)", "cta_fee_eco", { draft.setFeePreset(250) })
-        Spacer(modifier = Modifier.height(16.dp))
-        PrimaryCta("ตรวจก่อนเซ็น", "cta_s4_review", {
-            if (draft.setAmount(amountText)) onContinue()
-        })
-        draft.lastError?.let {
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(it, color = MaterialTheme.colorScheme.error)
-        }
-    }
-}
-
-@Composable
 fun S5ReviewSignScreen(
     wallet: SingleSigWallet,
     session: OnboardingSession,
@@ -166,41 +150,133 @@ fun S5ReviewSignScreen(
 ) {
     val scope = rememberCoroutineScope()
     var refused by remember { mutableStateOf(false) }
+    val total = draft.amountSats + draft.feeSats
     MebitScreen(
-        eyebrow = "REVIEW & SIGN",
-        title = "ตรวจแล้วเซ็น",
+        eyebrow = "SEND · ตรวจสอบ",
+        title = "ตรวจก่อนส่ง",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         subtitle = "ส่งแล้วยกเลิกไม่ได้ เทียบที่อยู่กับคนรับอีกครั้ง",
         tag = "screen_send/s5",
-    ) {
-        Text("ถึง · ${draft.destination}", style = MaterialTheme.typography.bodyMedium)
-        Text("ส่ง · ${draft.amountSats} · fee · ${draft.feeSats}", style = MaterialTheme.typography.bodyMedium)
-        Spacer(modifier = Modifier.height(20.dp))
-        PrimaryCta(
-            if (wallet.live) "เซ็นและส่ง" else "เซ็นบนเครื่องนี้ (demo)",
-            "cta_s5_sign",
-            {
-                scope.launch {
-                    // Face ID first when the app lock is on; nothing is signed on a refusal.
-                    refused = !confirm()
-                    if (!refused && wallet.broadcast(session, draft.amountSats, draft.feeSats, draft.destination)) {
-                        onSigned()
+        bottom = {
+            BottomActions(
+                primaryLabel = when {
+                    session.appLockEnabled -> "เซ็นด้วย Face ID"
+                    wallet.live -> "เซ็นและส่ง"
+                    else -> "เซ็นบนเครื่องนี้ (demo)"
+                },
+                primaryTag = "cta_s5_sign",
+                onPrimary = {
+                    scope.launch {
+                        // Face ID first when the app lock is on; nothing is signed on a refusal.
+                        refused = !confirm()
+                        if (!refused && wallet.broadcast(session, draft.amountSats, draft.feeSats, draft.destination)) {
+                            onSigned()
+                        }
                     }
-                }
-            },
-        )
+                },
+                linkLabel = "ยกเลิก",
+                linkTag = "cta_s5_cancel",
+                onLink = onBack,
+                linkColor = MbBody,
+            )
+        },
+    ) {
+        Spacer(modifier = Modifier.height(27.dp))
+        SendSummary(draft)
+        Spacer(modifier = Modifier.height(14.dp))
+        val rows = RoundedCornerShape(20.dp)
+        Column(
+            modifier = Modifier.fillMaxWidth().height(196.dp).clip(rows).background(MbWhite).border(1.dp, MbBorder, rows).padding(start = 16.dp, end = 16.dp, top = 6.dp),
+        ) {
+            ReviewRow("จาก", "กระเป๋าใช้จ่าย")
+            ReviewDivider()
+            ReviewRow("ค่าธรรมเนียม", "${thousands(draft.feeSats)} sat")
+            ReviewDivider()
+            ReviewRow("หักจากกระเป๋ารวม", "${formatBtc(total)} BTC", bold = true)
+            ReviewDivider()
+            ReviewRow("คงเหลือ", "${formatBtc((wallet.balanceSats - total).coerceAtLeast(0))} BTC")
+        }
         if (refused) {
+            Spacer(modifier = Modifier.height(12.dp))
             Text("ยืนยันตัวตนไม่สำเร็จ ลองอีกครั้ง", color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("sign_refused"))
         }
-        if (draft.amountSats + draft.feeSats > wallet.balanceSats) {
+        if (total > wallet.balanceSats) {
+            Spacer(modifier = Modifier.height(12.dp))
             Text("ยอดไม่พอ", color = MaterialTheme.colorScheme.error)
         }
         wallet.lastError?.let {
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("error"))
         }
     }
+}
+
+/** Penpot 4.5: what leaves, in the first 4 decimals, and where to. The baht line is left out (no price feed). */
+@Composable
+private fun SendSummary(draft: SendDraft) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(168.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(MbNavy)
+            .padding(horizontal = 22.dp)
+            .testTag("send_summary"),
+    ) {
+        Spacer(modifier = Modifier.height(20.dp))
+        Text("ส่ง", color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(formatBtc(draft.amountSats, 4), color = MbWhite, fontSize = 38.sp, fontWeight = FontWeight.Bold, lineHeight = 50.sp, modifier = Modifier.testTag("send_amount"))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("BTC", color = MbWhite.copy(alpha = 0.8f), fontSize = 15.sp, fontWeight = FontWeight.Bold, lineHeight = 20.sp, modifier = Modifier.padding(bottom = 5.dp))
+        }
+        // The board's baht line sits here: no price feed, so the room stays.
+        Spacer(modifier = Modifier.height(34.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("ถึง", color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
+            Spacer(modifier = Modifier.width(18.dp))
+            Text(groupedAddress(draft.destination), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, lineHeight = 19.sp, modifier = Modifier.testTag("send_to"))
+        }
+    }
+}
+
+private val AddressGold = Color(0xFFEEB42A)
+
+/** "tb1q 9h7a 2kxv 7tq3 … 4e8s m4kz": four-letter groups from each end, the middle left out, the ends picked out in gold. */
+internal fun groupedAddress(address: String): AnnotatedString = buildAnnotatedString {
+    val long = address.length > 24
+    val head = (if (long) address.take(16) else address).chunked(4)
+    val tail = if (long) address.takeLast(8).chunked(4) else emptyList()
+    fun group(text: String, gold: Boolean) = withStyle(SpanStyle(color = if (gold) AddressGold else Color.White)) { append(text) }
+    head.forEachIndexed { i, g ->
+        if (i > 0) append(' ')
+        group(g, gold = i in 1..2)
+    }
+    if (long) {
+        group(" … ", gold = false)
+        tail.forEachIndexed { i, g ->
+            if (i > 0) append(' ')
+            group(g, gold = true)
+        }
+    }
+}
+
+@Composable
+private fun ReviewRow(label: String, value: String, bold: Boolean = false) {
+    Row(
+        modifier = Modifier.fillMaxWidth().height(45.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = MbBody, fontSize = 13.5.sp, lineHeight = 19.sp)
+        Text(value, color = MbNavyInk, fontSize = 14.sp, fontWeight = if (bold) FontWeight.Bold else FontWeight.SemiBold, lineHeight = 19.sp)
+    }
+}
+
+@Composable
+private fun ReviewDivider() {
+    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MbBorder))
 }
 
 @Composable
@@ -212,6 +288,10 @@ fun S6SentScreen(
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
+    if (variant == "slip") {
+        SentSlip(wallet, draft, onHome, onOpenCatalog)
+        return
+    }
     val eyebrow = when (variant) {
         "slip" -> "SENT · SLIP"
         "block" -> "SENT · BLOCK"

@@ -106,12 +106,76 @@ class SingleSigWallet {
     }
 }
 
+/** A typical 1-input, 2-output P2WPKH payment. The fee tiers are rate times this until coin selection reports the real size. */
+const val TYPICAL_VSIZE = 141L
+
+enum class FeeTier(val label: String, val eta: String, val satPerVb: Long) {
+    Slow("ช้า", "~1 ชม.", 4),
+    Normal("ปกติ", "~30 นาที", 8),
+    Fast("เร็ว", "~10 นาที", 15);
+
+    val sats: Long get() = satPerVb * TYPICAL_VSIZE
+}
+
+/** "0.0050" to 500_000 sats. Null for anything that is not a positive amount of at most 21 million BTC with at most 8 decimals. */
+fun parseBtc(text: String): Long? {
+    val t = text.trim()
+    if (!Regex("""\d*(\.\d{0,8})?""").matches(t)) return null
+    val whole = t.substringBefore('.').ifEmpty { "0" }.toLongOrNull()?.takeIf { it <= 21_000_000 } ?: return null
+    val fraction = t.substringAfter('.', "").padEnd(8, '0').toLong()
+    return (whole * 100_000_000 + fraction).takeIf { it > 0 }
+}
+
+/** 500_000 sats to "0.00500000". Cut to [decimals] places, never rounded, so an amount is never shown larger than it is. */
+fun formatBtc(sats: Long, decimals: Int = 8): String {
+    val fraction = (sats % 100_000_000).toString().padStart(8, '0').take(decimals)
+    return if (decimals == 0) "${sats / 100_000_000}" else "${sats / 100_000_000}.$fraction"
+}
+
+sealed interface SendIssue {
+    data object InvalidAddress : SendIssue
+    data class Insufficient(val missingSats: Long) : SendIssue
+}
+
+/** What keeps a payment from review, if anything. [addressOk] is null while the address field is empty. */
+fun sendIssue(addressOk: Boolean?, amountSats: Long, feeSats: Long, balanceSats: Long): SendIssue? = when {
+    addressOk == false -> SendIssue.InvalidAddress
+    amountSats > 0 && amountSats + feeSats > balanceSats -> SendIssue.Insufficient(amountSats + feeSats - balanceSats)
+    else -> null
+}
+
 class SendDraft {
-    var amountSats: Long by mutableStateOf(50_000L)
-    var feeSats: Long by mutableStateOf(500L)
-    var destination: String by mutableStateOf("tb1qdestinationdemo000000000000000000000")
+    var amountSats: Long by mutableStateOf(0L)
+        private set
+    var feeSats: Long by mutableStateOf(FeeTier.Normal.sats)
+        private set
+    var tier: FeeTier by mutableStateOf(FeeTier.Normal)
+        private set
+    var destination: String by mutableStateOf("")
+    var amountText: String by mutableStateOf("")
+        private set
     var lastError: String? by mutableStateOf(null)
         private set
+
+    /** A new payment: nothing typed, normal fee. */
+    fun reset() {
+        destination = ""
+        amountText = ""
+        amountSats = 0L
+        chooseTier(FeeTier.Normal)
+        lastError = null
+    }
+
+    /** Takes what the user typed in the amount field, in BTC. An empty or unreadable text means no amount yet. */
+    fun setAmountBtc(text: String) {
+        amountText = text
+        amountSats = parseBtc(text) ?: 0L
+    }
+
+    fun chooseTier(next: FeeTier) {
+        tier = next
+        feeSats = next.sats
+    }
 
     fun setAmount(text: String): Boolean {
         lastError = null
@@ -121,11 +185,8 @@ class SendDraft {
             return false
         }
         amountSats = v
+        amountText = formatBtc(v).trimEnd('0').trimEnd('.')
         return true
-    }
-
-    fun setFeePreset(sats: Long) {
-        feeSats = sats
     }
 }
 
