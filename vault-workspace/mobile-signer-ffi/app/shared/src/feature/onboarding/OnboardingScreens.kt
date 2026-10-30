@@ -75,6 +75,13 @@ import com.mebit.app.ui.theme.MbPick
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbBody
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.semantics.semantics
+import com.mebit.app.CaptureClaim
+import com.mebit.app.hideWhen
+import com.mebit.app.rememberCaptureGuard
+import com.mebit.app.resources.ic_warning
+import com.mebit.app.ui.components.IssueBanner
 
 @Composable
 fun WelcomeScreen(
@@ -333,6 +340,7 @@ fun BackupWordsScreen(
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
+    val guard = rememberCaptureGuard()
     MebitScreen(
         eyebrow = "BACKUP · ขั้น 2 / 3",
         title = "จด 24 คำนี้ลงกระดาษ",
@@ -345,16 +353,22 @@ fun BackupWordsScreen(
         },
     ) {
         Spacer(modifier = Modifier.height(19.dp))
-        WordGrid(session.words)
+        WordGrid(session.words, Modifier.hideWhen(guard))
+        Spacer(modifier = Modifier.height(14.dp))
+        CaptureBanner(guard.claim)
+        if (guard.screenshotTaken) {
+            Spacer(modifier = Modifier.height(12.dp))
+            IssueBanner("ถ่ายภาพหน้าจอแล้ว", "ลบภาพนั้นออกจากอัลบั้มและ iCloud ทันที", "screenshot_taken")
+        }
     }
 }
 
 /** Penpot 1.4: the phrase in three columns of eight, numbered down each column like the Import grid. */
 @Composable
-private fun WordGrid(words: List<String>) {
+private fun WordGrid(words: List<String>, modifier: Modifier = Modifier) {
     val card = RoundedCornerShape(20.dp)
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(320.dp)
             .clip(card)
@@ -382,6 +396,31 @@ private fun WordGrid(words: List<String>) {
     }
 }
 
+/** Penpot 1.4: the banner under the grid. */
+@Composable
+private fun CaptureBanner(claim: CaptureClaim) {
+    val text = when (claim) {
+        CaptureClaim.BlocksScreenshots -> "แอปจะบล็อกการถ่ายภาพหน้าจอระหว่างแสดงคำ"
+        CaptureClaim.HidesWhileRecording -> "แอปจะซ่อนคำเมื่อมีการอัดหน้าจอ · อย่าถ่ายภาพหน้าจอ"
+        CaptureClaim.None -> return
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 46.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(MbIconWash)
+            .padding(horizontal = 16.dp, vertical = 13.dp)
+            .semantics(mergeDescendants = true) {}
+            .testTag("capture_banner"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Image(painterResource(Res.drawable.ic_warning), contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(text, color = MbEyebrow, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
 @Composable
 fun VerifyWordsScreen(
     session: OnboardingSession,
@@ -389,6 +428,7 @@ fun VerifyWordsScreen(
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
+    val guard = rememberCaptureGuard()
     val quiz = remember(session.words) { verifyQuestions(session.words) }
     val picks = remember(quiz) { mutableStateListOf<String?>().apply { repeat(quiz.size) { add(null) } } }
     var wrong by remember { mutableStateOf(false) }
@@ -427,11 +467,13 @@ fun VerifyWordsScreen(
             return@MebitScreen
         }
         Spacer(modifier = Modifier.height(39.dp))
-        quiz.forEachIndexed { i, question ->
-            if (i > 0) Spacer(modifier = Modifier.height(12.dp))
-            QuestionCard(question, picks[i]) { word ->
-                picks[i] = word
-                wrong = false
+        Column(modifier = Modifier.hideWhen(guard)) {
+            quiz.forEachIndexed { i, question ->
+                if (i > 0) Spacer(modifier = Modifier.height(12.dp))
+                QuestionCard(question, picks[i]) { word ->
+                    picks[i] = word
+                    wrong = false
+                }
             }
         }
         if (wrong) {

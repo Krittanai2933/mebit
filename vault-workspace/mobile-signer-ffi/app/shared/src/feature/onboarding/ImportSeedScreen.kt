@@ -69,10 +69,13 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mebit.app.CaptureGuard
 import com.mebit.app.data.ImportSeedDraft
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.SeedStatus
 import com.mebit.app.data.ffiImportSeedDraft
+import com.mebit.app.hideWhen
+import com.mebit.app.rememberCaptureGuard
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_check
 import com.mebit.app.resources.ic_eye
@@ -110,6 +113,7 @@ fun ImportSeedScreen(
     onOpenCatalog: () -> Unit,
 ) {
     val draft = remember { ffiImportSeedDraft() }
+    val guard = rememberCaptureGuard()
     var engaged by remember { mutableStateOf(false) }
     var taps by remember { mutableIntStateOf(0) }
     var sheet by remember { mutableStateOf<ImportSheet?>(null) }
@@ -167,7 +171,7 @@ fun ImportSeedScreen(
     ) {
         // Penpot sets the grid 59dp under the subtitle (1B.4 y=236); the scaffold leaves 20.
         Spacer(modifier = Modifier.height(39.dp))
-        SeedGrid(draft, engaged, taps) {
+        SeedGrid(draft, engaged, taps, Modifier.hideWhen(guard)) {
             draft.focus(it)
             engaged = true
             taps += 1
@@ -181,7 +185,7 @@ fun ImportSeedScreen(
     }
 
     when (sheet) {
-        ImportSheet.Passphrase -> PassphraseSheet(draft) { sheet = null }
+        ImportSheet.Passphrase -> PassphraseSheet(draft, guard) { sheet = null }
         ImportSheet.Fingerprint -> FingerprintSheet(
             session = session,
             onConfirm = {
@@ -198,7 +202,7 @@ fun ImportSeedScreen(
 }
 
 @Composable
-private fun SeedGrid(draft: ImportSeedDraft, engaged: Boolean, taps: Int, onSlot: (Int) -> Unit) {
+private fun SeedGrid(draft: ImportSeedDraft, engaged: Boolean, taps: Int, modifier: Modifier = Modifier, onSlot: (Int) -> Unit) {
     // Once the 24th word is accepted nothing is being edited: no active slot, no list, no field.
     val editing = engaged && !draft.committed
     val dropdown = if (editing) draft.dropdown else emptyList()
@@ -222,7 +226,7 @@ private fun SeedGrid(draft: ImportSeedDraft, engaged: Boolean, taps: Int, onSlot
 
     // The box grows to hold the list, so its rows are inside the box's bounds and can be tapped.
     BoxWithConstraints(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(maxOf(GRID_HEIGHT, dropdownBottom).dp)
             .bringIntoViewRequester(reveal)
@@ -456,7 +460,7 @@ private fun SeedStatusRow(draft: ImportSeedDraft, pinned: Boolean = false, onEdi
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PassphraseSheet(draft: ImportSeedDraft, onDone: () -> Unit) {
+private fun PassphraseSheet(draft: ImportSeedDraft, guard: CaptureGuard, onDone: () -> Unit) {
     var reveal by remember { mutableStateOf(false) }
     ModalBottomSheet(
         onDismissRequest = onDone,
@@ -464,7 +468,7 @@ private fun PassphraseSheet(draft: ImportSeedDraft, onDone: () -> Unit) {
         containerColor = MbWhite,
         modifier = Modifier.testTag("sheet_passphrase"),
     ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 24.dp).imePadding()) {
+        Column(modifier = Modifier.hideWhen(guard).fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 24.dp).imePadding()) {
             Text("Passphrase (คำที่ 25)", color = MbNavyInk, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             Spacer(modifier = Modifier.height(8.dp))
             Text(
