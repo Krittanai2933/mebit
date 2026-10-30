@@ -263,12 +263,11 @@ private fun IssuePanel(label: String, message: String) {
             .clip(shape)
             .background(MbWhite)
             .border(1.dp, MbBorder, shape)
-            .padding(16.dp)
-            .testTag("send_issue"),
+            .padding(16.dp),
     ) {
         Text(label, color = MbEyebrow, fontSize = 11.sp, fontWeight = FontWeight.Bold, lineHeight = 15.sp)
         Spacer(modifier = Modifier.height(6.dp))
-        Text(message, color = MbNavyInk, fontSize = 14.sp, lineHeight = 20.sp)
+        Text(message, color = MbNavyInk, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.testTag("send_issue"))
     }
 }
 
