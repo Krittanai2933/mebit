@@ -261,7 +261,7 @@ class KeyringStore {
 /** BIP-48 P2WSH account on testnet. Coin type 1, account 0, script type 2. */
 internal const val TESTNET_MULTISIG_ACCOUNT = "m/48'/1'/0'/2'"
 
-private fun hardwareName(source: KeySourceLabel): String = when (source) {
+internal fun hardwareName(source: KeySourceLabel): String = when (source) {
     KeySourceLabel.Jade -> "Jade"
     KeySourceLabel.TrezorSafe7 -> "Trezor Safe 7"
     KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")

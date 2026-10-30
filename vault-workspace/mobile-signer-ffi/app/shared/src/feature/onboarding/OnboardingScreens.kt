@@ -33,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.OnboardingSession
+import com.mebit.app.data.PairedDevice
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.mebit_logo
 import com.mebit.app.ui.components.BackChip
@@ -65,12 +66,14 @@ import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbBtcOrange
 import com.mebit.app.ui.theme.MbChip
 import com.mebit.app.ui.theme.MbEyebrow
+import com.mebit.app.ui.theme.MbGreenWash
 import com.mebit.app.ui.theme.MbIconWash
 import com.mebit.app.ui.theme.MbMuted
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbPage
 import com.mebit.app.ui.theme.MbPick
 import com.mebit.app.ui.theme.MbSlate
+import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbBody
 
 @Composable
@@ -469,17 +472,19 @@ private fun QuestionCard(question: VerifyQuestion, picked: String?, onPick: (Str
 }
 
 /**
- * Penpot 1.2.1. The board's device card (name, Bluetooth address, "เชื่อมแล้ว") is left out: the app
- * reaches this screen before it pairs the device, so there is nothing true to show in it yet.
+ * Penpot 1.2.1. It follows Confirm Key, so [device] is the hardware key just saved. The debug catalog can
+ * open it with none saved, and the card is then left out.
  */
 @Composable
 fun HwBackupConfirmScreen(
+    device: PairedDevice?,
     onDone: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
     var noted by remember { mutableStateOf(false) }
     var kept by remember { mutableStateOf(false) }
+    val vendor = device?.vendor ?: "อุปกรณ์"
     MebitScreen(
         eyebrow = "HARDWARE WALLET · ขั้น 2 / 3",
         title = "สำรอง seed แล้วหรือยัง",
@@ -489,10 +494,23 @@ fun HwBackupConfirmScreen(
         tag = "screen_onboarding/hw-backup-confirm",
         // The board's link points at a how-to the app does not have, so it stays plain text.
         bottom = {
-            BottomActions("ยืนยัน ไปต่อ", "cta_hw_backup_done", onDone, "ยังไม่ได้สำรอง · ดูวิธีทำบน Jade", "hw_backup_howto", null, enabled = noted && kept)
+            BottomActions("ยืนยัน ไปต่อ", "cta_hw_backup_done", onDone, "ยังไม่ได้สำรอง · ดูวิธีตั้งค่าในคู่มือของ $vendor", "hw_backup_howto", null, enabled = noted && kept, linkColor = MbBody)
         },
     ) {
         Spacer(modifier = Modifier.height(19.dp))
+        if (device != null) {
+            KeyCard(
+                monogram = device.monogram,
+                monogramInk = MbEyebrow,
+                title = device.name,
+                meta = device.meta,
+                metaTag = "hw_device_meta",
+                badge = "เชื่อมแล้ว",
+                badgeInk = MbSuccess,
+                badgeBackground = MbGreenWash,
+            )
+            Spacer(modifier = Modifier.height(20.dp))
+        }
         val card = RoundedCornerShape(20.dp)
         Column(
             modifier = Modifier.fillMaxWidth().clip(card).background(MbWhite).border(1.dp, MbBorder, card).padding(horizontal = 16.dp, vertical = 17.dp),
@@ -505,7 +523,7 @@ fun HwBackupConfirmScreen(
         }
         Spacer(modifier = Modifier.height(14.dp))
         Text(
-            text = "กระเป๋านี้รับเงินได้ทันที ส่งเงินต้องเชื่อม Jade มาเซ็นทุกครั้ง มือถือไม่ได้ถือกุญแจ",
+            text = "กระเป๋านี้รับเงินได้ทันที ส่งเงินต้องเชื่อม $vendor มาเซ็นทุกครั้ง มือถือไม่ได้ถือกุญแจ",
             color = MbMuted,
             fontSize = 13.sp,
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MbChip).padding(horizontal = 16.dp, vertical = 12.dp),

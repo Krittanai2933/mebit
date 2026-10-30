@@ -33,6 +33,7 @@ import com.mebit.app.data.MultisigSendDraft
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.VaultDraft
+import com.mebit.app.data.pairedDevice
 import com.mebit.app.feature.keys.AddKeyScreen
 import com.mebit.app.feature.keys.HardwareWalletScreen
 import com.mebit.app.feature.keys.KeyringFirstVaultScreen
@@ -93,6 +94,8 @@ fun MebitNavHost() {
     val multisigSend = remember { MultisigSendDraft() }
     val biometrics = remember { platformBiometrics() }
     val appLock = remember { AppLockState() }
+    // Starts as Keyring so the debug catalog can open Verify Key without passing Key Source.
+    var keyFlow by remember { mutableStateOf(KeyFlow.Keyring) }
     val current = backStack.last()
 
     // More than a minute away locks the app again, once the user turned the lock on.
@@ -100,6 +103,7 @@ fun MebitNavHost() {
     LifecycleEventEffect(Lifecycle.Event.ON_START) { appLock.onForeground(session.appLockEnabled) }
 
     fun navigate(route: MovieRoute) {
+        keyFlow = keyFlowAfter(route, keyFlow)
         if (route == MovieRoute.Keyring || route == MovieRoute.KeyringFirstVault) {
             keyring.importVerifiedFromOnboarding(session)
         }
@@ -126,7 +130,7 @@ fun MebitNavHost() {
         MovieRoute.KeySource -> KeySourceScreen(
             session = session,
             onPhone = { navigate(MovieRoute.KeyCreated) },
-            onHardware = { navigate(MovieRoute.HwBackupConfirm) },
+            onHardware = { navigate(MovieRoute.HardwareWallet) },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
@@ -173,7 +177,11 @@ fun MebitNavHost() {
             onOpenCatalog = openCatalog,
         )
         MovieRoute.HwBackupConfirm -> HwBackupConfirmScreen(
-            onDone = { navigate(MovieRoute.HardwareWallet) },
+            device = pairedDevice(keyring.keys),
+            onDone = {
+                session.markBackupConfirmed()
+                navigate(MovieRoute.HomeFirstRun)
+            },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
@@ -200,7 +208,7 @@ fun MebitNavHost() {
         )
         MovieRoute.VerifyKey -> VerifyKeyScreen(
             store = keyring,
-            onMatched = { navigate(MovieRoute.Keyring) },
+            onMatched = { navigate(routeAfterVerify(keyFlow)) },
             onMismatch = { navigate(MovieRoute.T14VerifyMismatch) },
             onBack = onBack,
             onOpenCatalog = openCatalog,

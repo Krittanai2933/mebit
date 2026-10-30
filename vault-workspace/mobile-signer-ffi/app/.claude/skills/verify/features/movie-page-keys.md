@@ -21,6 +21,7 @@ Preconditions:
 - App running; prefer catalog jump for isolation.
 
 - **Add Key.** Open catalog (`id:open_catalog`), tap the ADD KEY row (`id:catalog_keys/add` or text containing `ADD KEY`), `verify.sh see "id:screen_keys/add"`, `verify.sh see "id:cta_add_this_device"`, `verify.sh see "id:cta_add_mebit_other"`, `verify.sh see "id:cta_add_hardware"`. Shot `mp-add-key-three-sources`.
+- **Add Key, hardware.** From Add Key, `verify.sh ios-tap "id:cta_add_hardware"`, `verify.sh ios-see "id:screen_keys/hardware"`, `verify.sh ios-tap "id:cta_hw_demo_jade"`, `verify.sh ios-see "id:screen_keys/verify"`, `verify.sh ios-tap "id:cta_fill_expected"`, `verify.sh ios-tap "id:cta_verify_match"`, `verify.sh ios-see "id:screen_keys/keyring"`. Shot `mp-addkey-hw-keyring`. This path ends at the keyring. The same match from Key Source goes on to the hardware backup step instead, see [onboarding](./movie-page-onboarding.md). From the keyring `verify.sh ios-tap "id:cta_keyring_add"` returns to Add Key, and `id:cta_add_this_device` with the same two taps also ends at the keyring. Verified on the simulator.
 - **Mismatch.** From Add Key, `tap id:cta_add_this_device`, on Verify fill wrong path via `tap id:cta_verify_mismatch`, `see id:screen_critical/t14`, `see id:mismatch_message`. Shot `mp-verify-mismatch`.
 - **T13.** Catalog → HARDWARE WALLET (`id:catalog_keys/hardware`), `tap id:cta_hw_unsupported`, `see id:screen_critical/t13`. Shot `mp-t13-unsupported`.
 
