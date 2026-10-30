@@ -486,7 +486,7 @@ ios_ui() {
     sign=(-allowProvisioningUpdates DEVELOPMENT_TEAM="$TEAM" PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE.ui")
   fi
   TEST_RUNNER_UI_ACTION=$act TEST_RUNNER_UI_KIND=$kind TEST_RUNNER_UI_CONTAINS=$contains TEST_RUNNER_UI_LABEL=$val \
-    TEST_RUNNER_MEBIT_BUNDLE_ID=$bundle \
+    TEST_RUNNER_UI_TEXT=${UI_TEXT:-} TEST_RUNNER_MEBIT_BUNDLE_ID=$bundle \
     xcodebuild test -project "$HERE/ios-ui/IosUi.xcodeproj" -scheme IosUi -destination "${dest[0]}" \
       -derivedDataPath "$derived" "${sign[@]}" > "$log" 2>&1 &
   local pid=$! i
@@ -511,6 +511,8 @@ ios_ui() {
 cmd_ios_tap() { [ $# -eq 1 ] || die "usage: verify.sh ios-tap SELECTOR"; ios_ui tap "$1"; }
 cmd_ios_see() { [ $# -eq 1 ] || die "usage: verify.sh ios-see SELECTOR"; ios_ui see "$1"; }
 cmd_ios_gone() { [ $# -eq 1 ] || die "usage: verify.sh ios-gone SELECTOR"; ios_ui gone "$1"; }
+# The text goes to the app's keyboard focus after a tap on SELECTOR. A newline in it presses return.
+cmd_ios_type() { [ $# -eq 2 ] || die "usage: verify.sh ios-type SELECTOR TEXT"; UI_TEXT=$2 ios_ui type "$1"; }
 
 cmd_ios_stop() {
   [ -f "$IOS_STATE" ] || { echo "no active iOS run"; return 0; }
@@ -541,7 +543,7 @@ cmd_ios_stop() {
 
 case ${1:-} in
   start | stop | doctor | see | gone | tap | shot | drawer) c=$1; shift; "cmd_$c" "$@" ;;
-  ios-start | ios-shot | ios-stop | ios-tap | ios-see | ios-gone) c=${1//-/_}; shift; "cmd_$c" "$@" ;;
+  ios-start | ios-shot | ios-stop | ios-tap | ios-see | ios-gone | ios-type) c=${1//-/_}; shift; "cmd_$c" "$@" ;;
   adb) shift; load "$STATE" start; "$ADB" -s "$SERIAL" "$@" ;; # not bounded, so logcat -f and similar can stream
   *) cat << 'EOF'
 usage: verify.sh COMMAND [ARGS]
@@ -557,6 +559,7 @@ usage: verify.sh COMMAND [ARGS]
   ios-start | ios-shot LABEL | ios-stop    the same idea on a throwaway iOS simulator
   ios-tap SELECTOR        tap an element on the simulator (XCUITest: about 5 s, and 15 s the first time)
   ios-see SELECTOR        wait for an element on the simulator; ios-gone waits for it to disappear
+  ios-type SELECTOR TEXT  tap an element, then type TEXT into the keyboard focus ("\n" presses return)
 SELECTOR is [text|desc|id][~]:VALUE, default text; "~" means contains. Example: tap "text~:Click me"
 On iOS text and desc both match the accessibility label, and id matches the accessibility identifier.
 Env (Android start): VERIFY_AVD, VERIFY_PORT, VERIFY_CORES, VERIFY_GPU (default swiftshader_indirect),

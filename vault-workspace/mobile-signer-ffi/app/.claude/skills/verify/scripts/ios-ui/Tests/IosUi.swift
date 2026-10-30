@@ -1,8 +1,9 @@
 import XCTest
 
 // One UI action against the installed com.mebit.app (MEBIT_BUNDLE_ID replaces the id on a phone whose team
-// cannot own it). verify.sh ios-tap, ios-see and ios-gone set UI_ACTION (tap, see or gone), UI_KIND (label or
-// identifier), UI_CONTAINS (0 or 1) and UI_LABEL through TEST_RUNNER_-prefixed environment variables.
+// cannot own it). verify.sh ios-tap, ios-see, ios-gone and ios-type set UI_ACTION (tap, see, gone or type),
+// UI_KIND (label or identifier), UI_CONTAINS (0 or 1), UI_LABEL and, for type, UI_TEXT through
+// TEST_RUNNER_-prefixed environment variables.
 final class IosUi: XCTestCase {
     func testAction() throws {
         let env = ProcessInfo.processInfo.environment
@@ -53,8 +54,22 @@ final class IosUi: XCTestCase {
             XCTAssertTrue(element.waitForExistence(timeout: 10), "no element with \(property) \(comparison) '\(value)'")
         case "gone":
             XCTAssertTrue(element.waitForNonExistence(timeout: 10), "element with \(property) \(comparison) '\(value)' is still on screen")
+        case "type":
+            // Tap to put the keyboard on the element, then type into whatever has it. "\n" is the return key.
+            XCTAssertTrue(element.waitForExistence(timeout: 5), "no element with \(property) \(comparison) '\(value)'")
+            element.tap()
+            let text = try XCTUnwrap(env["UI_TEXT"], "UI_TEXT is not set")
+            Thread.sleep(forTimeInterval: 0.6) // the keyboard slides up
+            // A return accepts a word and moves the focus on. Typing straight on loses the first letters of the next word.
+            for (i, part) in text.components(separatedBy: "\n").enumerated() {
+                if i > 0 {
+                    app.typeText("\n")
+                    Thread.sleep(forTimeInterval: 0.5)
+                }
+                if !part.isEmpty { app.typeText(part) }
+            }
         default:
-            XCTFail("UI_ACTION must be tap, see or gone, not '\(action)'")
+            XCTFail("UI_ACTION must be tap, see, gone or type, not '\(action)'")
         }
     }
 }

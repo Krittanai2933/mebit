@@ -22,9 +22,9 @@ Preconditions:
 - **Phone key.** `verify.sh tap "id:cta_create"`, `verify.sh see "id:screen_onboarding/key-source"`, `verify.sh tap "id:cta_phone"`, `verify.sh see "id:screen_onboarding/key-created"`, `verify.sh see "id:fingerprint"`. Shot `mp-phone-key`.
 - **Backup.** `verify.sh tap "id:cta_backup"`, `verify.sh see "id:screen_onboarding/backup-words"`, `verify.sh see "id:word_0"`, `verify.sh tap "id:cta_to_verify"`. Shot `mp-backup`.
 - **Verify chips.** On `id:screen_onboarding/verify-words`, tap the correct chip labels (words from the backup screen). Wrong chips show `id:verify_error`. After all targets, expect `id:screen_onboarding/app-lock`. Shot `mp-backup-verify`.
-- **App lock skip.** `verify.sh tap "id:cta_skip_lock"`, `verify.sh see "id:screen_home/first-run"`. Shot `mp-home-first-run`.
+- **App lock skip.** `verify.sh tap "id:cta_skip_lock"`, `verify.sh see "id:screen_home/first-run"`. Shot `mp-home-first-run`. On an Android emulator (no biometric code yet) this button continues without a lock. On an iOS simulator or an iPhone it opens iOS's passcode sheet instead, which XCUITest cannot type into; see [app lock](./movie-page-app-lock.md).
 
 ## Gotchas
 
 - Verify chips are shuffled; capture word list from backup PNGs/XML before tapping.
-- Welcome → นำเข้า (`id:cta_import`) opens `MovieRoute.ImportSeed` (`id:screen_onboarding/import-seed`).
+- Welcome → นำเข้า (`id:cta_import`) opens `MovieRoute.ImportSeed` (`id:screen_onboarding/import-seed`). An import skips the backup screens and goes to App Lock; see [import seed](./movie-page-import-seed.md).

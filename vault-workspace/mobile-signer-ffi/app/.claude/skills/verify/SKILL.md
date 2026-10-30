@@ -114,6 +114,7 @@ What to do when `doctor` is red:
 | `drawer` | Presses HOME and opens the launcher's all-apps list. From API 36 it tries the key first and then two swipes. Below API 36 it tries the swipes first and the key last. After a failed round it presses HOME and tries once more. |
 | `adb ARGS...` | Runs `adb -s emulator-5580 ARGS`. Use it for key events, `am`, `pm`, and `logcat`. |
 | `ios-see`, `ios-tap`, `ios-gone SELECTOR` | The same three actions on the iOS simulator. About 5 s each, 15 s the first time while the test bundle builds, and about 20 s when the action fails. |
+| `ios-type SELECTOR TEXT` | Taps the element, then types TEXT into the keyboard focus. A `\n` in TEXT presses the return key. |
 | `ios-shot LABEL` | Saves `NN-LABEL.png` from the simulator. |
 
 A selector is `[KIND[~]:]VALUE`. KIND is `text` (the default), `desc` (content description) or `id` (resource id, or a Compose `testTag`). A `~` after the kind means "contains" instead of "equals". Examples are `"Click me! na kub"`, `"text~:Hello, Android"`, `"desc:app"`. On iOS `text` and `desc` both match the accessibility label, and `id` matches the accessibility identifier.
@@ -123,7 +124,7 @@ A selector is `[KIND[~]:]VALUE`. KIND is `text` (the default), `desc` (content d
 - Each Android command dumps the hierarchy with `uiautomator`, so expect 2 to 3 s per command. When the emulator does not answer `adb` at all, `see`, `gone`, `tap` and `drawer` stop after one bounded attempt and say so, instead of retrying for minutes.
 - The Android commands see the whole screen, not only this app. `features/app-launch.md` uses the same selectors in the launcher.
 - The app sets no content descriptions or test tags today. When you add a screen, give each control a `contentDescription` or a `testTag`. Both `id:` forms work once a control carries a tag. This was tried in a scratch clone with `Modifier.testTag("reveal")` on the button. On iOS `ios-see id:reveal`, `ios-tap id:reveal` and `ios-see "id~:rev"` found it, and `id:nope` failed as it should. On Android the tag alone is not a resource id (`see id:reveal` failed), and it became one when the root set `Modifier.semantics { testTagsAsResourceId = true }`, which the app does not do yet.
-- Scrolling and typing go through `verify.sh adb shell input swipe ...` and `input text` (ASCII only, `%s` for a space). Neither is exercised yet, because the app has no scrolling or text field. The iOS commands have no scroll or type action either.
+- On Android, scrolling and typing go through `verify.sh adb shell input swipe ...` and `input text` (ASCII only, `%s` for a space). Neither is exercised yet. On iOS, typing is `ios-type`, which the Import Seed recipe uses. There is no iOS scroll action.
 
 ## Evidence
 

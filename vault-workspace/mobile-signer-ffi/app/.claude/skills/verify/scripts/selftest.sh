@@ -38,6 +38,9 @@ check "ios pick, both" "$(pick com.apple.CoreSimulator.SimRuntime.iOS-26-5 com.a
 pick com.apple.CoreSimulator.SimRuntime.iOS-18-5 com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro > /dev/null; check "ios pick rejects a device type the runtime lacks" "$?" 1
 pick com.apple.CoreSimulator.SimRuntime.iOS-27-0 > /dev/null; check "ios pick rejects an unavailable runtime" "$?" 1
 
+# ios-type needs a selector and the text. The usage error comes before any simulator is touched.
+check "ios-type without its text is a usage error" "$("$HERE/verify.sh" ios-type "id:x" 2>&1 | head -1)" "verify.sh: usage: verify.sh ios-type SELECTOR TEXT"
+
 # ios-start end to end with a stub xcrun: the pair handed to `simctl create` must be one the runtime supports.
 mkdir -p "$T/bin" "$T/iosapp/.claude/skills/verify" "$T/iosapp/build/verify"
 ln -s "$HERE" "$T/iosapp/.claude/skills/verify/scripts"
