@@ -9,25 +9,28 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -60,74 +63,76 @@ fun MebitScreen(
     val eyebrowColor = if (dark) MbGold else MbEyebrow
     val bodyColor = if (dark) MbWhite.copy(alpha = 0.72f) else MbBody
     // Background edge-bleeds under system bars; content clears status / Dynamic Island / home indicator.
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(bg)
-            .safeDrawingPadding()
-            .padding(horizontal = 20.dp)
-            .padding(top = 12.dp, bottom = 16.dp)
-            .testTag(tag),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            // No eyebrow and no back chip: keep the row's height so the title sits where the others do.
-            modifier = Modifier.fillMaxWidth().then(if (eyebrow == null) Modifier.height(36.dp) else Modifier),
-        ) {
-            if (onBack != null) {
-                BackChip(onClick = onBack, dark = dark)
-                Spacer(modifier = Modifier.width(12.dp))
-            }
-            if (eyebrow != null) {
-                Text(
-                    text = eyebrow.uppercase(),
-                    color = eyebrowColor,
-                    fontSize = 10.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.6.sp,
-                    modifier = Modifier.testTag("eyebrow"),
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(16.dp))
+    Box(modifier = Modifier.fillMaxSize().background(bg).testTag(tag)) {
         Column(
             modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState()),
+                .fillMaxSize()
+                .safeDrawingPadding()
+                .padding(horizontal = 20.dp)
+                .padding(top = 12.dp, bottom = 16.dp),
         ) {
-            Text(
-                text = title,
-                color = titleColor,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Medium,
-                lineHeight = 34.sp,
-                modifier = Modifier.testTag("title"),
-            )
-            if (subtitle != null) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = subtitle,
-                    color = bodyColor,
-                    fontSize = 13.5.sp,
-                    fontWeight = FontWeight.Light,
-                    lineHeight = 20.sp,
-                )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                // No eyebrow and no back chip: keep the row's height so the title sits where the others do.
+                modifier = Modifier.fillMaxWidth().then(if (eyebrow == null) Modifier.height(36.dp) else Modifier),
+            ) {
+                if (onBack != null) {
+                    BackChip(onClick = onBack, dark = dark)
+                    Spacer(modifier = Modifier.width(12.dp))
+                }
+                if (eyebrow != null) {
+                    Text(
+                        text = eyebrow.uppercase(),
+                        color = eyebrowColor,
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 0.6.sp,
+                        modifier = Modifier.testTag("eyebrow"),
+                    )
+                }
             }
-            Spacer(modifier = Modifier.height(20.dp))
-            content()
+            Spacer(modifier = Modifier.height(16.dp))
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text(
+                    text = title,
+                    color = titleColor,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Medium,
+                    lineHeight = 34.sp,
+                    modifier = Modifier.testTag("title"),
+                )
+                if (subtitle != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = subtitle,
+                        color = bodyColor,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Light,
+                        lineHeight = 20.sp,
+                    )
+                }
+                Spacer(modifier = Modifier.height(20.dp))
+                content()
+            }
+            bottom?.invoke(this)
         }
-        bottom?.invoke(this)
-        TextButton(
-            onClick = onOpenCatalog,
-            modifier = Modifier.fillMaxWidth().testTag("open_catalog"),
-        ) {
-            Text(
-                "รายการหน้าทั้งหมด (debug)",
-                color = if (dark) MbWhite.copy(alpha = 0.5f) else MbBody,
-                fontSize = 12.sp,
-            )
-        }
+        // Debug link floats in the home-indicator inset so it takes no layout space: the bottom block then ends where the boards end it.
+        Text(
+            text = "รายการหน้าทั้งหมด (debug)",
+            color = if (dark) MbWhite.copy(alpha = 0.5f) else MbBody,
+            fontSize = 11.sp,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .windowInsetsPadding(WindowInsets.systemBars)
+                .clickable(role = Role.Button, onClick = onOpenCatalog)
+                .padding(horizontal = 16.dp, vertical = 2.dp)
+                .testTag("open_catalog"),
+        )
     }
 }
 
