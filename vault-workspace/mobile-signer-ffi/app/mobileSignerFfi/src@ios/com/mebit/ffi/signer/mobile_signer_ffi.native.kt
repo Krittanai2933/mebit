@@ -1308,6 +1308,8 @@ internal val UniffiVTableCallbackInterfacePairingCodesUniffiByValue.`uniffiFree`
 
 
 
+
+
 internal object UniffiLib {
     init {
             uniffiCallbackInterfacePairingCodes.register(this)
@@ -1501,6 +1503,15 @@ internal object UniffiLib {
     ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_wallet_snapshot(
         `mnemonicWords`,
         `passphrase`,
+        `network`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_func_is_valid_address(
+        `address`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Byte = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_is_valid_address(
+        `address`,
         `network`,
         uniffiCallStatus,
     )
@@ -1934,6 +1945,9 @@ internal object UniffiLib {
     fun uniffi_mobile_signer_ffi_checksum_func_hot_wallet_snapshot(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_wallet_snapshot(
     )
+    fun uniffi_mobile_signer_ffi_checksum_func_is_valid_address(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_is_valid_address(
+    )
     fun uniffi_mobile_signer_ffi_checksum_func_live_wallet_links(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_live_wallet_links(
     )
@@ -2141,6 +2155,27 @@ public object FfiConverterULong: FfiConverter<ULong, Long> {
 
     override fun write(value: ULong, buf: ByteBuffer) {
         buf.putLong(value.toLong())
+    }
+}
+
+
+public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
+    override fun lift(value: Byte): Boolean {
+        return value.toInt() != 0
+    }
+
+    override fun read(buf: ByteBuffer): Boolean {
+        return lift(buf.get())
+    }
+
+    override fun lower(value: Boolean): Byte {
+        return if (value) 1.toByte() else 0.toByte()
+    }
+
+    override fun allocationSize(value: Boolean): ULong = 1UL
+
+    override fun write(value: Boolean, buf: ByteBuffer) {
+        buf.put(lower(value))
     }
 }
 
@@ -3468,6 +3503,19 @@ public actual fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `pas
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_wallet_snapshot(
             FfiConverterSequenceString.lower(`mnemonicWords`),
             FfiConverterString.lower(`passphrase`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * True when `address` parses and belongs to `network`: the same test `hot_send` applies to its destination.
+ */
+public actual fun `isValidAddress`(`address`: kotlin.String, `network`: KeyNetwork): kotlin.Boolean {
+    return FfiConverterBoolean.lift(uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_is_valid_address(
+            FfiConverterString.lower(`address`),
             FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,
         )

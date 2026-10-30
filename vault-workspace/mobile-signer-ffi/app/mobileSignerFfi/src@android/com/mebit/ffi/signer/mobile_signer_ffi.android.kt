@@ -1040,6 +1040,8 @@ internal typealias UniffiVTableCallbackInterfacePairingCodesUniffiByValue = Unif
 
 
 
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -1107,6 +1109,9 @@ internal object IntegrityCheckingUniffiLib : Library {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_wallet_snapshot() != 48081.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_is_valid_address() != 14296.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_live_wallet_links() != 38905.toShort()) {
@@ -1177,6 +1182,9 @@ internal object IntegrityCheckingUniffiLib : Library {
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_hot_wallet_snapshot(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_is_valid_address(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_live_wallet_links(
@@ -1362,6 +1370,12 @@ internal object UniffiLib : Library {
         `network`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_is_valid_address(
+        `address`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Byte
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_func_live_wallet_links(
         uniffiCallStatus: UniffiRustCallStatus,
@@ -1832,6 +1846,27 @@ public object FfiConverterULong: FfiConverter<ULong, Long> {
 
     override fun write(value: ULong, buf: ByteBuffer) {
         buf.putLong(value.toLong())
+    }
+}
+
+
+public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
+    override fun lift(value: Byte): Boolean {
+        return value.toInt() != 0
+    }
+
+    override fun read(buf: ByteBuffer): Boolean {
+        return lift(buf.get())
+    }
+
+    override fun lower(value: Boolean): Byte {
+        return if (value) 1.toByte() else 0.toByte()
+    }
+
+    override fun allocationSize(value: Boolean): ULong = 1UL
+
+    override fun write(value: Boolean, buf: ByteBuffer) {
+        buf.put(lower(value))
     }
 }
 
@@ -3150,6 +3185,19 @@ public actual fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `pas
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_wallet_snapshot(
             FfiConverterSequenceString.lower(`mnemonicWords`),
             FfiConverterString.lower(`passphrase`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * True when `address` parses and belongs to `network`: the same test `hot_send` applies to its destination.
+ */
+public actual fun `isValidAddress`(`address`: kotlin.String, `network`: KeyNetwork): kotlin.Boolean {
+    return FfiConverterBoolean.lift(uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_is_valid_address(
+            FfiConverterString.lower(`address`),
             FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,
         )

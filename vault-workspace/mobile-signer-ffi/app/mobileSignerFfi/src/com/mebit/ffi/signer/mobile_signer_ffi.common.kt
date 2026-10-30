@@ -105,6 +105,8 @@ public object NoPointer
 
 
 
+
+
 /**
  * Asks the user for the six digits a Trezor Safe 7 shows while pairing (not its PIN).
  * Return null if the user gives up, and never throw: an exception cannot be mapped, so the
@@ -827,6 +829,11 @@ public expect fun `hotSend`(`mnemonicWords`: List<kotlin.String>, `passphrase`: 
  */
 @Throws(MobileSignerException::class)
 public expect fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork): HotWalletSnapshot
+
+/**
+ * True when `address` parses and belongs to `network`: the same test `hot_send` applies to its destination.
+ */
+public expect fun `isValidAddress`(`address`: kotlin.String, `network`: KeyNetwork): kotlin.Boolean
 
 /**
  * How many `WalletLink` objects exist in this process. For tests, not a stable API: a link

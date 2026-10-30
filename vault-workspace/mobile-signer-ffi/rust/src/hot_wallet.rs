@@ -151,6 +151,12 @@ pub struct HotSendResult {
     pub txid: String,
 }
 
+/// True when `address` parses and belongs to `network`: the same test `hot_send` applies to its destination.
+#[uniffi::export]
+pub fn is_valid_address(address: String, network: KeyNetwork) -> bool {
+    Address::from_str(&address).is_ok_and(|a| a.require_network(network_of(network)).is_ok())
+}
+
 /// Build, sign (BIP-84 index 0 key), and broadcast a payment. Fee is absolute sats.
 #[uniffi::export]
 pub fn hot_send(
@@ -321,6 +327,17 @@ mod tests {
         let trezor =
             hot_receive_address(abandon_about(), "TREZOR".into(), KeyNetwork::Test, 0).unwrap();
         assert_eq!(trezor, "tb1qfwxzlmn42rh6wu6gt4f0yrfpe4gf0jtwgxagrr");
+    }
+
+    #[test]
+    fn address_check_matches_what_hot_send_accepts() {
+        let own = hot_receive_address(abandon_about(), String::new(), KeyNetwork::Test, 0).unwrap();
+        assert!(is_valid_address(own.clone(), KeyNetwork::Test));
+        assert!(!is_valid_address(own, KeyNetwork::Main), "a testnet address is not a mainnet one");
+        assert!(is_valid_address("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".into(), KeyNetwork::Main));
+        assert!(!is_valid_address("tb1qnotanaddress".into(), KeyNetwork::Test));
+        assert!(!is_valid_address(" ".into(), KeyNetwork::Test));
+        assert!(!is_valid_address(String::new(), KeyNetwork::Test));
     }
 
     #[test]
