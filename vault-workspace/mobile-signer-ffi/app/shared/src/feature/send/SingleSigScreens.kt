@@ -19,7 +19,6 @@ import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
-import com.mebit.app.ui.components.SecondaryCta
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -47,58 +46,6 @@ import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbWhite
-
-@Composable
-fun S2ReceiveBackupGateScreen(
-    session: OnboardingSession,
-    onBackedUp: () -> Unit,
-    onGoBackup: () -> Unit,
-    onBack: (() -> Unit)?,
-    onOpenCatalog: () -> Unit,
-) {
-    MebitScreen(
-        eyebrow = "RECEIVE",
-        title = "สำรองกุญแจก่อนรับเงิน",
-        subtitle = if (session.backupConfirmed) {
-            "สำรองแล้ว · พร้อมรับ"
-        } else {
-            "ถ้าเครื่องหายตอนยังไม่ได้สำรอง เงินที่รับเข้ามาจะหายไปด้วย และ mebit กู้ให้ไม่ได้ จด 24 คำลงกระดาษ"
-        },
-        onBack = onBack,
-        onOpenCatalog = onOpenCatalog,
-        tag = "screen_send/s2",
-    ) {
-        if (session.backupConfirmed) {
-            PrimaryCta("ต่อไป · ที่อยู่รับ", "cta_s2_continue", onBackedUp)
-        } else {
-            PrimaryCta("ไปสำรอง", "cta_s2_backup", onGoBackup)
-        }
-    }
-}
-
-@Composable
-fun S3ReceiveScreen(
-    wallet: SingleSigWallet,
-    session: OnboardingSession,
-    onDone: () -> Unit,
-    onBack: (() -> Unit)?,
-    onOpenCatalog: () -> Unit,
-) {
-    MebitScreen(
-        eyebrow = "RECEIVE",
-        title = "รับ Bitcoin",
-        onBack = onBack,
-        onOpenCatalog = onOpenCatalog,
-        subtitle = "ให้คนส่ง หรือกระดานเทรดที่คุณถอนออก ส่งมาที่อยู่นี้",
-        tag = "screen_send/s3",
-    ) {
-        Text(wallet.receiveAddress, modifier = Modifier.testTag("ss_receive_address"))
-        Spacer(modifier = Modifier.height(16.dp))
-        SecondaryCta("สร้างที่อยู่ใหม่", "cta_s3_refresh", { wallet.refreshReceive(session) })
-        Spacer(modifier = Modifier.height(8.dp))
-        PrimaryCta("เสร็จ", "cta_s3_done", onDone)
-    }
-}
 
 @Composable
 fun S5ReviewSignScreen(

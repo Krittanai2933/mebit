@@ -67,12 +67,24 @@ fun S1HomeSingleSigScreen(
     onSend: () -> Unit,
     onVault: () -> Unit,
     onOpenCatalog: () -> Unit,
+) = SingleSigHome(wallet, session, onReceive, onSend, onVault, onOpenCatalog, tag = "screen_send/s1")
+
+/** The home itself, so the backup gate can show it dimmed behind its sheet under a tag of its own. */
+@Composable
+internal fun SingleSigHome(
+    wallet: SingleSigWallet,
+    session: OnboardingSession,
+    onReceive: () -> Unit,
+    onSend: () -> Unit,
+    onVault: () -> Unit,
+    onOpenCatalog: () -> Unit,
+    tag: String,
 ) {
     // The snapshot is a blocking network call: keep it off the main thread.
     LaunchedEffect(session.words, session.fingerprint, session.passphrase) {
         withContext(Dispatchers.Default) { wallet.bindSession(session) }
     }
-    Box(modifier = Modifier.fillMaxSize().background(MbPage).testTag("screen_send/s1")) {
+    Box(modifier = Modifier.fillMaxSize().background(MbPage).testTag(tag)) {
         Box(modifier = Modifier.fillMaxWidth().height(350.dp).background(MbNavy))
         Column(modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 20.dp).padding(top = 4.dp)) {
             Image(painterResource(Res.drawable.mebit_logo), contentDescription = "mebit", modifier = Modifier.size(width = 98.dp, height = 26.dp))
