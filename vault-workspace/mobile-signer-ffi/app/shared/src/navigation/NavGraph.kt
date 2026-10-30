@@ -169,6 +169,7 @@ fun MebitNavHost() {
             wallet = singleSig,
             onSingleSig = { navigate(MovieRoute.S1HomeSingleSig) },
             onVault = { navigate(MovieRoute.KeyringFirstVault) },
+            onBackup = { navigate(MovieRoute.BackupWords) },
             onOpenCatalog = openCatalog,
         )
         MovieRoute.HwBackupConfirm -> HwBackupConfirmScreen(

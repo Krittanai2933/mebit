@@ -6,7 +6,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,7 +16,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,8 +41,8 @@ import com.mebit.app.data.OnboardingSession
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.face_id
 import com.mebit.app.resources.ic_check
+import com.mebit.app.ui.components.BottomActions
 import com.mebit.app.ui.components.MebitScreen
-import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbEyebrow
 import com.mebit.app.ui.theme.MbGreenWash
@@ -118,8 +116,10 @@ fun AppLockScreen(
     }
 
     val passcodeOnly = failed && attemptsLeft <= 0
+    // Boards 1.3.1 and 1.6 count the create flow's steps and have no back chip. An import has neither.
+    val creating = enable && !session.imported
     MebitScreen(
-        eyebrow = null,
+        eyebrow = if (!creating) null else if (failed) "SECURITY · Face ID ไม่ผ่าน" else "SECURITY · ขั้น 3 / 3",
         title = when {
             failed -> "Face ID ไม่ผ่าน"
             enable -> "ล็อกแอปด้วย Face ID"
@@ -130,29 +130,24 @@ fun AppLockScreen(
             enable -> "กันคนอื่นหยิบเครื่องคุณไปเปิดแอปหรือส่งเงิน"
             else -> "สแกนใบหน้าเพื่อเปิดแอปต่อ"
         },
-        onBack = onBack,
+        onBack = if (creating) null else onBack,
         onOpenCatalog = onOpenCatalog,
         tag = if (enable) "screen_onboarding/app-lock" else "screen_unlock",
         bottom = {
-            Spacer(modifier = Modifier.height(12.dp))
-            PrimaryCta(
-                label = when {
+            BottomActions(
+                primaryLabel = when {
                     passcodeOnly -> "ใช้รหัส 6 หลัก"
                     failed -> "ลองอีกครั้ง"
                     enable -> "เปิดใช้ Face ID"
                     else -> "ปลดล็อกด้วย Face ID"
                 },
-                tag = if (enable) "cta_enable_lock" else "cta_unlock",
-                onClick = { scan(allowPasscode = passcodeOnly) },
+                primaryTag = if (enable) "cta_enable_lock" else "cta_unlock",
+                onPrimary = { scan(allowPasscode = passcodeOnly) },
+                linkLabel = "ใช้รหัส 6 หลักแทน",
+                linkTag = if (enable) "cta_skip_lock" else "cta_unlock_passcode",
+                onLink = { scan(allowPasscode = true) },
                 enabled = !busy,
             )
-            TextButton(
-                onClick = { scan(allowPasscode = true) },
-                contentPadding = PaddingValues(0.dp),
-                modifier = Modifier.fillMaxWidth().height(40.dp).testTag(if (enable) "cta_skip_lock" else "cta_unlock_passcode"),
-            ) {
-                Text("ใช้รหัส 6 หลักแทน", color = MbNavy, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            }
         },
     ) {
         Spacer(modifier = Modifier.height(65.dp))
@@ -203,11 +198,12 @@ private fun FailedBanner(attemptsLeft: Int) {
             .clip(shape)
             .background(MbWhite)
             .border(1.dp, Color(0xFFDFDFDF), shape)
-            .padding(16.dp)
+            .height(96.dp)
+            .padding(start = 16.dp, end = 16.dp, top = 14.dp)
             .testTag("lock_failed"),
     ) {
         Text("FACE ID · FAILED", color = Color(0xFFF8981C), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(8.dp))
         Text(
             "ยังไม่ปลดล็อกแอป คุณลองได้อีก $attemptsLeft ครั้ง ก่อนต้องใช้รหัส 6 หลัก",
             color = Color(0xFF1E1E1E),
@@ -222,13 +218,14 @@ private fun LockScope() {
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .height(112.dp)
             .clip(shape)
             .background(MbWhite)
             .border(1.dp, MbBorder, shape)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .padding(start = 16.dp, end = 16.dp, top = 9.dp),
     ) {
         ScopeRow("ทุกครั้งที่เปิดแอป", "ปิดแอปเกิน 1 นาทีต้องสแกนใหม่")
-        Box(modifier = Modifier.padding(start = 38.dp, top = 12.dp, bottom = 12.dp).fillMaxWidth().height(1.dp).background(MbBorder))
+        Box(modifier = Modifier.padding(start = 38.dp, top = 8.dp, bottom = 7.dp).fillMaxWidth().height(1.dp).background(MbBorder))
         ScopeRow("ทุกครั้งที่เซ็นส่งเงิน", "ถึงแอปเปิดอยู่ก็ต้องสแกนก่อนเซ็น")
     }
 }
@@ -236,7 +233,7 @@ private fun LockScope() {
 @Composable
 private fun ScopeRow(title: String, meta: String) {
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Box(Modifier.size(26.dp).clip(CircleShape).background(MbGreenWash)) {
+        Box(Modifier.padding(top = 6.dp).size(26.dp).clip(CircleShape).background(MbGreenWash)) {
             Image(painterResource(Res.drawable.ic_check), contentDescription = null, modifier = Modifier.size(26.dp))
         }
         Column {

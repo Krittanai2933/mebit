@@ -27,6 +27,10 @@ class OnboardingSession {
         private set
     var backupConfirmed: Boolean by mutableStateOf(false)
         private set
+
+    /** The key came from typed words, so there was no backup step and its App Lock screen has no step count. */
+    var imported: Boolean by mutableStateOf(false)
+        private set
     var appLockEnabled: Boolean by mutableStateOf(false)
         private set
     var lastError: String? by mutableStateOf(null)
@@ -47,6 +51,7 @@ class OnboardingSession {
         try {
             applyKey(restoreSoftwareMultisigKey(words, passphrase, network, 0u), passphrase)
             backupConfirmed = true
+            imported = true
         } catch (e: Exception) {
             lastError = e.message
         }
@@ -60,6 +65,7 @@ class OnboardingSession {
         derivationPath = ""
         passphrase = ""
         backupConfirmed = false
+        imported = false
         appLockEnabled = false
         lastError = null
     }
@@ -79,5 +85,6 @@ class OnboardingSession {
         derivationPath = key.derivationPath
         this.passphrase = passphrase
         backupConfirmed = false
+        imported = false
     }
 }

@@ -43,3 +43,5 @@ Preconditions:
 - The lock state is in memory, like the keys: a cold start is onboarding again.
 - Leaving the app with `simctl launch` of another app leaves a "‹ Settings" breadcrumb in the status bar. That is the simulator, not the app.
 - `devicectl device capture screenshot` shows the whole screen, system sheets included, and does not wake the app. It is the only safe way to look while a sheet is up.
+- After a key was created, App Lock shows the eyebrow "SECURITY · ขั้น 3 / 3" and no back chip (boards 1.3.1 and 1.6); after an import it shows neither. The failed state adds "SECURITY · Face ID ไม่ผ่าน" in the create flow (boards 1.3.1.1 and 1.6.1), which has only been checked by reading the code.
+- On a simulator the app's failed state cannot be reached even with idb: five `pearl.nomatch` answers, each followed by an idb tap on iOS's Try Face ID Again, left the system sheet up and the app never reported a result.

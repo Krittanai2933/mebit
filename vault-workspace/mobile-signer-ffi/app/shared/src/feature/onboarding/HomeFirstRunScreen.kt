@@ -22,7 +22,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -34,6 +33,7 @@ import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
@@ -42,6 +42,7 @@ import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_chevron
+import com.mebit.app.resources.ic_warning
 import com.mebit.app.resources.mebit_logo_dark
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
@@ -72,6 +73,7 @@ fun HomeFirstRunScreen(
     wallet: SingleSigWallet,
     onSingleSig: () -> Unit,
     onVault: () -> Unit,
+    onBackup: () -> Unit,
     onOpenCatalog: () -> Unit,
 ) {
     // The snapshot is a blocking network call: keep it off the main thread.
@@ -94,20 +96,15 @@ fun HomeFirstRunScreen(
                 modifier = Modifier.size(width = 74.dp, height = 19.dp),
             )
             Spacer(modifier = Modifier.height(25.dp))
-            BalanceHero(if (wallet.live) btc(wallet.balanceSats) else "—")
+            if (!session.backupConfirmed) {
+                BackupNudge(onBackup)
+                Spacer(modifier = Modifier.height(14.dp))
+            }
+            BalanceHero(if (wallet.live) btc(wallet.balanceSats) else "—", zero = wallet.live && wallet.balanceSats == 0L)
             Spacer(modifier = Modifier.height(24.dp))
             Text("จะเริ่มใช้แบบไหน", color = MbNavyInk, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(modifier = Modifier.height(2.dp))
             Text("เลือกตอนนี้ หรือสร้าง Vault ทีหลังก็ได้", color = MbBody, fontSize = 13.sp)
             Spacer(modifier = Modifier.height(16.dp))
-            if (!session.backupConfirmed) {
-                Text(
-                    text = "ยังไม่ได้สำรองกุญแจ · ต้องสำรอง 24 คำก่อนรับเงินครั้งแรก",
-                    color = MaterialTheme.colorScheme.error,
-                    fontSize = 12.sp,
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-            }
             ChoiceCard(
                 title = "กระเป๋ากุญแจเดียว",
                 tag = "พร้อมใช้",
@@ -147,8 +144,33 @@ private fun btc(sats: Long): String {
     return "$whole.${fraction.toString().padStart(4, '0')}"
 }
 
+/** Penpot 1.3.2: sits above the balance until the 24 words are backed up. */
 @Composable
-private fun BalanceHero(balance: String) {
+private fun BackupNudge(onBackup: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(60.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(MbIconWash)
+            .clickable(role = Role.Button, onClick = onBackup)
+            .padding(horizontal = 16.dp)
+            .testTag("cta_backup_now"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Image(painterResource(Res.drawable.ic_warning), contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text("ยังไม่ได้สำรองกุญแจ", color = MbNavyInk, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Text("ต้องสำรอง 24 คำก่อนรับเงินครั้งแรก", color = MbEyebrow, fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
+        }
+        Text("สำรองเลย", color = MbNavy, fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+/** [zero] shows the baht line only for an empty wallet: with no price feed, zero is the one amount known in baht. */
+@Composable
+private fun BalanceHero(balance: String, zero: Boolean) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -175,9 +197,10 @@ private fun BalanceHero(balance: String) {
                 color = MbWhite.copy(alpha = 0.8f),
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 12.dp),
+                modifier = Modifier.padding(bottom = 6.dp),
             )
         }
+        if (zero) Text("≈ ฿0", color = Color(0xFFEEB42A), fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
