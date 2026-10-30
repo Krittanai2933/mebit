@@ -1302,6 +1302,12 @@ internal val UniffiVTableCallbackInterfacePairingCodesUniffiByValue.`uniffiFree`
 
 
 
+
+
+
+
+
+
 internal object UniffiLib {
     init {
             uniffiCallbackInterfacePairingCodes.register(this)
@@ -1394,6 +1400,29 @@ internal object UniffiLib {
     ): Long = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_method_walletlink_unlock(
         `ptr`,
     )
+    fun uniffi_mobile_signer_ffi_fn_func_bip39_last_word_candidates(
+        `firstWords`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_bip39_last_word_candidates(
+        `firstWords`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_func_bip39_suggest(
+        `prefix`: RustBufferByValue,
+        `limit`: Int,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_bip39_suggest(
+        `prefix`,
+        `limit`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_func_check_mnemonic(
+        `words`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_check_mnemonic(
+        `words`,
+        uniffiCallStatus,
+    )
     fun uniffi_mobile_signer_ffi_fn_func_compute_vault_address(
         `borrowerPubkey`: RustBufferByValue,
         `platformPubkey`: RustBufferByValue,
@@ -1436,17 +1465,20 @@ internal object UniffiLib {
     )
     fun uniffi_mobile_signer_ffi_fn_func_hot_receive_address(
         `mnemonicWords`: RustBufferByValue,
+        `passphrase`: RustBufferByValue,
         `network`: RustBufferByValue,
         `index`: Int,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_receive_address(
         `mnemonicWords`,
+        `passphrase`,
         `network`,
         `index`,
         uniffiCallStatus,
     )
     fun uniffi_mobile_signer_ffi_fn_func_hot_send(
         `mnemonicWords`: RustBufferByValue,
+        `passphrase`: RustBufferByValue,
         `network`: RustBufferByValue,
         `destination`: RustBufferByValue,
         `amountSats`: Long,
@@ -1454,6 +1486,7 @@ internal object UniffiLib {
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_send(
         `mnemonicWords`,
+        `passphrase`,
         `network`,
         `destination`,
         `amountSats`,
@@ -1462,10 +1495,12 @@ internal object UniffiLib {
     )
     fun uniffi_mobile_signer_ffi_fn_func_hot_wallet_snapshot(
         `mnemonicWords`: RustBufferByValue,
+        `passphrase`: RustBufferByValue,
         `network`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_wallet_snapshot(
         `mnemonicWords`,
+        `passphrase`,
         `network`,
         uniffiCallStatus,
     )
@@ -1868,6 +1903,15 @@ internal object UniffiLib {
     ): Unit = mobile_signer_ffi.cinterop.ffi_mobile_signer_ffi_rust_future_complete_void(
         `handle`,
         uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_checksum_func_bip39_last_word_candidates(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_bip39_last_word_candidates(
+    )
+    fun uniffi_mobile_signer_ffi_checksum_func_bip39_suggest(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_bip39_suggest(
+    )
+    fun uniffi_mobile_signer_ffi_checksum_func_check_mnemonic(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_check_mnemonic(
     )
     fun uniffi_mobile_signer_ffi_checksum_func_compute_vault_address(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_compute_vault_address(
@@ -2960,6 +3004,78 @@ public object FfiConverterTypeKeyNetwork: FfiConverterRustBuffer<KeyNetwork> {
 
 
 
+
+public object FfiConverterTypeMnemonicCheck : FfiConverterRustBuffer<MnemonicCheck>{
+    override fun read(buf: ByteBuffer): MnemonicCheck {
+        return when(buf.getInt()) {
+            1 -> MnemonicCheck.Valid
+            2 -> MnemonicCheck.UnknownWord(
+                FfiConverterUInt.read(buf),
+                )
+            3 -> MnemonicCheck.BadWordCount(
+                FfiConverterUInt.read(buf),
+                )
+            4 -> MnemonicCheck.InvalidChecksum
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: MnemonicCheck): ULong = when(value) {
+        is MnemonicCheck.Valid -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is MnemonicCheck.UnknownWord -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterUInt.allocationSize(value.`index`)
+            )
+        }
+        is MnemonicCheck.BadWordCount -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterUInt.allocationSize(value.`count`)
+            )
+        }
+        is MnemonicCheck.InvalidChecksum -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+    }
+
+    override fun write(value: MnemonicCheck, buf: ByteBuffer) {
+        when(value) {
+            is MnemonicCheck.Valid -> {
+                buf.putInt(1)
+                Unit
+            }
+            is MnemonicCheck.UnknownWord -> {
+                buf.putInt(2)
+                FfiConverterUInt.write(value.`index`, buf)
+                Unit
+            }
+            is MnemonicCheck.BadWordCount -> {
+                buf.putInt(3)
+                FfiConverterUInt.write(value.`count`, buf)
+                Unit
+            }
+            is MnemonicCheck.InvalidChecksum -> {
+                buf.putInt(4)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
 public object MobileSignerExceptionErrorHandler : UniffiRustCallStatusErrorHandler<MobileSignerException> {
     override fun lift(errorBuf: RustBufferByValue): MobileSignerException = FfiConverterTypeMobileSignerError.lift(errorBuf)
 }
@@ -3191,6 +3307,48 @@ public object FfiConverterSequenceTypeFoundWallet: FfiConverterRustBuffer<List<F
 
 
 /**
+ * The words that turn `first_words` into a valid mnemonic, in list order. For 23
+ * words that is 8: the last word carries 3 entropy bits and 8 checksum bits.
+ * Empty when a word is not in the list or the count cannot become 12, 15, 18, 21
+ * or 24 words.
+ */
+public actual fun `bip39LastWordCandidates`(`firstWords`: List<kotlin.String>): List<kotlin.String> {
+    return FfiConverterSequenceString.lift(uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_bip39_last_word_candidates(
+            FfiConverterSequenceString.lower(`firstWords`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * Up to `limit` BIP-39 English words that start with `prefix`, in list order.
+ * An empty prefix gives none.
+ */
+public actual fun `bip39Suggest`(`prefix`: kotlin.String, `limit`: kotlin.UInt): List<kotlin.String> {
+    return FfiConverterSequenceString.lift(uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_bip39_suggest(
+            FfiConverterString.lower(`prefix`),
+            FfiConverterUInt.lower(`limit`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * Is `words` a valid BIP-39 English mnemonic, and if not, why? Nothing is retained.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `checkMnemonic`(`words`: List<kotlin.String>): MnemonicCheck {
+    return FfiConverterTypeMnemonicCheck.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_check_mnemonic(
+            FfiConverterSequenceString.lower(`words`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
  * MOCK, legacy three-party (borrower/platform/lender) 2-of-3 lending vault.
  * Returns `"tb1q"` + hex of a Rust `DefaultHasher` digest: not a Bitcoin
  * address, and not stable across Rust releases. For a real address use
@@ -3266,13 +3424,16 @@ public actual fun `generateSoftwareMultisigKey`(`passphrase`: kotlin.String, `ne
 }
 
 /**
- * First receive address at BIP-84 index `index` (usually 0).
+ * First receive address at BIP-84 index `index` (usually 0). `passphrase` is the
+ * BIP-39 passphrase the key was restored with, empty for none: a different
+ * passphrase is a different wallet.
  */
 @Throws(MobileSignerException::class)
-public actual fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `network`: KeyNetwork, `index`: kotlin.UInt): kotlin.String {
+public actual fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `index`: kotlin.UInt): kotlin.String {
     return FfiConverterString.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_receive_address(
             FfiConverterSequenceString.lower(`mnemonicWords`),
+            FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
             FfiConverterUInt.lower(`index`),
             uniffiRustCallStatus,
@@ -3284,10 +3445,11 @@ public actual fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `net
  * Build, sign (BIP-84 index 0 key), and broadcast a payment. Fee is absolute sats.
  */
 @Throws(MobileSignerException::class)
-public actual fun `hotSend`(`mnemonicWords`: List<kotlin.String>, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeSats`: kotlin.ULong): HotSendResult {
+public actual fun `hotSend`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeSats`: kotlin.ULong): HotSendResult {
     return FfiConverterTypeHotSendResult.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_send(
             FfiConverterSequenceString.lower(`mnemonicWords`),
+            FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
             FfiConverterString.lower(`destination`),
             FfiConverterULong.lower(`amountSats`),
@@ -3301,10 +3463,11 @@ public actual fun `hotSend`(`mnemonicWords`: List<kotlin.String>, `network`: Key
  * Confirmed + mempool balance for receive index 0 via Esplora.
  */
 @Throws(MobileSignerException::class)
-public actual fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `network`: KeyNetwork): HotWalletSnapshot {
+public actual fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork): HotWalletSnapshot {
     return FfiConverterTypeHotWalletSnapshot.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_wallet_snapshot(
             FfiConverterSequenceString.lower(`mnemonicWords`),
+            FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,
         )

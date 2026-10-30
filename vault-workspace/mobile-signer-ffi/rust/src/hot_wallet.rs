@@ -53,11 +53,12 @@ fn mnemonic_from(words: &[String]) -> Result<Mnemonic, MobileSignerError> {
 
 fn receive_privkey(
     mnemonic: &Mnemonic,
+    passphrase: &str,
     network: Network,
     index: u32,
 ) -> Result<(PrivateKey, Address), MobileSignerError> {
     let secp = Secp256k1::new();
-    let seed = mnemonic.to_seed("");
+    let seed = mnemonic.to_seed(passphrase);
     let master = Xpriv::new_master(network, &seed)
         .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?;
     let path = DerivationPath::from_str(&format!("{ACCOUNT_PATH}/0/{index}"))
@@ -89,15 +90,18 @@ fn http_post(url: &str, body: &str) -> Result<String, MobileSignerError> {
         .map_err(|e| MobileSignerError::InvalidPsbtJson(format!("esplora body: {e}")))
 }
 
-/// First receive address at BIP-84 index `index` (usually 0).
+/// First receive address at BIP-84 index `index` (usually 0). `passphrase` is the
+/// BIP-39 passphrase the key was restored with, empty for none: a different
+/// passphrase is a different wallet.
 #[uniffi::export]
 pub fn hot_receive_address(
     mnemonic_words: Vec<String>,
+    passphrase: String,
     network: KeyNetwork,
     index: u32,
 ) -> Result<String, MobileSignerError> {
     let mnemonic = mnemonic_from(&mnemonic_words)?;
-    let (_pk, address) = receive_privkey(&mnemonic, network_of(network), index)?;
+    let (_pk, address) = receive_privkey(&mnemonic, &passphrase, network_of(network), index)?;
     Ok(address.to_string())
 }
 
@@ -105,10 +109,11 @@ pub fn hot_receive_address(
 #[uniffi::export]
 pub fn hot_wallet_snapshot(
     mnemonic_words: Vec<String>,
+    passphrase: String,
     network: KeyNetwork,
 ) -> Result<HotWalletSnapshot, MobileSignerError> {
     let mnemonic = mnemonic_from(&mnemonic_words)?;
-    let (_pk, address) = receive_privkey(&mnemonic, network_of(network), 0)?;
+    let (_pk, address) = receive_privkey(&mnemonic, &passphrase, network_of(network), 0)?;
     let base = esplora_base(network)?;
     let raw = http_get(&format!("{base}/address/{address}"))?;
     let balance = parse_address_balance(&raw)?;
@@ -150,6 +155,7 @@ pub struct HotSendResult {
 #[uniffi::export]
 pub fn hot_send(
     mnemonic_words: Vec<String>,
+    passphrase: String,
     network: KeyNetwork,
     destination: String,
     amount_sats: u64,
@@ -157,7 +163,7 @@ pub fn hot_send(
 ) -> Result<HotSendResult, MobileSignerError> {
     let mnemonic = mnemonic_from(&mnemonic_words)?;
     let net = network_of(network);
-    let (privkey, from_address) = receive_privkey(&mnemonic, net, 0)?;
+    let (privkey, from_address) = receive_privkey(&mnemonic, &passphrase, net, 0)?;
     let dest = Address::from_str(&destination)
         .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?
         .require_network(net)
@@ -298,17 +304,31 @@ fn extract_u64_simple(obj: &str, field: &str) -> Option<u64> {
 mod tests {
     use super::*;
 
+    fn abandon_about() -> Vec<String> {
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+            .split_whitespace()
+            .map(str::to_string)
+            .collect()
+    }
+
+    // Both addresses were derived outside this crate (stdlib PBKDF2 + BIP-32 + bech32,
+    // BIP-84 path m/84'/1'/0'/0/0). The empty-passphrase one is the published BIP-84
+    // testnet vector, so it also pins the behaviour from before passphrases existed.
     #[test]
-    fn receive_address_is_stable_for_known_words() {
-        let words: Vec<String> =
-            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-                .split_whitespace()
-                .map(str::to_string)
-                .collect();
-        let a = hot_receive_address(words.clone(), KeyNetwork::Test, 0).unwrap();
-        let b = hot_receive_address(words, KeyNetwork::Test, 0).unwrap();
-        assert_eq!(a, b);
-        assert!(a.starts_with("tb1"));
+    fn receive_address_matches_an_independent_derivation() {
+        let none = hot_receive_address(abandon_about(), String::new(), KeyNetwork::Test, 0).unwrap();
+        assert_eq!(none, "tb1q6rz28mcfaxtmd6v789l9rrlrusdprr9pqcpvkl");
+        let trezor =
+            hot_receive_address(abandon_about(), "TREZOR".into(), KeyNetwork::Test, 0).unwrap();
+        assert_eq!(trezor, "tb1qfwxzlmn42rh6wu6gt4f0yrfpe4gf0jtwgxagrr");
+    }
+
+    #[test]
+    fn a_different_passphrase_is_a_different_wallet() {
+        let a = hot_receive_address(abandon_about(), "a".into(), KeyNetwork::Test, 0).unwrap();
+        let b = hot_receive_address(abandon_about(), "b".into(), KeyNetwork::Test, 0).unwrap();
+        let none = hot_receive_address(abandon_about(), String::new(), KeyNetwork::Test, 0).unwrap();
+        assert!(a != b && a != none && b != none);
     }
 
     #[test]

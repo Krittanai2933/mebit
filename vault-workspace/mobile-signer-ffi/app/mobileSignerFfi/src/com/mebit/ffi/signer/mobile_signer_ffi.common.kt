@@ -584,6 +584,47 @@ public enum class KeyNetwork {
 
 
 
+/**
+ * What `check_mnemonic` found. `index` and `count` are positions and sizes of the
+ * list the caller passed, never the words themselves.
+ */
+
+public sealed class MnemonicCheck {
+    
+    
+    public object Valid : MnemonicCheck() 
+    
+    
+    /**
+     * The word at `index` (0-based) is not in the BIP-39 English list.
+     */
+    public data class UnknownWord(
+        val `index`: kotlin.UInt,
+    ) : MnemonicCheck() {
+    }
+    
+    /**
+     * BIP-39 mnemonics have 12, 15, 18, 21 or 24 words.
+     */
+    public data class BadWordCount(
+        val `count`: kotlin.UInt,
+    ) : MnemonicCheck() {
+    }
+    
+    /**
+     * Every word is in the list, but the checksum does not match.
+     */
+    
+    public object InvalidChecksum : MnemonicCheck() 
+    
+    
+}
+
+
+
+
+
+
 
 /**
  * Every failure an export returns.
@@ -707,6 +748,26 @@ public enum class WalletKind {
 
 
 /**
+ * The words that turn `first_words` into a valid mnemonic, in list order. For 23
+ * words that is 8: the last word carries 3 entropy bits and 8 checksum bits.
+ * Empty when a word is not in the list or the count cannot become 12, 15, 18, 21
+ * or 24 words.
+ */
+public expect fun `bip39LastWordCandidates`(`firstWords`: List<kotlin.String>): List<kotlin.String>
+
+/**
+ * Up to `limit` BIP-39 English words that start with `prefix`, in list order.
+ * An empty prefix gives none.
+ */
+public expect fun `bip39Suggest`(`prefix`: kotlin.String, `limit`: kotlin.UInt): List<kotlin.String>
+
+/**
+ * Is `words` a valid BIP-39 English mnemonic, and if not, why? Nothing is retained.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `checkMnemonic`(`words`: List<kotlin.String>): MnemonicCheck
+
+/**
  * MOCK, legacy three-party (borrower/platform/lender) 2-of-3 lending vault.
  * Returns `"tb1q"` + hex of a Rust `DefaultHasher` digest: not a Bitcoin
  * address, and not stable across Rust releases. For a real address use
@@ -748,22 +809,24 @@ public expect fun `deriveBorrowerPubkey`(`accountXpub`: kotlin.String, `index`: 
 public expect fun `generateSoftwareMultisigKey`(`passphrase`: kotlin.String, `network`: KeyNetwork, `account`: kotlin.UInt): SoftwareAccountKey
 
 /**
- * First receive address at BIP-84 index `index` (usually 0).
+ * First receive address at BIP-84 index `index` (usually 0). `passphrase` is the
+ * BIP-39 passphrase the key was restored with, empty for none: a different
+ * passphrase is a different wallet.
  */
 @Throws(MobileSignerException::class)
-public expect fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `network`: KeyNetwork, `index`: kotlin.UInt): kotlin.String
+public expect fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `index`: kotlin.UInt): kotlin.String
 
 /**
  * Build, sign (BIP-84 index 0 key), and broadcast a payment. Fee is absolute sats.
  */
 @Throws(MobileSignerException::class)
-public expect fun `hotSend`(`mnemonicWords`: List<kotlin.String>, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeSats`: kotlin.ULong): HotSendResult
+public expect fun `hotSend`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeSats`: kotlin.ULong): HotSendResult
 
 /**
  * Confirmed + mempool balance for receive index 0 via Esplora.
  */
 @Throws(MobileSignerException::class)
-public expect fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `network`: KeyNetwork): HotWalletSnapshot
+public expect fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork): HotWalletSnapshot
 
 /**
  * How many `WalletLink` objects exist in this process. For tests, not a stable API: a link

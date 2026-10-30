@@ -11,7 +11,7 @@ pub mod hot_wallet;
 
 use std::str::FromStr;
 
-use bip39::Mnemonic;
+use bip39::{Language, Mnemonic};
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::{Network, NetworkKind, bip32::Xpub};
 use vault_core::derivation;
@@ -212,6 +212,74 @@ pub fn restore_software_multisig_key(
     let mnemonic = Mnemonic::parse_normalized(&mnemonic_words.join(" "))
         .map_err(|error| MobileSignerError::InvalidMnemonic(error.to_string()))?;
     software_account_key(&mnemonic, &passphrase, network, account)
+}
+
+/// What `check_mnemonic` found. `index` and `count` are positions and sizes of the
+/// list the caller passed, never the words themselves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum MnemonicCheck {
+    Valid,
+    /// The word at `index` (0-based) is not in the BIP-39 English list.
+    UnknownWord { index: u32 },
+    /// BIP-39 mnemonics have 12, 15, 18, 21 or 24 words.
+    BadWordCount { count: u32 },
+    /// Every word is in the list, but the checksum does not match.
+    InvalidChecksum,
+}
+
+/// Is `words` a valid BIP-39 English mnemonic, and if not, why? Nothing is retained.
+#[uniffi::export]
+pub fn check_mnemonic(words: Vec<String>) -> Result<MnemonicCheck, MobileSignerError> {
+    match Mnemonic::parse_normalized(&words.join(" ")) {
+        Ok(_) => Ok(MnemonicCheck::Valid),
+        Err(bip39::Error::UnknownWord(index)) => Ok(MnemonicCheck::UnknownWord {
+            index: index as u32,
+        }),
+        Err(bip39::Error::BadWordCount(count)) => Ok(MnemonicCheck::BadWordCount {
+            count: count as u32,
+        }),
+        Err(bip39::Error::InvalidChecksum) => Ok(MnemonicCheck::InvalidChecksum),
+        // Unreachable with the English-only list: report it as a bug.
+        Err(other) => Err(MobileSignerError::InvalidMnemonic(other.to_string())),
+    }
+}
+
+/// Up to `limit` BIP-39 English words that start with `prefix`, in list order.
+/// An empty prefix gives none.
+#[uniffi::export]
+pub fn bip39_suggest(prefix: String, limit: u32) -> Vec<String> {
+    let prefix = prefix.trim().to_lowercase();
+    if prefix.is_empty() {
+        return Vec::new();
+    }
+    Language::English
+        .words_by_prefix(&prefix)
+        .iter()
+        .take(limit as usize)
+        .map(|word| (*word).to_string())
+        .collect()
+}
+
+/// The words that turn `first_words` into a valid mnemonic, in list order. For 23
+/// words that is 8: the last word carries 3 entropy bits and 8 checksum bits.
+/// Empty when a word is not in the list or the count cannot become 12, 15, 18, 21
+/// or 24 words.
+#[uniffi::export]
+pub fn bip39_last_word_candidates(first_words: Vec<String>) -> Vec<String> {
+    if ![11, 14, 17, 20, 23].contains(&first_words.len())
+        || first_words
+            .iter()
+            .any(|word| Language::English.find_word(word).is_none())
+    {
+        return Vec::new();
+    }
+    let prefix = first_words.join(" ");
+    Language::English
+        .word_list()
+        .iter()
+        .filter(|word| Mnemonic::parse_normalized(&format!("{prefix} {word}")).is_ok())
+        .map(|word| (*word).to_string())
+        .collect()
 }
 
 fn software_account_key(
@@ -659,6 +727,66 @@ mod tests {
     }
 
     #[test]
+    fn suggestions_are_the_first_matches_in_list_order() {
+        assert_eq!(
+            bip39_suggest("ab".into(), 8),
+            [
+                "abandon", "ability", "able", "about", "above", "absent", "absorb", "abstract"
+            ]
+        );
+        assert_eq!(bip39_suggest("  ZOO ".into(), 8), ["zoo"]);
+        assert!(bip39_suggest(String::new(), 8).is_empty());
+        assert!(bip39_suggest("qqq".into(), 8).is_empty());
+    }
+
+    #[test]
+    fn check_mnemonic_names_the_problem() {
+        assert_eq!(
+            check_mnemonic(phrase_words(ABANDON_ART)).unwrap(),
+            MnemonicCheck::Valid
+        );
+
+        let mut unknown = phrase_words(ABANDON_ART);
+        unknown[3] = "abandonn".into();
+        assert_eq!(
+            check_mnemonic(unknown).unwrap(),
+            MnemonicCheck::UnknownWord { index: 3 }
+        );
+
+        // 24 x "abandon": every word is in the list, the checksum is wrong.
+        assert_eq!(
+            check_mnemonic(vec!["abandon".to_string(); 24]).unwrap(),
+            MnemonicCheck::InvalidChecksum
+        );
+        assert_eq!(
+            check_mnemonic(vec!["abandon".to_string(); 13]).unwrap(),
+            MnemonicCheck::BadWordCount { count: 13 }
+        );
+    }
+
+    #[test]
+    fn last_word_candidates_complete_the_mnemonic() {
+        let first23 = vec!["abandon".to_string(); 23];
+        let candidates = bip39_last_word_candidates(first23.clone());
+        assert_eq!(candidates.len(), 8, "3 entropy bits leave 8 words: {candidates:?}");
+        assert!(candidates.contains(&"art".to_string()));
+        let mut sorted = candidates.clone();
+        sorted.sort();
+        assert_eq!(candidates, sorted, "list order is alphabetical");
+        for word in &candidates {
+            let mut all = first23.clone();
+            all.push(word.clone());
+            assert_eq!(check_mnemonic(all.clone()).unwrap(), MnemonicCheck::Valid);
+            restore_software_multisig_key(all, String::new(), KeyNetwork::Test, 0).unwrap();
+        }
+
+        let mut unknown = first23;
+        unknown[0] = "abandonn".into();
+        assert!(bip39_last_word_candidates(unknown).is_empty());
+        assert!(bip39_last_word_candidates(vec!["abandon".to_string(); 22]).is_empty());
+    }
+
+    #[test]
     fn committed_android_bindings_match_the_exports() {
         let kotlin = include_str!(
             "../../app/mobileSignerFfi/src@android/com/mebit/ffi/signer/mobile_signer_ffi.android.kt"
@@ -687,6 +815,18 @@ mod tests {
             (
                 "func_restore_software_multisig_key",
                 uniffi_mobile_signer_ffi_checksum_func_restore_software_multisig_key(),
+            ),
+            (
+                "func_check_mnemonic",
+                uniffi_mobile_signer_ffi_checksum_func_check_mnemonic(),
+            ),
+            (
+                "func_bip39_suggest",
+                uniffi_mobile_signer_ffi_checksum_func_bip39_suggest(),
+            ),
+            (
+                "func_bip39_last_word_candidates",
+                uniffi_mobile_signer_ffi_checksum_func_bip39_last_word_candidates(),
             ),
             (
                 "func_hot_receive_address",
