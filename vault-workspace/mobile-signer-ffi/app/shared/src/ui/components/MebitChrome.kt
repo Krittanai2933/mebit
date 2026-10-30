@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.ui.theme.MbBody
@@ -235,6 +236,7 @@ fun PrimaryCta(
     onClick: () -> Unit,
     enabled: Boolean = true,
     darkSurface: Boolean = false,
+    height: Dp = 54.dp,
 ) {
     val bg = when {
         !enabled -> MbChip
@@ -249,7 +251,7 @@ fun PrimaryCta(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(54.dp)
+            .height(height)
             .clip(RoundedCornerShape(999.dp))
             .background(bg)
             .clickable(enabled = enabled, onClick = onClick)
@@ -266,13 +268,14 @@ fun SecondaryCta(
     tag: String,
     onClick: () -> Unit,
     darkSurface: Boolean = false,
+    height: Dp = 54.dp,
 ) {
     val border = if (darkSurface) MbWhite.copy(alpha = 0.35f) else MbNavy.copy(alpha = 0.2f)
     val fg = if (darkSurface) MbWhite else MbNavy
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(54.dp)
+            .height(height)
             .clip(RoundedCornerShape(999.dp))
             .border(1.5.dp, border, RoundedCornerShape(999.dp))
             .clickable(onClick = onClick)

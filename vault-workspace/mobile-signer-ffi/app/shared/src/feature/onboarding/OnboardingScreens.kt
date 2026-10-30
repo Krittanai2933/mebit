@@ -129,9 +129,10 @@ fun WelcomeScreen(
                 letterSpacing = (-0.8).sp,
             )
             Spacer(modifier = Modifier.height(34.dp))
-            PrimaryCta("สร้างกระเป๋าใหม่", "cta_create", onCreate, darkSurface = true)
+            // Penpot 1.1 draws both CTAs 56dp tall, not the 54dp default.
+            PrimaryCta("สร้างกระเป๋าใหม่", "cta_create", onCreate, darkSurface = true, height = 56.dp)
             Spacer(modifier = Modifier.height(20.dp))
-            SecondaryCta("นำเข้ากระเป๋าเดิม", "cta_import", onImport, darkSurface = true)
+            SecondaryCta("นำเข้ากระเป๋าเดิม", "cta_import", onImport, darkSurface = true, height = 56.dp)
         }
         // Penpot leaves 22dp under the CTAs above the home-indicator inset; the debug link lives in it so the CTAs keep their design position.
         TextButton(
