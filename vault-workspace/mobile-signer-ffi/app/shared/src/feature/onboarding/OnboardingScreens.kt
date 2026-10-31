@@ -355,10 +355,10 @@ fun BackupWordsScreen(
         Spacer(modifier = Modifier.height(19.dp))
         WordGrid(session.words, Modifier.hideWhen(guard))
         Spacer(modifier = Modifier.height(14.dp))
-        CaptureBanner(guard.claim)
         if (guard.screenshotTaken) {
-            Spacer(modifier = Modifier.height(12.dp))
-            IssueBanner("ถ่ายภาพหน้าจอแล้ว", "ลบภาพนั้นออกจากอัลบั้มและ iCloud ทันที", "screenshot_taken")
+            IssueBanner("ถ่ายภาพหน้าจอ seed แล้ว", "สร้าง seed ใหม่ อย่าใช้ seed นี้", "screenshot_taken")
+        } else {
+            CaptureBanner(guard.claim)
         }
     }
 }
