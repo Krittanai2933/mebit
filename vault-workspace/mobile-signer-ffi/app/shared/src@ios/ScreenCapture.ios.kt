@@ -19,7 +19,9 @@ import platform.UIKit.UISceneCaptureStateActive
 import platform.UIKit.UIScreen
 import platform.UIKit.UIScreenCapturedDidChangeNotification
 
-// iOS has no public API that blocks a still screenshot, so the app can only hide the words and warn after one.
+private val secureHolders = HolderCount()
+
+// iOS has no public API that blocks a still screenshot, so without the secure layer the app can only hide the words and warn after one.
 @Composable
 actual fun rememberCaptureGuard(): CaptureGuard {
     var captured by remember { mutableStateOf(isCaptured()) }
@@ -33,9 +35,11 @@ actual fun rememberCaptureGuard(): CaptureGuard {
         val screenshot = center.addObserverForName(UIApplicationUserDidTakeScreenshotNotification, `object` = null, queue = NSOperationQueue.mainQueue) {
             screenshotTaken = true
         }
+        if (secureHolders.acquire()) SecureLayer.install()
         onDispose {
             center.removeObserver(capture)
             center.removeObserver(screenshot)
+            if (secureHolders.release()) SecureLayer.uninstall()
         }
     }
     LaunchedEffect(state) { captured = isCaptured() }
@@ -44,10 +48,15 @@ actual fun rememberCaptureGuard(): CaptureGuard {
         while (true) {
             delay(250)
             captured = isCaptured()
+            SecureLayer.refresh()
         }
     }
     // Compose reports an inactive scene, as in the app switcher, as STARTED and only an active one as RESUMED.
-    return CaptureGuard(CaptureClaim.HidesWhileRecording, hidden = captured || state < Lifecycle.State.RESUMED, screenshotTaken = screenshotTaken)
+    return CaptureGuard(
+        if (SecureLayer.installed) CaptureClaim.BlocksScreenshots else CaptureClaim.HidesWhileRecording,
+        hidden = captured || state < Lifecycle.State.RESUMED,
+        screenshotTaken = screenshotTaken && !SecureLayer.installed,
+    )
 }
 
 private fun isCaptured(): Boolean =

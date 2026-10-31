@@ -39,7 +39,7 @@ Preconditions:
 
 ## Gotchas
 
-- Import Seed and its passphrase sheet block capture on Android (FLAG_SECURE), so every Android `verify.sh shot` of them is black. On iOS the words are hidden while the screen is recorded or the app is inactive. See [onboarding](./movie-page-onboarding.md) for the commands that proved it.
+- Import Seed and its passphrase sheet block capture on Android (FLAG_SECURE), so every Android `verify.sh shot` of them is black. On an iPhone the screen comes out black in screenshots and recordings, but the passphrase sheet and the system keyboard are not covered (docs/04-open-items.md item 40). See [onboarding](./movie-page-onboarding.md) for the commands that proved it.
 - While a slot has the keyboard, the warning shows above it, pinned where the button normally is, because the one under the grid is behind the keyboard.
 - While a slot has the keyboard, the debug link under the screen is hidden. Dismiss the keyboard or finish typing before `ios-tap "id:open_catalog"`.
 - `ios-type` types into whatever has the keyboard after the tap. The tap on a slot is what moves the focus, so one `ios-type` per slot when the words are not separated by newlines.
