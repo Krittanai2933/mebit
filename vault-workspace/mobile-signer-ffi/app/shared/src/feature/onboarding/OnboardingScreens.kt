@@ -401,7 +401,7 @@ private fun WordGrid(words: List<String>, modifier: Modifier = Modifier) {
 private fun CaptureBanner(claim: CaptureClaim) {
     val text = when (claim) {
         CaptureClaim.BlocksScreenshots -> "แอปจะบล็อกการถ่ายภาพหน้าจอระหว่างแสดงคำ"
-        CaptureClaim.HidesWhileRecording -> "แอปจะซ่อนคำเมื่อมีการอัดหน้าจอ · อย่าถ่ายภาพหน้าจอ"
+        CaptureClaim.HidesWhileRecording -> "seed ถูกถ่ายแล้วควรสร้างโปรดสร้าง seed ใหม่"
         CaptureClaim.None -> return
     }
     Row(
