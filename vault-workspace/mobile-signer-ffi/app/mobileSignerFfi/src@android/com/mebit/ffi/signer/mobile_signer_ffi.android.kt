@@ -1042,6 +1042,8 @@ internal typealias UniffiVTableCallbackInterfacePairingCodesUniffiByValue = Unif
 
 
 
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -1097,6 +1099,9 @@ internal object IntegrityCheckingUniffiLib : Library {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_derive_borrower_pubkey() != 16439.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_fetch_btc_thb() != 42524.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key() != 291.toShort()) {
@@ -1170,6 +1175,9 @@ internal object IntegrityCheckingUniffiLib : Library {
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_derive_borrower_pubkey(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_fetch_btc_thb(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key(
@@ -1336,6 +1344,10 @@ internal object UniffiLib : Library {
     external fun uniffi_mobile_signer_ffi_fn_func_derive_borrower_pubkey(
         `accountXpub`: RustBufferByValue,
         `index`: Int,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_fetch_btc_thb(
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     @JvmStatic
@@ -1846,6 +1858,27 @@ public object FfiConverterULong: FfiConverter<ULong, Long> {
 
     override fun write(value: ULong, buf: ByteBuffer) {
         buf.putLong(value.toLong())
+    }
+}
+
+
+public object FfiConverterDouble: FfiConverter<Double, Double> {
+    override fun lift(value: Double): Double {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Double {
+        return buf.getDouble()
+    }
+
+    override fun lower(value: Double): Double {
+        return value
+    }
+
+    override fun allocationSize(value: Double): ULong = 8UL
+
+    override fun write(value: Double, buf: ByteBuffer) {
+        buf.putDouble(value)
     }
 }
 
@@ -2449,6 +2482,28 @@ public object FfiConverterTypeWalletLink: FfiConverter<WalletLink, Pointer> {
 
 
 
+public object FfiConverterTypeBtcPrice: FfiConverterRustBuffer<BtcPrice> {
+    override fun read(buf: ByteBuffer): BtcPrice {
+        return BtcPrice(
+            FfiConverterDouble.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: BtcPrice): ULong = (
+            FfiConverterDouble.allocationSize(value.`thbPerBtc`) +
+            FfiConverterULong.allocationSize(value.`fetchedAt`)
+    )
+
+    override fun write(value: BtcPrice, buf: ByteBuffer) {
+        FfiConverterDouble.write(value.`thbPerBtc`, buf)
+        FfiConverterULong.write(value.`fetchedAt`, buf)
+    }
+}
+
+
+
+
 public object FfiConverterTypeFoundWallet: FfiConverterRustBuffer<FoundWallet> {
     override fun read(buf: ByteBuffer): FoundWallet {
         return FoundWallet(
@@ -2807,6 +2862,7 @@ public object FfiConverterTypeMobileSignerError : FfiConverterRustBuffer<MobileS
             5 -> MobileSignerException.InvalidThreshold(FfiConverterString.read(buf))
             6 -> MobileSignerException.VaultCore(FfiConverterString.read(buf))
             7 -> MobileSignerException.InvalidMnemonic(FfiConverterString.read(buf))
+            8 -> MobileSignerException.Network(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
@@ -2843,6 +2899,10 @@ public object FfiConverterTypeMobileSignerError : FfiConverterRustBuffer<MobileS
             }
             is MobileSignerException.InvalidMnemonic -> {
                 buf.putInt(7)
+                Unit
+            }
+            is MobileSignerException.Network -> {
+                buf.putInt(8)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -3116,6 +3176,22 @@ public actual fun `deriveBorrowerPubkey`(`accountXpub`: kotlin.String, `index`: 
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_derive_borrower_pubkey(
             FfiConverterString.lower(`accountXpub`),
             FfiConverterUInt.lower(`index`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * Baht per bitcoin from Bitkub, or from CoinGecko when Bitkub fails or answers nonsense.
+ * Neither publishes terms for use inside an app: fine for this testnet build, not for production.
+ *
+ * Blocks for up to 20 seconds when both sources hang, so call it off the main thread. Fails with
+ * `Network`, which names both reasons, when neither source gives a price.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `fetchBtcThb`(): BtcPrice {
+    return FfiConverterTypeBtcPrice.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_fetch_btc_thb(
             uniffiRustCallStatus,
         )
     })

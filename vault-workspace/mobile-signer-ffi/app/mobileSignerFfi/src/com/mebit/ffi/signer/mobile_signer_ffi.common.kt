@@ -107,6 +107,8 @@ public object NoPointer
 
 
 
+
+
 /**
  * Asks the user for the six digits a Trezor Safe 7 shows while pairing (not its PIN).
  * Return null if the user gives up, and never throw: an exception cannot be mapped, so the
@@ -328,6 +330,25 @@ public expect open class WalletLink: Disposable, WalletLinkInterface {
     public companion object
 }
 
+
+
+
+/**
+ * Baht per bitcoin and the phone clock at the moment of the call.
+ */
+
+public data class BtcPrice (
+    /**
+     * Baht for one bitcoin, between 1,000 and 1,000,000,000.
+     */
+    var `thbPerBtc`: kotlin.Double, 
+    /**
+     * Unix seconds on the phone's clock when the call started. Bitkub sends no time of its own.
+     */
+    var `fetchedAt`: kotlin.ULong
+) {
+    public companion object
+}
 
 
 
@@ -681,6 +702,12 @@ public sealed class MobileSignerException(message: String): kotlin.Exception(mes
      */
     public class InvalidMnemonic(message: String) : MobileSignerException(message)
     
+    /**
+     * A network call failed or answered something unusable. The text names the cause. Kotlin
+     * reads variants by position, so any new one goes below this.
+     */
+    public class Network(message: String) : MobileSignerException(message)
+    
 }
 
 
@@ -799,6 +826,16 @@ public expect fun `computeVaultAddressMultisig`(`xpubs`: List<kotlin.String>, `t
  * `"{account_xpub}/m/48'/0'/0'/2'/{index}"`, not a public key.
  */
 public expect fun `deriveBorrowerPubkey`(`accountXpub`: kotlin.String, `index`: kotlin.UInt): kotlin.String
+
+/**
+ * Baht per bitcoin from Bitkub, or from CoinGecko when Bitkub fails or answers nonsense.
+ * Neither publishes terms for use inside an app: fine for this testnet build, not for production.
+ *
+ * Blocks for up to 20 seconds when both sources hang, so call it off the main thread. Fails with
+ * `Network`, which names both reasons, when neither source gives a price.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `fetchBtcThb`(): BtcPrice
 
 /**
  * A new 24-word BIP-39 mnemonic and its BIP-48 P2WSH account key.

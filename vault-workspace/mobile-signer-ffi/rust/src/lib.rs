@@ -8,6 +8,7 @@ uniffi::setup_scaffolding!();
 
 pub mod ble;
 pub mod hot_wallet;
+pub mod price;
 
 use std::str::FromStr;
 
@@ -69,6 +70,11 @@ pub enum MobileSignerError {
     /// never the words.
     #[error("invalid mnemonic: {0}")]
     InvalidMnemonic(String),
+
+    /// A network call failed or answered something unusable. The text names the cause. Kotlin
+    /// reads variants by position, so any new one goes below this.
+    #[error("network error: {0}")]
+    Network(String),
 }
 
 impl From<VaultCoreError> for MobileSignerError {
@@ -883,6 +889,10 @@ mod tests {
             (
                 "method_pairingcodes_pairing_code",
                 ble::uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(),
+            ),
+            (
+                "func_fetch_btc_thb",
+                price::uniffi_mobile_signer_ffi_checksum_func_fetch_btc_thb(),
             ),
         ];
         for (name, checksum) in checksums {

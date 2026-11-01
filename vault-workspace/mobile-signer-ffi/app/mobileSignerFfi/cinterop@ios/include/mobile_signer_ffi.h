@@ -192,6 +192,9 @@ RustBuffer uniffi_mobile_signer_ffi_fn_func_compute_vault_address_multisig(RustB
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_derive_borrower_pubkey(RustBuffer accountXpub, int32_t index, UniffiRustCallStatus *_Nonnull out_status
 );
+RustBuffer uniffi_mobile_signer_ffi_fn_func_fetch_btc_thb(UniffiRustCallStatus *_Nonnull out_status
+    
+);
 RustBuffer uniffi_mobile_signer_ffi_fn_func_generate_software_multisig_key(RustBuffer passphrase, RustBuffer network, int32_t account, UniffiRustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_receive_address(RustBuffer mnemonicWords, RustBuffer passphrase, RustBuffer network, int32_t index, UniffiRustCallStatus *_Nonnull out_status
@@ -339,6 +342,9 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_compute_vault_address_multisig(vo
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_func_derive_borrower_pubkey(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_fetch_btc_thb(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key(void
