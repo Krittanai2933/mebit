@@ -1312,6 +1312,8 @@ internal val UniffiVTableCallbackInterfacePairingCodesUniffiByValue.`uniffiFree`
 
 
 
+
+
 internal object UniffiLib {
     init {
             uniffiCallbackInterfacePairingCodes.register(this)
@@ -1500,6 +1502,17 @@ internal object UniffiLib {
         `destination`,
         `amountSats`,
         `feeSats`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_func_hot_wallet_history(
+        `mnemonicWords`: RustBufferByValue,
+        `passphrase`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_wallet_history(
+        `mnemonicWords`,
+        `passphrase`,
+        `network`,
         uniffiCallStatus,
     )
     fun uniffi_mobile_signer_ffi_fn_func_hot_wallet_snapshot(
@@ -1952,6 +1965,9 @@ internal object UniffiLib {
     fun uniffi_mobile_signer_ffi_checksum_func_hot_send(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_send(
     )
+    fun uniffi_mobile_signer_ffi_checksum_func_hot_wallet_history(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_wallet_history(
+    )
     fun uniffi_mobile_signer_ffi_checksum_func_hot_wallet_snapshot(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_wallet_snapshot(
     )
@@ -2165,6 +2181,27 @@ public object FfiConverterULong: FfiConverter<ULong, Long> {
 
     override fun write(value: ULong, buf: ByteBuffer) {
         buf.putLong(value.toLong())
+    }
+}
+
+
+public object FfiConverterLong: FfiConverter<Long, Long> {
+    override fun lift(value: Long): Long {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Long {
+        return buf.getLong()
+    }
+
+    override fun lower(value: Long): Long {
+        return value
+    }
+
+    override fun allocationSize(value: Long): ULong = 8UL
+
+    override fun write(value: Long, buf: ByteBuffer) {
+        buf.putLong(value)
     }
 }
 
@@ -2864,6 +2901,34 @@ public object FfiConverterTypeHotSendResult: FfiConverterRustBuffer<HotSendResul
 
 
 
+public object FfiConverterTypeHotTx: FfiConverterRustBuffer<HotTx> {
+    override fun read(buf: ByteBuffer): HotTx {
+        return HotTx(
+            FfiConverterString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterOptionalULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: HotTx): ULong = (
+            FfiConverterString.allocationSize(value.`txid`) +
+            FfiConverterLong.allocationSize(value.`netSats`) +
+            FfiConverterUInt.allocationSize(value.`confirmations`) +
+            FfiConverterOptionalULong.allocationSize(value.`blockTime`)
+    )
+
+    override fun write(value: HotTx, buf: ByteBuffer) {
+        FfiConverterString.write(value.`txid`, buf)
+        FfiConverterLong.write(value.`netSats`, buf)
+        FfiConverterUInt.write(value.`confirmations`, buf)
+        FfiConverterOptionalULong.write(value.`blockTime`, buf)
+    }
+}
+
+
+
+
 public object FfiConverterTypeHotWalletSnapshot: FfiConverterRustBuffer<HotWalletSnapshot> {
     override fun read(buf: ByteBuffer): HotWalletSnapshot {
         return HotWalletSnapshot(
@@ -3311,6 +3376,35 @@ public object FfiConverterTypeWalletKind: FfiConverterRustBuffer<WalletKind> {
 
 
 
+public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
+    override fun read(buf: ByteBuffer): kotlin.ULong? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterULong.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.ULong?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterULong.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.ULong?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterULong.write(value, buf)
+        }
+    }
+}
+
+
+
+
 public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?> {
     override fun read(buf: ByteBuffer): kotlin.String? {
         if (buf.get().toInt() == 0) {
@@ -3383,6 +3477,31 @@ public object FfiConverterSequenceTypeFoundWallet: FfiConverterRustBuffer<List<F
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeFoundWallet.write(it, buf)
+        }
+    }
+}
+
+
+
+
+public object FfiConverterSequenceTypeHotTx: FfiConverterRustBuffer<List<HotTx>> {
+    override fun read(buf: ByteBuffer): List<HotTx> {
+        val len = buf.getInt()
+        return List<HotTx>(len) {
+            FfiConverterTypeHotTx.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<HotTx>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.sumOf { FfiConverterTypeHotTx.allocationSize(it) }
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<HotTx>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeHotTx.write(it, buf)
         }
     }
 }
@@ -3563,6 +3682,26 @@ public actual fun `hotSend`(`mnemonicWords`: List<kotlin.String>, `passphrase`: 
             FfiConverterString.lower(`destination`),
             FfiConverterULong.lower(`amountSats`),
             FfiConverterULong.lower(`feeSats`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The latest transactions of the wallet's address, each as the wallet saw it. The order is
+ * Esplora's: the mempool first, then confirmed transactions newest first. Only the first page
+ * comes back (about 25 confirmed transactions plus the mempool), so older history is not here.
+ *
+ * Makes two network calls, so call it off the main thread. An answer it cannot read fails the
+ * whole call, never one transaction.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `hotWalletHistory`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork): List<HotTx> {
+    return FfiConverterSequenceTypeHotTx.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_wallet_history(
+            FfiConverterSequenceString.lower(`mnemonicWords`),
+            FfiConverterString.lower(`passphrase`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,
         )
     })

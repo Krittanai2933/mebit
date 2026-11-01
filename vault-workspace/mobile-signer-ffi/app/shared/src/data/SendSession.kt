@@ -4,9 +4,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.hotReceiveAddress
 import com.mebit.ffi.signer.hotSend
+import com.mebit.ffi.signer.hotWalletHistory
 import com.mebit.ffi.signer.hotWalletSnapshot
 
 /**
@@ -25,6 +27,10 @@ class SingleSigWallet {
     var live: Boolean by mutableStateOf(false)
         private set
 
+    /** Recent transactions of the wallet address in Esplora's order: mempool first, then confirmed newest first. First page only. Empty for the demo fixture and after a failed history call. */
+    var history: List<HotTx> by mutableStateOf(emptyList())
+        private set
+
     fun bindSession(session: OnboardingSession, network: KeyNetwork = KeyNetwork.TEST) {
         lastError = null
         if (session.words.size < 12) {
@@ -36,6 +42,12 @@ class SingleSigWallet {
             receiveAddress = snap.receiveAddress
             balanceSats = snap.balanceSats.toLong()
             live = true
+            // Its own try: a history failure is not the wallet's, so it must not reach the demo fixture or lastError.
+            history = try {
+                hotWalletHistory(session.words, session.passphrase, network)
+            } catch (e: Exception) {
+                emptyList()
+            }
         } catch (e: Exception) {
             lastError = e.message
             useDemoFixture()
@@ -99,6 +111,7 @@ class SingleSigWallet {
         balanceSats = 1_250_000L
         receiveAddress = "tb1qmebitdemosinglesig0000000000000000recv"
         lastTxid = ""
+        history = emptyList()
     }
 
     fun refreshMock() {

@@ -109,6 +109,8 @@ public object NoPointer
 
 
 
+
+
 /**
  * Asks the user for the six digits a Trezor Safe 7 shows while pairing (not its PIN).
  * Return null if the user gives up, and never throw: an exception cannot be mapped, so the
@@ -375,6 +377,32 @@ public data class FoundWallet (
 
 public data class HotSendResult (
     var `txid`: kotlin.String
+) {
+    public companion object
+}
+
+
+
+/**
+ * One transaction of the hot wallet's address, seen from the wallet's side.
+ */
+
+public data class HotTx (
+    var `txid`: kotlin.String, 
+    /**
+     * Sats the wallet gained (positive) or lost (negative), fee included: the outputs paying the
+     * address minus the inputs that spent from it. A payment to yourself reads as minus the fee.
+     */
+    var `netSats`: kotlin.Long, 
+    /**
+     * 0 while in the mempool, 1 in the newest block, and so on. Never 0 once confirmed.
+     */
+    var `confirmations`: kotlin.UInt, 
+    /**
+     * Unix seconds of the block that holds it. Null while unconfirmed, and when the server gives
+     * 0 or a time after the start of 2100, which the app could not print.
+     */
+    var `blockTime`: kotlin.ULong?
 ) {
     public companion object
 }
@@ -776,6 +804,10 @@ public enum class WalletKind {
 
 
 
+
+
+
+
 /**
  * The words that turn `first_words` into a valid mnemonic, in list order. For 23
  * words that is 8: the last word carries 3 entropy bits and 8 checksum bits.
@@ -860,6 +892,17 @@ public expect fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `pas
  */
 @Throws(MobileSignerException::class)
 public expect fun `hotSend`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeSats`: kotlin.ULong): HotSendResult
+
+/**
+ * The latest transactions of the wallet's address, each as the wallet saw it. The order is
+ * Esplora's: the mempool first, then confirmed transactions newest first. Only the first page
+ * comes back (about 25 confirmed transactions plus the mempool), so older history is not here.
+ *
+ * Makes two network calls, so call it off the main thread. An answer it cannot read fails the
+ * whole call, never one transaction.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `hotWalletHistory`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork): List<HotTx>
 
 /**
  * Confirmed + mempool balance for receive index 0 via Esplora.

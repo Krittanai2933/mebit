@@ -843,6 +843,10 @@ mod tests {
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_send(),
             ),
             (
+                "func_hot_wallet_history",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_wallet_history(),
+            ),
+            (
                 "func_hot_wallet_snapshot",
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_wallet_snapshot(),
             ),
