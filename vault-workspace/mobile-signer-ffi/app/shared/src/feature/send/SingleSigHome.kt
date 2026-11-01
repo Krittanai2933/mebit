@@ -1,5 +1,6 @@
 package com.mebit.app.feature.send
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -8,15 +9,21 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsTopHeight
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,17 +36,25 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.OnboardingSession
+import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.data.formatBtc
+import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_chevron
 import com.mebit.app.resources.mebit_logo
@@ -63,26 +78,30 @@ import org.jetbrains.compose.resources.painterResource
 private val FiatGold = Color(0xFFEEB42A)
 
 /**
- * Penpot 4.1 Home · single-sig. Left out: the recent transactions (the hot wallet exports no history), the
- * bottom tabs (the app has no tab navigation), the settings gear and the key-details link (no screens behind
- * them yet), and the baht line unless the balance is zero, the one amount known in baht without a price feed.
- * A key whose balance could not be fetched shows a dash and a retry line in place of a number.
+ * Penpot 4.1 Home · single-sig. Left out: the bottom tabs (the app has no tab navigation), the settings gear and
+ * the key-details link (no screens behind them yet), and the names in the transaction rows (the wallet knows no
+ * counterparty, so a row says only รับ or ส่งออก).
+ * A key whose balance could not be fetched shows a dash and a retry line in place of a number, and a key whose
+ * first fetch is still running shows a dash and "กำลังดึงยอด…". The whole page scrolls, the navy block with it,
+ * so a short phone or a large font still reaches the rows.
  */
 @Composable
 fun S1HomeSingleSigScreen(
     wallet: SingleSigWallet,
     session: OnboardingSession,
+    quotes: QuoteCache,
     onReceive: () -> Unit,
     onSend: () -> Unit,
     onVault: () -> Unit,
     onOpenCatalog: () -> Unit,
-) = SingleSigHome(wallet, session, onReceive, onSend, onVault, onOpenCatalog, tag = "screen_send/s1")
+) = SingleSigHome(wallet, session, quotes, onReceive, onSend, onVault, onOpenCatalog, tag = "screen_send/s1")
 
 /** The home itself, so the backup gate can show it dimmed behind its sheet under a tag of its own. */
 @Composable
 internal fun SingleSigHome(
     wallet: SingleSigWallet,
     session: OnboardingSession,
+    quotes: QuoteCache,
     onReceive: () -> Unit,
     onSend: () -> Unit,
     onVault: () -> Unit,
@@ -99,9 +118,21 @@ internal fun SingleSigHome(
         binding = false
     }
     var keyDetails by remember { mutableStateOf(false) }
+    val quote = rememberFiatQuote(quotes)
+    // A key of 12 or more words is a real one, yet the wallet says Demo until its first bind ends. Read from the session, this holds on the first frame, before any bind has started.
+    val loading = session.words.size >= 12 && wallet.mode == WalletMode.Demo
+    val rows = if (wallet.mode == WalletMode.Live) homeRows(wallet.history) else emptyList()
     Box(modifier = Modifier.fillMaxSize().background(MbPage).testTag(tag)) {
-        Box(modifier = Modifier.fillMaxWidth().height(350.dp).background(MbNavy))
-        Column(modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 20.dp).padding(top = 4.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                // After the scroll, so the navy block is part of the content and scrolls away with it.
+                .drawBehind { drawRect(MbNavy, size = size.copy(height = 350.dp.toPx())) }
+                .safeDrawingPadding()
+                .padding(horizontal = 20.dp)
+                .padding(top = 4.dp),
+        ) {
             Image(painterResource(Res.drawable.mebit_logo), contentDescription = "mebit", modifier = Modifier.size(width = 98.dp, height = 26.dp))
             Spacer(modifier = Modifier.height(22.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -114,32 +145,27 @@ internal fun SingleSigHome(
             Spacer(modifier = Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
-                    text = if (wallet.balanceKnown) formatBtc(wallet.balanceSats, 4) + " BTC" else "—",
+                    text = if (wallet.balanceKnown && !loading) formatBtc(wallet.balanceSats, 4) + " BTC" else "—",
                     color = MbWhite,
                     fontSize = 38.sp,
                     fontWeight = FontWeight.Bold,
                     lineHeight = 50.sp,
                     modifier = Modifier.testTag("ss_balance"),
                 )
-                if (wallet.mode == WalletMode.Demo) {
+                if (wallet.mode == WalletMode.Demo && !loading) {
                     Text(" demo", color = MbWhite.copy(alpha = 0.6f), fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.padding(bottom = 10.dp))
                 }
             }
             Spacer(modifier = Modifier.height(2.dp))
-            // The board's baht line sits here. Only an empty wallet can say it, and a balance that failed to load puts its retry here, so the room stays either way.
+            // The board's baht line sits here, and so do the fetch note and the retry. The room stays when none shows, so nothing below it moves.
             Box(modifier = Modifier.height(17.dp)) {
-                if (wallet.live && wallet.balanceSats == 0L) {
-                    Text("≈ ฿0", color = FiatGold, fontSize = 13.sp, fontWeight = FontWeight.Light, lineHeight = 17.sp)
-                }
-                if (!wallet.balanceKnown) {
-                    Text(
+                when {
+                    loading -> GoldLine("กำลังดึงยอด…")
+                    !wallet.balanceKnown -> GoldLine(
                         text = "ดึงยอดไม่สำเร็จ · แตะเพื่อลองใหม่",
-                        color = FiatGold,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Light,
-                        lineHeight = 17.sp,
                         modifier = Modifier.clickable(role = Role.Button, enabled = !binding) { retries++ }.testTag("cta_s1_retry"),
                     )
+                    wallet.mode == WalletMode.Live -> fiatLine(wallet.balanceSats, quote)?.let { GoldLine(it) }
                 }
             }
             Spacer(modifier = Modifier.height(9.dp))
@@ -153,10 +179,72 @@ internal fun SingleSigHome(
             UpgradeCard(onVault)
             wallet.lastError?.let {
                 Spacer(modifier = Modifier.height(12.dp))
-                Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.testTag("error"))
+                // The raw text of an unreachable chain names the server and the library, so that mode says it in plain words.
+                val text = if (wallet.mode == WalletMode.Unavailable) "ต่อเครือข่าย Bitcoin ไม่ได้ ตรวจอินเทอร์เน็ตแล้วลองใหม่" else it
+                Text(text, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.testTag("error"))
+            }
+            if (rows.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(24.dp))
+                Text("ธุรกรรมล่าสุด", color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 14.sp, modifier = Modifier.testTag("home_tx_label"))
+                Spacer(modifier = Modifier.height(16.dp))
+                rows.forEachIndexed { index, row -> HomeTxRowItem(row, Modifier.testTag("home_tx_$index")) }
             }
         }
+        // Once the navy block has scrolled up, the status bar still needs a navy ground for its white icons.
+        Box(modifier = Modifier.fillMaxWidth().windowInsetsTopHeight(WindowInsets.safeDrawing).background(MbNavy))
         DebugLink(onClick = onOpenCatalog)
+    }
+}
+
+/** The board's gold 13 sp line under the balance. */
+@Composable
+private fun GoldLine(text: String, modifier: Modifier = Modifier) {
+    Text(text, color = FiatGold, fontSize = 13.sp, fontWeight = FontWeight.Light, lineHeight = 17.sp, modifier = modifier)
+}
+
+/** One recent transaction: the arrow, the title over the date, and the amount over the status, on the board's 67 dp pitch. */
+@Composable
+private fun HomeTxRowItem(row: HomeTxRow, modifier: Modifier = Modifier) {
+    Row(modifier = modifier.fillMaxWidth().heightIn(min = 67.dp)) {
+        Box(
+            modifier = Modifier.padding(top = 5.dp).size(32.dp).background(if (row.received) MbIconWash else MbChip, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            TxArrow(down = row.received, color = if (row.received) MbEyebrow else MbNavy)
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(row.title, color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.Medium, lineHeight = 17.sp)
+            Spacer(modifier = Modifier.height(5.dp))
+            Text(row.date, color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.Light, lineHeight = 14.sp)
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            Text(row.amount, color = if (row.received) MbSuccess else MbSlate, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 17.sp)
+            Spacer(modifier = Modifier.height(5.dp))
+            Text(row.status, color = MbSlate, fontSize = 10.sp, fontWeight = FontWeight.Light, lineHeight = 13.sp)
+        }
+    }
+}
+
+/** An arrow 12 by 14 dp with 2.4 dp strokes: pointing down for money in, and the same turned over for money out. */
+@Composable
+private fun TxArrow(down: Boolean, color: Color) {
+    val stroke = 2.4.dp
+    Canvas(Modifier.size(12.dp + stroke, 14.dp + stroke).rotate(if (down) 0f else 180f)) {
+        // The box is inset by half a stroke, so the line never crosses the canvas edge.
+        val inset = stroke.toPx() / 2
+        val width = 12.dp.toPx()
+        val height = 14.dp.toPx()
+        val middle = inset + width / 2
+        val tip = inset + height
+        val arrow = Path().apply {
+            moveTo(middle, inset)
+            lineTo(middle, tip)
+            moveTo(inset, tip - width / 2)
+            lineTo(middle, tip)
+            lineTo(inset + width, tip - width / 2)
+        }
+        drawPath(arrow, color, style = Stroke(stroke.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
     }
 }
 

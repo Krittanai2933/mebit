@@ -337,6 +337,7 @@ fun MebitNavHost() {
         MovieRoute.S1HomeSingleSig -> S1HomeSingleSigScreen(
             wallet = singleSig,
             session = session,
+            quotes = quotes,
             onReceive = { navigate(if (session.backupConfirmed) MovieRoute.S3Receive else MovieRoute.S2ReceiveBackupGate) },
             onSend = {
                 sendDraft.reset()
@@ -348,6 +349,7 @@ fun MebitNavHost() {
         MovieRoute.S2ReceiveBackupGate -> S2ReceiveBackupGateScreen(
             wallet = singleSig,
             session = session,
+            quotes = quotes,
             onBackedUp = { navigate(MovieRoute.S3Receive) },
             onGoBackup = { navigate(MovieRoute.BackupWords) },
             onBack = onBack,

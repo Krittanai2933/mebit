@@ -19,8 +19,15 @@ expect fun utcOffsetSeconds(epochSeconds: Long, timeZoneId: String?): Int
 fun formatThaiDateTime(epochSeconds: Long, timeZoneId: String? = null): String =
     thaiDateTime(epochSeconds, utcOffsetSeconds(epochSeconds, timeZoneId))
 
+/**
+ * [formatThaiDateTime] without the closing ` น.`, such as `23 ต.ค. 2569 · 14:32`, for the rows where the board leaves it out.
+ * The day, the year, the time and [timeZoneId] work as they do there.
+ */
+fun formatThaiDateTimeShort(epochSeconds: Long, timeZoneId: String? = null): String =
+    thaiDateTime(epochSeconds, utcOffsetSeconds(epochSeconds, timeZoneId), withSuffix = false)
+
 // Own date maths (Howard Hinnant's civil_from_days) so that no platform locale or calendar decides the Buddhist year.
-internal fun thaiDateTime(epochSeconds: Long, utcOffsetSeconds: Int): String {
+internal fun thaiDateTime(epochSeconds: Long, utcOffsetSeconds: Int, withSuffix: Boolean = true): String {
     val local = epochSeconds + utcOffsetSeconds
     val secondOfDay = local.mod(86_400)
     val daysSinceYear0March1 = local.floorDiv(86_400) + 719_468
@@ -34,5 +41,5 @@ internal fun thaiDateTime(epochSeconds: Long, utcOffsetSeconds: Int): String {
     val year = era * 400 + yearOfEra + (if (month <= 2) 1 else 0)
     val hour = (secondOfDay / 3_600).toString().padStart(2, '0')
     val minute = (secondOfDay % 3_600 / 60).toString().padStart(2, '0')
-    return "$day ${thaiMonths[month - 1]} ${year + 543} · $hour:$minute น."
+    return "$day ${thaiMonths[month - 1]} ${year + 543} · $hour:$minute" + if (withSuffix) " น." else ""
 }

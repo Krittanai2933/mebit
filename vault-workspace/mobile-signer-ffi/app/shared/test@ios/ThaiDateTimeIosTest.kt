@@ -36,4 +36,10 @@ class ThaiDateTimeIosTest {
     fun printsTheBoardSampleForABangkokId() {
         assertEquals("23 ต.ค. 2569 · 14:32 น.", formatThaiDateTime(1_792_740_720, "Asia/Bangkok"))
     }
+
+    @Test
+    fun printsTheShortBoardSampleForABangkokId() {
+        assertEquals("18 ส.ค. 2569 · 14:02", formatThaiDateTimeShort(1_787_036_520, "Asia/Bangkok"))
+        assertEquals("18 ส.ค. 2569 · 14:02 น.", formatThaiDateTime(1_787_036_520, "Asia/Bangkok"))
+    }
 }

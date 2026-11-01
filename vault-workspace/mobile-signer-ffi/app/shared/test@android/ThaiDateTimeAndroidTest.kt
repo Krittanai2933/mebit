@@ -47,6 +47,23 @@ class ThaiDateTimeAndroidTest {
     }
 
     @Test
+    fun printsTheShortBoardSampleForABangkokId() {
+        assertEquals("18 ส.ค. 2569 · 14:02", formatThaiDateTimeShort(1_787_036_520, "Asia/Bangkok"))
+        assertEquals("18 ส.ค. 2569 · 14:02 น.", formatThaiDateTime(1_787_036_520, "Asia/Bangkok"))
+    }
+
+    @Test
+    fun theShortFormIsJavaTimesTextWithoutTheSuffixForRandomInstants() {
+        val random = Random(2569)
+        repeat(2_000) {
+            val instant = random.nextLong(JAN_1_1900_UTC, JAN_1_2100_UTC)
+            for (zone in listOf("Asia/Bangkok", "America/New_York")) {
+                assertEquals(javaTimeText(instant, zone).removeSuffix(" น."), formatThaiDateTimeShort(instant, zone), "$instant in $zone")
+            }
+        }
+    }
+
+    @Test
     fun matchesJavaTimeForRandomInstants() {
         val random = Random(2569)
         repeat(2_000) {

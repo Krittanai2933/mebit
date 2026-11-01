@@ -12,6 +12,23 @@ class ThaiDateTimeTest {
     }
 
     @Test
+    fun theShortFormIsTheBoardSampleOfTheHomeRowsWithoutTheSuffix() {
+        assertEquals("18 ส.ค. 2569 · 14:02", thaiDateTime(1_787_036_520, BANGKOK, withSuffix = false))
+    }
+
+    @Test
+    fun theShortFormStillRollsOverAtMidnight() {
+        assertEquals("31 ธ.ค. 2569 · 23:59", thaiDateTime(1_798_736_340, BANGKOK, withSuffix = false))
+        assertEquals("1 ม.ค. 2570 · 00:00", thaiDateTime(1_798_736_400, BANGKOK, withSuffix = false))
+    }
+
+    @Test
+    fun theLongFormKeepsItsSuffix() {
+        assertEquals("18 ส.ค. 2569 · 14:02 น.", thaiDateTime(1_787_036_520, BANGKOK))
+        assertEquals("1 ม.ค. 2570 · 00:00 น.", thaiDateTime(1_798_736_400, BANGKOK, withSuffix = true))
+    }
+
+    @Test
     fun midnightOfNewYearStartsTheNextBuddhistYear() {
         assertEquals("31 ธ.ค. 2569 · 23:59 น.", thaiDateTime(1_798_736_340, BANGKOK))
         assertEquals("1 ม.ค. 2570 · 00:00 น.", thaiDateTime(1_798_736_400, BANGKOK))

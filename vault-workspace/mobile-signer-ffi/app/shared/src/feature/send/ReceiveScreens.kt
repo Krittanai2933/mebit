@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.QrCode
 import com.mebit.app.data.OnboardingSession
+import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.rememberSharer
 import com.mebit.app.resources.Res
@@ -75,6 +76,7 @@ private val Grabber = Color(0xFFC9CFD8)
 fun S2ReceiveBackupGateScreen(
     wallet: SingleSigWallet,
     session: OnboardingSession,
+    quotes: QuoteCache,
     onBackedUp: () -> Unit,
     onGoBackup: () -> Unit,
     onBack: (() -> Unit)?,
@@ -82,7 +84,7 @@ fun S2ReceiveBackupGateScreen(
 ) {
     LaunchedEffect(session.backupConfirmed) { if (session.backupConfirmed) onBackedUp() }
     Box(modifier = Modifier.fillMaxSize().testTag("screen_send/s2")) {
-        SingleSigHome(wallet, session, onReceive = {}, onSend = {}, onVault = {}, onOpenCatalog = {}, tag = "s2_home_behind")
+        SingleSigHome(wallet, session, quotes, onReceive = {}, onSend = {}, onVault = {}, onOpenCatalog = {}, tag = "s2_home_behind")
         // The scrim swallows every tap, and a tap on it closes the sheet like the cancel link does.
         Box(
             modifier = Modifier
