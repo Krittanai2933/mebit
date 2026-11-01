@@ -6,6 +6,7 @@ Single-sig send checks the typed address and amount, shows the fee tiers, review
 
 - `mp-s1-home` shows the single-sig balance.
 - `mp-s2-backup-gate` blocks receive until backup confirmed.
+- `mp-s3-receive` shows the wallet's address as a QR with copy and share, for a live wallet.
 - `mp-s4-send` takes an address, an amount and a fee tier, and says what is wrong with them.
 - `mp-s5-review` shows what leaves and what stays, with the baht value when a price arrived, and signs.
 - `mp-s6-slip` shows the sent slip with a txid, the send date, the baht value when a price arrived, and a share button.
@@ -40,7 +41,8 @@ Preconditions:
 ## Gotchas
 
 - Fee tiers are 4, 8 and 15 sat/vB times a typical 141 vB payment (564, 1,128 and 2,115 sat), not a live fee estimate.
-- Receive leaves out the QR block (no encoder), the share button and the board's line about a fresh address every time: the hot wallet watches and spends the first address only. The catalog row `id:catalog_send/s3` sits below the first screen of the route list and `verify.sh` has no scroll action, so reach Receive through a confirmed backup instead.
+- Receive leaves out the board's line about a fresh address every time (the hot wallet watches and spends the first address only) and the logo tile the board draws over the QR (it would cover data modules). A wallet that is not live keeps the old screen, with no QR and no share, because money sent to its demo address is lost.
+- **Receive, live wallet.** The QR, the address under it and the copy and share buttons side by side show only for a wallet whose snapshot loaded (`live`). That needs a key and a network that reaches mempool.space (the public test phrase through [import seed](./movie-page-import-seed.md)). On 2026-11-02 this Mac could not reach it, so the live screen was checked with a throwaway patch that sets `live = true` and a real testnet address in `SingleSigWallet.useDemoFixture()`, never committed. Open Home first (`id:cta_singlesig`), because Home binds the wallet and the catalog row `id:catalog_send/s3` alone shows an empty card. The row sits below the first screen of the route list: swipe it up three times, `idb ui swipe 201 700 201 300 --duration 0.4 --udid <udid>` on iOS. Then `verify.sh ios-see "id:ss_receive_qr"` and shot `mp-s3-receive`: the QR 196 dp square at the board's x 103, y 208, the address in two lines, copy and share at y 732. To prove the code reads, build the helper once, `swiftc -O .claude/skills/verify/scripts/qrdecode.swift -o /tmp/qrdecode`, then `/tmp/qrdecode <shot>.png` prints the address it found. `verify.sh ios-tap "id:cta_s3_copy"` puts the address on the pasteboard (`xcrun simctl pbpaste <udid>`), and `verify.sh ios-tap "id:cta_s3_share"` opens iOS's sheet with the address as text.
 - Home leaves out the recent transactions, the bottom tabs, the settings gear: the app has no history data, tab navigation or settings screen yet.
 - The send form leaves out the QR scan button, the ฿ toggle and every baht figure: the app has no camera path yet, and only Review and the slip use the price so far.
 - Review and the slip ask for the price once per screen and wait four seconds at most. On a dead network a screen stays without baht until it is opened again, and the fee reads in sats.

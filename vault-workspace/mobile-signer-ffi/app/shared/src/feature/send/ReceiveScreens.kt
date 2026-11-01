@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -34,6 +35,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -42,8 +45,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mebit.app.QrCode
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.SingleSigWallet
+import com.mebit.app.rememberSharer
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_warning
 import com.mebit.app.ui.components.BottomActions
@@ -53,6 +58,7 @@ import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbEyebrow
 import com.mebit.app.ui.theme.MbIconWash
+import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbWhite
 import kotlinx.coroutines.delay
@@ -117,9 +123,9 @@ fun S2ReceiveBackupGateScreen(
 }
 
 /**
- * Penpot 4.3 Receive. Left out: the QR block (no encoder here, and a drawing that only looks like a code
- * would be worse than none), the share button (no share sheet) and the line about a fresh address every
- * time (the hot wallet watches and spends the first address only, so it does not rotate).
+ * Penpot 4.3 Receive. Left out: the line about a fresh address every time (the hot wallet watches and spends the
+ * first address only, so it does not rotate, item C6), the logo over the QR (it would cover data modules, and each
+ * one spends error correction), and QR and share when the wallet is not live (money sent to its demo address is lost).
  */
 @Composable
 fun S3ReceiveScreen(
@@ -130,12 +136,19 @@ fun S3ReceiveScreen(
     onOpenCatalog: () -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
+    val sharer = rememberSharer()
+    val live = wallet.live
     var copied by remember { mutableStateOf(false) }
     LaunchedEffect(copied) {
         if (copied) {
             delay(1_500)
             copied = false
         }
+    }
+    val copyLabel = if (copied) "คัดลอกแล้ว" else "คัดลอกที่อยู่"
+    val copy = {
+        clipboard.setText(AnnotatedString(wallet.receiveAddress))
+        copied = true
     }
     MebitScreen(
         eyebrow = "RECEIVE · กระเป๋าใช้จ่าย",
@@ -145,39 +158,68 @@ fun S3ReceiveScreen(
         tag = "screen_send/s3",
         bottom = {
             Spacer(modifier = Modifier.height(12.dp))
-            PrimaryCta(
-                label = if (copied) "คัดลอกแล้ว" else "คัดลอกที่อยู่",
-                tag = "cta_s3_copy",
-                onClick = {
-                    clipboard.setText(AnnotatedString(wallet.receiveAddress))
-                    copied = true
-                },
-            )
-            Spacer(modifier = Modifier.height(38.dp))
+            if (live) {
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        PrimaryCta(label = copyLabel, tag = "cta_s3_copy", onClick = copy, height = 52.dp)
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(52.dp)
+                            .clip(CircleShape)
+                            .background(MbWhite)
+                            .border(1.5.dp, MbNavy, CircleShape)
+                            .clickable(role = Role.Button) {
+                                // shortcut: a share that fails does nothing, because the board has no error for it and a crash on a tap is worse. Add one when it does.
+                                try {
+                                    sharer.text(wallet.receiveAddress)
+                                } catch (_: Exception) {
+                                }
+                            }
+                            .testTag("cta_s3_share"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("แชร์", color = MbNavy, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                // 40 dp, not the 38 under the single 54 dp button: this row is 2 dp shorter and the board puts its top at y 732.
+                Spacer(modifier = Modifier.height(40.dp))
+            } else {
+                PrimaryCta(label = copyLabel, tag = "cta_s3_copy", onClick = copy)
+                Spacer(modifier = Modifier.height(38.dp))
+            }
         },
     ) {
         ReceiveSendSwitch(sendSelected = false, onReceive = {}, onSend = onSend)
         Spacer(modifier = Modifier.height(20.dp))
         val card = RoundedCornerShape(24.dp)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .shadow(4.dp, card, clip = false)
-                .clip(card)
-                .background(MbWhite)
-                .border(1.dp, MbBorder, card)
-                .padding(horizontal = 32.dp, vertical = 28.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = groupedFull(wallet.receiveAddress),
-                color = MbNavyInk,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.SemiBold,
-                lineHeight = 24.sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.testTag("ss_receive_address"),
-            )
+        val cardLook = Modifier
+            .shadow(4.dp, card, clip = false)
+            .clip(card)
+            .background(MbWhite)
+            .border(1.dp, MbBorder, card)
+        if (live) {
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 335.dp).then(cardLook).padding(horizontal = 32.dp, vertical = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                QrCode(
+                    text = wallet.receiveAddress,
+                    modifier = Modifier.size(196.dp).semantics { contentDescription = "QR ของที่อยู่รับเงิน" }.testTag("ss_receive_qr"),
+                    dark = MbNavy,
+                )
+                Spacer(modifier = Modifier.height(18.8.dp))
+                ReceiveAddress(wallet.receiveAddress)
+            }
+        } else {
+            Box(
+                modifier = Modifier.fillMaxWidth().then(cardLook).padding(horizontal = 32.dp, vertical = 28.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                ReceiveAddress(wallet.receiveAddress)
+            }
         }
         Spacer(modifier = Modifier.height(14.dp))
         Row(
@@ -188,10 +230,24 @@ fun S3ReceiveScreen(
             Spacer(modifier = Modifier.width(14.dp))
             Column {
                 Text("เลือกเครือข่าย Bitcoin (BTC) เท่านั้น", color = MbNavyInk, fontSize = 13.5.sp, fontWeight = FontWeight.Bold, lineHeight = 18.sp)
+                Spacer(modifier = Modifier.height(4.8.dp))
                 Text("ถ้าเลือก BEP20 หรือ ERC20 เหรียญจะไม่เข้ากระเป๋านี้", color = MbEyebrow, fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 15.sp)
             }
         }
     }
+}
+
+@Composable
+private fun ReceiveAddress(address: String) {
+    Text(
+        text = groupedFull(address),
+        color = MbNavyInk,
+        fontSize = 17.sp,
+        fontWeight = FontWeight.SemiBold,
+        lineHeight = 24.sp,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.testTag("ss_receive_address"),
+    )
 }
 
 /** The whole address in four-letter groups, the second and the last two picked out in gold, as the board has it. */
