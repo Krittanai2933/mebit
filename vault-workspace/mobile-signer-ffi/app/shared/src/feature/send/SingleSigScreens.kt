@@ -19,6 +19,7 @@ import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
+import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
@@ -84,8 +85,8 @@ fun S5ReviewSignScreen(
             BottomActions(
                 primaryLabel = when {
                     session.appLockEnabled -> "เซ็นด้วย Face ID"
-                    wallet.live -> "เซ็นและส่ง"
-                    else -> "เซ็นบนเครื่องนี้ (demo)"
+                    wallet.mode == WalletMode.Demo -> "เซ็นบนเครื่องนี้ (demo)"
+                    else -> "เซ็นและส่ง"
                 },
                 primaryTag = "cta_s5_sign",
                 onPrimary = {
@@ -107,7 +108,7 @@ fun S5ReviewSignScreen(
                 linkLabel = "ยกเลิก",
                 linkTag = "cta_s5_cancel",
                 onLink = leave,
-                enabled = !attempt.running,
+                enabled = !attempt.running && wallet.balanceKnown,
                 linkColor = MbBody,
             )
         },

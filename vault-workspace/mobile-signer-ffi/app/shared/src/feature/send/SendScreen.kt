@@ -75,7 +75,8 @@ private val SelectedFee = Color(0xFFFFF8EF)
  * Penpot 4.4 Send, with 4.4.1 (address filled), 4.4.3 (amount in baht), 4.4.4 (send all), 4.4.5 (send all in baht),
  * 4.4.6 (insufficient funds) and 4.4.7 (invalid address) as states of it. Left out on purpose: the QR scan button (no
  * camera yet). The ฿ unit toggle, the baht lines and the fee prices in baht need a price from [quotes]. Without one
- * the screen is BTC and sats only.
+ * the screen is BTC and sats only. A balance that could not be fetched closes review with a panel of its own, which
+ * has no board.
  */
 @Composable
 fun S4SendScreen(
@@ -90,7 +91,7 @@ fun S4SendScreen(
     val quote = rememberFiatQuote(quotes)
     val entry = remember(draft) { AmountEntry(draft) }
     val addressOk = if (draft.destination.isEmpty()) null else isValidAddress(draft.destination, KeyNetwork.TEST)
-    val issue = sendIssue(addressOk, draft.amountSats, draft.feeSats, wallet.balanceSats)
+    val issue = sendIssue(addressOk, draft.amountSats, draft.feeSats, wallet.balanceSats, wallet.balanceKnown)
     MebitScreen(
         eyebrow = "SEND · กระเป๋าใช้จ่าย",
         title = null,
@@ -121,6 +122,10 @@ fun S4SendScreen(
             SendIssue.InvalidAddress -> {
                 Spacer(modifier = Modifier.height(20.dp))
                 IssuePanel("INVALID ADDRESS", "ที่อยู่ไม่ถูกต้อง — ตรวจตัวอักษรและเครือข่าย (รองรับ Bitcoin เท่านั้น) แล้ววางใหม่")
+            }
+            SendIssue.BalanceUnavailable -> {
+                Spacer(modifier = Modifier.height(20.dp))
+                IssuePanel("BALANCE UNAVAILABLE", "ยังดึงยอดคงเหลือไม่ได้ จึงยังส่งไม่ได้ กลับไปหน้าแรกแล้วลองใหม่")
             }
             is SendIssue.Insufficient -> {
                 Spacer(modifier = Modifier.height(20.dp))
@@ -235,7 +240,7 @@ private fun AmountCard(wallet: SingleSigWallet, entry: AmountEntry, quote: FiatQ
             Spacer(modifier = Modifier.height(11.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(
-                    text = entry.caption(wallet.balanceSats, quote) + if (short) " · ไม่พอ" else "",
+                    text = (if (wallet.balanceKnown) entry.caption(wallet.balanceSats, quote) else "ใช้ได้ —") + if (short) " · ไม่พอ" else "",
                     color = if (short) MbEyebrow else MbBody,
                     fontSize = 12.5.sp,
                     fontWeight = FontWeight.Medium,

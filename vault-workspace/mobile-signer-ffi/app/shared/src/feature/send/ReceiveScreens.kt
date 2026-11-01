@@ -125,7 +125,9 @@ fun S2ReceiveBackupGateScreen(
 /**
  * Penpot 4.3 Receive. Left out: the line about a fresh address every time (the hot wallet watches and spends the
  * first address only, so it does not rotate, item C6), the logo over the QR (it would cover data modules, and each
- * one spends error correction), and QR and share when the wallet is not live (money sent to its demo address is lost).
+ * one spends error correction), and QR and share for the demo wallet (money sent to its made-up address is lost). A
+ * real key whose balance could not be fetched keeps them, because its address is derived from the key offline. With
+ * no address at all, copy is off too.
  */
 @Composable
 fun S3ReceiveScreen(
@@ -137,7 +139,6 @@ fun S3ReceiveScreen(
 ) {
     val clipboard = LocalClipboardManager.current
     val sharer = rememberSharer()
-    val live = wallet.live
     var copied by remember { mutableStateOf(false) }
     LaunchedEffect(copied) {
         if (copied) {
@@ -158,7 +159,7 @@ fun S3ReceiveScreen(
         tag = "screen_send/s3",
         bottom = {
             Spacer(modifier = Modifier.height(12.dp))
-            if (live) {
+            if (wallet.addressIsReal) {
                 Row(modifier = Modifier.fillMaxWidth()) {
                     Box(modifier = Modifier.weight(1f)) {
                         PrimaryCta(label = copyLabel, tag = "cta_s3_copy", onClick = copy, height = 52.dp)
@@ -187,7 +188,7 @@ fun S3ReceiveScreen(
                 // 40 dp, not the 38 under the single 54 dp button: this row is 2 dp shorter and the board puts its top at y 732.
                 Spacer(modifier = Modifier.height(40.dp))
             } else {
-                PrimaryCta(label = copyLabel, tag = "cta_s3_copy", onClick = copy)
+                PrimaryCta(label = copyLabel, tag = "cta_s3_copy", onClick = copy, enabled = wallet.receiveAddress.isNotEmpty())
                 Spacer(modifier = Modifier.height(38.dp))
             }
         },
@@ -200,7 +201,7 @@ fun S3ReceiveScreen(
             .clip(card)
             .background(MbWhite)
             .border(1.dp, MbBorder, card)
-        if (live) {
+        if (wallet.addressIsReal) {
             Column(
                 modifier = Modifier.fillMaxWidth().heightIn(min = 335.dp).then(cardLook).padding(horizontal = 32.dp, vertical = 24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,

@@ -18,7 +18,7 @@ import kotlin.time.Clock
  * Single-sig hot wallet surface for Movie Page S*.
  * Live path uses BIP-84 + Esplora (hot_* UniFFI). Demo path keeps offline fixtures.
  *
- * [send], [snapshot] and [fetchHistory] are the hot_* calls. Tests pass fakes, so they need no native library or network.
+ * [send], [snapshot], [fetchHistory] and [receiveAddressOf] are the hot_* calls. Tests pass fakes, so they need no native library or network.
  * [nowSeconds] is the phone clock in Unix seconds, which [lastSentAtSeconds] reads when a payment goes out.
  */
 class SingleSigWallet(
@@ -26,7 +26,23 @@ class SingleSigWallet(
     private val snapshot: (words: List<String>, passphrase: String, network: KeyNetwork) -> HotWalletSnapshot = ::hotWalletSnapshot,
     private val fetchHistory: (words: List<String>, passphrase: String, network: KeyNetwork) -> List<HotTx> = ::hotWalletHistory,
     private val nowSeconds: () -> Long = { Clock.System.now().epochSeconds },
+    private val receiveAddressOf: (words: List<String>, passphrase: String, network: KeyNetwork, index: UInt) -> String = ::hotReceiveAddress,
 ) {
+    /** What the wallet is. A real key is only ever [Live] or [Unavailable], so a real wallet never looks like the demo. */
+    enum class WalletMode {
+        /** No real key, fewer than 12 words. The offline fixture, whose payments are mocked. */
+        Demo,
+
+        /** A real key whose snapshot loaded. The balance and the address came from the chain. */
+        Live,
+
+        /** A real key whose snapshot failed. The balance is unknown and the address is derived from the key offline. */
+        Unavailable,
+    }
+
+    /** The [WalletMode] the last [bindSession] left. [WalletMode.Demo] until the first bind. */
+    var mode: WalletMode by mutableStateOf(WalletMode.Demo)
+        private set
     var balanceSats: Long by mutableStateOf(0L)
         private set
     var receiveAddress: String by mutableStateOf("")
@@ -39,8 +55,13 @@ class SingleSigWallet(
         private set
     var lastError: String? by mutableStateOf(null)
         private set
-    var live: Boolean by mutableStateOf(false)
-        private set
+    val live: Boolean get() = mode == WalletMode.Live
+
+    /** False when the snapshot failed. Screens then show a dash, not [balanceSats], and no payment can start. */
+    val balanceKnown: Boolean get() = mode != WalletMode.Unavailable
+
+    /** True when [receiveAddress] belongs to the key, so money sent to it arrives. The demo's address is made up. */
+    val addressIsReal: Boolean get() = mode != WalletMode.Demo && receiveAddress.isNotEmpty()
 
     /** Recent transactions of the wallet address in Esplora's order: mempool first, then confirmed newest first. First page only. Empty for the demo fixture and after a failed history call. */
     var history: List<HotTx> by mutableStateOf(emptyList())
@@ -56,30 +77,25 @@ class SingleSigWallet(
             val snap = snapshot(session.words, session.passphrase, network)
             receiveAddress = snap.receiveAddress
             balanceSats = snap.balanceSats.toLong()
-            live = true
-            // Its own try: a history failure is not the wallet's, so it must not reach the demo fixture or lastError.
+            mode = WalletMode.Live
+            // A history failure is not the wallet's, so its own try keeps it from changing the mode or reaching lastError.
             history = try {
                 fetchHistory(session.words, session.passphrase, network)
             } catch (e: Exception) {
                 emptyList()
             }
         } catch (e: Exception) {
+            // Mode first, so no frame shows the cleared balance as a known one.
+            mode = WalletMode.Unavailable
             lastError = e.message
-            useDemoFixture()
-        }
-    }
-
-    fun refreshReceive(session: OnboardingSession, index: UInt = 0u, network: KeyNetwork = KeyNetwork.TEST) {
-        lastError = null
-        if (session.words.size < 12) {
-            receiveAddress = "tb1qmebitdemosinglesig" + (1000..9999).random()
-            return
-        }
-        try {
-            receiveAddress = hotReceiveAddress(session.words, session.passphrase, network, index)
-            live = true
-        } catch (e: Exception) {
-            lastError = e.message
+            balanceSats = 0L
+            history = emptyList()
+            // The address needs only the key, so the wallet keeps its own address, never the demo's, while the chain is out of reach.
+            receiveAddress = try {
+                receiveAddressOf(session.words, session.passphrase, network, 0u)
+            } catch (_: Exception) {
+                ""
+            }
         }
     }
 
@@ -128,16 +144,12 @@ class SingleSigWallet(
 
     /** Offline fixture for catalog / no-seed CI. */
     fun useDemoFixture() {
-        live = false
+        mode = WalletMode.Demo
         balanceSats = 1_250_000L
         receiveAddress = "tb1qmebitdemosinglesig0000000000000000recv"
         lastTxid = ""
         lastSentAtSeconds = 0L
         history = emptyList()
-    }
-
-    fun refreshMock() {
-        receiveAddress = "tb1qmebitdemosinglesig" + (1000..9999).random()
     }
 }
 
@@ -169,12 +181,16 @@ fun formatBtc(sats: Long, decimals: Int = 8): String {
 
 sealed interface SendIssue {
     data object InvalidAddress : SendIssue
+
+    /** The balance could not be fetched, so no payment can be checked against it. */
+    data object BalanceUnavailable : SendIssue
     data class Insufficient(val missingSats: Long) : SendIssue
 }
 
-/** What keeps a payment from review, if anything. [addressOk] is null while the address field is empty. */
-fun sendIssue(addressOk: Boolean?, amountSats: Long, feeSats: Long, balanceSats: Long): SendIssue? = when {
+/** What keeps a payment from review, if anything. [addressOk] is null while the address field is empty. [balanceKnown] is false when the balance could not be fetched. */
+fun sendIssue(addressOk: Boolean?, amountSats: Long, feeSats: Long, balanceSats: Long, balanceKnown: Boolean = true): SendIssue? = when {
     addressOk == false -> SendIssue.InvalidAddress
+    !balanceKnown -> SendIssue.BalanceUnavailable
     amountSats > 0 && amountSats + feeSats > balanceSats -> SendIssue.Insufficient(amountSats + feeSats - balanceSats)
     else -> null
 }

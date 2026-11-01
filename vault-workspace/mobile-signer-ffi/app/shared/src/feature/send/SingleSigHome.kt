@@ -23,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -37,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.SingleSigWallet
+import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.data.formatBtc
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_chevron
@@ -64,6 +66,7 @@ private val FiatGold = Color(0xFFEEB42A)
  * Penpot 4.1 Home · single-sig. Left out: the recent transactions (the hot wallet exports no history), the
  * bottom tabs (the app has no tab navigation), the settings gear and the key-details link (no screens behind
  * them yet), and the baht line unless the balance is zero, the one amount known in baht without a price feed.
+ * A key whose balance could not be fetched shows a dash and a retry line in place of a number.
  */
 @Composable
 fun S1HomeSingleSigScreen(
@@ -86,9 +89,14 @@ internal fun SingleSigHome(
     onOpenCatalog: () -> Unit,
     tag: String,
 ) {
+    var retries by remember { mutableIntStateOf(0) }
+    // One bind at a time, because each one blocks a thread until it ends and an older one could end last.
+    var binding by remember { mutableStateOf(false) }
     // The snapshot is a blocking network call: keep it off the main thread.
-    LaunchedEffect(session.words, session.fingerprint, session.passphrase) {
+    LaunchedEffect(session.words, session.fingerprint, session.passphrase, retries) {
+        binding = true
         withContext(Dispatchers.Default) { wallet.bindSession(session) }
+        binding = false
     }
     var keyDetails by remember { mutableStateOf(false) }
     Box(modifier = Modifier.fillMaxSize().background(MbPage).testTag(tag)) {
@@ -106,22 +114,32 @@ internal fun SingleSigHome(
             Spacer(modifier = Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
-                    text = formatBtc(wallet.balanceSats, 4) + " BTC",
+                    text = if (wallet.balanceKnown) formatBtc(wallet.balanceSats, 4) + " BTC" else "—",
                     color = MbWhite,
                     fontSize = 38.sp,
                     fontWeight = FontWeight.Bold,
                     lineHeight = 50.sp,
                     modifier = Modifier.testTag("ss_balance"),
                 )
-                if (!wallet.live) {
+                if (wallet.mode == WalletMode.Demo) {
                     Text(" demo", color = MbWhite.copy(alpha = 0.6f), fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.padding(bottom = 10.dp))
                 }
             }
             Spacer(modifier = Modifier.height(2.dp))
-            // The board's baht line sits here: only an empty wallet can say it, so the room stays either way.
+            // The board's baht line sits here. Only an empty wallet can say it, and a balance that failed to load puts its retry here, so the room stays either way.
             Box(modifier = Modifier.height(17.dp)) {
                 if (wallet.live && wallet.balanceSats == 0L) {
                     Text("≈ ฿0", color = FiatGold, fontSize = 13.sp, fontWeight = FontWeight.Light, lineHeight = 17.sp)
+                }
+                if (!wallet.balanceKnown) {
+                    Text(
+                        text = "ดึงยอดไม่สำเร็จ · แตะเพื่อลองใหม่",
+                        color = FiatGold,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Light,
+                        lineHeight = 17.sp,
+                        modifier = Modifier.clickable(role = Role.Button, enabled = !binding) { retries++ }.testTag("cta_s1_retry"),
+                    )
                 }
             }
             Spacer(modifier = Modifier.height(9.dp))

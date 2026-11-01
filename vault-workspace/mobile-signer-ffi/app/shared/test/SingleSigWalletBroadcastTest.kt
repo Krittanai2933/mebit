@@ -50,6 +50,7 @@ private class FakeHot {
         },
         fetchHistory = { _, _, _ -> history },
         nowSeconds = { clock++ },
+        receiveAddressOf = { _, _, _, _ -> "tb1qoffline" },
     )
 
     /** A 12-word session bound through a working snapshot: the wallet is live with 1,000,000 sats. */
@@ -131,14 +132,15 @@ class SingleSigWalletBroadcastTest {
     }
 
     @Test
-    fun aSeedWhoseWalletNeverWentLiveIsMockedAndNeverSends() {
+    fun aSeedWhoseWalletNeverWentLiveNeverSendsAndFakesNoPayment() {
         val hot = FakeHot()
         hot.snapshotResult = { throw IllegalStateException("esplora unreachable") }
         hot.sendResult = { fail("send ran") }
         val session = sessionWithWords(WORDS, PASSPHRASE)
         hot.wallet.bindSession(session)
         assertFalse(hot.wallet.live)
-        assertMockPayments(hot.wallet, session)
+        assertFalse(hot.wallet.broadcast(session, 100_000, 1_128, DESTINATION), "no payment from a balance nobody knows")
+        assertEquals("", hot.wallet.lastTxid, "no mock txid")
         assertEquals(1, hot.snapshots, "only bindSession asked for a snapshot")
     }
 
