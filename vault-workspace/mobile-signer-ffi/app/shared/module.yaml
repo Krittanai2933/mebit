@@ -5,6 +5,7 @@ product:
 dependencies:
   - //mobileSignerFfi
   - org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0
+  - io.github.g0dkar:qrcode-kotlin:4.5.0
   - $compose.runtime
   - $compose.foundation
   - $compose.material3
@@ -17,6 +18,10 @@ dependencies:
 
 dependencies@android:
   - $compose.uiTooling
+
+test-dependencies@android:
+  # Host-JVM tests only: in test-dependencies it would break the iOS test compilation.
+  - com.google.zxing:core:3.5.3
 
 settings:
   compose:
