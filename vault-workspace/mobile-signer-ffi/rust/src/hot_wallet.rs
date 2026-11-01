@@ -258,52 +258,31 @@ struct Utxo {
     value: u64,
 }
 
+// A bad element fails the whole list. Skipping it would hide funds behind "insufficient funds".
 fn parse_utxos(json: &str) -> Result<Vec<Utxo>, MobileSignerError> {
-    let mut out = Vec::new();
-    let mut rest = json;
-    while let Some(start) = rest.find('{') {
-        let end = rest[start..]
-            .find('}')
-            .map(|i| start + i + 1)
-            .unwrap_or(rest.len());
-        let obj = &rest[start..end];
-        if let (Some(txid_s), Some(vout), Some(value)) = (
-            extract_string(obj, "\"txid\""),
-            extract_u64_simple(obj, "\"vout\""),
-            extract_u64_simple(obj, "\"value\""),
-        ) {
-            let txid = Txid::from_str(&txid_s)
-                .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?;
-            out.push(Utxo {
-                txid,
-                vout: vout as u32,
-                value,
-            });
-        }
-        rest = &rest[end..];
-    }
-    Ok(out)
-}
-
-fn extract_string(obj: &str, field: &str) -> Option<String> {
-    let f = obj.find(field)?;
-    let after = &obj[f + field.len()..];
-    let q1 = after.find('"')?;
-    let rest = &after[q1 + 1..];
-    let q2 = rest.find('"')?;
-    Some(rest[..q2].to_string())
-}
-
-fn extract_u64_simple(obj: &str, field: &str) -> Option<u64> {
-    let f = obj.find(field)?;
-    let after = &obj[f + field.len()..];
-    let colon = after.find(':')?;
-    let digits: String = after[colon + 1..]
-        .chars()
-        .skip_while(|c| c.is_whitespace())
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    digits.parse().ok()
+    let bad = |what: String| MobileSignerError::InvalidPsbtJson(format!("esplora utxo: {what}"));
+    let body: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| bad(format!("not JSON: {e}")))?;
+    let items = body.as_array().ok_or_else(|| bad("not an array".into()))?;
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let txid = item["txid"]
+                .as_str()
+                .ok_or_else(|| bad(format!("item {i} has no string txid")))?;
+            let txid = Txid::from_str(txid)
+                .map_err(|e| bad(format!("item {i} txid is not 64 hex characters: {e}")))?;
+            let vout = item["vout"]
+                .as_u64()
+                .and_then(|v| u32::try_from(v).ok())
+                .ok_or_else(|| bad(format!("item {i} has no u32 vout")))?;
+            let value = item["value"]
+                .as_u64()
+                .ok_or_else(|| bad(format!("item {i} has no unsigned integer value")))?;
+            Ok(Utxo { txid, vout, value })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -352,5 +331,75 @@ mod tests {
     fn parse_balance_reads_chain_stats() {
         let json = r#"{"chain_stats":{"funded_txo_sum":1000,"spent_txo_sum":200},"mempool_stats":{"funded_txo_sum":50,"spent_txo_sum":0}}"#;
         assert_eq!(parse_address_balance(json).unwrap(), 850);
+    }
+
+    #[test]
+    fn real_address_summary_gives_its_balance() {
+        let real = include_str!("../fixtures/esplora/blockstream_testnet_address_real.json");
+        assert_eq!(parse_address_balance(real).unwrap(), 79_177_760);
+    }
+
+    fn outpoints(json: &str) -> Vec<String> {
+        parse_utxos(json)
+            .unwrap()
+            .iter()
+            .map(|u| format!("{}:{} {}", u.txid, u.vout, u.value))
+            .collect()
+    }
+
+    // Real Esplora puts a nested "status" object between "vout" and "value".
+    #[test]
+    fn real_esplora_utxos_parse_in_order() {
+        let real = include_str!("../fixtures/esplora/testnet4_utxo_real_extract.json");
+        assert_eq!(
+            outpoints(real),
+            [
+                "d81587ef11ffab4230dbba9bce41faed7c18dfe561111f18323aeb26da5be194:1 10000",
+                "14d8cee6cf445d0bc12e8959435e7e97a5e1833d54391bdbe2a29d72917f4b5a:1 5000",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_list_is_an_empty_wallet() {
+        assert!(outpoints("[]").is_empty());
+    }
+
+    #[test]
+    fn an_unconfirmed_utxo_is_kept() {
+        let unconfirmed = include_str!("../fixtures/esplora/synthetic_utxo_unconfirmed.json");
+        assert_eq!(
+            outpoints(unconfirmed),
+            ["0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:0 1234"]
+        );
+    }
+
+    #[test]
+    fn unknown_fields_are_ignored() {
+        let extra = include_str!("../fixtures/esplora/synthetic_utxo_extra_fields.json");
+        assert_eq!(
+            outpoints(extra),
+            ["0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:2 5000"]
+        );
+    }
+
+    #[test]
+    fn a_malformed_utxo_list_is_an_error_not_an_empty_wallet() {
+        for body in [
+            "<html>Sign in to Wi-Fi</html>",
+            include_str!("../fixtures/esplora/synthetic_utxo_not_an_array.json"),
+            include_str!("../fixtures/esplora/synthetic_utxo_missing_value.json"),
+            include_str!("../fixtures/esplora/synthetic_utxo_vout_not_a_number.json"),
+            include_str!("../fixtures/esplora/synthetic_utxo_vout_above_u32.json"),
+            include_str!("../fixtures/esplora/synthetic_utxo_txid_not_64_hex.json"),
+        ] {
+            match parse_utxos(body) {
+                Err(MobileSignerError::InvalidPsbtJson(m)) => {
+                    assert!(m.starts_with("esplora utxo:"), "{body}: {m}")
+                }
+                Err(e) => panic!("{body}: wrong error {e:?}"),
+                Ok(found) => panic!("{body}: accepted as {} utxos", found.len()),
+            }
+        }
     }
 }
