@@ -9,9 +9,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
@@ -20,6 +23,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -27,17 +31,28 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mebit.app.data.AmountEntry
+import com.mebit.app.data.AmountUnit
 import com.mebit.app.data.FeeTier
+import com.mebit.app.data.FiatQuote
+import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SendIssue
 import com.mebit.app.data.SingleSigWallet
+import com.mebit.app.data.bahtText
 import com.mebit.app.data.enterDestination
 import com.mebit.app.data.formatBtc
+import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.data.sendIssue
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
@@ -57,19 +72,23 @@ private val Placeholder = Color(0xFFB4BAC4)
 private val SelectedFee = Color(0xFFFFF8EF)
 
 /**
- * Penpot 4.4 Send, with 4.4.1 (address filled), 4.4.4 (send all), 4.4.6 (insufficient funds) and 4.4.7
- * (invalid address) as states of it. Left out on purpose: the QR scan button and the ฿ unit toggle (no
- * camera in the MVP), and every baht figure (no price feed): fees show in sats where the board shows ฿.
+ * Penpot 4.4 Send, with 4.4.1 (address filled), 4.4.3 (amount in baht), 4.4.4 (send all), 4.4.5 (send all in baht),
+ * 4.4.6 (insufficient funds) and 4.4.7 (invalid address) as states of it. Left out on purpose: the QR scan button (no
+ * camera yet). The ฿ unit toggle, the baht lines and the fee prices in baht need a price from [quotes]. Without one
+ * the screen is BTC and sats only.
  */
 @Composable
 fun S4SendScreen(
     wallet: SingleSigWallet,
     draft: SendDraft,
+    quotes: QuoteCache,
     onContinue: () -> Unit,
     onReceive: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
+    val quote = rememberFiatQuote(quotes)
+    val entry = remember(draft) { AmountEntry(draft) }
     val addressOk = if (draft.destination.isEmpty()) null else isValidAddress(draft.destination, KeyNetwork.TEST)
     val issue = sendIssue(addressOk, draft.amountSats, draft.feeSats, wallet.balanceSats)
     MebitScreen(
@@ -89,13 +108,13 @@ fun S4SendScreen(
         Spacer(modifier = Modifier.height(20.dp))
         DestinationField(draft, invalid = issue == SendIssue.InvalidAddress)
         Spacer(modifier = Modifier.height(14.dp))
-        AmountCard(wallet, draft, short = issue is SendIssue.Insufficient)
+        AmountCard(wallet, entry, quote, short = issue is SendIssue.Insufficient)
         Spacer(modifier = Modifier.height(20.dp))
         Text("ค่าธรรมเนียมเครือข่าย", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp)
         Spacer(modifier = Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FeeTier.entries.forEach { tier ->
-                FeeCard(tier, selected = tier == draft.tier, modifier = Modifier.weight(1f)) { draft.chooseTier(tier) }
+                FeeCard(tier, selected = tier == draft.tier, quote, modifier = Modifier.weight(1f)) { entry.chooseTier(tier, wallet.balanceSats) }
             }
         }
         when (issue) {
@@ -170,70 +189,138 @@ private fun DestinationField(draft: SendDraft, invalid: Boolean) {
 }
 
 @Composable
-private fun AmountCard(wallet: SingleSigWallet, draft: SendDraft, short: Boolean) {
+private fun AmountCard(wallet: SingleSigWallet, entry: AmountEntry, quote: FiatQuote?, short: Boolean) {
     val shape = RoundedCornerShape(22.dp)
     val amount = TextStyle(color = MbNavyInk, fontSize = 44.sp, fontWeight = FontWeight.Bold, lineHeight = 56.sp)
-    Column(
+    val baht = entry.inBaht(quote)
+    val text = entry.fieldText(quote)
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(168.dp)
             .clip(shape)
             .background(MbWhite)
-            .border(if (short) 1.5.dp else 1.dp, if (short) MbBtcOrange else MbBorder, shape)
-            .padding(horizontal = 16.dp),
+            .border(if (short) 1.5.dp else 1.dp, if (short) MbBtcOrange else MbBorder, shape),
     ) {
-        Spacer(modifier = Modifier.height(14.dp))
-        Text("จำนวน", color = MbSlate, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
-        Spacer(modifier = Modifier.height(6.dp))
-        Row(verticalAlignment = Alignment.Bottom) {
-            BasicTextField(
-                value = draft.amountText,
-                onValueChange = { if (Regex("""\d{0,8}(\.\d{0,8})?""").matches(it)) draft.setAmountBtc(it) },
-                textStyle = amount,
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                decorationBox = { inner ->
-                    Box {
-                        if (draft.amountText.isEmpty()) Text("0.0000", style = amount.copy(color = Placeholder))
-                        inner()
-                    }
-                },
-                modifier = Modifier.width(IntrinsicSize.Min).widthIn(min = 40.dp).testTag("s4_amount"),
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("BTC", color = MbSlate, fontSize = 16.sp, fontWeight = FontWeight.Bold, lineHeight = 22.sp, modifier = Modifier.padding(bottom = 12.dp))
+        Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+            Spacer(modifier = Modifier.height(14.dp))
+            Text("จำนวน", color = MbSlate, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.Bottom) {
+                BasicTextField(
+                    value = text,
+                    onValueChange = { if (baht) entry.typeBaht(it, quote) else entry.typeBtc(it) },
+                    textStyle = amount,
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = if (baht) KeyboardType.Number else KeyboardType.Decimal),
+                    visualTransformation = if (baht) ThousandsTransformation else VisualTransformation.None,
+                    decorationBox = { inner ->
+                        Box {
+                            if (text.isEmpty()) Text(if (baht) "0" else "0.0000", style = amount.copy(color = Placeholder))
+                            inner()
+                        }
+                    },
+                    modifier = Modifier.width(IntrinsicSize.Min).widthIn(min = 40.dp).testTag("s4_amount"),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(if (baht) "THB" else "BTC", color = MbSlate, fontSize = 16.sp, fontWeight = FontWeight.Bold, lineHeight = 22.sp, modifier = Modifier.padding(bottom = 12.dp))
+            }
+            // The other unit's line has its room even when it shows nothing, so the divider keeps its place.
+            Box(modifier = Modifier.fillMaxWidth().height(36.dp)) {
+                entry.otherLine(quote)?.let {
+                    Text(it, color = MbEyebrow, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, modifier = Modifier.padding(top = 4.dp).testTag("s4_fiat"))
+                }
+            }
+            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MbBorder))
+            Spacer(modifier = Modifier.height(11.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(
+                    text = entry.caption(wallet.balanceSats, quote) + if (short) " · ไม่พอ" else "",
+                    color = if (short) MbEyebrow else MbBody,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    lineHeight = 17.sp,
+                    modifier = Modifier.testTag("s4_available"),
+                )
+                Text(
+                    text = "ส่งทั้งหมด",
+                    color = MbNavy,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    lineHeight = 17.sp,
+                    modifier = Modifier.clickable(role = Role.Button) { entry.sendAll(wallet.balanceSats) }.testTag("s4_send_all"),
+                )
+            }
         }
-        // The board's baht line sits here: no price feed, so the room stays and the divider keeps its place.
-        Spacer(modifier = Modifier.height(36.dp))
-        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MbBorder))
-        Spacer(modifier = Modifier.height(11.dp))
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(
-                text = "ใช้ได้ ${formatBtc(wallet.balanceSats, 4)} BTC" + if (short) " · ไม่พอ" else "",
-                color = if (short) MbEyebrow else MbBody,
-                fontSize = 12.5.sp,
-                fontWeight = FontWeight.Medium,
-                lineHeight = 17.sp,
-            )
-            Text(
-                text = "ส่งทั้งหมด",
-                color = MbNavy,
-                fontSize = 12.5.sp,
-                fontWeight = FontWeight.Bold,
-                lineHeight = 17.sp,
-                modifier = Modifier
-                    .clickable(role = Role.Button) {
-                        val all = (wallet.balanceSats - draft.feeSats).coerceAtLeast(0)
-                        draft.setAmountBtc(if (all == 0L) "" else formatBtc(all).trimEnd('0').trimEnd('.'))
-                    }
-                    .testTag("s4_send_all"),
-            )
+        if (quote != null) {
+            UnitToggle(baht, onPick = { entry.pickUnit(it, quote) }, modifier = Modifier.align(Alignment.TopEnd).padding(top = 14.dp, end = 16.dp))
         }
     }
 }
 
+/** The BTC / ฿ switch in the amount card's corner, drawn to the boards' 70 x 30 pill with a white 34 x 24 pill behind the chosen unit. */
 @Composable
-private fun FeeCard(tier: FeeTier, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun UnitToggle(baht: Boolean, onPick: (AmountUnit) -> Unit, modifier: Modifier) {
+    Box(modifier = modifier.size(width = 70.dp, height = 30.dp).clip(CircleShape).background(MbChip)) {
+        Box(
+            modifier = Modifier
+                .offset(x = if (baht) 33.dp else 3.dp, y = 3.dp)
+                .size(width = 34.dp, height = 24.dp)
+                .clip(CircleShape)
+                .background(MbWhite),
+        )
+        UnitSegment("BTC", active = !baht, start = 5.dp, tag = "s4_unit_btc") { onPick(AmountUnit.Btc) }
+        UnitSegment("฿", active = baht, start = 35.dp, tag = "s4_unit_thb") { onPick(AmountUnit.Thb) }
+    }
+}
+
+@Composable
+private fun UnitSegment(label: String, active: Boolean, start: Dp, tag: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .offset(x = start)
+            .size(30.dp)
+            .clickable(role = Role.Button, onClick = onClick)
+            .testTag(tag),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = if (active) MbNavy else MbSlate, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/** Shows the baht field's bare digits with a comma every three places. The field keeps the digits, so typing and backspace work on what was typed. */
+private object ThousandsTransformation : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        val shown = groupDigits(text.text)
+        return TransformedText(
+            AnnotatedString(shown),
+            object : OffsetMapping {
+                override fun originalToTransformed(offset: Int) = caretInGrouped(shown, offset)
+                override fun transformedToOriginal(offset: Int) = caretInDigits(shown, offset)
+            },
+        )
+    }
+}
+
+/** "18010" to "18,010". It works on the digits as written, so a leading zero keeps its place. */
+internal fun groupDigits(digits: String): String = digits.reversed().chunked(3).joinToString(",").reversed()
+
+/** Where a caret after [digitsBefore] digits sits in [grouped], after a comma that follows them. */
+internal fun caretInGrouped(grouped: String, digitsBefore: Int): Int {
+    var seen = 0
+    var at = 0
+    while (at < grouped.length && seen < digitsBefore) {
+        if (grouped[at] != ',') seen++
+        at++
+    }
+    return if (at < grouped.length && grouped[at] == ',') at + 1 else at
+}
+
+/** How many digits lie before the caret at [offset] in a grouped text. */
+internal fun caretInDigits(grouped: String, offset: Int): Int = offset - grouped.take(offset).count { it == ',' }
+
+@Composable
+private fun FeeCard(tier: FeeTier, selected: Boolean, quote: FiatQuote?, modifier: Modifier, onClick: () -> Unit) {
     val shape = RoundedCornerShape(16.dp)
     Column(
         modifier = modifier
@@ -250,7 +337,7 @@ private fun FeeCard(tier: FeeTier, selected: Boolean, modifier: Modifier, onClic
         Spacer(modifier = Modifier.height(1.dp))
         Text(tier.eta, color = MbBody, fontSize = 11.5.sp, fontWeight = FontWeight.Medium, lineHeight = 15.sp)
         Spacer(modifier = Modifier.height(10.dp))
-        Text("${thousands(tier.sats)} sat", color = if (selected) MbEyebrow else MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.Bold, lineHeight = 20.sp)
+        Text(bahtText(tier.sats, quote) ?: "${thousands(tier.sats)} sat", color = if (selected) MbEyebrow else MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.Bold, lineHeight = 20.sp)
         Spacer(modifier = Modifier.height(1.dp))
         Text("${tier.satPerVb} sat/vB", color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, lineHeight = 14.sp)
     }

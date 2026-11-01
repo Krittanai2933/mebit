@@ -366,6 +366,7 @@ fun MebitNavHost() {
         MovieRoute.S4Send -> S4SendScreen(
             wallet = singleSig,
             draft = sendDraft,
+            quotes = quotes,
             onContinue = { navigate(MovieRoute.S5ReviewSign) },
             onReceive = { navigate(if (session.backupConfirmed) MovieRoute.S3Receive else MovieRoute.S2ReceiveBackupGate) },
             onBack = onBack,

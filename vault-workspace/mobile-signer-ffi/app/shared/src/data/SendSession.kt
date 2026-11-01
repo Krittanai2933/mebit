@@ -207,6 +207,12 @@ class SendDraft {
         amountSats = parseBtc(text) ?: 0L
     }
 
+    /** Sets the amount to exactly [sats] and writes the BTC text from it, so 500_000 gives "0.005". Zero leaves the text empty. Not `setAmountSats`: that is the private setter's name on the JVM. */
+    fun setAmountInSats(sats: Long) {
+        amountSats = sats
+        amountText = if (sats == 0L) "" else formatBtc(sats).trimEnd('0').trimEnd('.')
+    }
+
     fun chooseTier(next: FeeTier) {
         tier = next
         feeSats = next.sats
