@@ -36,6 +36,7 @@ import com.mebit.app.data.FeeTier
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SendIssue
 import com.mebit.app.data.SingleSigWallet
+import com.mebit.app.data.enterDestination
 import com.mebit.app.data.formatBtc
 import com.mebit.app.data.sendIssue
 import com.mebit.app.ui.components.MebitScreen
@@ -114,6 +115,7 @@ fun S4SendScreen(
 @Composable
 private fun DestinationField(draft: SendDraft, invalid: Boolean) {
     val clipboard = LocalClipboardManager.current
+    val enter = { text: String -> draft.enterDestination(text) { isValidAddress(it, KeyNetwork.TEST) } }
     val shape = RoundedCornerShape(18.dp)
     val ink = if (invalid) MbEyebrow else MbNavyInk
     Row(
@@ -137,7 +139,7 @@ private fun DestinationField(draft: SendDraft, invalid: Boolean) {
             Spacer(modifier = Modifier.height(8.dp))
             BasicTextField(
                 value = draft.destination,
-                onValueChange = { draft.destination = it.filterNot(Char::isWhitespace) },
+                onValueChange = enter,
                 textStyle = TextStyle(color = ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, lineHeight = 20.sp),
                 maxLines = 2,
                 decorationBox = { inner ->
@@ -160,7 +162,7 @@ private fun DestinationField(draft: SendDraft, invalid: Boolean) {
             modifier = Modifier
                 .clip(CircleShape)
                 .background(MbChip)
-                .clickable(role = Role.Button) { clipboard.getText()?.text?.let { draft.destination = it.filterNot(Char::isWhitespace) } }
+                .clickable(role = Role.Button) { clipboard.getText()?.text?.let(enter) }
                 .padding(horizontal = 16.dp, vertical = 6.dp)
                 .testTag("s4_paste"),
         )
