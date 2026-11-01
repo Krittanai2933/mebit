@@ -12,23 +12,30 @@ import com.mebit.ffi.signer.hotReceiveAddress
 import com.mebit.ffi.signer.hotSend
 import com.mebit.ffi.signer.hotWalletHistory
 import com.mebit.ffi.signer.hotWalletSnapshot
+import kotlin.time.Clock
 
 /**
  * Single-sig hot wallet surface for Movie Page S*.
  * Live path uses BIP-84 + Esplora (hot_* UniFFI). Demo path keeps offline fixtures.
  *
  * [send], [snapshot] and [fetchHistory] are the hot_* calls. Tests pass fakes, so they need no native library or network.
+ * [nowSeconds] is the phone clock in Unix seconds, which [lastSentAtSeconds] reads when a payment goes out.
  */
 class SingleSigWallet(
     private val send: (words: List<String>, passphrase: String, network: KeyNetwork, destination: String, amountSats: ULong, feeSats: ULong) -> HotSendResult = ::hotSend,
     private val snapshot: (words: List<String>, passphrase: String, network: KeyNetwork) -> HotWalletSnapshot = ::hotWalletSnapshot,
     private val fetchHistory: (words: List<String>, passphrase: String, network: KeyNetwork) -> List<HotTx> = ::hotWalletHistory,
+    private val nowSeconds: () -> Long = { Clock.System.now().epochSeconds },
 ) {
     var balanceSats: Long by mutableStateOf(0L)
         private set
     var receiveAddress: String by mutableStateOf("")
         private set
     var lastTxid: String by mutableStateOf("")
+        private set
+
+    /** When the last payment went out, in Unix seconds on the phone clock. 0 until a payment goes out, and again after [useDemoFixture]. */
+    var lastSentAtSeconds: Long by mutableStateOf(0L)
         private set
     var lastError: String? by mutableStateOf(null)
         private set
@@ -91,6 +98,7 @@ class SingleSigWallet(
             }
             balanceSats -= amountSats + feeSats
             lastTxid = "mocktxid_" + balanceSats.toString(16) + "_" + amountSats.toString(16)
+            lastSentAtSeconds = nowSeconds()
             return true
         }
         val result = try {
@@ -107,6 +115,7 @@ class SingleSigWallet(
             return false
         }
         lastTxid = result.txid
+        lastSentAtSeconds = nowSeconds()
         // Its own try: the payment is out once send returns, and reading it as failed invites a retry that pays twice.
         try {
             val snap = snapshot(session.words, session.passphrase, network)
@@ -123,6 +132,7 @@ class SingleSigWallet(
         balanceSats = 1_250_000L
         receiveAddress = "tb1qmebitdemosinglesig0000000000000000recv"
         lastTxid = ""
+        lastSentAtSeconds = 0L
         history = emptyList()
     }
 

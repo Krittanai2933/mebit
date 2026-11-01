@@ -1,5 +1,11 @@
 package com.mebit.app.data
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import com.mebit.app.feature.send.thousands
 import com.mebit.ffi.signer.fetchBtcThb
 import kotlin.math.floor
@@ -8,6 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val FRESH_SECONDS = 60L
 private const val USABLE_SECONDS = 300L
@@ -61,3 +68,15 @@ fun liveQuoteCache() = QuoteCache(
     },
     nowSeconds = { Clock.System.now().epochSeconds },
 )
+
+/**
+ * The [FiatQuote] for this screen: null until it arrives, and for good when [cache] has none within four seconds.
+ * It asks once per screen, because a failed fetch is not cached and every further ask on a dead network tries the source again.
+ * A fetch already blocked in the price export is not interrupted, so a quote that comes after the four seconds is dropped for this screen.
+ */
+@Composable
+fun rememberFiatQuote(cache: QuoteCache): FiatQuote? {
+    var quote by remember(cache) { mutableStateOf<FiatQuote?>(null) }
+    LaunchedEffect(cache) { quote = withTimeoutOrNull(4_000) { cache.fresh() } }
+    return quote
+}

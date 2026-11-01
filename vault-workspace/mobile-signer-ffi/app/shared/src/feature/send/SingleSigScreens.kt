@@ -14,12 +14,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import com.mebit.app.data.FiatQuote
 import com.mebit.app.data.OnboardingSession
+import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
+import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -53,20 +58,25 @@ fun S5ReviewSignScreen(
     wallet: SingleSigWallet,
     session: OnboardingSession,
     draft: SendDraft,
+    quotes: QuoteCache,
     confirm: suspend () -> Boolean,
     onSigned: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val quote = rememberFiatQuote(quotes)
     var refused by remember { mutableStateOf(false) }
     // Kept local because Home sets wallet.lastError when its balance fetch fails, so it is stale when this screen opens.
     var failed by remember { mutableStateOf(false) }
+    val attempt = remember { SignAttempt() }
+    // Back and cancel wait while a payment is in flight, because leaving would hide one that still goes out. The back chip stays so the header does not shift.
+    val leave = onBack?.let { back -> { if (!attempt.running) back() } }
     val total = draft.amountSats + draft.feeSats
     MebitScreen(
         eyebrow = "SEND · ตรวจสอบ",
         title = "ตรวจก่อนส่ง",
-        onBack = onBack,
+        onBack = leave,
         onOpenCatalog = onOpenCatalog,
         subtitle = "ส่งแล้วยกเลิกไม่ได้ เทียบที่อยู่กับคนรับอีกครั้ง",
         tag = "screen_send/s5",
@@ -79,25 +89,31 @@ fun S5ReviewSignScreen(
                 },
                 primaryTag = "cta_s5_sign",
                 onPrimary = {
-                    scope.launch {
-                        failed = false
-                        // Face ID first when the app lock is on; nothing is signed on a refusal.
-                        refused = !confirm()
-                        if (!refused) {
-                            failed = !wallet.broadcast(session, draft.amountSats, draft.feeSats, draft.destination)
-                            if (!failed) onSigned()
+                    if (attempt.begin()) {
+                        scope.launch {
+                            failed = false
+                            // Face ID first when the app lock is on; nothing is signed on a refusal.
+                            refused = !confirm()
+                            if (!refused) {
+                                failed = !withContext(Dispatchers.Default) {
+                                    wallet.broadcast(session, draft.amountSats, draft.feeSats, draft.destination)
+                                }
+                                if (!failed) onSigned()
+                            }
+                            attempt.end(paid = !refused && !failed)
                         }
                     }
                 },
                 linkLabel = "ยกเลิก",
                 linkTag = "cta_s5_cancel",
-                onLink = onBack,
+                onLink = leave,
+                enabled = !attempt.running,
                 linkColor = MbBody,
             )
         },
     ) {
         Spacer(modifier = Modifier.height(27.dp))
-        SendSummary(draft)
+        SendSummary(draft, quote)
         Spacer(modifier = Modifier.height(14.dp))
         val rows = RoundedCornerShape(20.dp)
         Column(
@@ -105,7 +121,7 @@ fun S5ReviewSignScreen(
         ) {
             ReviewRow("จาก", "กระเป๋าใช้จ่าย")
             ReviewDivider()
-            ReviewRow("ค่าธรรมเนียม", "${thousands(draft.feeSats)} sat")
+            ReviewRow("ค่าธรรมเนียม", reviewFeeText(draft.feeSats, quote))
             ReviewDivider()
             ReviewRow("หักจากกระเป๋ารวม", "${formatBtc(total)} BTC", bold = true)
             ReviewDivider()
@@ -127,6 +143,27 @@ internal enum class ReviewIssue(val message: String, val tag: String) {
     BroadcastFailed("ลองอีกครั้ง · ตรวจยอดคงเหลือก่อนส่งซ้ำ", "error"),
 }
 
+/**
+ * One signing attempt at a time on Review. A tap while one runs, or after one paid, starts nothing, so a double tap
+ * cannot pay twice. A refusal or a failed broadcast frees the button for another try.
+ */
+internal class SignAttempt {
+    var running by mutableStateOf(false)
+        private set
+
+    /** True when the caller may start an attempt now. */
+    fun begin(): Boolean {
+        if (running) return false
+        running = true
+        return true
+    }
+
+    /** [paid] keeps the button locked: the screen is left a moment later and a queued tap must not pay again. */
+    fun end(paid: Boolean) {
+        running = paid
+    }
+}
+
 /** A refusal wins over a failed broadcast, because nothing was signed. */
 internal fun reviewIssue(refused: Boolean, failed: Boolean): ReviewIssue? = when {
     refused -> ReviewIssue.SignRefused
@@ -134,9 +171,9 @@ internal fun reviewIssue(refused: Boolean, failed: Boolean): ReviewIssue? = when
     else -> null
 }
 
-/** Penpot 4.5: what leaves, in the first 4 decimals, and where to. The baht line is left out (no price feed). */
+/** Penpot 4.5: what leaves, in the first 4 decimals, its baht when there is a price, and where to. */
 @Composable
-private fun SendSummary(draft: SendDraft) {
+private fun SendSummary(draft: SendDraft, quote: FiatQuote?) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -153,8 +190,12 @@ private fun SendSummary(draft: SendDraft) {
             Spacer(modifier = Modifier.width(8.dp))
             Text("BTC", color = MbWhite.copy(alpha = 0.8f), fontSize = 15.sp, fontWeight = FontWeight.Bold, lineHeight = 20.sp, modifier = Modifier.padding(bottom = 5.dp))
         }
-        // The board's baht line sits here: no price feed, so the room stays.
-        Spacer(modifier = Modifier.height(34.dp))
+        // The room stays when there is no price, so the card keeps its height.
+        Box(modifier = Modifier.fillMaxWidth().height(34.dp)) {
+            fiatLine(draft.amountSats, quote)?.let {
+                Text(it, color = SummaryGold, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 19.sp, modifier = Modifier.testTag("send_fiat"))
+            }
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("ถึง", color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
             Spacer(modifier = Modifier.width(18.dp))
@@ -163,14 +204,14 @@ private fun SendSummary(draft: SendDraft) {
     }
 }
 
-private val AddressGold = Color(0xFFEEB42A)
+private val SummaryGold = Color(0xFFEEB42A)
 
 /** "tb1q 9h7a 2kxv 7tq3 … 4e8s m4kz": four-letter groups from each end, the middle left out, the ends picked out in gold. */
 internal fun groupedAddress(address: String): AnnotatedString = buildAnnotatedString {
     val long = address.length > 24
     val head = (if (long) address.take(16) else address).chunked(4)
     val tail = if (long) address.takeLast(8).chunked(4) else emptyList()
-    fun group(text: String, gold: Boolean) = withStyle(SpanStyle(color = if (gold) AddressGold else Color.White)) { append(text) }
+    fun group(text: String, gold: Boolean) = withStyle(SpanStyle(color = if (gold) SummaryGold else Color.White)) { append(text) }
     head.forEachIndexed { i, g ->
         if (i > 0) append(' ')
         group(g, gold = i in 1..2)
@@ -205,13 +246,14 @@ private fun ReviewDivider() {
 fun S6SentScreen(
     wallet: SingleSigWallet,
     draft: SendDraft,
+    quotes: QuoteCache,
     variant: String,
     onHome: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
     if (variant == "slip") {
-        SentSlip(wallet, draft, onHome, onOpenCatalog)
+        SentSlip(wallet, draft, quotes, onHome, onOpenCatalog)
         return
     }
     val eyebrow = when (variant) {

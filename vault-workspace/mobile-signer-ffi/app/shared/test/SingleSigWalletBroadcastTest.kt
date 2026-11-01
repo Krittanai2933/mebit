@@ -18,6 +18,9 @@ private val WORDS = List(11) { "abandon" } + "about"
 private const val PASSPHRASE = "mebit-test"
 private const val DESTINATION = "tb1qdestinationfortheseteststhatneverleaves"
 
+// 23 ต.ค. 2569 · 14:32 น. in Bangkok, the time on board 4.6.
+private const val SENT_AT = 1_792_740_720L
+
 private data class SendCall(val words: List<String>, val passphrase: String, val network: KeyNetwork, val destination: String, val amountSats: ULong, val feeSats: ULong)
 
 /** What the send screens read after a broadcast. */
@@ -25,10 +28,14 @@ private data class Seen(val returned: Boolean, val txid: String, val error: Stri
 
 private fun SingleSigWallet.seen(returned: Boolean) = Seen(returned, lastTxid, lastError, balanceSats, receiveAddress)
 
-/** Fakes for the three hot_* calls. A test swaps [sendResult] or [snapshotResult] to change what the next call does. */
+/**
+ * Fakes for the three hot_* calls. A test swaps [sendResult] or [snapshotResult] to change what the next call does.
+ * The clock is [clock], and every read moves it on a second, so the wallet's send time shows which read it kept.
+ */
 private class FakeHot {
     var sendResult: () -> HotSendResult = { HotSendResult("txid-1") }
     var snapshotResult: () -> HotWalletSnapshot = { HotWalletSnapshot("tb1qbefore", 1_000_000uL, KeyNetwork.TEST) }
+    var clock = SENT_AT
     val sends = mutableListOf<SendCall>()
     var snapshots = 0
     val history = listOf(HotTx("txid-0", 1_000_000L, 3u, 1_760_000_000uL))
@@ -42,6 +49,7 @@ private class FakeHot {
             snapshotResult()
         },
         fetchHistory = { _, _, _ -> history },
+        nowSeconds = { clock++ },
     )
 
     /** A 12-word session bound through a working snapshot: the wallet is live with 1,000,000 sats. */
@@ -55,10 +63,11 @@ private class FakeHot {
     }
 }
 
-private fun walletThatMustNotCallHot() = SingleSigWallet(
+private fun walletThatMustNotCallHot(nowSeconds: () -> Long = { 0L }) = SingleSigWallet(
     send = { _, _, _, _, _, _ -> fail("send ran") },
     snapshot = { _, _, _ -> fail("snapshot ran") },
     fetchHistory = { _, _, _ -> fail("history ran") },
+    nowSeconds = nowSeconds,
 )
 
 /** The demo fixture holds 1,250,000 sats: a payment above that is refused, one within it is deducted with its fee under a mock txid. */
@@ -131,5 +140,57 @@ class SingleSigWalletBroadcastTest {
         assertFalse(hot.wallet.live)
         assertMockPayments(hot.wallet, session)
         assertEquals(1, hot.snapshots, "only bindSession asked for a snapshot")
+    }
+
+    @Test
+    fun aLiveSendRecordsWhenTheSendReturnedNotWhenASlowRefreshEnded() {
+        val hot = FakeHot()
+        val session = hot.goLive()
+        hot.snapshotResult = {
+            hot.clock += 5
+            HotWalletSnapshot("tb1qafter", 898_872uL, KeyNetwork.TEST)
+        }
+        assertEquals(0L, hot.wallet.lastSentAtSeconds, "nothing sent yet")
+        assertTrue(hot.wallet.broadcast(session, 100_000, 1_128, DESTINATION))
+        assertEquals(SENT_AT, hot.wallet.lastSentAtSeconds)
+    }
+
+    @Test
+    fun aSentPaymentWhoseRefreshFailsStillHasItsSendTime() {
+        val hot = FakeHot()
+        val session = hot.goLive()
+        hot.snapshotResult = { throw IllegalStateException("esplora answer unreadable") }
+        assertTrue(hot.wallet.broadcast(session, 100_000, 1_128, DESTINATION))
+        assertEquals(SENT_AT, hot.wallet.lastSentAtSeconds)
+    }
+
+    @Test
+    fun aFailedSendLeavesNoSendTime() {
+        val hot = FakeHot()
+        val session = hot.goLive()
+        hot.sendResult = { throw IllegalStateException("bad-txns-inputs-missingorspent") }
+        assertFalse(hot.wallet.broadcast(session, 100_000, 1_128, DESTINATION))
+        assertEquals(0L, hot.wallet.lastSentAtSeconds)
+    }
+
+    @Test
+    fun aMockPaymentRecordsTheClockAndARefusedOneDoesNot() {
+        val wallet = walletThatMustNotCallHot { SENT_AT }
+        val session = OnboardingSession()
+        wallet.bindSession(session)
+        assertFalse(wallet.broadcast(session, 1_250_000, 1_128, DESTINATION))
+        assertEquals(0L, wallet.lastSentAtSeconds)
+        assertTrue(wallet.broadcast(session, 100_000, 1_128, DESTINATION))
+        assertEquals(SENT_AT, wallet.lastSentAtSeconds)
+    }
+
+    @Test
+    fun theDemoFixtureForgetsTheSendTime() {
+        val hot = FakeHot()
+        val session = hot.goLive()
+        assertTrue(hot.wallet.broadcast(session, 100_000, 1_128, DESTINATION))
+        assertEquals(SENT_AT, hot.wallet.lastSentAtSeconds)
+        hot.wallet.useDemoFixture()
+        assertEquals(0L, hot.wallet.lastSentAtSeconds)
     }
 }

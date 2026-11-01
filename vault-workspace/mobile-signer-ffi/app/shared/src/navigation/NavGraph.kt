@@ -33,6 +33,7 @@ import com.mebit.app.data.MultisigSendDraft
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.VaultDraft
+import com.mebit.app.data.liveQuoteCache
 import com.mebit.app.data.pairedDevice
 import com.mebit.app.feature.keys.AddKeyScreen
 import com.mebit.app.feature.keys.HardwareWalletScreen
@@ -90,6 +91,7 @@ fun MebitNavHost() {
     val keyring = remember { KeyringStore() }
     val vaultDraft = remember { VaultDraft() }
     val singleSig = remember { SingleSigWallet() }
+    val quotes = remember { liveQuoteCache() }
     val sendDraft = remember { SendDraft() }
     val multisigSend = remember { MultisigSendDraft() }
     val biometrics = remember { platformBiometrics() }
@@ -373,6 +375,7 @@ fun MebitNavHost() {
             wallet = singleSig,
             session = session,
             draft = sendDraft,
+            quotes = quotes,
             confirm = { appLock.confirm(biometrics, session.appLockEnabled, "ยืนยันการเซ็นส่งเงิน") },
             onSigned = { navigate(MovieRoute.S6SentSlip) },
             onBack = onBack,
@@ -381,6 +384,7 @@ fun MebitNavHost() {
         MovieRoute.S6Sent -> S6SentScreen(
             wallet = singleSig,
             draft = sendDraft,
+            quotes = quotes,
             variant = "default",
             onHome = { navigate(MovieRoute.S1HomeSingleSig) },
             onBack = onBack,
@@ -389,6 +393,7 @@ fun MebitNavHost() {
         MovieRoute.S6SentSlip -> S6SentScreen(
             wallet = singleSig,
             draft = sendDraft,
+            quotes = quotes,
             variant = "slip",
             onHome = { navigate(MovieRoute.S1HomeSingleSig) },
             onBack = onBack,
@@ -397,6 +402,7 @@ fun MebitNavHost() {
         MovieRoute.S6SentBlock -> S6SentScreen(
             wallet = singleSig,
             draft = sendDraft,
+            quotes = quotes,
             variant = "block",
             onHome = { navigate(MovieRoute.S1HomeSingleSig) },
             onBack = onBack,
@@ -405,6 +411,7 @@ fun MebitNavHost() {
         MovieRoute.S6SentPoster -> S6SentScreen(
             wallet = singleSig,
             draft = sendDraft,
+            quotes = quotes,
             variant = "poster",
             onHome = { navigate(MovieRoute.S1HomeSingleSig) },
             onBack = onBack,
