@@ -125,26 +125,26 @@ pub fn hot_wallet_snapshot(
     })
 }
 
+// Defaulting a missing field to 0 would show a Wi-Fi sign-in page as an empty wallet.
 fn parse_address_balance(json: &str) -> Result<u64, MobileSignerError> {
-    let chain_funded = extract_u64(json, "\"chain_stats\"", "\"funded_txo_sum\"").unwrap_or(0);
-    let chain_spent = extract_u64(json, "\"chain_stats\"", "\"spent_txo_sum\"").unwrap_or(0);
-    let mem_funded = extract_u64(json, "\"mempool_stats\"", "\"funded_txo_sum\"").unwrap_or(0);
-    let mem_spent = extract_u64(json, "\"mempool_stats\"", "\"spent_txo_sum\"").unwrap_or(0);
-    Ok(chain_funded.saturating_sub(chain_spent) + mem_funded.saturating_sub(mem_spent))
-}
-
-fn extract_u64(json: &str, section: &str, field: &str) -> Option<u64> {
-    let sec = json.find(section)?;
-    let slice = &json[sec..];
-    let f = slice.find(field)?;
-    let after = &slice[f + field.len()..];
-    let colon = after.find(':')?;
-    let digits: String = after[colon + 1..]
-        .chars()
-        .skip_while(|c| c.is_whitespace())
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    digits.parse().ok()
+    let bad = |what: String| MobileSignerError::InvalidPsbtJson(format!("esplora balance: {what}"));
+    let body: Value = serde_json::from_str(json).map_err(|e| bad(format!("not JSON: {e}")))?;
+    if !body.is_object() {
+        return Err(bad("not an object".into()));
+    }
+    let sum = |section: &str, field: &str| {
+        body[section][field]
+            .as_u64()
+            .map(u128::from)
+            .ok_or_else(|| bad(format!("no unsigned integer {section}.{field}")))
+    };
+    // Subtract totals. A coin can be funded in chain_stats and spent in mempool_stats.
+    let funded = sum("chain_stats", "funded_txo_sum")? + sum("mempool_stats", "funded_txo_sum")?;
+    let spent = sum("chain_stats", "spent_txo_sum")? + sum("mempool_stats", "spent_txo_sum")?;
+    let balance = funded
+        .checked_sub(spent)
+        .ok_or_else(|| bad(format!("spent {spent} is more than funded {funded}")))?;
+    u64::try_from(balance).map_err(|_| bad(format!("{balance} sats does not fit u64")))
 }
 
 /// One transaction of the hot wallet's address, seen from the wallet's side.
@@ -452,6 +452,77 @@ mod tests {
     fn real_address_summary_gives_its_balance() {
         let real = include_str!("../fixtures/esplora/blockstream_testnet_address_real.json");
         assert_eq!(parse_address_balance(real).unwrap(), 79_177_760);
+    }
+
+    // 10000 confirmed, then spent in the mempool with 4000 back as change. 10000 + 4000 - 10000.
+    #[test]
+    fn a_pending_spend_leaves_only_the_change() {
+        let json = r#"{"chain_stats":{"funded_txo_sum":10000,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":4000,"spent_txo_sum":10000}}"#;
+        assert_eq!(parse_address_balance(json).unwrap(), 4_000);
+    }
+
+    // Nothing confirmed, 2500 arriving in the mempool. 0 + 2500 - 0.
+    #[test]
+    fn a_receive_still_in_the_mempool_counts() {
+        let json = r#"{"chain_stats":{"funded_txo_sum":0,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":2500,"spent_txo_sum":0}}"#;
+        assert_eq!(parse_address_balance(json).unwrap(), 2_500);
+    }
+
+    // 5000 received and all of it spent, both confirmed. An empty wallet is a real 0, not an error.
+    #[test]
+    fn a_fully_spent_address_is_a_real_zero() {
+        let json = r#"{"chain_stats":{"funded_txo_sum":5000,"spent_txo_sum":5000},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#;
+        assert_eq!(parse_address_balance(json).unwrap(), 0);
+    }
+
+    #[test]
+    fn an_answer_it_cannot_read_is_an_error_not_a_balance() {
+        let cases = [
+            ("<html>Sign in to Wi-Fi</html>", "not JSON"),
+            ("[]", "not an object"),
+            (
+                r#"{"chain_stats":{"funded_txo_sum":5000,"spent_txo_sum":0}}"#,
+                "mempool_stats",
+            ),
+            (
+                r#"{"mempool_stats":{"funded_txo_sum":5000,"spent_txo_sum":0}}"#,
+                "chain_stats",
+            ),
+            (
+                r#"{"chain_stats":{"funded_txo_sum":"5000","spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#,
+                "chain_stats.funded_txo_sum",
+            ),
+            (
+                r#"{"chain_stats":{"funded_txo_sum":5000,"spent_txo_sum":1.5},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#,
+                "chain_stats.spent_txo_sum",
+            ),
+            (
+                r#"{"chain_stats":{"funded_txo_sum":5000,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":-1}}"#,
+                "mempool_stats.spent_txo_sum",
+            ),
+            (
+                r#"{"chain_stats":{"funded_txo_sum":5000,"spent_txo_sum":6000},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#,
+                "spent 6000 is more than funded 5000",
+            ),
+            (
+                r#"{"chain_stats":{"funded_txo_sum":10000,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":1000,"spent_txo_sum":12000}}"#,
+                "spent 12000 is more than funded 11000",
+            ),
+            (
+                r#"{"chain_stats":{"funded_txo_sum":18446744073709551615,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":1,"spent_txo_sum":0}}"#,
+                "18446744073709551616 sats does not fit u64",
+            ),
+        ];
+        for (body, rule) in cases {
+            match parse_address_balance(body) {
+                Err(MobileSignerError::InvalidPsbtJson(m)) => {
+                    assert!(m.starts_with("esplora balance:"), "{body}: {m}");
+                    assert!(m.contains(rule), "{body}: {m}");
+                }
+                Err(e) => panic!("{body}: wrong error {e:?}"),
+                Ok(sats) => panic!("{body}: accepted as {sats} sats"),
+            }
+        }
     }
 
     fn outpoints(json: &str) -> Vec<String> {
