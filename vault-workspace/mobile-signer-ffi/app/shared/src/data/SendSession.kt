@@ -4,7 +4,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.mebit.ffi.signer.HotSendResult
 import com.mebit.ffi.signer.HotTx
+import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.hotReceiveAddress
 import com.mebit.ffi.signer.hotSend
@@ -14,8 +16,14 @@ import com.mebit.ffi.signer.hotWalletSnapshot
 /**
  * Single-sig hot wallet surface for Movie Page S*.
  * Live path uses BIP-84 + Esplora (hot_* UniFFI). Demo path keeps offline fixtures.
+ *
+ * [send], [snapshot] and [fetchHistory] are the hot_* calls. Tests pass fakes, so they need no native library or network.
  */
-class SingleSigWallet {
+class SingleSigWallet(
+    private val send: (words: List<String>, passphrase: String, network: KeyNetwork, destination: String, amountSats: ULong, feeSats: ULong) -> HotSendResult = ::hotSend,
+    private val snapshot: (words: List<String>, passphrase: String, network: KeyNetwork) -> HotWalletSnapshot = ::hotWalletSnapshot,
+    private val fetchHistory: (words: List<String>, passphrase: String, network: KeyNetwork) -> List<HotTx> = ::hotWalletHistory,
+) {
     var balanceSats: Long by mutableStateOf(0L)
         private set
     var receiveAddress: String by mutableStateOf("")
@@ -38,13 +46,13 @@ class SingleSigWallet {
             return
         }
         try {
-            val snap = hotWalletSnapshot(session.words, session.passphrase, network)
+            val snap = snapshot(session.words, session.passphrase, network)
             receiveAddress = snap.receiveAddress
             balanceSats = snap.balanceSats.toLong()
             live = true
             // Its own try: a history failure is not the wallet's, so it must not reach the demo fixture or lastError.
             history = try {
-                hotWalletHistory(session.words, session.passphrase, network)
+                fetchHistory(session.words, session.passphrase, network)
             } catch (e: Exception) {
                 emptyList()
             }
@@ -85,8 +93,8 @@ class SingleSigWallet {
             lastTxid = "mocktxid_" + balanceSats.toString(16) + "_" + amountSats.toString(16)
             return true
         }
-        return try {
-            val result = hotSend(
+        val result = try {
+            send(
                 session.words,
                 session.passphrase,
                 network,
@@ -94,15 +102,19 @@ class SingleSigWallet {
                 amountSats.toULong(),
                 feeSats.toULong(),
             )
-            lastTxid = result.txid
-            val snap = hotWalletSnapshot(session.words, session.passphrase, network)
-            balanceSats = snap.balanceSats.toLong()
-            receiveAddress = snap.receiveAddress
-            true
         } catch (e: Exception) {
             lastError = e.message
-            false
+            return false
         }
+        lastTxid = result.txid
+        // Its own try: the payment is out once send returns, and reading it as failed invites a retry that pays twice.
+        try {
+            val snap = snapshot(session.words, session.passphrase, network)
+            balanceSats = snap.balanceSats.toLong()
+            receiveAddress = snap.receiveAddress
+        } catch (e: Exception) {
+        }
+        return true
     }
 
     /** Offline fixture for catalog / no-seed CI. */
