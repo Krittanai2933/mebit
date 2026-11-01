@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.mebit.ffi.signer.BleException
+import com.mebit.ffi.signer.FoundWallet
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.PairingCodes
 import com.mebit.ffi.signer.WalletKind
@@ -29,6 +30,7 @@ data class PendingKey(
     val xpub: String,
     val derivationPath: String,
     val source: KeySourceLabel,
+    val isMock: Boolean = false,
 )
 
 data class SavedKey(
@@ -40,13 +42,35 @@ data class SavedKey(
     val source: KeySourceLabel,
     val verified: Boolean,
     val usedInVault: Boolean = false,
+    val isMock: Boolean = false,
 )
+
+/** Why a scan could not list everything. The wallets found before it stay in [HardwareScan.Done.found]. */
+sealed interface ScanProblem {
+    data object BluetoothOff : ScanProblem
+    data class PermissionDenied(val message: String) : ScanProblem
+    data class Failed(val message: String) : ScanProblem
+}
+
+/** What the hardware screen lists: nothing yet, the wallets seen so far, or the end of a scan. */
+sealed interface HardwareScan {
+    data object Idle : HardwareScan
+    data class Scanning(val found: List<FoundWallet>) : HardwareScan
+    data class Done(val found: List<FoundWallet>, val problem: ScanProblem?) : HardwareScan
+}
+
+/** How [KeyringStore.enrollHardware] ended. [Failed] also covers a call ignored because a connect was already running. */
+enum class EnrollResult { Enrolled, UnsupportedModel, Failed }
 
 /**
  * In-memory keyring for Movie Page 01–05 / T13–T15.
  * Only [commitPending] after VerifyKey match may add a verified key.
+ *
+ * [scan] lists the wallets of one kind in range. Tests pass a fake, so they need no Bluetooth.
  */
-class KeyringStore {
+class KeyringStore(
+    private val scan: suspend (WalletKind) -> List<FoundWallet> = { scanWallets(it) },
+) {
     val keys = mutableStateListOf<SavedKey>()
     var pending: PendingKey? by mutableStateOf(null)
         private set
@@ -59,6 +83,9 @@ class KeyringStore {
     var pairingCode: String by mutableStateOf("")
 
     var hardwareBusy: Boolean by mutableStateOf(false)
+        private set
+
+    var hardwareScan: HardwareScan by mutableStateOf(HardwareScan.Idle)
         private set
 
     fun clearError() {
@@ -89,11 +116,12 @@ class KeyringStore {
         try {
             val key = generateSoftwareMultisigKey("", network, (keys.size + 17).toUInt())
             pending = PendingKey(
-                label = "mebit · เครื่องอื่น (mock)",
+                label = "mebit · เครื่องอื่น · จำลอง",
                 fingerprint = key.masterFingerprint,
                 xpub = key.xpub,
                 derivationPath = key.derivationPath,
                 source = KeySourceLabel.MebitOther,
+                isMock = true,
             )
         } catch (e: Exception) {
             lastError = e.message
@@ -125,15 +153,12 @@ class KeyringStore {
             val account = (keys.size + if (source == KeySourceLabel.Jade) 31 else 47).toUInt()
             val key = generateSoftwareMultisigKey("", network, account)
             pending = PendingKey(
-                label = when (source) {
-                    KeySourceLabel.Jade -> "Jade · BLE"
-                    KeySourceLabel.TrezorSafe7 -> "Trezor Safe 7 · BLE"
-                    KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")
-                },
+                label = defaultKeyLabel(source, isMock = true),
                 fingerprint = key.masterFingerprint,
                 xpub = key.xpub,
                 derivationPath = key.derivationPath,
                 source = source,
+                isMock = true,
             )
         } catch (e: Exception) {
             lastError = e.message
@@ -141,36 +166,60 @@ class KeyringStore {
         }
     }
 
-    /** Live BLE enroll. A wrong model sets [lastError] and leaves the unsupported-model screen as its own action. */
-    suspend fun startHardwareLive(source: KeySourceLabel) {
-        require(source == KeySourceLabel.Jade || source == KeySourceLabel.TrezorSafe7)
-        if (hardwareBusy) return
+    /**
+     * Scans for a Jade, then a Safe 7 (about 4 s each) and publishes the rows after each kind. A kind that is
+     * not in range adds no rows and is no problem. Ignored while a scan or a connect is running. A cancelled
+     * scan keeps the rows it had.
+     */
+    suspend fun scanHardware() {
+        if (hardwareScan is HardwareScan.Scanning || hardwareBusy) return
+        val found = mutableListOf<FoundWallet>()
+        var problem: ScanProblem? = null
+        hardwareScan = HardwareScan.Scanning(emptyList())
+        try {
+            for (kind in listOf(WalletKind.JADE, WalletKind.TREZOR_SAFE7)) {
+                try {
+                    found += scan(kind)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: BleException.NotFound) {
+                    // On iOS this is also what Bluetooth off looks like, so it cannot be told apart from an empty room.
+                } catch (e: Exception) {
+                    problem = problem ?: e.toScanProblem()
+                }
+                hardwareScan = HardwareScan.Scanning(found.toList())
+            }
+        } finally {
+            hardwareScan = HardwareScan.Done(found.toList(), problem)
+        }
+    }
+
+    /**
+     * Live BLE enroll of a wallet [scanHardware] found: connect, unlock, read the multisig account key and
+     * stage it in [pending]. Nothing is saved until [confirmFingerprint]. A model mebit does not support is
+     * [EnrollResult.UnsupportedModel] and sets no error. Any other failure sets [lastError].
+     */
+    suspend fun enrollHardware(found: FoundWallet): EnrollResult {
+        if (hardwareBusy) return EnrollResult.Failed
         hardwareBusy = true
         clearError()
         pending = null
-        val kind = when (source) {
-            KeySourceLabel.Jade -> WalletKind.JADE
-            KeySourceLabel.TrezorSafe7 -> WalletKind.TREZOR_SAFE7
-            KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")
-        }
+        // A code typed for an earlier connect must not answer this one.
+        pairingCode = ""
+        val source = hardwareSource(found.kind)
         val codes = FieldPairingCodes(
             jade = source == KeySourceLabel.Jade,
             read = { pairingCode },
             consume = { pairingCode = "" },
         )
         try {
-            val found = scanWallets(kind).firstOrNull()
-                ?: throw BleException.NotFound("ไม่พบอุปกรณ์ในระยะ")
-            if (found.kind != kind) {
-                throw BleException.WrongDevice("อุปกรณ์นี้ไม่ใช่ ${hardwareName(source)}")
-            }
             val link = WalletLink(found)
             try {
                 link.connect(codes)
                 link.unlock()
                 val key = link.accountXpub(TESTNET_MULTISIG_ACCOUNT)
                 pending = PendingKey(
-                    label = "${hardwareName(source)} · ${found.name}",
+                    label = defaultKeyLabel(source, isMock = false),
                     fingerprint = key.masterFingerprint,
                     xpub = key.xpub,
                     derivationPath = key.derivationPath,
@@ -182,12 +231,17 @@ class KeyringStore {
                 }
                 link.close()
             }
+            return EnrollResult.Enrolled
         } catch (e: CancellationException) {
             pending = null
             throw e
+        } catch (e: BleException.WrongDevice) {
+            pending = null
+            return EnrollResult.UnsupportedModel
         } catch (e: Exception) {
             lastError = e.message ?: "เชื่อมต่อไม่สำเร็จ"
             pending = null
+            return EnrollResult.Failed
         } finally {
             hardwareBusy = false
         }
@@ -197,31 +251,39 @@ class KeyringStore {
      * Confirm fingerprint. Mismatch clears pending and does not save.
      * @return true if saved
      */
-    fun confirmFingerprint(observed: String): Boolean {
+    fun confirmFingerprint(observed: String, label: String? = null): Boolean {
         clearError()
         val p = pending ?: run {
             lastError = "ไม่มีกุญแจรอยืนยัน"
             return false
         }
-        if (!observed.equals(p.fingerprint, ignoreCase = true)) {
+        if (!observed.filterNot(Char::isWhitespace).equals(p.fingerprint, ignoreCase = true)) {
             lastMismatch = true
             lastError = "Fingerprint ไม่ตรง · ไม่บันทึกเข้าคลัง"
             pending = null
             return false
         }
+        val name = label?.trim()?.takeIf { it.isNotEmpty() } ?: p.label
+        val savedLabel = if (p.isMock && !name.endsWith(" · จำลอง")) "$name · จำลอง" else name
         keys.add(
             SavedKey(
                 id = "key_${keys.size + 1}_${p.fingerprint}",
-                label = p.label,
+                label = savedLabel,
                 fingerprint = p.fingerprint,
                 xpub = p.xpub,
                 derivationPath = p.derivationPath,
                 source = p.source,
                 verified = true,
+                isMock = p.isMock,
             ),
         )
         pending = null
         return true
+    }
+
+    fun discardPending() {
+        pending = null
+        clearError()
     }
 
     fun importVerifiedFromOnboarding(session: OnboardingSession) {
@@ -265,6 +327,21 @@ internal fun hardwareName(source: KeySourceLabel): String = when (source) {
     KeySourceLabel.Jade -> "Jade"
     KeySourceLabel.TrezorSafe7 -> "Trezor Safe 7"
     KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")
+}
+
+internal fun hardwareSource(kind: WalletKind): KeySourceLabel = when (kind) {
+    WalletKind.JADE -> KeySourceLabel.Jade
+    WalletKind.TREZOR_SAFE7 -> KeySourceLabel.TrezorSafe7
+}
+
+/** The name a hardware key starts with on Confirm Key: "Jade ของฉัน" for a real device, "Jade · จำลอง" for a demo one. */
+internal fun defaultKeyLabel(source: KeySourceLabel, isMock: Boolean): String =
+    hardwareName(source) + if (isMock) " · จำลอง" else " ของฉัน"
+
+private fun Exception.toScanProblem(): ScanProblem = when (this) {
+    is BleException.BluetoothOff -> ScanProblem.BluetoothOff
+    is BleException.PermissionDenied -> ScanProblem.PermissionDenied(message.orEmpty())
+    else -> ScanProblem.Failed(message ?: "ค้นหาไม่สำเร็จ")
 }
 
 /**

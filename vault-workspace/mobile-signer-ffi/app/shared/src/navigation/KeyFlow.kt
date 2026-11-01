@@ -1,5 +1,7 @@
 package com.mebit.app.navigation
 
+import com.mebit.app.data.KeySourceLabel
+
 /** Where a key is being added, which decides the step after Confirm Key. */
 enum class KeyFlow { Onboarding, Keyring }
 
@@ -14,4 +16,16 @@ fun keyFlowAfter(opened: MovieRoute, current: KeyFlow): KeyFlow = when (opened) 
 fun routeAfterVerify(flow: KeyFlow): MovieRoute = when (flow) {
     KeyFlow.Onboarding -> MovieRoute.HwBackupConfirm
     KeyFlow.Keyring -> MovieRoute.Keyring
+}
+
+fun routeBeforeVerify(source: KeySourceLabel, flow: KeyFlow): MovieRoute = when (source) {
+    KeySourceLabel.Jade, KeySourceLabel.TrezorSafe7 -> MovieRoute.HardwareWallet
+    KeySourceLabel.MebitOther -> MovieRoute.PairMebitOther
+    KeySourceLabel.ThisDevice -> if (flow == KeyFlow.Onboarding) MovieRoute.KeySource else MovieRoute.AddKey
+}
+
+internal fun keyRetryBackStack(stack: List<MovieRoute>, sourceRoute: MovieRoute): List<MovieRoute> {
+    val existing = stack.indexOfLast { it == sourceRoute }
+    return if (existing >= 0) stack.take(existing + 1)
+    else stack.dropLastWhile { it == MovieRoute.VerifyKey || it == MovieRoute.T14VerifyMismatch } + sourceRoute
 }

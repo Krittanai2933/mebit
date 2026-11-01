@@ -1,12 +1,50 @@
 package com.mebit.app.feature.keys
 
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import com.mebit.app.data.fingerprintGroups
+import com.mebit.app.data.hardwareName
+import com.mebit.app.ui.theme.MbBorder
+import com.mebit.app.ui.theme.MbChip
+import com.mebit.app.ui.theme.MbNavy
+import com.mebit.app.ui.theme.MbMuted
+import com.mebit.app.ui.theme.MbNavyInk
+import com.mebit.app.ui.theme.MbSuccess
+import com.mebit.app.ui.theme.MbSlate
+import com.mebit.app.ui.theme.MbWhite
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -14,14 +52,29 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.KeySourceLabel
 import com.mebit.app.data.KeyringStore
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
+
+/** Longest key name Confirm Key takes, so a pasted paragraph cannot stretch the keyring rows. */
+private const val KEY_NAME_MAX = 40
+
+/** The grey Penpot 2.4.1 gives the "ไม่ตรง" link, which the theme has no token for. */
+private val MismatchInk = Color(0xFF545454)
+
+/** Penpot 2.4.1's name suggestion: 24 dp high, where the shared [com.mebit.app.ui.components.HwChip] is 28. */
+@Composable
+private fun NameChip(label: String, onPick: () -> Unit) {
+    Box(
+        Modifier.height(24.dp).clip(CircleShape).background(MbChip).clickable(role = Role.Button, onClick = onPick).padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = MbMuted, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, lineHeight = 14.sp)
+    }
+}
 
 @Composable
 fun AddKeyScreen(
@@ -105,93 +158,21 @@ fun PairMebitOtherScreen(
 }
 
 @Composable
-fun HardwareWalletScreen(
-    store: KeyringStore,
-    onEnrolled: () -> Unit,
-    onUnsupported: () -> Unit,
-    onBack: (() -> Unit)?,
-    onOpenCatalog: () -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    val busy = store.hardwareBusy
-    MebitScreen(
-        eyebrow = "HARDWARE WALLET",
-        title = "เชื่อมต่ออุปกรณ์",
-        onBack = onBack,
-        onOpenCatalog = onOpenCatalog,
-        subtitle = "Jade และ Trezor Safe 7 ผ่าน BLE จริง · บน emulator ที่ไม่มีวิทยุ ใช้ปุ่มจำลอง",
-        tag = "screen_keys/hardware",
-    ) {
-        PrimaryCta(
-            label = "เชื่อมต่อ Jade",
-            tag = "cta_hw_jade",
-            onClick = {
-                scope.launch {
-                    store.startHardwareLive(KeySourceLabel.Jade)
-                    if (store.pending != null) onEnrolled()
-                }
-            },
-            enabled = !busy,
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        PrimaryCta(
-            label = "เชื่อมต่อ Trezor Safe 7",
-            tag = "cta_hw_trezor",
-            onClick = {
-                scope.launch {
-                    store.startHardwareLive(KeySourceLabel.TrezorSafe7)
-                    if (store.pending != null) onEnrolled()
-                }
-            },
-            enabled = !busy,
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        OutlinedTextField(
-            value = store.pairingCode,
-            onValueChange = { store.pairingCode = it },
-            modifier = Modifier.fillMaxWidth().testTag("hw_pairing_code"),
-            label = { Text("รหัส 6 หลักบน Trezor") },
-        )
-        if (busy) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("กำลังเชื่อมต่อ พิมพ์รหัสบน Trezor ถ้าเครื่องขอ", modifier = Modifier.testTag("hw_busy"))
-        }
-        Spacer(modifier = Modifier.height(12.dp))
-        SecondaryCta("จำลอง Jade", "cta_hw_demo_jade", {
-            if (!store.hardwareBusy) {
-                store.startHardwareMock(KeySourceLabel.Jade)
-                if (store.pending != null) onEnrolled()
-            }
-        })
-        Spacer(modifier = Modifier.height(8.dp))
-        SecondaryCta("จำลอง Trezor Safe 7", "cta_hw_demo_trezor", {
-            if (!store.hardwareBusy) {
-                store.startHardwareMock(KeySourceLabel.TrezorSafe7)
-                if (store.pending != null) onEnrolled()
-            }
-        })
-        Spacer(modifier = Modifier.height(8.dp))
-        SecondaryCta("จำลองรุ่นอื่น (Unsupported)", "cta_hw_unsupported", onUnsupported)
-        store.lastError?.let {
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("error"))
-        }
-    }
-}
-
-@Composable
 fun VerifyKeyScreen(
     store: KeyringStore,
     onMatched: () -> Unit,
-    onMismatch: () -> Unit,
+    onMismatch: (KeySourceLabel) -> Unit,
+    onReconnect: (KeySourceLabel) -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
     val pending = store.pending
-    var observed by remember(pending?.fingerprint) { mutableStateOf("") }
+    var label by remember(pending) { mutableStateOf(pending?.label.orEmpty()) }
+    val nameFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
     MebitScreen(
         eyebrow = "VERIFY KEY",
-        title = "ยืนยัน fingerprint",
+        title = null,
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         tag = "screen_keys/verify",
@@ -200,35 +181,103 @@ fun VerifyKeyScreen(
             Text("ไม่มีกุญแจรอยืนยัน · กลับไปเพิ่มกุญแจ", color = MaterialTheme.colorScheme.error)
             return@MebitScreen
         }
-        Text(
-            text = "คาดหวัง · ${pending.fingerprint}",
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.testTag("expected_fp"),
-        )
-        Text(
-            text = pending.label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        OutlinedTextField(
-            value = observed,
-            onValueChange = { observed = it },
-            modifier = Modifier.fillMaxWidth().testTag("observed_fp"),
-            label = { Text("fingerprint ที่อ่านได้") },
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        PrimaryCta("ตรง · บันทึกเข้าคลัง", "cta_verify_match", {
-            if (store.confirmFingerprint(observed.trim())) onMatched() else onMismatch()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(34.dp).background(MbSuccess, CircleShape).clearAndSetSemantics {},
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("✓", color = MbWhite, fontSize = 20.sp)
+            }
+            Spacer(Modifier.width(14.dp))
+            Text("ยืนยัน fingerprint", color = MbNavyInk, fontSize = 28.sp, fontWeight = FontWeight.Medium, modifier = Modifier.testTag("title"))
+        }
+        Spacer(Modifier.height(21.dp))
+        val hardware = pending.source == KeySourceLabel.Jade || pending.source == KeySourceLabel.TrezorSafe7
+        val source = when (pending.source) {
+            KeySourceLabel.ThisDevice -> "mebit · เครื่องนี้"
+            KeySourceLabel.MebitOther -> "mebit · เครื่องอื่น"
+            KeySourceLabel.Jade, KeySourceLabel.TrezorSafe7 -> hardwareName(pending.source)
+        } + when {
+            pending.isMock -> " · จำลอง"
+            hardware -> " · Bluetooth"
+            else -> ""
+        }
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(MbWhite)
+                .border(1.dp, MbBorder, RoundedCornerShape(24.dp)).padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 32.dp),
+        ) {
+            Text("ชื่อกุญแจ (ตั้งเองได้)", color = MbSlate, fontSize = 10.5.sp, lineHeight = 14.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                BasicTextField(
+                    value = label,
+                    onValueChange = { label = it.take(KEY_NAME_MAX) },
+                    singleLine = true,
+                    textStyle = TextStyle(color = MbNavyInk, fontSize = 18.sp, fontWeight = FontWeight.SemiBold),
+                    modifier = Modifier.weight(1f).focusRequester(nameFocus).semantics { contentDescription = "ชื่อกุญแจ" }.testTag("verify_key_name"),
+                )
+                TextButton(
+                    onClick = { nameFocus.requestFocus(); keyboard?.show() },
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("verify_edit_name"),
+                ) {
+                    Text("แก้ไข", color = MbNavy, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(MbNavy))
+            Spacer(Modifier.height(12.dp))
+            // Penpot 2.4.1: the first chip is the name the key arrived with, two fit on the first row.
+            val suggestions = listOf(pending.label, "กุญแจบ้าน", "กุญแจสำรอง ตู้เซฟ").distinct()
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    suggestions.take(2).forEach { suggestion -> NameChip(suggestion) { label = suggestion } }
+                }
+                suggestions.drop(2).forEach { suggestion -> NameChip(suggestion) { label = suggestion } }
+            }
+            Spacer(Modifier.height(7.dp))
+            Box(Modifier.fillMaxWidth().height(1.dp).background(MbBorder))
+            Spacer(Modifier.height(15.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("แหล่งที่มา", color = MbSlate, fontSize = 12.5.sp, lineHeight = 16.sp)
+                // The board ends both values 20 dp inside the card's edge.
+                Text(source, color = MbNavyInk, fontSize = 12.5.sp, lineHeight = 16.sp, modifier = Modifier.padding(end = 20.dp).testTag("verify_key_source"))
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Fingerprint", color = MbSlate, fontSize = 12.5.sp, lineHeight = 16.sp)
+                Text(
+                    fingerprintGroups(pending.fingerprint),
+                    color = MbNavyInk,
+                    fontSize = 13.sp,
+                    lineHeight = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(end = 20.dp).testTag("expected_fp"),
+                )
+            }
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "เทียบ fingerprint กับที่แสดงบน${if (hardware && !pending.isMock) "อุปกรณ์" else "แหล่งกุญแจ"}ให้ตรงกันก่อนกดยืนยัน",
+                color = MbMuted,
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(RoundedCornerShape(14.dp)).background(MbChip).padding(14.dp),
+            )
+        }
+        Spacer(Modifier.height(22.dp))
+        PrimaryCta(if (hardware && !pending.isMock) "ตรงกับที่อุปกรณ์แสดง" else "ตรงกับที่แหล่งกุญแจแสดง", "cta_verify_match", {
+            if (store.confirmFingerprint(pending.fingerprint, label)) onMatched() else onMismatch(pending.source)
         })
-        Spacer(modifier = Modifier.height(8.dp))
-        SecondaryCta("เติมค่าที่ถูกต้อง (demo)", "cta_fill_expected", {
-            observed = pending.fingerprint
-        })
-        Spacer(modifier = Modifier.height(8.dp))
-        SecondaryCta("จำลองไม่ตรง", "cta_verify_mismatch", {
-            if (!store.confirmFingerprint("DEADBEEF")) onMismatch()
-        })
+        TextButton(
+            onClick = {
+                store.discardPending()
+                onReconnect(pending.source)
+            },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("cta_verify_mismatch"),
+        ) {
+            Text("ไม่ตรง · กลับไปเชื่อมต่อ (ไม่บันทึก)", color = MismatchInk, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        }
+        store.lastError?.let {
+            Spacer(Modifier.height(12.dp))
+            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("error"))
+        }
     }
 }
 
@@ -316,28 +365,6 @@ fun KeyringFirstVaultScreen(
             onContinuePolicy,
             enabled = store.verifiedCount() >= 1,
         )
-    }
-}
-
-@Composable
-fun T13UnsupportedModelScreen(
-    onBack: (() -> Unit)?,
-    onOpenCatalog: () -> Unit,
-) {
-    MebitScreen(
-        eyebrow = "UNSUPPORTED MODEL",
-        title = "รุ่นนี้ไม่รองรับ",
-        onBack = onBack,
-        onOpenCatalog = onOpenCatalog,
-        tag = "screen_critical/t13",
-    ) {
-        Text(
-            text = "mebit รองรับเฉพาะ Trezor Safe 7 (และ Jade) · รุ่นอื่นถูกปฏิเสธที่ชั้น BLE (WrongDevice)",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(20.dp))
-        PrimaryCta("กลับ", "cta_t13_back", { onBack?.invoke() })
     }
 }
 

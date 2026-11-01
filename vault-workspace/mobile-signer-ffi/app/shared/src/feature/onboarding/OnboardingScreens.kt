@@ -547,9 +547,9 @@ fun HwBackupConfirmScreen(
                 title = device.name,
                 meta = device.meta,
                 metaTag = "hw_device_meta",
-                badge = "เชื่อมแล้ว",
-                badgeInk = MbSuccess,
-                badgeBackground = MbGreenWash,
+                badge = device.status,
+                badgeInk = if (device.isMock) MbEyebrow else MbSuccess,
+                badgeBackground = if (device.isMock) MbIconWash else MbGreenWash,
             )
             Spacer(modifier = Modifier.height(20.dp))
         }

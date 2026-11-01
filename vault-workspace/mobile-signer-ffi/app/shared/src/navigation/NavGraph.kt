@@ -96,6 +96,8 @@ fun MebitNavHost() {
     val appLock = remember { AppLockState() }
     // Starts as Keyring so the debug catalog can open Verify Key without passing Key Source.
     var keyFlow by remember { mutableStateOf(KeyFlow.Keyring) }
+    var verifyRetryRoute by remember { mutableStateOf(MovieRoute.HardwareWallet) }
+    var unsupportedModel by remember { mutableStateOf<String?>(null) }
     val current = backStack.last()
 
     // More than a minute away locks the app again, once the user turned the lock on.
@@ -108,6 +110,12 @@ fun MebitNavHost() {
             keyring.importVerifiedFromOnboarding(session)
         }
         if (backStack.lastOrNull() != route) backStack.add(route)
+    }
+
+    fun returnToKeySource(sourceRoute: MovieRoute) {
+        val retryStack = keyRetryBackStack(backStack, sourceRoute)
+        backStack.clear()
+        backStack.addAll(retryStack)
     }
 
     fun goBack() {
@@ -202,14 +210,21 @@ fun MebitNavHost() {
         MovieRoute.HardwareWallet -> HardwareWalletScreen(
             store = keyring,
             onEnrolled = { navigate(MovieRoute.VerifyKey) },
-            onUnsupported = { navigate(MovieRoute.T13UnsupportedModel) },
+            onUnsupported = { model ->
+                unsupportedModel = model
+                navigate(MovieRoute.T13UnsupportedModel)
+            },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
         MovieRoute.VerifyKey -> VerifyKeyScreen(
             store = keyring,
             onMatched = { navigate(routeAfterVerify(keyFlow)) },
-            onMismatch = { navigate(MovieRoute.T14VerifyMismatch) },
+            onMismatch = { source ->
+                verifyRetryRoute = routeBeforeVerify(source, keyFlow)
+                navigate(MovieRoute.T14VerifyMismatch)
+            },
+            onReconnect = { source -> returnToKeySource(routeBeforeVerify(source, keyFlow)) },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
@@ -273,11 +288,12 @@ fun MebitNavHost() {
             onOpenCatalog = openCatalog,
         )
         MovieRoute.T13UnsupportedModel -> T13UnsupportedModelScreen(
+            model = unsupportedModel,
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
         MovieRoute.T14VerifyMismatch -> T14VerifyMismatchScreen(
-            onBack = onBack,
+            onBack = { returnToKeySource(verifyRetryRoute) },
             onOpenCatalog = openCatalog,
         )
         MovieRoute.T15KeyringEmpty -> T15KeyringEmptyScreen(
