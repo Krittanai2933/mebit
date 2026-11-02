@@ -52,10 +52,12 @@ import platform.Foundation.CFBridgingRelease
 import platform.Foundation.CFBridgingRetain
 import platform.Foundation.NSApplicationSupportDirectory
 import platform.Foundation.NSData
+import platform.Foundation.NSDate
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSLock
 import platform.Foundation.NSSearchPathForDirectoriesInDomains
 import platform.Foundation.NSString
+import platform.Foundation.NSThread
 import platform.Foundation.NSUTF8StringEncoding
 import platform.Foundation.NSUserDomainMask
 import platform.Foundation.dataWithBytes
@@ -85,6 +87,7 @@ import platform.Security.kSecAccessControlUserPresence
 import platform.Security.kSecAttrAccessControl
 import platform.Security.kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly
 import platform.Security.kSecAttrAccount
+import platform.Security.kSecAttrCreationDate
 import platform.Security.kSecAttrService
 import platform.Security.kSecAttrSynchronizable
 import platform.Security.kSecClass
@@ -98,12 +101,11 @@ import platform.Security.kSecUseAuthenticationContext
 import platform.Security.kSecValueData
 import platform.UIKit.UIApplication
 import platform.UIKit.UIApplicationState
+import platform.darwin.dispatch_get_main_queue
+import platform.darwin.dispatch_sync
 
 /** The Keychain service every item of the wallet lives under. */
 private const val SERVICE = "com.mebit.app.wallet"
-
-/** Each item's account is this followed by its generation, counted from 1. */
-private const val ACCOUNT_PREFIX = "wallet."
 
 /** What the marker file holds for each marker it can hold. No other marker is ever written. */
 private val MARKER_CONTENT = mapOf(Marker.Empty to "empty", Marker.Kept to "kept")
@@ -116,23 +118,28 @@ private val MARKER_CONTENT = mapOf(Marker.Empty to "empty", Marker.Kept to "kept
 private const val EVALUATE_BEFORE_READ = true
 
 /**
- * The wallet in the iOS Keychain. Each write is a generic-password item under [SERVICE] with account `wallet.<generation>`,
+ * The wallet in the iOS Keychain. Each write is a generic-password item under [SERVICE] in one of the two accounts of [Slot],
  * never synchronizable, protected by `SecAccessControl(WhenPasscodeSetThisDeviceOnly, UserPresence)` and never also by
  * `kSecAttrAccessible`, in the default access group with no entitlements file. So the item never syncs, never enters a backup,
  * never leaves this phone, is refused on a phone without a passcode, and the OS owner check runs inside [read].
  *
+ * On an iPhone no listing of this item is both silent and useful (2 Nov 2026): a list under a non-interactive LAContext answers
+ * errSecInteractionNotAllowed and returns no item, and a list with no context is slow and likely shows a sheet. So [read] and a
+ * Replace [write] name the two accounts and never list. Only [probe] and a Create's existence check list, silently, and
+ * [probeOutcome] reads that refusal on an unlocked phone as an item that needs its owner.
+ *
  * This is the default arrangement. The simulator enforces no access control, so the iPhone decides whether it holds, and
  * each fallback plugs in here without changing anything above [SecureStore]:
- * - if an add or a delete of this item shows a sheet, [write] and [readNewest] move to an EC P-256 key pair (the private half
+ * - if an add or a delete of this item shows a sheet, [write] and [read] move to an EC P-256 key pair (the private half
  *   under this access control, the public half in its own item with none) and an ECIES blob in a plain ThisDeviceOnly item;
  * - [read] evaluates its LAContext before the Keychain read and hands it in, so the sheet shows on a simulator too; if that
  *   gives two sheets on the iPhone, not one, [EVALUATE_BEFORE_READ] returns to the Keychain's own sheet.
  *
- * One object and one lock per process, because the Keychain slot is one shared write target. Logs nothing.
+ * One object and one lock per process, because the two slots are one shared write target. Logs nothing.
  */
 private object KeychainStore : SecureStore {
     /**
-     * Taken by every call, so a Replace's add and deletes never interleave with another call. A read takes it for its Keychain
+     * Taken by every call, so a write's add and delete never interleave with another call. A read takes it for its Keychain
      * calls only, never while its owner check's card is up, so the card never blocks a probe or a flush on the main thread.
      */
     private val lock = NSLock()
@@ -141,9 +148,9 @@ private object KeychainStore : SecureStore {
     private val markerFile =
         (NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, true).first() as String) + "/mebit/wallet-marker"
 
-    override fun probe(): StoreProbe = locked {
-        val (status, accounts) = list()
-        probeOutcome(status, accounts, passcodeSet())
+    override fun probe(): StoreProbe {
+        val unlocked = protectedDataAvailable()
+        return locked { silentProbe(unlocked) }
     }
 
     override suspend fun read(reason: String): ReadResult {
@@ -154,7 +161,7 @@ private object KeychainStore : SecureStore {
         }
         return coroutineScope {
             // The Keychain call blocks while the OS sheet is up, so it runs off the caller's thread.
-            val reading = async(Dispatchers.Default) { locked { readNewest(context) } }
+            val reading = async(Dispatchers.Default) { locked { readSlots(context) } }
             try {
                 reading.await()
             } catch (e: CancellationException) {
@@ -164,15 +171,12 @@ private object KeychainStore : SecureStore {
         }
     }
 
-    override fun write(bytes: ByteArray, mode: WriteMode): WriteResult = locked {
-        val (listed, accounts) = list()
-        // Without the list the newest generation is unknown, and a Replace could add one below it.
-        if (listed != errSecSuccess && listed != errSecItemNotFound) return@locked writeOutcome(listed, mode, passcodeSet())
-        val generation = generationToAdd(accounts, mode) ?: return@locked WriteResult.AlreadyExists
-        // Add, then delete, and never SecItemUpdate, which may prompt for an item with this access control.
-        val added = add(ACCOUNT_PREFIX + generation, bytes)
-        if (added == errSecSuccess) accountsToDelete(accounts, generation).forEach { delete(it) }
-        writeOutcome(added, mode, passcodeSet())
+    override fun write(bytes: ByteArray, mode: WriteMode): WriteResult {
+        val unlocked = mode == WriteMode.Create && protectedDataAvailable() // before the lock, see protectedDataAvailable
+        return locked {
+            if (mode == WriteMode.Create) createRefusal(silentProbe(unlocked))?.let { return@locked it }
+            writeOutcome(addToFreeSlot(bytes, mode), mode, passcodeSet())
+        }
     }
 
     override fun erase(): EraseResult = locked { eraseOutcome(delete(null)) }
@@ -202,17 +206,18 @@ private object KeychainStore : SecureStore {
         }
     }
 
-    /** The newest generation's bytes, read with [context], which carries the sheet's reason. Blocks while the sheet is up. */
-    private fun readNewest(context: LAContext): ReadResult = memScoped {
-        val (listed, accounts) = list()
-        val newest = newestGeneration(accounts) ?: return@memScoped readOutcome(listed, null)
-        val out = alloc<CFTypeRefVar>()
-        val status = SecItemCopyMatching(
-            query(ACCOUNT_PREFIX + newest, kSecReturnData to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne, kSecUseAuthenticationContext to owned(CFBridgingRetain(context))),
-            out.ptr,
-        )
-        val data = owned(out.value)?.reinterpret<__CFData>()
-        readOutcome(status, data?.let { CFDataGetBytePtr(it)?.readBytes(CFDataGetLength(it).toInt()) ?: ByteArray(0) })
+    /**
+     * The wallet's bytes, read from each slot by name with [context], which carries the sheet's reason, so nothing is listed.
+     * Blocks while a sheet is up. Every copy it does not return is zeroed.
+     */
+    private fun readSlots(context: LAContext): ReadResult {
+        val reads = Slot.entries.associateWith { readData(it, context) }
+        val result = slotsOutcome(reads) {
+            // Two copies mean a write's delete did not happen, so the older copy is deleted here, best effort.
+            pickNewest(Slot.entries.associateWith { creationDate(it, context) }).also { delete(it.other.account) }
+        }
+        reads.values.forEach { if (it !== result) (it as? ReadResult.Bytes)?.bytes?.fill(0) }
+        return result
     }
 }
 
@@ -220,7 +225,10 @@ private object KeychainStore : SecureStore {
 @Composable
 internal actual fun rememberSecureStore(): SecureStore = KeychainStore
 
-/** The status of a listing of every item under the service, and their accounts. Never prompts. */
+/**
+ * The status of a listing of every item under the service, and their accounts. Never prompts. A simulator lists the wallet's
+ * item; an iPhone answers errSecInteractionNotAllowed and lists nothing while the item is there (2 Nov 2026).
+ */
 private fun list(): Pair<Int, List<String>> = memScoped {
     val out = alloc<CFTypeRefVar>()
     val silent = LAContext().apply { interactionNotAllowed = true }
@@ -232,9 +240,62 @@ private fun list(): Pair<Int, List<String>> = memScoped {
     status to List(CFArrayGetCount(items).toInt()) { accountOf(CFArrayGetValueAtIndex(items, it.toLong())) }
 }
 
-/** An item's account, or "" when it has none, so it still counts as an item but never as a generation. */
+/** An item's account, or "" when it has none, so it still counts as an item. */
 private fun accountOf(item: COpaquePointer?): String =
     CFDictionaryGetValue(item?.reinterpret<__CFDictionary>(), kSecAttrAccount)?.let { CFBridgingRelease(CFRetain(it)) as? String } ?: ""
+
+/** What the silent [list] says the store holds. [unlocked] comes from [protectedDataAvailable]. Never prompts. */
+private fun silentProbe(unlocked: Boolean): StoreProbe {
+    val (status, accounts) = list()
+    return probeOutcome(status, accounts, passcodeSet(), unlocked)
+}
+
+/**
+ * Whether the phone is unlocked, so that a refused [list] means an item that needs its owner rather than a locked Keychain.
+ * UIKit wants the main thread, so a call from another thread waits for it. Read it before taking the store's lock, because
+ * the main thread may itself be waiting for that lock.
+ */
+private fun protectedDataAvailable(): Boolean {
+    if (NSThread.isMainThread) return UIApplication.sharedApplication.protectedDataAvailable
+    var available = false
+    dispatch_sync(dispatch_get_main_queue()) { available = UIApplication.sharedApplication.protectedDataAvailable }
+    return available
+}
+
+/** A data-only read of [slot] with [context]: the query an iPhone answered with no second sheet once the context had passed. */
+private fun readData(slot: Slot, context: LAContext): ReadResult = memScoped {
+    val out = alloc<CFTypeRefVar>()
+    val status = SecItemCopyMatching(
+        query(slot.account, kSecReturnData to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne, kSecUseAuthenticationContext to owned(CFBridgingRetain(context))),
+        out.ptr,
+    )
+    val data = owned(out.value)?.reinterpret<__CFData>()
+    readOutcome(status, data?.let { CFDataGetBytePtr(it)?.readBytes(CFDataGetLength(it).toInt()) ?: ByteArray(0) })
+}
+
+/** When [slot]'s item was added, in seconds from 1 Jan 2001, by an attributes-only read with [context], or null if unreadable. */
+private fun creationDate(slot: Slot, context: LAContext): Double? = memScoped {
+    val out = alloc<CFTypeRefVar>()
+    SecItemCopyMatching(
+        query(slot.account, kSecReturnAttributes to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne, kSecUseAuthenticationContext to owned(CFBridgingRetain(context))),
+        out.ptr,
+    )
+    val item = owned(out.value)?.reinterpret<__CFDictionary>() ?: return@memScoped null
+    CFDictionaryGetValue(item, kSecAttrCreationDate)?.let { (CFBridgingRelease(CFRetain(it)) as? NSDate)?.timeIntervalSinceReferenceDate }
+}
+
+/**
+ * Adds [bytes] to the slot [slotToAdd] names, moving on while an add answers duplicate, and returns the last add's status.
+ * After a Replace's add it deletes the other slot, which held the copy this one replaces, best effort. Never SecItemUpdate,
+ * which may prompt for an item with this access control.
+ */
+private tailrec fun addToFreeSlot(bytes: ByteArray, mode: WriteMode, taken: Set<Slot> = emptySet()): Int {
+    val slot = slotToAdd(mode, taken) ?: return errSecDuplicateItem
+    val added = add(slot.account, bytes)
+    if (added == errSecDuplicateItem) return addToFreeSlot(bytes, mode, taken + slot)
+    if (added == errSecSuccess && mode == WriteMode.Replace) delete(slot.other.account)
+    return added
+}
 
 /** Adds [bytes] as [account] under the access control, without copying them: the caller zeroes its array afterwards. */
 private fun add(account: String, bytes: ByteArray): Int {
@@ -295,11 +356,16 @@ private fun MemScope.cfString(text: String): CFStringRef? = owned(CFStringCreate
 /** Releases [ref] when this scope ends, so every CF object a call creates is freed on every path. */
 private fun <T : CPointer<*>> MemScope.owned(ref: T?): T? = ref?.also { defer { CFRelease(it) } }
 
-/** What the probe makes of its listing. Any item is Present; with none, a phone without a passcode cannot hold one. */
-internal fun probeOutcome(status: Int, accounts: List<String>, passcodeSet: Boolean): StoreProbe = when {
+/**
+ * What the probe makes of its silent listing. Any item listed is Present, as on a simulator. A refused listing with none is an
+ * item that needs its owner while the phone is unlocked, which is how an iPhone answers for this access control, and TryLater
+ * while it is locked, which answers the same. With nothing found, a phone without a passcode cannot hold a wallet.
+ */
+internal fun probeOutcome(status: Int, accounts: List<String>, passcodeSet: Boolean, protectedDataAvailable: Boolean): StoreProbe = when {
     accounts.isNotEmpty() -> StoreProbe.Present
     status == errSecSuccess || status == errSecItemNotFound -> if (passcodeSet) StoreProbe.Empty else StoreProbe.Unavailable(Why.NoScreenLock)
-    status == errSecInteractionNotAllowed || status == errSecNotAvailable -> StoreProbe.Unavailable(Why.TryLater)
+    status == errSecInteractionNotAllowed -> if (protectedDataAvailable) StoreProbe.Present else StoreProbe.Unavailable(Why.TryLater)
+    status == errSecNotAvailable -> StoreProbe.Unavailable(Why.TryLater)
     else -> StoreProbe.Unavailable(Why.Other)
 }
 
@@ -335,26 +401,62 @@ internal fun writeOutcome(status: Int, mode: WriteMode, passcodeSet: Boolean): W
 internal fun eraseOutcome(status: Int): EraseResult =
     if (status == errSecSuccess || status == errSecItemNotFound) EraseResult.Erased else EraseResult.Failed(Why.Other)
 
-/** The newest wallet generation among [accounts], or null when none is one. */
-internal fun newestGeneration(accounts: List<String>): Int? = accounts.mapNotNull(::generationOf).maxOrNull()
+/**
+ * The two accounts under [SERVICE] that can hold the wallet. A Replace adds to the free one and then deletes the other, so two
+ * copies exist only when that delete did not happen (a crash between the calls, or a failed delete), and no call needs a
+ * listing to find the wallet.
+ */
+internal enum class Slot(val account: String) {
+    A("wallet.a"),
+    B("wallet.b"),
+    ;
 
-/** The generation a write adds, or null when a Create meets a wallet that is already there. */
-internal fun generationToAdd(accounts: List<String>, mode: WriteMode): Int? =
-    if (mode == WriteMode.Create && accounts.any { it.startsWith(ACCOUNT_PREFIX) }) null else (newestGeneration(accounts) ?: 0) + 1
+    /** The slot a write empties after adding to this one. */
+    val other: Slot get() = if (this == A) B else A
+}
 
-/** What a write deletes after adding generation [added]: every older generation, and nothing else. */
-internal fun accountsToDelete(accounts: List<String>, added: Int): List<String> =
-    accounts.filter { account -> generationOf(account)?.let { it < added } ?: false }
+/**
+ * What stops a Create before its add, from the silent probe of the store: nothing when it is empty, AlreadyExists for a wallet
+ * it lists or only senses, else the probe's reason.
+ */
+internal fun createRefusal(probe: StoreProbe): WriteResult? = when (probe) {
+    StoreProbe.Empty -> null
+    StoreProbe.Present, StoreProbe.KeyGone -> WriteResult.AlreadyExists
+    is StoreProbe.Unavailable -> WriteResult.Unavailable(probe.why)
+}
+
+/**
+ * The slot a write adds to, given the slots whose add answered duplicate: a Create only to an empty store, a Replace to the
+ * first slot not taken. Null when there is none.
+ */
+internal fun slotToAdd(mode: WriteMode, taken: Set<Slot>): Slot? =
+    if (mode == WriteMode.Create && taken.isNotEmpty()) null else Slot.entries.firstOrNull { it !in taken }
+
+/**
+ * What a read of both slots answers. One slot with bytes holds the wallet. Two (a write's add whose delete did not happen) go
+ * to [newest], which reads the creation dates, so that read happens on this rare path only. With none it is NotFound when
+ * both slots found nothing, else the first slot's other answer, so a refusal is never taken for a missing wallet.
+ */
+internal fun slotsOutcome(reads: Map<Slot, ReadResult>, newest: () -> Slot): ReadResult {
+    val inOrder = Slot.entries.mapNotNull { reads[it] }
+    val copies = inOrder.filterIsInstance<ReadResult.Bytes>()
+    return when (copies.size) {
+        0 -> inOrder.firstOrNull { it != ReadResult.NotFound } ?: ReadResult.NotFound
+        1 -> copies.single()
+        else -> reads.getValue(newest())
+    }
+}
+
+/**
+ * The slot whose copy was added last, from each slot's creation date in seconds. A date that could not be read loses to any
+ * that could, and a tie goes to A, so two copies always settle to one. Both copies are the same wallet and differ at most in
+ * its flags and its payment of unknown outcome, so a wrong pick (a clock moved back between the two adds) loses only those.
+ */
+internal fun pickNewest(dates: Map<Slot, Double?>): Slot =
+    Slot.entries.filter { it in dates }.maxBy { dates[it] ?: Double.NEGATIVE_INFINITY }
 
 /** What the marker file's [content] says. Anything but the two words, or a file that could not be read (null), is doubt. */
 internal fun markerOf(content: String?): Marker = MARKER_CONTENT.entries.firstOrNull { it.value == content }?.key ?: Marker.Unreadable
 
 /** What [marker] is written as, or null for a marker the file never holds. */
 internal fun markerContent(marker: Marker): String? = MARKER_CONTENT[marker]
-
-/** The generation in a canonical `wallet.<n>` account (n from 1, no sign, no leading zero), or null for any other account. */
-private fun generationOf(account: String): Int? {
-    if (!account.startsWith(ACCOUNT_PREFIX)) return null
-    val digits = account.substring(ACCOUNT_PREFIX.length)
-    return digits.toIntOrNull()?.takeIf { it > 0 && it.toString() == digits }
-}
