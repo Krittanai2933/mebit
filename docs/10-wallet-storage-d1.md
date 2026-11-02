@@ -14,7 +14,7 @@ Five parts of the app had to meet for that to work, and none of them touched eac
 - a start decision made before any session exists, because the nav host's back stack was seeded from the constant `MovieRoute.start`
 - a way to start locked, while `AppLockState` and its test pin an in-session lock that starts unlocked
 - a load path that sets the three flags from the record, not from how the key was made
-- an Android owner check, which does not exist yet
+- an Android owner check, which step 7 added as `rememberBiometrics()` over the store's prompt
 
 One more fact decided the layering. `SingleSigHome` binds even with an empty session and then shows the 1,250,000 sat demo fixture. So nothing that reads the session may exist before the wallet is open.
 
@@ -153,6 +153,7 @@ Only these rows destroy data. Row 17 erases the orphan of a deleted install, by 
 - The second iPhone session (3 Nov 2026, the same iPhone 15, a signed debug build of `7477818` with a throwaway status-logging patch that changes no logic) ran the step 3c store end to end, and every step passed. At the first launch after a delete and a reinstall the probe read its refused list (-25308) as a wallet, `SecItemDelete` of the old item answered 0 in 4 ms with no sheet, and Welcome showed the one-time notice. Create added `wallet.a` silently. Enable cost one Face ID scan. The read of `wallet.a` returned its 173 bytes, the read of the empty `wallet.b` answered not found in 4 ms with no prompt, and the Replace added to `wallet.b` after `wallet.a` answered duplicate, then deleted `wallet.a` silently. After a kill and a relaunch the probe said Present, one scan unlocked the wallet from `wallet.b`, and the fingerprint matched the one shown at creation. After 70 seconds away the unlock screen appeared, so the lock flag written by that Replace survived. A missed face and Cancel left the unlock screen with its button and no error line, and a Forget with one owner scan erased the item with status 0 and opened Welcome. `.audit/d1-secure-storage/phone/` holds both logs and the evidence notes.
 
 - Step 6, the Android Keystore store, has 26 host tests (`KeystoreMappingTest`). The first 24 tests all failed against stubs. Two more were added when a mutation survived or would have. Twenty-six one-rule mutations were all caught (`.audit/d1-secure-storage/android/mutate.py` reruns them). On the `Medium_Phone_API_36.0` emulator (API 36, PIN 1234, a software Keystore), the real UI ran as follows on 3 Nov 2026. Key Created showed the delete warning and no notice, and the wallet file held 459 bytes. App Lock Enable read the copy back through one PIN prompt. After a force-stop and a relaunch, the unlock screen showed the prompt, and the PIN opened first-run Home with the same fingerprint. The system logged one auth session with `IsCrypto: true`. Cancel left the unlock button and no second prompt. A rotation while the prompt was up kept one session. With the PIN removed the next launch showed the recovery screen, and Forget erased the file without a prompt. With no screen lock a new key showed the NoScreenLock notice. An uninstall and a reinstall opened Welcome.
+- Step 7, Android `Biometrics`, made `platformBiometrics()` the composable `rememberBiometrics()` and backs the Android actual with the store's `askOwner` sheet without a crypto object (a strong biometric or the screen lock). `androidBiometricOutcome` maps the sheet's answer through the store's `androidPromptOutcome`, and it has 5 host tests (`AndroidBiometricsTest`). Three failed against a stub that kept the old answer, and the two that passed check the Unavailable rules the stub already met. Five one-rule mutations were all caught. On the same emulator on 3 Nov 2026, Enable took one PIN prompt (`IsCrypto: true`). After 65 seconds away the same process showed the unlock screen with the prompt up, and the PIN opened Home: the case step 6 left stuck. Cancel (error 10) left the unlock button with no error line and no second prompt. The sign check showed the prompt over Review. Cancel gave the refusal banner with nothing signed, and the PIN let signing go on (a throwaway probe supplied the balance).
 
 The Kotlin/Native test executable gets `errSecMissingEntitlement` for every Keychain call, so no unit test touches the real Keychain. Those proofs are the simulator runs and the two iPhone sessions.
 
@@ -170,7 +171,7 @@ The iPhone sessions of 2 and 3 Nov 2026 settled most of this list. A read shows 
 
 Android has step 6, built and proven on an emulator only. It still owes:
 
-- step 7 (`Biometrics`) before step 6 ships. Today App Lock Enable on a saved wallet reads the copy back through the store and turns the lock on. After 60 seconds away the in-session lock then asks the stub `Biometrics`, which answers unavailable to both buttons, so the only way back is to kill the app. This was seen on the emulator.
+- step 7 (`Biometrics`) on hardware. It is done and proven on the emulator only. A fingerprint, a real lockout (codes 7 and 9, which the emulator never sent with the PIN allowed), API 30 to 32 and MIUI's sheet are unrun.
 - the POCO X3 NFC round with a person (Android 11, MIUI, a TEE and no StrongBox): the key's security level and generation time, whether the `CryptoObject` prompt with the screen lock works on API 30, a fingerprint read, Cancel, a lockout, and whether removing the PIN also deletes the key there
 - API 30 to 32, where the Keystore error code 10 cannot be read, so a wrapped key that is not this one reads as try again, not as damage
 - StrongBox generation and its time, on a phone that has one, such as the Galaxy S25 FE
@@ -195,6 +196,6 @@ Android has step 6, built and proven on an emulator only. It still owes:
 ## Next steps
 
 1. Add the compare-and-swap `Replace` before any real money.
-2. Build Android `Biometrics` (step 7), then run the POCO X3 NFC round before step 6 ships.
+2. Run the POCO X3 NFC round, which now covers steps 6 and 7, before step 6 ships.
 3. Optionally hide the screen under the in-session lock from accessibility (step 8).
 4. Have the security review read D1, including the Android envelope, before the testnet-only limit is lifted.
