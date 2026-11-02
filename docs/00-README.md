@@ -15,6 +15,7 @@
 6. `06-mobile-app-design-mebit.md` — สเปคแอปมือถือ "mebit" ที่สกัดจากไฟล์ design ที่อัปโหลด (12 หน้าจอ, brand, LTV thresholds) — ตอนนี้ต้องอ่านคู่กับ app flow v3 ใน `07`
 7. `08-multisig-wallet-spec.md` — สเปคเชิงเทคนิคของ multisig wallet: key-first data model, script types, miniscript policy (timelock fallback, decaying multisig), hardware wallet support (Jade + Trezor Safe 7, QR+BLE เท่านั้น), roadmap MVP → phase 2
 8. `09-wallet-mvp-buildplan.md` — **แผนเริ่ม build จริง**: Tauri desktop (พิสูจน์ engine) → React Native + UniFFI (production mobile), ลำดับ phase 0-3
+9. `10-wallet-storage-d1.md` (ภาษาอังกฤษ) สรุปการออกแบบ D1 การเก็บกระเป๋าซอฟต์แวร์ไว้ในเครื่องนี้เท่านั้น การปลดล็อกตอนเปิดแอป สิ่งที่ป้องกันและไม่ป้องกัน สิ่งที่พิสูจน์แล้ว และสิ่งที่ยังค้าง
 
 ## สถานะเอกสาร
 
