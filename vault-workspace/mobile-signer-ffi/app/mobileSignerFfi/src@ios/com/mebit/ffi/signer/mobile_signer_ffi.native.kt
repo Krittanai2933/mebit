@@ -3244,6 +3244,7 @@ public object FfiConverterTypeMobileSignerError : FfiConverterRustBuffer<MobileS
             6 -> MobileSignerException.VaultCore(FfiConverterString.read(buf))
             7 -> MobileSignerException.InvalidMnemonic(FfiConverterString.read(buf))
             8 -> MobileSignerException.Network(FfiConverterString.read(buf))
+            9 -> MobileSignerException.BroadcastUnknown(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
@@ -3284,6 +3285,10 @@ public object FfiConverterTypeMobileSignerError : FfiConverterRustBuffer<MobileS
             }
             is MobileSignerException.Network -> {
                 buf.putInt(8)
+                Unit
+            }
+            is MobileSignerException.BroadcastUnknown -> {
+                buf.putInt(9)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -3671,6 +3676,12 @@ public actual fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `pas
 
 /**
  * Build, sign (BIP-84 index 0 key), and broadcast a payment. Fee is absolute sats.
+ *
+ * The txid it returns is computed from the signed transaction, never read from the server. When the
+ * explorer's answer to the broadcast leaves it unclear whether the payment went out, it looks that
+ * txid up a few times and fails with `BroadcastUnknown` if it is still not found. The payment may be
+ * out then, so the app must not offer it as a failure to retry. A silent explorer can hold this call
+ * for about two minutes, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
 public actual fun `hotSend`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeSats`: kotlin.ULong): HotSendResult {

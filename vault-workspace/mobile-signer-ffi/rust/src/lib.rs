@@ -75,6 +75,15 @@ pub enum MobileSignerError {
     /// reads variants by position, so any new one goes below this.
     #[error("network error: {0}")]
     Network(String),
+
+    /// `hot_send` broadcast a payment but cannot tell whether the explorer took it: the answer was
+    /// lost or unclear, and the transaction was still not found after the last lookup. The text
+    /// carries the txid. The payment may be out, so repeating it may pay twice. Kotlin reads
+    /// variants by position, so any new one goes below this.
+    #[error(
+        "it is not known whether transaction {0} was sent, so do not repeat the payment until the wallet and this transaction id have been checked"
+    )]
+    BroadcastUnknown(String),
 }
 
 impl From<VaultCoreError> for MobileSignerError {

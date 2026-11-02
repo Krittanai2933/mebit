@@ -5,6 +5,8 @@
 //! persistence and coin selection land when Android binary size is measured.
 
 use std::str::FromStr;
+use std::sync::LazyLock;
+use std::time::Duration;
 
 use bip39::Mnemonic;
 use bitcoin::absolute::LockTime;
@@ -22,6 +24,34 @@ use crate::{KeyNetwork, MobileSignerError};
 
 const ESPLORA_TESTNET4: &str = "https://mempool.space/testnet4/api";
 const ACCOUNT_PATH: &str = "m/84'/1'/0'";
+
+// Esplora connects in well under a second. Past 10 s on a weak phone network the host is not answering.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+// Per read and per write. ureq 2 has neither by default, so a server that went silent held the call for good.
+const IO_TIMEOUT: Duration = Duration::from_secs(20);
+
+static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
+    ureq::AgentBuilder::new()
+        .timeout_connect(CONNECT_TIMEOUT)
+        .timeout_read(IO_TIMEOUT)
+        .timeout_write(IO_TIMEOUT)
+        .build()
+});
+
+// After an unclear broadcast: about 6 s of asking, for the explorer to index what its node took.
+const LOOKUPS: u32 = 4;
+const LOOKUP_PAUSE: Duration = Duration::from_secs(2);
+
+// What a node says about a transaction it already holds, so the payment is out. "outputs already in
+// utxo set" is what blockstream.info testnet said on 2026-11-02; older Bitcoin Core says "already in
+// block chain".
+const ALREADY_HELD: [&str; 5] = [
+    "txn-already-in-mempool",
+    "txn-already-known",
+    "already in block chain",
+    "already in utxo set",
+    "already in the utxo set",
+];
 
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct HotWalletSnapshot {
@@ -75,18 +105,10 @@ fn receive_privkey(
 }
 
 fn http_get(url: &str) -> Result<String, MobileSignerError> {
-    ureq::get(url)
+    AGENT
+        .get(url)
         .call()
         .map_err(|e| MobileSignerError::InvalidPsbtJson(format!("esplora get: {e}")))?
-        .into_string()
-        .map_err(|e| MobileSignerError::InvalidPsbtJson(format!("esplora body: {e}")))
-}
-
-fn http_post(url: &str, body: &str) -> Result<String, MobileSignerError> {
-    ureq::post(url)
-        .set("Content-Type", "text/plain")
-        .send_string(body)
-        .map_err(|e| MobileSignerError::InvalidPsbtJson(format!("esplora post: {e}")))?
         .into_string()
         .map_err(|e| MobileSignerError::InvalidPsbtJson(format!("esplora body: {e}")))
 }
@@ -273,6 +295,12 @@ pub fn is_valid_address(address: String, network: KeyNetwork) -> bool {
 }
 
 /// Build, sign (BIP-84 index 0 key), and broadcast a payment. Fee is absolute sats.
+///
+/// The txid it returns is computed from the signed transaction, never read from the server. When the
+/// explorer's answer to the broadcast leaves it unclear whether the payment went out, it looks that
+/// txid up a few times and fails with `BroadcastUnknown` if it is still not found. The payment may be
+/// out then, so the app must not offer it as a failure to retry. A silent explorer can hold this call
+/// for about two minutes, so call it off the main thread.
 #[uniffi::export]
 pub fn hot_send(
     mnemonic_words: Vec<String>,
@@ -361,10 +389,75 @@ pub fn hot_send(
     }
     let signed = cache.into_transaction();
     let hex = serialize_hex(&signed);
-    let txid = http_post(&format!("{base}/tx"), &hex)?;
-    Ok(HotSendResult {
-        txid: txid.trim().to_string(),
-    })
+    let txid = signed.compute_txid().to_string();
+    let post = |hex: &str| {
+        AGENT
+            .post(&format!("{base}/tx"))
+            .set("Content-Type", "text/plain")
+            .send_string(hex)
+    };
+    // Not /tx/{txid}/status: Esplora answers that one 200 for a txid it never saw (blockstream.info, 2026-11-02).
+    let lookup = |txid: &str| AGENT.get(&format!("{base}/tx/{txid}")).call();
+    let pause = || std::thread::sleep(LOOKUP_PAUSE);
+    let txid = broadcast_signed(&post, &lookup, &pause, &hex, &txid)?;
+    Ok(HotSendResult { txid })
+}
+
+type Answer = Result<ureq::Response, ureq::Error>;
+
+/// Posts the signed transaction once and returns `txid`, the id computed from it here, when the
+/// explorer shows it took it. A txid the server sends back is never trusted.
+///
+/// A 200 naming `txid`, or a 4xx whose reason says the node already holds it, means the payment is
+/// out. Any other 4xx is a refusal, and a retry after a refusal is safe. Anything else (no answer, a
+/// 5xx, a 200 naming something else, a body that cannot be read) leaves it unclear: it looks `txid`
+/// up to `LOOKUPS` times with `pause` between asks and never posts again. Still not found is
+/// `BroadcastUnknown`, because a retry could pay twice.
+fn broadcast_signed(
+    post: &dyn Fn(&str) -> Answer,
+    lookup: &dyn Fn(&str) -> Answer,
+    pause: &dyn Fn(),
+    hex: &str,
+    txid: &str,
+) -> Result<String, MobileSignerError> {
+    match post(hex) {
+        Ok(answer) if answer.status() == 200 => {
+            if answer.into_string().is_ok_and(|body| body.trim() == txid) {
+                return Ok(txid.to_string());
+            }
+        }
+        Err(refusal @ ureq::Error::Status(400..=499, _)) => {
+            let error = format!("esplora post: {refusal}");
+            // A reason that cannot be read may be the node saying it already holds the transaction.
+            if let Some(Ok(reason)) = refusal.into_response().map(ureq::Response::into_string) {
+                let reason = reason.to_lowercase();
+                if ALREADY_HELD.iter().any(|held| reason.contains(held)) {
+                    return Ok(txid.to_string());
+                }
+                return Err(MobileSignerError::InvalidPsbtJson(error));
+            }
+        }
+        _ => {}
+    }
+    for ask in 0..LOOKUPS {
+        if ask > 0 {
+            pause();
+        }
+        if lookup(txid).is_ok_and(|answer| shows(answer, txid)) {
+            return Ok(txid.to_string());
+        }
+    }
+    Err(MobileSignerError::BroadcastUnknown(txid.to_string()))
+}
+
+// Only the transaction itself counts as found: a Wi-Fi sign-in page answers 200 to any URL.
+fn shows(answer: ureq::Response, txid: &str) -> bool {
+    answer.status() == 200
+        && answer
+            .into_string()
+            .ok()
+            .and_then(|body| serde_json::from_str::<Value>(&body).ok())
+            .is_some_and(|tx| tx["txid"] == txid)
 }
 
 struct Utxo {
@@ -402,6 +495,9 @@ fn parse_utxos(json: &str) -> Result<Vec<Utxo>, MobileSignerError> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
+    use std::collections::VecDeque;
+
     use super::*;
 
     fn abandon_about() -> Vec<String> {
@@ -909,6 +1005,252 @@ mod tests {
         ] {
             let body = one_tx(vin, &wallet_outputs(&["5000"]), MEMPOOL);
             assert_eq!(history(&body), [hot(&id('9'), 5_000, 0, None)], "{vin}");
+        }
+    }
+
+    // The txid computed from the signed transaction and its hex. The core parses neither.
+    const TXID: &str = "3e4a1db3652a715a6bb202bcaec79818edae3dff4db24a9c928af5279f2b8f20";
+    const SIGNED_HEX: &str = "02000000000101";
+    // Recorded from blockstream.info testnet on 2026-11-02, posting a confirmed transaction again.
+    const NODE_HOLDS_IT: &str =
+        "sendrawtransaction RPC error -27: Transaction outputs already in utxo set";
+    // The same format with the reason for coins already spent. Not recorded.
+    const NODE_REFUSES: &str = "sendrawtransaction RPC error -25: bad-txns-inputs-missingorspent";
+
+    // An answer as ureq hands it over: a status of 400 or more arrives as an error.
+    fn answer(status: u16, body: &str) -> Answer {
+        let response = ureq::Response::new(status, "-", body).unwrap();
+        if status >= 400 { Err(response.into()) } else { Ok(response) }
+    }
+
+    // What ureq returns when a read times out: a transport error with no status.
+    fn no_answer() -> Answer {
+        Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out").into())
+    }
+
+    // A body announced as 100 bytes that stops after 5, so reading it fails.
+    fn cut_short(status: u16) -> Answer {
+        let response: ureq::Response =
+            format!("HTTP/1.1 {status} -\r\nContent-Length: 100\r\n\r\nshort").parse().unwrap();
+        if status >= 400 { Err(response.into()) } else { Ok(response) }
+    }
+
+    // What /tx/{txid} answers for a transaction the explorer holds, cut to the field that is read.
+    fn found() -> Answer {
+        answer(200, &format!(r#"{{"txid":"{TXID}","status":{{"confirmed":false}}}}"#))
+    }
+
+    // What /tx/{txid} answers for a txid it never saw (blockstream.info testnet, 2026-11-02).
+    fn not_found() -> Answer {
+        answer(404, "Transaction not found")
+    }
+
+    struct Broadcast {
+        result: Result<String, MobileSignerError>,
+        posts: usize,
+        asks: usize,
+        pauses: usize,
+    }
+
+    // The first POST gets `post` and any later one no answer. The lookups get `lookups` in order,
+    // then not found.
+    fn broadcast(post: Answer, lookups: Vec<Answer>) -> Broadcast {
+        let post = RefCell::new(Some(post));
+        let lookups = RefCell::new(VecDeque::from(lookups));
+        let (posts, asks, pauses) = (Cell::new(0), Cell::new(0), Cell::new(0));
+        let result = broadcast_signed(
+            &|hex| {
+                assert_eq!(hex, SIGNED_HEX);
+                posts.set(posts.get() + 1);
+                post.borrow_mut().take().unwrap_or_else(no_answer)
+            },
+            &|txid| {
+                assert_eq!(txid, TXID);
+                asks.set(asks.get() + 1);
+                lookups.borrow_mut().pop_front().unwrap_or_else(not_found)
+            },
+            &|| pauses.set(pauses.get() + 1),
+            SIGNED_HEX,
+            TXID,
+        );
+        Broadcast {
+            result,
+            posts: posts.get(),
+            asks: asks.get(),
+            pauses: pauses.get(),
+        }
+    }
+
+    #[track_caller]
+    fn assert_sent(run: &Broadcast, case: &str) {
+        match &run.result {
+            Ok(txid) => assert_eq!(txid, TXID, "{case}: the txid must be the one computed here"),
+            Err(e) => panic!("{case}: expected the payment to count as sent, got {e:?}"),
+        }
+    }
+
+    #[track_caller]
+    fn assert_unknown(run: &Broadcast, case: &str) {
+        match &run.result {
+            Err(MobileSignerError::BroadcastUnknown(txid)) => assert_eq!(txid, TXID, "{case}"),
+            other => panic!("{case}: expected BroadcastUnknown, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_200_naming_the_txid_is_sent_after_one_post_and_no_lookup() {
+        for body in [TXID.to_string(), format!("{TXID}\n")] {
+            let run = broadcast(answer(200, &body), vec![]);
+            assert_sent(&run, &body);
+            assert_eq!((run.posts, run.asks, run.pauses), (1, 0, 0), "{body:?}");
+        }
+    }
+
+    // A 200 says the node took something. Only the lookup can say it was this transaction.
+    #[test]
+    fn a_200_naming_anything_else_is_settled_by_the_lookup() {
+        let other_txid = "1".repeat(64);
+        for body in [other_txid.as_str(), "", "<html>Sign in to Wi-Fi</html>"] {
+            let run = broadcast(answer(200, body), vec![found()]);
+            assert_sent(&run, body);
+            assert_eq!((run.posts, run.asks), (1, 1), "{body:?}");
+            let run = broadcast(answer(200, body), vec![]);
+            assert_unknown(&run, body);
+            assert_eq!((run.posts, run.asks), (1, 4), "{body:?}");
+        }
+    }
+
+    #[test]
+    fn a_refusal_fails_as_before_with_no_lookup() {
+        let refusals = [
+            (400, NODE_REFUSES),
+            (400, "sendrawtransaction RPC error -26: min relay fee not met, 110 < 141"),
+            (404, "Not Found"),
+            (429, "Too Many Requests"),
+        ];
+        for (status, body) in refusals {
+            // The text the old http_post gave for the same answer.
+            let before = format!("esplora post: {}", answer(status, body).unwrap_err());
+            let run = broadcast(answer(status, body), vec![found()]);
+            match &run.result {
+                Err(MobileSignerError::InvalidPsbtJson(text)) => assert_eq!(text, &before),
+                other => panic!("{status} {body}: expected the refusal, got {other:?}"),
+            }
+            assert_eq!((run.posts, run.asks), (1, 0), "{status} {body}");
+        }
+    }
+
+    #[test]
+    fn a_4xx_saying_the_node_holds_it_is_sent_with_no_lookup() {
+        let reasons = [
+            NODE_HOLDS_IT,
+            "sendrawtransaction RPC error -26: txn-already-in-mempool",
+            "sendrawtransaction RPC error -26: txn-already-known",
+            "sendrawtransaction RPC error -27: Transaction already in block chain",
+            "Transaction outputs already in the UTXO set",
+        ];
+        for reason in reasons {
+            let run = broadcast(answer(400, reason), vec![]);
+            assert_sent(&run, reason);
+            assert_eq!((run.posts, run.asks), (1, 0), "{reason}");
+        }
+    }
+
+    #[test]
+    fn the_holds_it_match_ignores_case() {
+        for reason in [
+            "TXN-ALREADY-IN-MEMPOOL",
+            "Txn-Already-Known",
+            "TRANSACTION OUTPUTS ALREADY IN UTXO SET",
+            "Transaction Already In Block Chain",
+        ] {
+            assert_sent(&broadcast(answer(400, reason), vec![]), reason);
+        }
+    }
+
+    #[test]
+    fn no_answer_then_a_find_is_sent_after_one_post() {
+        let run = broadcast(no_answer(), vec![found()]);
+        assert_sent(&run, "timed out, then found");
+        assert_eq!((run.posts, run.asks, run.pauses), (1, 1, 0));
+    }
+
+    #[test]
+    fn no_answer_then_two_misses_then_a_find_pauses_twice() {
+        let run = broadcast(no_answer(), vec![not_found(), not_found(), found()]);
+        assert_sent(&run, "timed out, then found on the third ask");
+        assert_eq!((run.posts, run.asks, run.pauses), (1, 3, 2));
+    }
+
+    #[test]
+    fn no_answer_then_four_misses_is_unknown_never_a_plain_failure() {
+        let misses = vec![not_found(), not_found(), not_found(), not_found()];
+        let run = broadcast(no_answer(), misses);
+        assert_unknown(&run, "timed out, then four misses");
+        assert_eq!((run.posts, run.asks, run.pauses), (1, 4, 3));
+    }
+
+    #[test]
+    fn lookups_that_get_no_answer_also_end_unknown() {
+        let silent = vec![no_answer(), no_answer(), no_answer(), no_answer()];
+        let run = broadcast(no_answer(), silent);
+        assert_unknown(&run, "timed out, then every lookup timed out");
+        assert_eq!((run.posts, run.asks, run.pauses), (1, 4, 3));
+    }
+
+    #[test]
+    fn a_5xx_is_unclear_like_no_answer() {
+        for status in [500, 502, 503, 504] {
+            let run = broadcast(answer(status, "Bad Gateway"), vec![found()]);
+            assert_sent(&run, &format!("{status}, then found"));
+            assert_eq!((run.posts, run.asks), (1, 1), "{status}");
+            let run = broadcast(answer(status, "Bad Gateway"), vec![]);
+            assert_unknown(&run, &format!("{status}, then never found"));
+            assert_eq!((run.posts, run.asks), (1, 4), "{status}");
+        }
+    }
+
+    // Esplora's /tx/{txid}/status answers {"confirmed":false} with 200 for a txid it never saw
+    // (blockstream.info testnet, 2026-11-02), and a Wi-Fi sign-in page answers 200 to any URL.
+    #[test]
+    fn a_lookup_200_that_is_not_the_transaction_is_not_a_find() {
+        let other_txid = format!(r#"{{"txid":"{}"}}"#, "1".repeat(64));
+        let bodies = [r#"{"confirmed":false}"#, "<html>Sign in to Wi-Fi</html>", other_txid.as_str(), ""];
+        for body in bodies {
+            let run = broadcast(no_answer(), (0..4).map(|_| answer(200, body)).collect());
+            assert_unknown(&run, body);
+            assert_eq!(run.asks, 4, "{body}");
+        }
+    }
+
+    #[test]
+    fn a_body_that_cannot_be_read_leaves_the_payment_unclear() {
+        assert!(cut_short(200).unwrap().into_string().is_err(), "the fixture must not be readable");
+        // A 4xx reason that breaks off may have said the node holds the transaction.
+        for status in [200, 400] {
+            let run = broadcast(cut_short(status), vec![found()]);
+            assert_sent(&run, &format!("{status} cut short, then found"));
+            assert_eq!((run.posts, run.asks), (1, 1), "{status}");
+            let run = broadcast(cut_short(status), vec![]);
+            assert_unknown(&run, &format!("{status} cut short, then never found"));
+        }
+        let run = broadcast(no_answer(), (0..4).map(|_| cut_short(200)).collect());
+        assert_unknown(&run, "every lookup answer cut short");
+    }
+
+    #[test]
+    fn the_transaction_is_never_posted_twice() {
+        let first_answers: [fn() -> Answer; 7] = [
+            || answer(200, TXID),
+            || answer(200, "<html>Sign in to Wi-Fi</html>"),
+            || answer(400, NODE_REFUSES),
+            || answer(400, NODE_HOLDS_IT),
+            || cut_short(400),
+            || answer(502, "Bad Gateway"),
+            no_answer,
+        ];
+        for (i, first) in first_answers.iter().enumerate() {
+            assert_eq!(broadcast(first(), vec![]).posts, 1, "first answer {i}");
         }
     }
 }
