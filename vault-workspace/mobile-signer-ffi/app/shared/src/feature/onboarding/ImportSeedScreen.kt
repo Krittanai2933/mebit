@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -88,7 +87,6 @@ import com.mebit.app.data.suggestionWindow
 import com.mebit.app.hideWhen
 import com.mebit.app.rememberCaptureGuard
 import com.mebit.app.resources.Res
-import com.mebit.app.resources.ic_check
 import com.mebit.app.resources.ic_eye
 import com.mebit.app.resources.ic_tick_white
 import com.mebit.app.resources.ic_warning
@@ -97,7 +95,6 @@ import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbEyebrow
-import com.mebit.app.ui.theme.MbGreenWash
 import com.mebit.app.ui.theme.MbIconWash
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
@@ -161,7 +158,7 @@ fun ImportSeedScreen(
             // wanted even if the keyboard has not gone away.
             if (keyboardUp && !draft.committed) {
                 // The warning under the grid is behind the keyboard, so it shows here while words are typed.
-                SeedStatusRow(draft, pinned = true) { sheet = ImportSheet.Passphrase }
+                SeedStatusRow(draft, pinned = true)
             } else {
                 Spacer(modifier = Modifier.height(12.dp))
                 PrimaryCta("นำเข้ากุญแจ", "cta_import_seed", ::restore, enabled = draft.canImport)
@@ -177,7 +174,7 @@ fun ImportSeedScreen(
         }
         // Boards 1B.4.1 and 1B.4.2 set the warning 8dp under the card.
         Spacer(modifier = Modifier.height(8.dp))
-        if (!keyboardUp || draft.committed) SeedStatusRow(draft) { sheet = ImportSheet.Passphrase }
+        if (!keyboardUp || draft.committed) SeedStatusRow(draft)
         session.lastError?.let {
             Spacer(modifier = Modifier.height(8.dp))
             Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("error"))
@@ -296,25 +293,37 @@ private fun SeedGrid(
     }
 }
 
-/** Board 1B.1's Passphrase option in the seed card: ticked while a passphrase is set. Ticking opens the sheet, unticking clears it. */
+/** Board 1B.1's Passphrase option in the seed card. Set, it is ticked and reads "ตั้งแล้ว" with an edit link, on the same row. Ticking opens the sheet, unticking clears it. */
 @Composable
 private fun PassphraseOption(set: Boolean, onOpen: () -> Unit, onClear: () -> Unit) {
     val box = RoundedCornerShape(10.dp)
-    Row(
-        modifier = Modifier
-            .height(SEED_SLOT.dp)
-            .toggleable(value = set, role = Role.Checkbox, onValueChange = { if (it) onOpen() else onClear() })
-            .testTag("seed_passphrase"),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier.size(width = 28.dp, height = SEED_SLOT.dp).clip(box).background(if (set) MbNavy else MbPage),
-            contentAlignment = Alignment.Center,
+    Row(modifier = Modifier.fillMaxWidth().height(SEED_SLOT.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier
+                .height(SEED_SLOT.dp)
+                .toggleable(value = set, role = Role.Checkbox, onValueChange = { if (it) onOpen() else onClear() })
+                .testTag("seed_passphrase"),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (set) Image(painterResource(Res.drawable.ic_tick_white), contentDescription = null, modifier = Modifier.size(24.dp))
+            Box(
+                modifier = Modifier.size(width = 28.dp, height = SEED_SLOT.dp).clip(box).background(if (set) MbNavy else MbPage),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (set) Image(painterResource(Res.drawable.ic_tick_white), contentDescription = null, modifier = Modifier.size(24.dp))
+            }
+            Spacer(modifier = Modifier.width(5.dp))
+            Text(if (set) "Passphrase · ตั้งแล้ว" else "Passphrase", color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
         }
-        Spacer(modifier = Modifier.width(5.dp))
-        Text("Passphrase", color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
+        if (set) {
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                "แก้ไข",
+                color = MbNavy,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clickable(onClick = onOpen).padding(4.dp).testTag("seed_passphrase_edit"),
+            )
+        }
     }
 }
 
@@ -451,7 +460,7 @@ private fun SeedDropdown(window: SuggestionWindow, onPick: (String) -> Unit, mod
 }
 
 @Composable
-private fun SeedStatusRow(draft: ImportSeedDraft, pinned: Boolean = false, onEditPassphrase: () -> Unit) {
+private fun SeedStatusRow(draft: ImportSeedDraft, pinned: Boolean = false) {
     val problem = when (draft.status) {
         is SeedStatus.InvalidWord -> "ไม่อยู่ในรายการคำ BIP39 · ตรวจการสะกดแล้วลองใหม่"
         SeedStatus.InvalidChecksum -> "Checksum ไม่ถูกต้อง"
@@ -473,29 +482,6 @@ private fun SeedStatusRow(draft: ImportSeedDraft, pinned: Boolean = false, onEdi
             Image(painterResource(Res.drawable.ic_warning), contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(8.dp))
             Text(problem, color = MbEyebrow, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        }
-        draft.passphrase.isNotEmpty() && !pinned -> Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(card)
-                .background(MbWhite)
-                .border(1.dp, MbBorder, card)
-                .padding(horizontal = 12.dp, vertical = 10.dp)
-                .testTag("seed_passphrase_chip"),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.size(26.dp).clip(CircleShape).background(MbGreenWash), contentAlignment = Alignment.Center) {
-                Image(painterResource(Res.drawable.ic_check), contentDescription = null, modifier = Modifier.size(26.dp))
-            }
-            Spacer(modifier = Modifier.width(12.dp))
-            Text("Passphrase · ตั้งแล้ว", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            Text(
-                "แก้ไข",
-                color = MbNavy,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.clickable(onClick = onEditPassphrase).padding(4.dp).testTag("seed_passphrase_edit"),
-            )
         }
         else -> Unit
     }
