@@ -302,12 +302,11 @@ private const val PASSPHRASE_SET_GROWTH = 17
 /** Board 1B.1's empty Passphrase box, and board 1B.4.3's status row once set: a green check (tap clears), "ตั้งแล้ว", and an edit link. */
 @Composable
 private fun PassphraseOption(set: Boolean, onOpen: () -> Unit, onClear: () -> Unit) {
-    val box = RoundedCornerShape(10.dp)
     Row(modifier = Modifier.fillMaxWidth().height(if (set) 46.dp else SEED_SLOT.dp), verticalAlignment = Alignment.CenterVertically) {
         Row(
             modifier = Modifier
                 // The board puts the check 12dp from the card edge, the card content starts at 16dp.
-                .offset(x = if (set) (-4).dp else 0.dp)
+                .offset(x = (-4).dp)
                 .height(if (set) 46.dp else SEED_SLOT.dp)
                 .toggleable(value = set, role = Role.Checkbox, onValueChange = { if (it) onOpen() else onClear() })
                 .testTag("seed_passphrase"),
@@ -320,8 +319,9 @@ private fun PassphraseOption(set: Boolean, onOpen: () -> Unit, onClear: () -> Un
                 Spacer(modifier = Modifier.width(12.dp))
                 Text("Passphrase · ตั้งแล้ว", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             } else {
-                Box(modifier = Modifier.size(width = 28.dp, height = SEED_SLOT.dp).clip(box).background(MbPage))
-                Spacer(modifier = Modifier.width(5.dp))
+                // A circle on purpose (user decision), the same shape as the set check, so the row keeps its shape. Board 1B.1 draws a rounded square.
+                Box(modifier = Modifier.size(26.dp).background(MbPage, CircleShape))
+                Spacer(modifier = Modifier.width(12.dp))
                 Text("Passphrase", color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
             }
         }
