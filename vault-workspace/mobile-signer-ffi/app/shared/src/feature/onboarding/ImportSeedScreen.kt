@@ -189,8 +189,10 @@ fun ImportSeedScreen(
         ImportSheet.Fingerprint -> FingerprintSheet(
             session = session,
             onConfirm = {
+                session.acceptStagedKey()
                 sheet = null
-                onRestored()
+                // A save that lost a race to another wallet clears the session and says why under the grid, so there is nothing to continue with.
+                if (session.lastError == null) onRestored()
             },
             onReject = {
                 session.clear()
