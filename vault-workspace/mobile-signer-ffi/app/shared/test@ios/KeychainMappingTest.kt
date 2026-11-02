@@ -5,6 +5,17 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import platform.LocalAuthentication.LAErrorAppCancel
+import platform.LocalAuthentication.LAErrorAuthenticationFailed
+import platform.LocalAuthentication.LAErrorBiometryLockout
+import platform.LocalAuthentication.LAErrorBiometryNotAvailable
+import platform.LocalAuthentication.LAErrorBiometryNotEnrolled
+import platform.LocalAuthentication.LAErrorInvalidContext
+import platform.LocalAuthentication.LAErrorNotInteractive
+import platform.LocalAuthentication.LAErrorPasscodeNotSet
+import platform.LocalAuthentication.LAErrorSystemCancel
+import platform.LocalAuthentication.LAErrorUserCancel
+import platform.LocalAuthentication.LAErrorUserFallback
 import platform.Security.errSecAuthFailed
 import platform.Security.errSecDuplicateItem
 import platform.Security.errSecInteractionNotAllowed
@@ -16,7 +27,7 @@ import platform.Security.errSecSuccess
 import platform.Security.errSecUserCanceled
 
 /**
- * The Keychain store's decisions, fed plain statuses and account names. The test executable cannot reach the Keychain
+ * The Keychain store's decisions, fed plain statuses, owner-check error codes and account names. The test executable cannot reach the Keychain
  * (every call answers errSecMissingEntitlement, measured), so the calls themselves are proven on a simulator instead.
  */
 class KeychainMappingTest {
@@ -80,6 +91,40 @@ class KeychainMappingTest {
     fun anyOtherReadStatusIsOther() {
         listOf(errSecMissingEntitlement, errSecNotAvailable, errSecParam, errSecDuplicateItem).forEach { status ->
             assertEquals("Unavailable(Other)", name(readOutcome(status, null)), "status $status")
+        }
+    }
+
+    @Test
+    fun aPassedOwnerCheckGoesOnToTheKeychainRead() {
+        assertNull(evaluateOutcome(null))
+    }
+
+    @Test
+    fun anOwnerCheckCancelledByTheUserTheSystemOrTheAppIsCancelled() {
+        listOf(LAErrorUserCancel, LAErrorSystemCancel, LAErrorAppCancel).forEach { code ->
+            assertEquals("Cancelled", name(evaluateOutcome(code)), "code $code")
+        }
+    }
+
+    @Test
+    fun anOwnerCheckThatRejectsTheFaceOrCodeIsDenied() {
+        assertEquals("Denied", name(evaluateOutcome(LAErrorAuthenticationFailed)))
+    }
+
+    @Test
+    fun aFaceIdLockoutIsLockedOut() {
+        assertEquals("LockedOut", name(evaluateOutcome(LAErrorBiometryLockout)))
+    }
+
+    @Test
+    fun anOwnerCheckOnAPhoneWithoutAPasscodeIsNoScreenLock() {
+        assertEquals("Unavailable(NoScreenLock)", name(evaluateOutcome(LAErrorPasscodeNotSet)))
+    }
+
+    @Test
+    fun anyOtherOwnerCheckErrorIsOtherAndNeverGoesOnToTheRead() {
+        listOf(LAErrorUserFallback, LAErrorBiometryNotAvailable, LAErrorBiometryNotEnrolled, LAErrorInvalidContext, LAErrorNotInteractive, 0L).forEach { code ->
+            assertEquals("Unavailable(Other)", name(evaluateOutcome(code)), "code $code")
         }
     }
 
@@ -197,7 +242,7 @@ class KeychainMappingTest {
 }
 
 /** A result's name for an assertion. The plain result classes would otherwise print an object id instead of the reason. */
-private fun name(result: Any): String = when (result) {
+private fun name(result: Any?): String = when (result) {
     is StoreProbe.Unavailable -> "Unavailable(${result.why})"
     is ReadResult.Unavailable -> "Unavailable(${result.why})"
     is WriteResult.Unavailable -> "Unavailable(${result.why})"

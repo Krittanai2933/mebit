@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import cnames.structs.__CFArray
 import cnames.structs.__CFData
 import cnames.structs.__CFDictionary
+import kotlin.coroutines.resume
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -22,6 +23,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import platform.CoreFoundation.CFArrayGetCount
 import platform.CoreFoundation.CFArrayGetValueAtIndex
 import platform.CoreFoundation.CFDataCreateWithBytesNoCopy
@@ -57,6 +62,12 @@ import platform.Foundation.dataWithBytes
 import platform.Foundation.stringWithContentsOfFile
 import platform.Foundation.writeToFile
 import platform.LocalAuthentication.LAContext
+import platform.LocalAuthentication.LAErrorAppCancel
+import platform.LocalAuthentication.LAErrorAuthenticationFailed
+import platform.LocalAuthentication.LAErrorBiometryLockout
+import platform.LocalAuthentication.LAErrorPasscodeNotSet
+import platform.LocalAuthentication.LAErrorSystemCancel
+import platform.LocalAuthentication.LAErrorUserCancel
 import platform.LocalAuthentication.LAPolicyDeviceOwnerAuthentication
 import platform.Security.SecAccessControlCreateWithFlags
 import platform.Security.SecItemAdd
@@ -85,6 +96,8 @@ import platform.Security.kSecReturnAttributes
 import platform.Security.kSecReturnData
 import platform.Security.kSecUseAuthenticationContext
 import platform.Security.kSecValueData
+import platform.UIKit.UIApplication
+import platform.UIKit.UIApplicationState
 
 /** The Keychain service every item of the wallet lives under. */
 private const val SERVICE = "com.mebit.app.wallet"
@@ -96,6 +109,13 @@ private const val ACCOUNT_PREFIX = "wallet."
 private val MARKER_CONTENT = mapOf(Marker.Empty to "empty", Marker.Kept to "kept")
 
 /**
+ * True: [KeychainStore.read] asks for the owner with LocalAuthentication first and hands the passed context to the Keychain,
+ * so the Face ID card shows and blocks on a simulator too, where the Keychain enforces no access control. Setting it to false
+ * returns to the Keychain's own sheet, the fallback if an iPhone shows two sheets for one read.
+ */
+private const val EVALUATE_BEFORE_READ = true
+
+/**
  * The wallet in the iOS Keychain. Each write is a generic-password item under [SERVICE] with account `wallet.<generation>`,
  * never synchronizable, protected by `SecAccessControl(WhenPasscodeSetThisDeviceOnly, UserPresence)` and never also by
  * `kSecAttrAccessible`, in the default access group with no entitlements file. So the item never syncs, never enters a backup,
@@ -105,13 +125,16 @@ private val MARKER_CONTENT = mapOf(Marker.Empty to "empty", Marker.Kept to "kept
  * each fallback plugs in here without changing anything above [SecureStore]:
  * - if an add or a delete of this item shows a sheet, [write] and [readNewest] move to an EC P-256 key pair (the private half
  *   under this access control, the public half in its own item with none) and an ECIES blob in a plain ThisDeviceOnly item;
- * - if a context evaluated before the read gives one sheet on the iPhone, not two, [read] evaluates its LAContext first and
- *   hands it in, so the sheet shows on a simulator too.
+ * - [read] evaluates its LAContext before the Keychain read and hands it in, so the sheet shows on a simulator too; if that
+ *   gives two sheets on the iPhone, not one, [EVALUATE_BEFORE_READ] returns to the Keychain's own sheet.
  *
  * One object and one lock per process, because the Keychain slot is one shared write target. Logs nothing.
  */
 private object KeychainStore : SecureStore {
-    /** Taken by every call, so a Replace's add and deletes never interleave with another call. */
+    /**
+     * Taken by every call, so a Replace's add and deletes never interleave with another call. A read takes it for its Keychain
+     * calls only, never while its owner check's card is up, so the card never blocks a probe or a flush on the main thread.
+     */
     private val lock = NSLock()
 
     /** Application Support/mebit/wallet-marker. Application Support is in backups, which the reinstall rule needs. */
@@ -123,15 +146,21 @@ private object KeychainStore : SecureStore {
         probeOutcome(status, accounts, passcodeSet())
     }
 
-    override suspend fun read(reason: String): ReadResult = coroutineScope {
+    override suspend fun read(reason: String): ReadResult {
         val context = LAContext().apply { localizedReason = reason }
-        // The Keychain call blocks while the OS sheet is up, so it runs off the caller's thread.
-        val reading = async(Dispatchers.Default) { locked { readNewest(context) } }
-        try {
-            reading.await()
-        } catch (e: CancellationException) {
-            context.invalidate() // takes the sheet down, so the blocked call returns and frees the lock
-            throw e
+        if (EVALUATE_BEFORE_READ) {
+            if (!awaitActive()) return ReadResult.Cancelled
+            ownerCheck(context, reason)?.let { return it }
+        }
+        return coroutineScope {
+            // The Keychain call blocks while the OS sheet is up, so it runs off the caller's thread.
+            val reading = async(Dispatchers.Default) { locked { readNewest(context) } }
+            try {
+                reading.await()
+            } catch (e: CancellationException) {
+                context.invalidate() // takes the sheet down, so the blocked call returns and frees the lock
+                throw e
+            }
         }
     }
 
@@ -226,6 +255,29 @@ private fun delete(account: String?): Int = memScoped { SecItemDelete(query(acco
 /** Whether this phone has a passcode, without which an item of this class cannot exist. Never prompts. */
 private fun passcodeSet(): Boolean = LAContext().canEvaluatePolicy(LAPolicyDeviceOwnerAuthentication, null)
 
+/**
+ * Whether the app became active within 3 s, polled on the main queue every 100 ms, so the owner check is never asked from an
+ * app that is not active, as at a cold start's first frame. iOS may cancel it there; the simulator does not.
+ */
+private suspend fun awaitActive(): Boolean = withTimeoutOrNull(3_000) {
+    withContext(Dispatchers.Main) {
+        while (UIApplication.sharedApplication.applicationState != UIApplicationState.UIApplicationStateActive) delay(100)
+    }
+    true
+} ?: false
+
+/**
+ * Asks for the owner on [context], Face ID first and the passcode inside the same OS card. Null when the owner passed,
+ * else what the read answers. Cancelling the caller takes the card down.
+ */
+private suspend fun ownerCheck(context: LAContext, reason: String): ReadResult? = suspendCancellableCoroutine { continuation ->
+    continuation.invokeOnCancellation { context.invalidate() }
+    context.evaluatePolicy(LAPolicyDeviceOwnerAuthentication, localizedReason = reason) { ok, error ->
+        // A refusal that names no error still refuses, and never goes on to the read.
+        continuation.resume(if (ok) null else evaluateOutcome(error?.code) ?: ReadResult.Unavailable(Why.Other))
+    }
+}
+
 /** A query with what every query carries (generic password, the service, never synchronizable), [account] when given, and [extra]. */
 private fun MemScope.query(account: String?, vararg extra: Pair<CFStringRef?, CFTypeRef?>): CFDictionaryRef? {
     val query = owned(CFDictionaryCreateMutable(null, 0, kCFTypeDictionaryKeyCallBacks.ptr, kCFTypeDictionaryValueCallBacks.ptr))
@@ -258,6 +310,16 @@ internal fun readOutcome(status: Int, data: ByteArray?): ReadResult = when (stat
     errSecUserCanceled -> ReadResult.Cancelled
     errSecAuthFailed -> ReadResult.Denied
     errSecInteractionNotAllowed -> ReadResult.Unavailable(Why.TryLater)
+    else -> ReadResult.Unavailable(Why.Other)
+}
+
+/** What the owner check's LocalAuthentication error code means for the read. Null is no error: the owner passed and the read goes on. */
+internal fun evaluateOutcome(laErrorCode: Long?): ReadResult? = when (laErrorCode) {
+    null -> null
+    LAErrorUserCancel, LAErrorSystemCancel, LAErrorAppCancel -> ReadResult.Cancelled
+    LAErrorAuthenticationFailed -> ReadResult.Denied
+    LAErrorBiometryLockout -> ReadResult.LockedOut
+    LAErrorPasscodeNotSet -> ReadResult.Unavailable(Why.NoScreenLock)
     else -> ReadResult.Unavailable(Why.Other)
 }
 

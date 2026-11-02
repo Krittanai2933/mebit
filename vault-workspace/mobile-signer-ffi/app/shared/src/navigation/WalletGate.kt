@@ -21,8 +21,8 @@ fun WalletGate(wallet: SavedWallet = rememberSavedWallet()) {
     val gate = remember(wallet) { WalletGateState(wallet, session) }
 
     // A failed save is tried again when the app comes back, for example once the user has set a passcode. Not while Locked or
-    // Broken: the iOS store holds one lock for a whole read, so a flush while an unlock's sheet is up would block the main
-    // thread until the sheet closes, and a session with nothing in it has nothing to flush there anyway.
+    // Broken: a session with nothing in it has nothing to flush there, and if the iOS store ever falls back to the Keychain's
+    // own sheet, a read holds the store's lock while that sheet is up, so a flush would block the main thread until it closes.
     LifecycleEventEffect(Lifecycle.Event.ON_START) {
         if (gate.boot is Boot.Open || gate.boot == Boot.Onboarding) session.flushPendingSave()
     }
