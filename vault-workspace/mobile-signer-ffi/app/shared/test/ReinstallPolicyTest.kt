@@ -17,11 +17,19 @@ class ReinstallPolicyTest {
         (Marker.Kept to StoreProbe.Empty) to ReinstallAction.Vanished,
     )
 
+    /** Unavailable is a plain class, so it cannot be a key of the table: the one Unavailable cell is written here. */
+    private fun expected(marker: Marker, probe: StoreProbe): ReinstallAction =
+        if (marker == Marker.Kept && probe is StoreProbe.Unavailable && probe.why == Why.NoScreenLock) {
+            ReinstallAction.Vanished // the item is gone and the phone has no passcode to hold another
+        } else {
+            table[marker to probe] ?: ReinstallAction.None
+        }
+
     @Test
     fun everyMarkerAndProbePairMatchesTheTable() {
         for (marker in Marker.entries) {
             for (probe in EVERY_PROBE) {
-                assertEquals(table[marker to probe] ?: ReinstallAction.None, reinstallPolicy(marker, probe), "$marker, ${label(probe)}")
+                assertEquals(expected(marker, probe), reinstallPolicy(marker, probe), "$marker, ${label(probe)}")
             }
         }
     }
@@ -30,7 +38,8 @@ class ReinstallPolicyTest {
     fun neverWipesOnDoubt() {
         for (marker in Marker.entries) {
             for (why in Why.entries) {
-                assertEquals(ReinstallAction.None, reinstallPolicy(marker, StoreProbe.Unavailable(why)), "$marker, $why")
+                val goneForSure = marker == Marker.Kept && why == Why.NoScreenLock
+                assertEquals(if (goneForSure) ReinstallAction.Vanished else ReinstallAction.None, reinstallPolicy(marker, StoreProbe.Unavailable(why)), "$marker, $why")
             }
         }
     }

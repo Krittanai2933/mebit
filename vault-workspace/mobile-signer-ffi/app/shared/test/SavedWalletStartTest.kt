@@ -32,6 +32,17 @@ class SavedWalletStartTest {
     }
 
     @Test
+    fun aKeptMarkerOnAPhoneThatNowHasNoPasscodeSaysTheWalletVanishedOnce() {
+        // The OS deletes a passcode-set item when the passcode is removed, and the probe then says there is no screen lock, not empty.
+        val store = FakeSecureStore(probe = StoreProbe.Unavailable(Why.NoScreenLock), marker = Marker.Kept)
+        val wallet = SavedWallet(store)
+        assertEquals(StartNotice.WalletVanished, wallet.start().notice)
+        assertEquals(listOf(Marker.Empty), store.markerWrites, "marker writes")
+        assertEquals(0, store.erases, "erases")
+        assertNull(wallet.start().notice, "the notice came back")
+    }
+
+    @Test
     fun aMarkerThatCannotBeReadIsDoubtAndNeverWipes() {
         for (probe in EVERY_PROBE) {
             val store = FakeSecureStore(probe = probe, marker = Marker.Unreadable)

@@ -48,7 +48,8 @@ fun reinstallPolicy(marker: Marker, probe: StoreProbe): ReinstallAction = when (
         is StoreProbe.Unavailable -> ReinstallAction.None
     }
     Marker.Empty -> if (probe == StoreProbe.Present) ReinstallAction.MarkKept else ReinstallAction.None
-    Marker.Kept -> if (probe == StoreProbe.Empty) ReinstallAction.Vanished else ReinstallAction.None
+    // A wallet was kept and the phone now holds nothing, or has no passcode and so cannot hold one: either way it is gone, and nothing is wiped.
+    Marker.Kept -> if (probe == StoreProbe.Empty || (probe is StoreProbe.Unavailable && probe.why == Why.NoScreenLock)) ReinstallAction.Vanished else ReinstallAction.None
 }
 
 /** How an attempt to open the saved wallet ended. */
