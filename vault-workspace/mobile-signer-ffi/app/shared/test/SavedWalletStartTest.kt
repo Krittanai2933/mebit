@@ -8,11 +8,50 @@ import com.mebit.app.WriteMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class SavedWalletStartTest {
+    @Test
+    fun aDoubtfulFirstLaunchThenAnUnlockKeepsTheWalletAtTheNextLaunch() {
+        // An orphan from a deleted install, met on a launch whose probe was in doubt. Once the user has unlocked it, a later launch must not take it for an orphan.
+        for (doubt in listOf(Why.TryLater, Why.Other)) {
+            val store = FakeSecureStore(marker = Marker.Absent)
+            store.write(v1Bytes(), WriteMode.Create) // the orphan, written behind the marker's back
+            store.probe = StoreProbe.Unavailable(doubt)
+            val wallet = SavedWallet(store)
+            assertNull(wallet.start().notice, "notice on the doubtful launch, $doubt")
+            assertTrue(store.erases == 0 && store.markerWrites.isEmpty(), "the doubtful launch changed the store, $doubt")
+            assertIs<UnlockResult.Opened>(wallet.openNow(), "the unlock, $doubt")
+            store.probe = StoreProbe.Present // the doubt is gone
+            assertNull(wallet.start().notice, "the next launch wiped the wallet the user had unlocked, $doubt")
+            assertEquals(0, store.erases, "erases at the next launch, $doubt")
+        }
+    }
+
+    @Test
+    fun aMarkerThatCannotBeReadIsDoubtAndNeverWipes() {
+        for (probe in EVERY_PROBE) {
+            val store = FakeSecureStore(probe = probe, marker = Marker.Unreadable)
+            assertNull(SavedWallet(store).start().notice, label(probe))
+            assertTrue(store.erases == 0 && store.markerWrites.isEmpty(), "the store changed, ${label(probe)}")
+        }
+    }
+
+    @Test
+    fun twoDroppedMarkerWritesNeverLeaveAWalletThatTheNextLaunchWouldWipe() {
+        // The first launch cannot write Empty and the save cannot write Kept. The wallet must not stay without a marker.
+        val store = FakeSecureStore(marker = Marker.Absent, failMarker = setOf(1, 2))
+        val wallet = SavedWallet(store)
+        wallet.start()
+        assertTrue(wallet.save(testRecord(), WriteMode.Create) is SaveResult.NotSaved, "a wallet was kept without a marker")
+        assertEquals(StoreProbe.Empty, store.probe(), "the wallet stayed in the store")
+        assertNull(wallet.start().notice, "the next launch wiped something")
+        assertEquals(1, store.erases, "only the undo of the failed save may erase")
+    }
+
     @Test
     fun wipeOrphanErasesWritesEmptyAndReportsTheNoticeOnce() {
         for (orphan in listOf(StoreProbe.Present, StoreProbe.KeyGone)) {

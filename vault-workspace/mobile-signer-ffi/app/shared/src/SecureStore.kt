@@ -12,8 +12,12 @@ enum class WriteMode {
     Replace,
 }
 
-/** A small file the iOS actual keeps in Application Support, included in backups, to tell a fresh install from a used one. Android reports Unsupported. */
-enum class Marker { Absent, Empty, Kept, Unsupported }
+/**
+ * A small file the iOS actual keeps in Application Support, included in backups, to tell a fresh install from a used one.
+ * Android reports Unsupported. [Unreadable] is doubt: the file could not be read, which is not the same as no file ([Absent]),
+ * and nothing is ever wiped on it.
+ */
+enum class Marker { Absent, Empty, Kept, Unsupported, Unreadable }
 
 /** What the phone holds, learned without a prompt. */
 sealed interface StoreProbe {
@@ -81,9 +85,9 @@ internal interface SecureStore {
 
     fun erase(): EraseResult
 
-    /** Never prompts. */
+    /** Never prompts. [Marker.Absent] only when there is no marker file. A file that cannot be read is [Marker.Unreadable], never Absent. */
     fun marker(): Marker
 
-    /** Atomic, never prompts, and a no-op where the marker is Unsupported. */
-    fun writeMarker(marker: Marker)
+    /** Atomic and never prompts. True when the marker now reads as [marker], and also where the marker is Unsupported, because there it is a no-op. False when the write did not take effect. */
+    fun writeMarker(marker: Marker): Boolean
 }

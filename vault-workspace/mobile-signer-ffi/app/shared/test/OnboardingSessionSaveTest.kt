@@ -343,6 +343,65 @@ class OnboardingSessionSaveTest {
         assertEquals(Cause.NewerVersion, assertIs<UnlockResult.Broken>(SavedWallet(store).openNow(), "the copy afterwards").cause)
     }
 
+    @Test
+    fun aFailedReplaceKeepsTheWalletSavedAndTheNextWritePointSavesIt() {
+        val store = FakeSecureStore(failWrite = 2)
+        val keys = Keys()
+        val session = session(store, keys)
+        session.generateThisDevice()
+        session.markBackupConfirmed() // write 2, a Replace, fails
+        assertEquals(SaveState.Saved, session.saved, "saved after a failed Replace: the earlier copy is still on the phone")
+        session.markAppLockEnabled() // write 3 must be a Replace again, not a Create that meets the copy
+        assertEquals(listOf(WriteMode.Create, WriteMode.Replace, WriteMode.Replace), store.modes(), "write modes")
+        assertEquals(listOf(true, false, true), store.savedCopy().flags(), "flags in the store")
+        assertIs<UnlockResult.Verified>(session.proveNow(), "the read-back after the retry")
+        val made = keys.made
+        session.generateThisDevice()
+        assertEquals(made, keys.made, "a key was made while one is saved")
+        assertTrue(session.words == PUBLIC_WORDS_24, "the saved key left memory")
+    }
+
+    @Test
+    fun aFailedSaveIsRepeatedByAFlushAndAFlushWithNothingPendingWritesNothing() {
+        val closed = FakeSecureStore(write = WriteResult.Unavailable(Why.NoScreenLock))
+        val first = session(closed)
+        first.generateThisDevice()
+        assertEquals(SaveState.NotSaved, first.saved, "saved while the phone could not keep it")
+        closed.write = null // the phone has a screen lock now
+        first.flushPendingSave()
+        assertEquals(SaveState.Saved, first.saved, "saved after the flush")
+        assertEquals(listOf(WriteMode.Create, WriteMode.Create), closed.modes(), "write modes of a failed Create then its flush")
+
+        val flaky = FakeSecureStore(failWrite = 2)
+        val second = session(flaky)
+        second.generateThisDevice()
+        second.markBackupConfirmed() // fails
+        second.flushPendingSave()
+        assertEquals(listOf(WriteMode.Create, WriteMode.Replace, WriteMode.Replace), flaky.modes(), "write modes of a failed Replace then its flush")
+        assertEquals(listOf(true, false, false), flaky.savedCopy().flags(), "flags in the store after the flush")
+
+        val writes = flaky.writes.size
+        second.flushPendingSave()
+        OnboardingSession().flushPendingSave()
+        assertEquals(writes, flaky.writes.size, "a flush with nothing pending wrote")
+    }
+
+    @Test
+    fun installDerivesWithTheRecordsPassphraseAndRefusesADamagedOne() {
+        val right = "correct horse"
+        var derivedWith: String? = null
+        val restore: (List<String>, String, KeyNetwork, UInt) -> SoftwareAccountKey = { w, p, _, _ ->
+            derivedWith = p
+            SoftwareAccountKey(w, if (p == right) TEST_CHECK else OTHER_CHECK, "tpub-test", "m/48'/1'/0'/2'")
+        }
+        val session = OnboardingSession(SavedWallet(FakeSecureStore()), restoreKey = restore)
+        assertTrue(session.install(testRecord(passphrase = right)), "the right passphrase did not install")
+        assertTrue(derivedWith == right, "the derivation did not get the record's passphrase")
+        val damaged = OnboardingSession(SavedWallet(FakeSecureStore()), restoreKey = restore)
+        assertFalse(damaged.install(testRecord(passphrase = "correct horsf")), "a damaged passphrase installed")
+        assertEmpty(damaged, "a damaged passphrase")
+    }
+
     private fun session(store: FakeSecureStore, keys: Keys = Keys()) = OnboardingSession(SavedWallet(store), keys.newKey, keys.restoreKey)
 
     /** Saves through [make], loads the saved copy into a new session, and compares every record field with what was set. */

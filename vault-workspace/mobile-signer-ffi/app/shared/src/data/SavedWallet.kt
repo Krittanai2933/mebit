@@ -41,7 +41,7 @@ sealed interface ReinstallAction {
  * Never wipes on doubt: an Unavailable probe is None and writes no marker, so the next launch decides.
  */
 fun reinstallPolicy(marker: Marker, probe: StoreProbe): ReinstallAction = when (marker) {
-    Marker.Unsupported -> ReinstallAction.None
+    Marker.Unsupported, Marker.Unreadable -> ReinstallAction.None // no marker to trust, or a marker that could not be read: never wipe on doubt
     Marker.Absent -> when (probe) {
         StoreProbe.Empty -> ReinstallAction.MarkEmpty
         StoreProbe.Present, StoreProbe.KeyGone -> ReinstallAction.WipeOrphan
@@ -116,7 +116,13 @@ class SavedWallet internal constructor(private val store: SecureStore) {
     suspend fun open(reason: String): UnlockResult = when (val r = store.read(reason)) {
         is ReadResult.Bytes -> try {
             when (val d = RecordCodec.decode(r.bytes)) {
-                is Decoded.Ok -> if (d.record.network in NETWORKS) UnlockResult.Opened(d.record) else UnlockResult.Broken(Cause.UnsupportedNetwork)
+                is Decoded.Ok -> if (d.record.network in NETWORKS) {
+                    // A wallet its owner has opened is theirs whatever the marker said, so a later launch must never take it for an orphan. Best effort.
+                    store.writeMarker(Marker.Kept)
+                    UnlockResult.Opened(d.record)
+                } else {
+                    UnlockResult.Broken(Cause.UnsupportedNetwork)
+                }
                 Decoded.Newer -> UnlockResult.Broken(Cause.NewerVersion) // never overwritten: a newer app wrote it
                 Decoded.Corrupt -> UnlockResult.Broken(Cause.Corrupt)
             }
@@ -145,7 +151,15 @@ class SavedWallet internal constructor(private val store: SecureStore) {
         }
         try {
             return when (val w = store.write(bytes, mode)) {
-                WriteResult.Written -> SaveResult.Written.also { store.writeMarker(Marker.Kept) }
+                WriteResult.Written -> when {
+                    store.writeMarker(Marker.Kept) -> SaveResult.Written
+                    mode == WriteMode.Replace -> SaveResult.Written // the wallet was already there, under a marker that was not Absent
+                    else -> {
+                        // A new wallet without its marker would be taken for an orphan and erased at the next launch, so it is not kept.
+                        store.erase()
+                        SaveResult.NotSaved(Why.Other)
+                    }
+                }
                 WriteResult.AlreadyExists -> SaveResult.AlreadyExists
                 is WriteResult.Unavailable -> SaveResult.NotSaved(w.why)
             }

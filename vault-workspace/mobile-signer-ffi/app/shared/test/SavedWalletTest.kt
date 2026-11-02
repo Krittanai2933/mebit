@@ -2,6 +2,7 @@ package com.mebit.app.data
 
 import com.mebit.app.Marker
 import com.mebit.app.ReadResult
+import com.mebit.app.StoreProbe
 import com.mebit.app.Why
 import com.mebit.app.WriteMode
 import com.mebit.app.WriteResult
@@ -13,6 +14,27 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class SavedWalletTest {
+    @Test
+    fun aNewWalletWhoseMarkerCannotBeWrittenIsNotKeptButAReplaceIsStillWritten() {
+        val store = FakeSecureStore(failMarker = setOf(1))
+        assertTrue(SavedWallet(store).save(testRecord(), WriteMode.Create) is SaveResult.NotSaved, "a new wallet without its marker")
+        assertEquals(1, store.erases, "the wallet it wrote was not undone")
+        assertEquals(StoreProbe.Empty, store.probe(), "the wallet stayed")
+        val kept = FakeSecureStore(failMarker = setOf(2)) // the Replace cannot rewrite a marker that is already Kept
+        val wallet = SavedWallet(kept)
+        assertEquals(SaveResult.Written, wallet.save(testRecord(), WriteMode.Create), "the first save")
+        assertEquals(SaveResult.Written, wallet.save(testRecord(backupConfirmed = true), WriteMode.Replace), "a Replace whose marker write failed")
+        assertEquals(0, kept.erases, "a Replace erased the wallet")
+    }
+
+    @Test
+    fun anOpenedWalletIsMarkedKeptSoNoLaterLaunchCanTakeItForAnOrphan() {
+        val store = FakeSecureStore(marker = Marker.Absent)
+        store.write(v1Bytes(), WriteMode.Create)
+        assertIs<UnlockResult.Opened>(SavedWallet(store).openNow(), "the unlock")
+        assertEquals(listOf(Marker.Kept), store.markerWrites, "marker writes after an unlock")
+    }
+
     /** What each read must become, from the design's table. No else branch, so a new ReadResult does not compile here until it is decided. */
     private fun expected(read: ReadResult): String = when (read) {
         is ReadResult.Bytes -> "Opened"
@@ -42,7 +64,9 @@ class SavedWalletTest {
             val case = expected(read)
             val store = FakeSecureStore(read = read)
             assertEquals(case, shown(SavedWallet(store).openNow()), case)
-            assertTrue(store.writes.isEmpty() && store.erases == 0 && store.markerWrites.isEmpty(), "open changed the store, $case")
+            assertTrue(store.writes.isEmpty() && store.erases == 0, "open wrote or erased, $case")
+            // An unlock is the one answer that marks the wallet as the owner's, so a later launch cannot take it for an orphan.
+            assertEquals(if (case == "Opened") listOf(Marker.Kept) else emptyList(), store.markerWrites, "marker writes after open, $case")
         }
     }
 

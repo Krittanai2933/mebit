@@ -24,6 +24,8 @@ internal class FakeSecureStore(
     var erase: EraseResult = EraseResult.Erased,
     var marker: Marker = Marker.Absent,
     private val failWrite: Int = 0,
+    /** Which marker writes, counting from 1, do not take effect: nothing is recorded and the marker keeps its value. */
+    private val failMarker: Set<Int> = emptySet(),
 ) : SecureStore {
     /** One write call: its mode, a copy of the bytes, and the array the caller handed over. */
     class Write(val mode: WriteMode, val bytes: ByteArray, val handed: ByteArray)
@@ -67,9 +69,14 @@ internal class FakeSecureStore(
 
     override fun marker(): Marker = marker
 
-    override fun writeMarker(marker: Marker) {
+    private var markerCalls = 0
+
+    override fun writeMarker(marker: Marker): Boolean {
+        markerCalls++
+        if (markerCalls in failMarker) return false
         markerWrites += marker
         if (this.marker != Marker.Unsupported) this.marker = marker
+        return true
     }
 }
 

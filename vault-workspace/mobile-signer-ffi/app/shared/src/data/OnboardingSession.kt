@@ -58,6 +58,9 @@ class OnboardingSession(
     var notSavedBecause: Why? by mutableStateOf(null)
         private set
 
+    /** A save that failed and has not been repeated yet. [flushPendingSave] and the next write point repeat it. */
+    private var pendingSave = false
+
     /** Saved before it returns, so a crash can never lose a key whose words were shown. Refused while a wallet is saved. */
     fun generateThisDevice(passphrase: String = "", network: KeyNetwork = KeyNetwork.TEST) {
         lastError = null
@@ -139,6 +142,7 @@ class OnboardingSession(
         network = KeyNetwork.TEST
         saved = SaveState.NotSaved
         notSavedBecause = null
+        pendingSave = false
     }
 
     fun markBackupConfirmed() {
@@ -182,23 +186,38 @@ class OnboardingSession(
     private fun persist(fresh: Boolean = false) {
         val w = wallet ?: return
         if (words.isEmpty() || saved == SaveState.Staged) return
-        when (val r = w.save(toRecord(), if (saved == SaveState.Saved) WriteMode.Replace else WriteMode.Create)) {
+        val mode = if (saved == SaveState.Saved) WriteMode.Replace else WriteMode.Create
+        when (val r = w.save(toRecord(), mode)) {
             SaveResult.Written -> {
                 saved = SaveState.Saved
                 notSavedBecause = null
+                pendingSave = false
             }
-            SaveResult.AlreadyExists -> if (fresh) {
-                clear() // lost a race on a key nobody has seen yet: drop ours, never overwrite theirs
-                lastError = TAKEN
-            } else {
-                saved = SaveState.NotSaved // never drop a key the user may have written down
-                notSavedBecause = Why.Other
+            SaveResult.AlreadyExists -> {
+                pendingSave = false // another copy is there, so trying again would meet it again
+                if (fresh) {
+                    clear() // lost a race on a key nobody has seen yet: drop ours, never overwrite theirs
+                    lastError = TAKEN
+                } else {
+                    saved = SaveState.NotSaved // never drop a key the user may have written down
+                    notSavedBecause = Why.Other
+                }
             }
             is SaveResult.NotSaved -> {
-                saved = SaveState.NotSaved
-                notSavedBecause = r.why
+                // A failed Replace leaves the earlier copy on the phone, so the wallet stays Saved and only a failed Create is not saved.
+                // Downgrading it would make every later write a Create, which meets that copy and is lost for good.
+                if (mode == WriteMode.Create) {
+                    saved = SaveState.NotSaved
+                    notSavedBecause = r.why
+                }
+                pendingSave = true
             }
         }
+    }
+
+    /** Tries a save that failed again, for example when the app comes back to the foreground. Does nothing unless one is pending. */
+    fun flushPendingSave() {
+        if (pendingSave) persist()
     }
 
     private fun refuseToReplace(): Boolean {
