@@ -12,7 +12,8 @@ import kotlin.time.TimeSource
 /**
  * When the app asks for Face ID again: after it has been in the background for more than a
  * minute, and before it signs a send. Only matters once the user turned the lock on. In memory
- * only, like the keys: a cold start is onboarding again.
+ * only: a cold start begins at the wallet gate, which asks for the owner itself when a wallet is
+ * saved, and this lock starts unlocked with the nav host that owns it.
  */
 class AppLockState(private val clock: TimeSource = TimeSource.Monotonic) {
     var locked: Boolean by mutableStateOf(false)

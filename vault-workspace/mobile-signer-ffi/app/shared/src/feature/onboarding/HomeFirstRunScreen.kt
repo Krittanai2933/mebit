@@ -100,6 +100,7 @@ fun HomeFirstRunScreen(
                 BackupNudge(onBackup)
                 Spacer(modifier = Modifier.height(14.dp))
             }
+            NotSavedNotice(session, Modifier.padding(bottom = 14.dp))
             BalanceHero(if (wallet.live) btc(wallet.balanceSats) else "—", zero = wallet.live && wallet.balanceSats == 0L)
             Spacer(modifier = Modifier.height(24.dp))
             Text("จะเริ่มใช้แบบไหน", color = MbNavyInk, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)

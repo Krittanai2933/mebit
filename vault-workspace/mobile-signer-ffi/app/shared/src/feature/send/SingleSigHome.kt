@@ -55,6 +55,7 @@ import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.data.formatBtc
 import com.mebit.app.data.rememberFiatQuote
+import com.mebit.app.feature.onboarding.NotSavedNotice
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_chevron
 import com.mebit.app.resources.mebit_logo
@@ -177,6 +178,7 @@ internal fun SingleSigHome(
             KeyStatus(backedUp = session.backupConfirmed, fingerprint = session.fingerprint, expanded = keyDetails, onToggle = { keyDetails = !keyDetails })
             Spacer(modifier = Modifier.height(14.dp))
             UpgradeCard(onVault)
+            NotSavedNotice(session, Modifier.padding(top = 12.dp))
             wallet.lastError?.let {
                 Spacer(modifier = Modifier.height(12.dp))
                 // The raw text of an unreachable chain names the server and the library, so that mode says it in plain words.

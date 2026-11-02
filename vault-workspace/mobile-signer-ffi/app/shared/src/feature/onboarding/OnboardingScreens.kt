@@ -34,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.PairedDevice
+import com.mebit.app.data.SaveState
 import com.mebit.app.data.StartNotice
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.mebit_logo
@@ -264,6 +265,17 @@ fun KeyCreatedScreen(
         )
         Spacer(modifier = Modifier.height(20.dp))
         NextStepCard()
+        // Not on board 1.3: an iOS reinstall wipes the wallet (the user's decision), so say so where it is made.
+        if (session.saved == SaveState.Saved) {
+            Text(
+                text = "ลบแอปแล้วกระเป๋าในเครื่องนี้จะหาย · กู้คืนได้ด้วย 24 คำเท่านั้น",
+                color = MbBody,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                modifier = Modifier.padding(top = 16.dp).testTag("delete_warning"),
+            )
+        }
+        NotSavedNotice(session, Modifier.padding(top = 16.dp))
     }
 }
 
