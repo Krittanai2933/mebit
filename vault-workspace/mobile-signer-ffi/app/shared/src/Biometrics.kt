@@ -1,5 +1,7 @@
 package com.mebit.app
 
+import androidx.compose.runtime.Composable
+
 /** How a Face ID (or device passcode) check ended. */
 sealed interface BiometricResult {
     data object Success : BiometricResult
@@ -24,4 +26,6 @@ interface Biometrics {
     suspend fun authenticate(reason: String, allowPasscode: Boolean = false): BiometricResult
 }
 
-expect fun platformBiometrics(): Biometrics
+/** This platform's owner check. Composable because the Android sheet needs the Activity. */
+@Composable
+expect fun rememberBiometrics(): Biometrics

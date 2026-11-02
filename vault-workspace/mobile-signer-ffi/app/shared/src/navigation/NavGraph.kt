@@ -78,7 +78,7 @@ import com.mebit.app.feature.send.M1SendVaultScreen
 import com.mebit.app.feature.send.M2CollectSignaturesScreen
 import com.mebit.app.feature.send.M3SignOnJadeScreen
 import com.mebit.app.feature.send.M4ReadyToBroadcastScreen
-import com.mebit.app.platformBiometrics
+import com.mebit.app.rememberBiometrics
 import com.mebit.app.ui.theme.MbPage
 
 private val ImplementedRoutes = MovieRoute.entries.toSet()
@@ -99,7 +99,7 @@ fun MebitNavHost(
     val quotes = remember { liveQuoteCache() }
     val sendDraft = remember { SendDraft() }
     val multisigSend = remember { MultisigSendDraft() }
-    val biometrics = remember { platformBiometrics() }
+    val biometrics = rememberBiometrics()
     val appLock = remember { AppLockState() }
     // Starts as Keyring so the debug catalog can open Verify Key without passing Key Source.
     var keyFlow by remember { mutableStateOf(KeyFlow.Keyring) }

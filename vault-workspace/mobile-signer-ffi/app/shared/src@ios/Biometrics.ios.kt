@@ -1,5 +1,7 @@
 package com.mebit.app
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import kotlin.coroutines.resume
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCObjectVar
@@ -49,4 +51,5 @@ private class IosBiometrics : Biometrics {
     }
 }
 
-actual fun platformBiometrics(): Biometrics = IosBiometrics()
+@Composable
+actual fun rememberBiometrics(): Biometrics = remember { IosBiometrics() }
