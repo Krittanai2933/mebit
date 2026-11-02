@@ -44,7 +44,7 @@ The layers, from the platform up:
 | Layer | File | What it owns |
 |---|---|---|
 | `SecureStore` | `src/SecureStore.kt` | The only platform seam. Six methods on bytes: `probe` and `marker` never prompt, `read` may show the OS sheet, `write` never prompts and is all or nothing, `erase` is idempotent, `writeMarker` reports whether it took effect. Results are closed enums with no free text. |
-| Keychain store | `src@ios/SecureStore.ios.kt` | The iOS actual. It keeps one Keychain item per generation and a marker file. |
+| Keychain store | `src@ios/SecureStore.ios.kt` | The iOS actual. It keeps the wallet in one of two fixed Keychain accounts, and a marker file. |
 | `NotWired` | `src@android/SecureStore.android.kt` | The Android actual until step 6. It stores nothing. |
 | `SavedWallet` | `src/data/SavedWallet.kt` | The record codec and its version, the testnet guard, the mapping of platform results to `UnlockResult` and `SaveResult`, and the reinstall rule (`start()` with the pure `reinstallPolicy`). The only code that calls `SecureStore`. |
 | `OnboardingSession` | `src/data/OnboardingSession.kt` | One write point (`persist()`), `install`, `proveSavedCopy`, `forgetSavedWallet`, `flushPendingSave`, `recordUnconfirmedSend` and `clearUnconfirmedSend`, and the `saved` and `notSavedBecause` state that screens read. |
@@ -71,10 +71,11 @@ When a broadcast ends in `BroadcastUnknown`, `SingleSigWallet.broadcast` sets it
 
 ## iOS keeps one Keychain item and a marker file
 
-- The item is a generic password under service `com.mebit.app.wallet`, account `wallet.<generation>`, with `kSecAttrSynchronizable` false and `SecAccessControl(kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, .userPresence)`. It never syncs, never enters a backup, stays on this phone, needs a passcode to exist, and the OS deletes it when the passcode is removed. It uses the default access group and no entitlements file.
-- `write` adds generation n+1 and then deletes the lower generations. It never calls `SecItemUpdate`, which may prompt for an item with this access control. A crash between the two calls leaves both items, and `probe` and `read` take the newest.
-- `probe` lists attributes only, with an `LAContext` whose `interactionNotAllowed` is true, so the cold start never prompts before the unlock screen.
-- `read` waits up to 3 seconds for the app to be active, evaluates `deviceOwnerAuthentication` (Face ID first, the passcode inside the same card), and hands that context to the Keychain query (`EVALUATE_BEFORE_READ`). A simulator enforces no Keychain access control, so without this step it would show no card at all. The store's lock is held only around the Keychain calls, never while the card is up.
+- The item is a generic password under service `com.mebit.app.wallet`, account `wallet.a` or `wallet.b`, with `kSecAttrSynchronizable` false and `SecAccessControl(kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, .userPresence)`. It never syncs, never enters a backup, stays on this phone, needs a passcode to exist, and the OS deletes it when the passcode is removed. It uses the default access group and no entitlements file.
+- On an iPhone the item cannot be listed both silently and usefully. On 2 Nov 2026 an iPhone 15 answered an attributes-only list under an `LAContext` whose `interactionNotAllowed` is true with `errSecInteractionNotAllowed` (-25308) and no item, although the item was there. The same list with no context returned the item after 3 to 4 seconds, probably behind a Face ID sheet. A simulator lists the item either way. So only `probe` and a Create's existence check list, and `read` and a Replace name the two accounts.
+- `probe` lists silently, so the cold start never prompts before the unlock screen. A listed item is `Present` (a simulator). A refused list with no item is `Present` while the phone is unlocked (`UIApplication.protectedDataAvailable`), because only an item that needs its owner answers that way, and `TryLater` while the phone is locked, which answers the same. Nothing found is `Empty`, or `Unavailable(NoScreenLock)` on a phone without a passcode.
+- `write` never calls `SecItemUpdate`, which may prompt for an item with this access control, and never prompts. A Create first checks with the probe's silent list and adds `wallet.a` only when the store is empty. It answers `AlreadyExists` for a wallet it lists or senses, and `Unavailable(TryLater)` on a locked phone. A Replace never lists. It adds to `wallet.a`, or to `wallet.b` when `wallet.a` answers `errSecDuplicateItem`, and then deletes the other account. When both answer duplicate it fails with `Unavailable(Other)` and changes nothing. So the wallet moves between the two accounts at each Replace.
+- `read` waits up to 3 seconds for the app to be active, evaluates `deviceOwnerAuthentication` (Face ID first, the passcode inside the same card), and hands that context to a data-only read of `wallet.a` and of `wallet.b` (`EVALUATE_BEFORE_READ`). The iPhone answered such a read with no second sheet. A simulator enforces no Keychain access control, so without the evaluation it would show no card at all. One account with bytes is the wallet. Two (a Replace whose delete did not happen) are settled by each item's creation date, read only on that path: the read returns the later copy and deletes the other. With no bytes the read is `NotFound` when both accounts found nothing, else the first account's other answer. The store's lock is held only around the Keychain calls, never while the card is up.
 - The marker file `Application Support/mebit/wallet-marker` holds `empty` or `kept`. It stays in backups on purpose, so a same-device restore keeps a good wallet. `reinstallPolicy(marker, probe)` decides the rest. A fresh install that finds an item left by a deleted install erases it and shows a one-time notice on Welcome. A probe in doubt never wipes.
 
 ## Android keeps nothing yet, and a Keystore envelope comes next
@@ -115,7 +116,7 @@ The design proceeds with these defaults until someone decides otherwise. Forget 
 
 ## Outcomes by group
 
-`outcomes.md` lists 71 cases. Two rules hold in every row. Only `forgetSavedWallet()`, after a confirm, deletes the saved copy. A failed write keeps the key in memory and says it is not saved.
+`outcomes.md` lists 75 cases. Two rules hold in every row. Only `forgetSavedWallet()`, after a confirm, deletes the saved copy. A failed write keeps the key in memory and says it is not saved.
 
 | Group | Rows | What the user sees |
 |---|---|---|
@@ -126,8 +127,9 @@ The design proceeds with these defaults until someone decides otherwise. Forget 
 | Process and screen lifecycle | 37 to 42 | A killed app asks again at the next launch. Forget asks for a confirm, then the owner. A failed erase keeps the wallet and the screen. |
 | Added by the synthesis and the reviews | 43 to 66 | The owner-checked Forget, the Enable read-back, the reinstall rule's edge cases, and the foreground flush. Row 52 is a payment of unknown outcome across a restart, which step 9 keeps refusing. |
 | Added by step 9 | 67 to 71 | A failed save of a payment of unknown outcome, its settle, a phone clock that moves, an older build that meets the section, and Android, where a restart still forgets it. |
+| Corrected by step 3c | 72 to 75 | A table of the earlier rows that failed on the iPhone because the store listed its item, then two copies in both Keychain accounts, their creation dates, and an item from a build before step 3c. |
 
-Only these rows destroy data. Row 17 erases the orphan of a deleted install, by the user's decision. Row 18 is the user's own Android uninstall. Rows 41 and 44 are a confirmed Forget. Row 54 erases a good wallet if the marker is lost without a reinstall. Row 33 can replace one wallet with another when two app instances run at once, on Android only. The 24 words recover every one of them.
+Only these rows destroy data. Row 17 erases the orphan of a deleted install, by the user's decision. Row 18 is the user's own Android uninstall. Rows 41, 44 and 75 are a confirmed Forget. Row 54 erases a good wallet if the marker is lost without a reinstall. Row 33 can replace one wallet with another when two app instances run at once, on Android only. The 24 words recover every one of them. Rows 72 to 74 delete only a second copy of the same wallet, and a wrong pick there drops at most its latest flags or payment of unknown outcome.
 
 ## What has been proven
 
@@ -142,19 +144,25 @@ Only these rows destroy data. Row 17 erases the orphan of a deleted install, by 
 
 - Step 9 stores a payment of unknown outcome with the wallet. Thirteen new tests and four extended ones cover the codec section, the session's write point and the wallet across a restart, and 18 one-rule mutations of that code were all caught. On an iPhone 17 Pro simulator (iOS 26.5), with a throwaway probe that made a key's bind live and its broadcast end in `BroadcastUnknown`, Send still showed PAYMENT UNCONFIRMED and Review still refused to sign after a kill, a relaunch and the unlock. Two minutes after the broadcast a bind settled the payment, and Send accepted the same payment again. The keychain item was replaced at the broadcast and again at the settle. `vault-workspace/mobile-signer-ffi/app/.claude/skills/verify/features/wallet-restart.md` holds the commands.
 
+- The first iPhone session (2 Nov 2026, an iPhone 15 with iOS 27.0.1, a signed debug build of `cdb04dd` with a throwaway logging patch) proved three things and broke one. The Keychain add of this item showed no sheet. `evaluatePolicy` passed, and a data read of a known account with the evaluated context then returned the item 10 ms later with no second sheet, so one read shows one card. A data read with a fresh context showed the Keychain's own sheet once. But the store's silent listing answered -25308 and no item while the item was there, so the unlock screen and the Enable read-back both said try again. `.audit/d1-secure-storage/phone/evidence-2026-11-02.md` holds the log.
+
+- Step 3c keeps the wallet in `wallet.a` or `wallet.b` and lists only in `probe` and a Create's check. `KeychainMappingTest` has 47 tests of the store's pure decisions, 14 of which failed first against stubs, each on the predicted disagreement. Twenty-four one-rule mutations were all caught. A throwaway harness passed 44 of 44 checks twice on an iOS 26.5 simulator, every read through the real Face ID card: the account alternated at each Replace, two copies in either order settled to the later one, and a Replace with both accounts taken changed nothing until a read settled them. On an iPhone 17 Pro simulator the real UI created a key (one item in `wallet.a`), enabled the lock (one item in `wallet.b`), reopened the same key after a kill and a relaunch, enabled the lock again from the catalog (one item in `wallet.a`), forgot the wallet after a missed face and the owner check, and wiped the item left by `simctl uninstall` at the reinstall's first launch, with the Welcome notice once. The simulator lists the item, so the refused listing is covered by the pure tests only.
+
 The Kotlin/Native test executable gets `errSecMissingEntitlement` for every Keychain call, so no unit test touches the real Keychain. Those proofs are the simulator runs.
 
 ## What each platform still owes
 
-The iPhone run owes the parts a simulator cannot show:
+The iPhone session of 2 Nov 2026 settled two items of this list: a read shows one card, not two, and a signed debug build ran. It also found that the store could not list its item, which step 3c answers. The iPhone still owes the parts a simulator cannot show:
 
-- whether one read shows one sheet or two (`EVALUATE_BEFORE_READ` switches to the Keychain's own sheet if it is two)
-- the signed device build
-- real Face ID, a failed face and the passcode inside one card
+- the step 3c store end to end on a signed build: create, Enable, kill, relaunch and unlock, a second Replace, Forget, and a delete and reinstall, which must open Welcome with the notice
+- whether `SecItemDelete` of this item shows a sheet or fails. A Replace, Forget and the reinstall wipe all delete. If the delete fails, the next Replace finds both accounts taken and fails, and so does every later one, because the read that would settle them deletes too.
+- whether a data read of an empty account with the evaluated context is silent (inferred: there is no item whose access control could ask)
+- whether the attributes-only read of the creation dates with the evaluated context is silent. Only two copies reach it, after a Replace whose delete did not happen.
+- a probe and a Create on a locked phone, which must answer try later
+- a failed face and the passcode inside the store's card
 - a kill while the card is up
 - removing the passcode, which must make the next launch say the wallet is gone
-- a delete and reinstall, which must open Welcome with the notice
-- that a cold start never stays inactive longer than the 3-second wait
+- that a cold start never stays inactive longer than the 3-second wait. The one cold start on the phone showed the card, so it held once.
 
 Android owes step 6 (the Keystore store) and step 7 (`Biometrics`, so the App Lock screen, the 60-second lock and the sign check work there). Both wait for decisions on the API floor, `minSdk`, `allowBackup` and `launchMode`. The emulator proof needs a PIN set with `adb shell locksettings set-pin`, and the hardware proof needs the POCO X3 NFC and the Galaxy S25 FE.
 
@@ -164,6 +172,8 @@ Android owes step 6 (the Keystore store) and step 7 (`Biometrics`, so the App Lo
 - A Forget from the unlock screen whose erase fails reads as "cannot open now", not as a failed erase.
 - The Welcome notice shows again if the user returns to Welcome in the same launch.
 - A user whose probe was in doubt may scan Face ID and then see the recovery screen for a missing item, because the face check now comes before the store looks for an item.
+- A Replace that finds both Keychain accounts taken fails until a read settles them, so a flag change or a payment of unknown outcome in that window is saved only after the next unlock (outcomes row 72). Two copies whose creation dates cannot be read, or a phone clock moved back between their adds, keep the wrong copy. Both copies hold the same wallet, so that loses at most its latest flags or payment of unknown outcome (rows 73 and 74).
+- An item that a build before step 3c wrote (`wallet.<generation>`) opens the recovery screen, where Forget erases it, and a fresh install wipes it (row 75). Only development installs hold one.
 - If the last flag write fails and nothing writes again before the app is killed, the stored `appLockEnabled` can be stale after a restart. The same holds for a payment of unknown outcome whose save failed: this run still refuses a second send, but a restart before the save is repeated forgets the payment.
 - A phone clock moved backwards after a broadcast of unknown outcome makes the two-minute rule slower, because the rule compares the clock with the stored time. A history that lists the txid still settles the payment at once, and a payment whose error named no txid settles only by time. A clock moved forward makes the rule faster, as it did before step 9.
 - Android keeps nothing yet, so a restart there still forgets a payment of unknown outcome, together with the wallet.
@@ -173,7 +183,7 @@ Android owes step 6 (the Keystore store) and step 7 (`Biometrics`, so the App Lo
 
 ## Next steps
 
-1. Run the iPhone acceptance with a person: create, back up, enable the lock, kill, relaunch and unlock, then the reinstall wipe.
+1. Run the iPhone acceptance of the step 3c store with a person: create, back up, enable the lock, kill, relaunch and unlock, enable the lock again from the catalog (a second Replace), Forget, then the reinstall wipe. Watch for a sheet at each delete.
 2. Add the compare-and-swap `Replace` before any real money.
 3. Build the Android Keystore store (step 6) and Android `Biometrics` (step 7) once the API floor and the manifest questions are decided.
 4. Optionally hide the screen under the in-session lock from accessibility (step 8).
