@@ -84,6 +84,7 @@ fun S5ReviewSignScreen(
         bottom = {
             BottomActions(
                 primaryLabel = when {
+                    attempt.running -> "กำลังส่ง…"
                     session.appLockEnabled -> "เซ็นด้วย Face ID"
                     wallet.mode == WalletMode.Demo -> "เซ็นบนเครื่องนี้ (demo)"
                     else -> "เซ็นและส่ง"
@@ -108,7 +109,7 @@ fun S5ReviewSignScreen(
                 linkLabel = "ยกเลิก",
                 linkTag = "cta_s5_cancel",
                 onLink = leave,
-                enabled = !attempt.running && wallet.balanceKnown,
+                enabled = !attempt.running && wallet.balanceKnown && wallet.unconfirmedSend == null,
                 linkColor = MbBody,
             )
         },
@@ -128,9 +129,9 @@ fun S5ReviewSignScreen(
             ReviewDivider()
             ReviewRow("คงเหลือ", "${formatBtc((wallet.balanceSats - total).coerceAtLeast(0))} BTC")
         }
-        reviewIssue(refused, failed)?.let {
+        reviewIssue(refused, failed, wallet.unconfirmedSend != null)?.let {
             Spacer(modifier = Modifier.height(20.dp))
-            IssueBanner("ส่งไม่สำเร็จ", it.message, it.tag)
+            IssueBanner(it.title, it.message, it.tag)
         }
         if (total > wallet.balanceSats) {
             Spacer(modifier = Modifier.height(12.dp))
@@ -139,9 +140,11 @@ fun S5ReviewSignScreen(
     }
 }
 
-internal enum class ReviewIssue(val message: String, val tag: String) {
-    SignRefused("ยืนยันตัวตนไม่สำเร็จ ลองอีกครั้ง · ยังไม่มีอะไรถูกเซ็นหรือส่ง", "sign_refused"),
-    BroadcastFailed("ลองอีกครั้ง · ตรวจยอดคงเหลือก่อนส่งซ้ำ", "error"),
+internal enum class ReviewIssue(val title: String, val message: String, val tag: String) {
+    SignRefused("ส่งไม่สำเร็จ", "ยืนยันตัวตนไม่สำเร็จ ลองอีกครั้ง · ยังไม่มีอะไรถูกเซ็นหรือส่ง", "sign_refused"),
+    BroadcastFailed("ส่งไม่สำเร็จ", "ลองอีกครั้ง · ตรวจยอดคงเหลือก่อนส่งซ้ำ", "error"),
+    // Not "failed", because the payment may be out.
+    BroadcastUnknown("ยังไม่ทราบผลการส่ง", "ไม่ทราบว่าการส่งล่าสุดออกไปแล้วหรือยัง อย่าส่งซ้ำ · เปิดหน้าแรกเพื่อตรวจยอดคงเหลือและรายการ", "send_unknown"),
 }
 
 /**
@@ -165,8 +168,9 @@ internal class SignAttempt {
     }
 }
 
-/** A refusal wins over a failed broadcast, because nothing was signed. */
-internal fun reviewIssue(refused: Boolean, failed: Boolean): ReviewIssue? = when {
+/** A payment that may be out ([unconfirmedSend]) wins over everything, because sending again could pay twice. A refusal wins over a failed broadcast, because nothing was signed. */
+internal fun reviewIssue(refused: Boolean, failed: Boolean, unconfirmedSend: Boolean = false): ReviewIssue? = when {
+    unconfirmedSend -> ReviewIssue.BroadcastUnknown
     refused -> ReviewIssue.SignRefused
     failed -> ReviewIssue.BroadcastFailed
     else -> null

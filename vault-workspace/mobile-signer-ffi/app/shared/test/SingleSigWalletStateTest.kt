@@ -150,4 +150,13 @@ class SingleSigWalletStateTest {
     fun anInvalidAddressIsNamedBeforeAnUnknownBalance() {
         assertEquals(SendIssue.InvalidAddress, sendIssue(false, 100_000, 1_128, 0, balanceKnown = false))
     }
+
+    @Test
+    fun anUnsettledPaymentKeepsEveryNewOneFromReviewAfterTheAddressAndBalanceChecks() {
+        assertEquals(SendIssue.PaymentUnconfirmed, sendIssue(null, 0, 1_128, 1_000_000, unconfirmedSend = true), "before anything is typed")
+        assertEquals(SendIssue.PaymentUnconfirmed, sendIssue(true, 100_000, 1_128, 1_000_000, unconfirmedSend = true), "a payment the balance covers")
+        assertEquals(SendIssue.PaymentUnconfirmed, sendIssue(true, 2_000_000, 1_128, 1_000_000, unconfirmedSend = true), "named before a shortfall")
+        assertEquals(SendIssue.BalanceUnavailable, sendIssue(true, 100_000, 1_128, 0, balanceKnown = false, unconfirmedSend = true))
+        assertEquals(SendIssue.InvalidAddress, sendIssue(false, 100_000, 1_128, 1_000_000, unconfirmedSend = true))
+    }
 }

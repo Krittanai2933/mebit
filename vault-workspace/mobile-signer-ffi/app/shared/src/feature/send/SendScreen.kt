@@ -91,7 +91,7 @@ fun S4SendScreen(
     val quote = rememberFiatQuote(quotes)
     val entry = remember(draft) { AmountEntry(draft) }
     val addressOk = if (draft.destination.isEmpty()) null else isValidAddress(draft.destination, KeyNetwork.TEST)
-    val issue = sendIssue(addressOk, draft.amountSats, draft.feeSats, wallet.balanceSats, wallet.balanceKnown)
+    val issue = sendIssue(addressOk, draft.amountSats, draft.feeSats, wallet.balanceSats, wallet.balanceKnown, wallet.unconfirmedSend != null)
     MebitScreen(
         eyebrow = "SEND · กระเป๋าใช้จ่าย",
         title = null,
@@ -126,6 +126,10 @@ fun S4SendScreen(
             SendIssue.BalanceUnavailable -> {
                 Spacer(modifier = Modifier.height(20.dp))
                 IssuePanel("BALANCE UNAVAILABLE", "ยังดึงยอดคงเหลือไม่ได้ จึงยังส่งไม่ได้ กลับไปหน้าแรกแล้วลองใหม่")
+            }
+            SendIssue.PaymentUnconfirmed -> {
+                Spacer(modifier = Modifier.height(20.dp))
+                IssuePanel("PAYMENT UNCONFIRMED", "การส่งครั้งก่อนยังยืนยันไม่ได้ รอสักครู่ แล้วเปิดหน้าแรกเพื่อตรวจยอดก่อนส่งอีกครั้ง")
             }
             is SendIssue.Insufficient -> {
                 Spacer(modifier = Modifier.height(20.dp))

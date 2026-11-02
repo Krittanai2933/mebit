@@ -8,6 +8,7 @@ import com.mebit.ffi.signer.HotSendResult
 import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.KeyNetwork
+import com.mebit.ffi.signer.MobileSignerException
 import com.mebit.ffi.signer.hotReceiveAddress
 import com.mebit.ffi.signer.hotSend
 import com.mebit.ffi.signer.hotWalletHistory
@@ -40,6 +41,9 @@ class SingleSigWallet(
         Unavailable,
     }
 
+    /** A payment whose broadcast ended in [MobileSignerException.BroadcastUnknown], so it may be out. [txid] is the one the error named, empty when it named none. [sinceSeconds] is the phone clock when the broadcast ended. */
+    data class UnconfirmedSend(val txid: String, val sinceSeconds: Long)
+
     /** The [WalletMode] the last [bindSession] left. [WalletMode.Demo] until the first bind. */
     var mode: WalletMode by mutableStateOf(WalletMode.Demo)
         private set
@@ -67,6 +71,10 @@ class SingleSigWallet(
     var history: List<HotTx> by mutableStateOf(emptyList())
         private set
 
+    /** The payment that may be out, or null. While it is set [broadcast] refuses, because the same payment could go out twice. A [bindSession] that loads clears it once [history] holds its txid or two minutes have passed, and [useDemoFixture] clears it. [lastTxid] and [lastSentAtSeconds] stay for payments that went out. */
+    var unconfirmedSend: UnconfirmedSend? by mutableStateOf(null)
+        private set
+
     fun bindSession(session: OnboardingSession, network: KeyNetwork = KeyNetwork.TEST) {
         lastError = null
         if (session.words.size < 12) {
@@ -79,10 +87,17 @@ class SingleSigWallet(
             balanceSats = snap.balanceSats.toLong()
             mode = WalletMode.Live
             // A history failure is not the wallet's, so its own try keeps it from changing the mode or reaching lastError.
-            history = try {
+            val loaded = try {
                 fetchHistory(session.words, session.passphrase, network)
             } catch (e: Exception) {
-                emptyList()
+                null
+            }
+            history = loaded ?: emptyList()
+            // Only a list that loaded can settle it, because the empty one of a failed call says nothing about the payment.
+            if (loaded != null) {
+                unconfirmedSend?.let { pending ->
+                    if (loaded.any { it.txid == pending.txid } || nowSeconds() - pending.sinceSeconds >= UNCONFIRMED_SEND_SETTLE_SECONDS) unconfirmedSend = null
+                }
             }
         } catch (e: Exception) {
             // Mode first, so no frame shows the cleared balance as a known one.
@@ -107,6 +122,15 @@ class SingleSigWallet(
         network: KeyNetwork = KeyNetwork.TEST,
     ): Boolean {
         lastError = null
+        if (unconfirmedSend != null) {
+            lastError = "การส่งครั้งก่อนยังยืนยันไม่ได้ จึงยังส่งใหม่ไม่ได้"
+            return false
+        }
+        // A real key never takes the mock below, which would show a made-up payment as sent.
+        if (session.words.size >= 12 && !live) {
+            lastError = "ยังดึงยอดคงเหลือไม่ได้ จึงยังส่งไม่ได้"
+            return false
+        }
         if (session.words.size < 12 || !live) {
             if (amountSats + feeSats > balanceSats) {
                 lastError = "ยอดไม่พอ"
@@ -126,6 +150,11 @@ class SingleSigWallet(
                 amountSats.toULong(),
                 feeSats.toULong(),
             )
+        } catch (e: MobileSignerException.BroadcastUnknown) {
+            unconfirmedSend = UnconfirmedSend(Regex("""\b[0-9a-f]{64}\b""").find(e.message.orEmpty())?.value.orEmpty(), nowSeconds())
+            // Plain Thai, because Home prints lastError raw until its next bind clears it, and the Rust text is English.
+            lastError = "ยังไม่ทราบว่าการส่งออกไปแล้วหรือยัง อย่าส่งซ้ำ"
+            return false
         } catch (e: Exception) {
             lastError = e.message
             return false
@@ -150,8 +179,12 @@ class SingleSigWallet(
         lastTxid = ""
         lastSentAtSeconds = 0L
         history = emptyList()
+        unconfirmedSend = null
     }
 }
+
+/** An explorer that answers lists a transaction its node took within seconds, so one still missing two minutes after an unclear broadcast is treated as not sent. */
+private const val UNCONFIRMED_SEND_SETTLE_SECONDS = 120L
 
 /** A typical 1-input, 2-output P2WPKH payment. The fee tiers are rate times this until coin selection reports the real size. */
 const val TYPICAL_VSIZE = 141L
@@ -184,13 +217,17 @@ sealed interface SendIssue {
 
     /** The balance could not be fetched, so no payment can be checked against it. */
     data object BalanceUnavailable : SendIssue
+
+    /** An earlier payment may be out ([SingleSigWallet.unconfirmedSend]), so a new one could pay twice. */
+    data object PaymentUnconfirmed : SendIssue
     data class Insufficient(val missingSats: Long) : SendIssue
 }
 
-/** What keeps a payment from review, if anything. [addressOk] is null while the address field is empty. [balanceKnown] is false when the balance could not be fetched. */
-fun sendIssue(addressOk: Boolean?, amountSats: Long, feeSats: Long, balanceSats: Long, balanceKnown: Boolean = true): SendIssue? = when {
+/** What keeps a payment from review, if anything. [addressOk] is null while the address field is empty. [balanceKnown] is false when the balance could not be fetched. [unconfirmedSend] is true while an earlier payment may be out. */
+fun sendIssue(addressOk: Boolean?, amountSats: Long, feeSats: Long, balanceSats: Long, balanceKnown: Boolean = true, unconfirmedSend: Boolean = false): SendIssue? = when {
     addressOk == false -> SendIssue.InvalidAddress
     !balanceKnown -> SendIssue.BalanceUnavailable
+    unconfirmedSend -> SendIssue.PaymentUnconfirmed
     amountSats > 0 && amountSats + feeSats > balanceSats -> SendIssue.Insufficient(amountSats + feeSats - balanceSats)
     else -> null
 }

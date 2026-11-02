@@ -29,4 +29,20 @@ class ReviewIssueTest {
     fun aRefusalBeatsAFailedBroadcastBecauseNothingWasSigned() {
         assertEquals(ReviewIssue.SignRefused, reviewIssue(refused = true, failed = true))
     }
+
+    @Test
+    fun aPaymentThatMayBeOutBeatsEveryOtherIssueBecauseSendingAgainCouldPayTwice() {
+        for (refused in listOf(false, true)) {
+            for (failed in listOf(false, true)) {
+                assertEquals(ReviewIssue.BroadcastUnknown, reviewIssue(refused, failed, unconfirmedSend = true), "refused=$refused failed=$failed")
+            }
+        }
+        assertEquals("send_unknown", ReviewIssue.BroadcastUnknown.tag)
+    }
+
+    @Test
+    fun anUnknownOutcomeIsNeverHeadlinedAsAFailureBecauseThePaymentMayBeOut() {
+        assertEquals("ส่งไม่สำเร็จ", ReviewIssue.BroadcastFailed.title)
+        assertEquals("ยังไม่ทราบผลการส่ง", ReviewIssue.BroadcastUnknown.title)
+    }
 }

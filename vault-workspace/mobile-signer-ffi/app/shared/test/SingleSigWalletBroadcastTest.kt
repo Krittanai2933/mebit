@@ -1,9 +1,11 @@
 package com.mebit.app.data
 
+import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
 import com.mebit.ffi.signer.HotSendResult
 import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.KeyNetwork
+import com.mebit.ffi.signer.MobileSignerException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -20,6 +22,16 @@ private const val DESTINATION = "tb1qdestinationfortheseteststhatneverleaves"
 
 // 23 ต.ค. 2569 · 14:32 น. in Bangkok, the time on board 4.6.
 private const val SENT_AT = 1_792_740_720L
+
+private const val UNKNOWN_TXID = "a14858161cc59cc1fdcafd3b8dfa3d8eb1731e69f28a304f806f98c1d2b9eb9f"
+
+// The Rust MobileSignerError::BroadcastUnknown Display, which is the Kotlin message, so the txid is read from the real wording.
+private const val UNKNOWN_MESSAGE = "it is not known whether transaction $UNKNOWN_TXID was sent, so do not repeat the payment until the wallet and this transaction id have been checked"
+
+// What Home would print raw, so it must not be the English Rust text above.
+private const val UNKNOWN_SHOWN = "ยังไม่ทราบว่าการส่งออกไปแล้วหรือยัง อย่าส่งซ้ำ"
+private const val NOT_LIVE = "ยังดึงยอดคงเหลือไม่ได้ จึงยังส่งไม่ได้"
+private const val EARLIER_UNSETTLED = "การส่งครั้งก่อนยังยืนยันไม่ได้ จึงยังส่งใหม่ไม่ได้"
 
 private data class SendCall(val words: List<String>, val passphrase: String, val network: KeyNetwork, val destination: String, val amountSats: ULong, val feeSats: ULong)
 
@@ -38,7 +50,8 @@ private class FakeHot {
     var clock = SENT_AT
     val sends = mutableListOf<SendCall>()
     var snapshots = 0
-    val history = listOf(HotTx("txid-0", 1_000_000L, 3u, 1_760_000_000uL))
+    var history = listOf(HotTx("txid-0", 1_000_000L, 3u, 1_760_000_000uL))
+    var historyFails = false
     val wallet = SingleSigWallet(
         send = { words, passphrase, network, destination, amountSats, feeSats ->
             sends += SendCall(words, passphrase, network, destination, amountSats, feeSats)
@@ -48,7 +61,7 @@ private class FakeHot {
             snapshots++
             snapshotResult()
         },
-        fetchHistory = { _, _, _ -> history },
+        fetchHistory = { _, _, _ -> if (historyFails) throw IllegalStateException("history unreadable") else history },
         nowSeconds = { clock++ },
         receiveAddressOf = { _, _, _, _ -> "tb1qoffline" },
     )
@@ -62,6 +75,16 @@ private class FakeHot {
         assertEquals(history, wallet.history)
         return session
     }
+}
+
+/** A live wallet whose broadcast at [SENT_AT] ended in BroadcastUnknown for [UNKNOWN_TXID]. Send works again afterwards, so a payment that wrongly reaches it goes out. */
+private fun FakeHot.unknownSend(): OnboardingSession {
+    val session = goLive()
+    sendResult = { throw MobileSignerException.BroadcastUnknown(UNKNOWN_MESSAGE) }
+    assertFalse(wallet.broadcast(session, 100_000, 1_128, DESTINATION))
+    assertEquals(UnconfirmedSend(UNKNOWN_TXID, SENT_AT), wallet.unconfirmedSend)
+    sendResult = { HotSendResult("txid-2") }
+    return session
 }
 
 private fun walletThatMustNotCallHot(nowSeconds: () -> Long = { 0L }) = SingleSigWallet(
@@ -194,5 +217,142 @@ class SingleSigWalletBroadcastTest {
         assertEquals(SENT_AT, hot.wallet.lastSentAtSeconds)
         hot.wallet.useDemoFixture()
         assertEquals(0L, hot.wallet.lastSentAtSeconds)
+    }
+
+    @Test
+    fun aRealKeyOnAnUnavailableWalletIsRefusedAndNoPaymentIsFaked() {
+        val hot = FakeHot()
+        hot.snapshotResult = { throw IllegalStateException("esplora unreachable") }
+        val session = sessionWithWords(WORDS, PASSPHRASE)
+        hot.wallet.bindSession(session)
+        val returned = hot.wallet.broadcast(session, 100_000, 1_128, DESTINATION)
+        assertEquals(Seen(false, "", NOT_LIVE, 0L, "tb1qoffline"), hot.wallet.seen(returned))
+        assertEquals(0L, hot.wallet.lastSentAtSeconds)
+        assertEquals(emptyList<SendCall>(), hot.sends)
+    }
+
+    @Test
+    fun aRealKeyWhoseFirstBindHasNotEndedIsRefusedEvenWhileTheDemoBalanceShows() {
+        val hot = FakeHot()
+        val session = sessionWithWords(WORDS, PASSPHRASE)
+        assertFalse(hot.wallet.broadcast(session, 100_000, 1_128, DESTINATION), "a wallet never bound")
+        assertEquals(NOT_LIVE, hot.wallet.lastError)
+        hot.wallet.bindSession(OnboardingSession())
+        val returned = hot.wallet.broadcast(session, 100_000, 1_128, DESTINATION)
+        assertEquals(Seen(false, "", NOT_LIVE, 1_250_000L, "tb1qmebitdemosinglesig0000000000000000recv"), hot.wallet.seen(returned), "the demo's balance pays for nothing")
+        assertEquals(0L, hot.wallet.lastSentAtSeconds)
+        assertEquals(emptyList<SendCall>(), hot.sends)
+    }
+
+    @Test
+    fun anUnknownBroadcastIsNeitherASentPaymentNorAFailureToRetry() {
+        val hot = FakeHot()
+        val session = hot.goLive()
+        hot.sendResult = { throw MobileSignerException.BroadcastUnknown(UNKNOWN_MESSAGE) }
+        val returned = hot.wallet.broadcast(session, 100_000, 1_128, DESTINATION)
+        assertEquals(Seen(false, "", UNKNOWN_SHOWN, 1_000_000L, "tb1qbefore"), hot.wallet.seen(returned), "no txid of a sent payment")
+        assertEquals(0L, hot.wallet.lastSentAtSeconds, "no send time of a sent payment")
+        assertEquals(UnconfirmedSend(UNKNOWN_TXID, SENT_AT), hot.wallet.unconfirmedSend, "the txid from the message and the clock when it failed")
+    }
+
+    @Test
+    fun noPaymentReachesSendWhileAnUnknownOneIsUnsettled() {
+        val hot = FakeHot()
+        val session = hot.unknownSend()
+        val returned = hot.wallet.broadcast(session, 50_000, 1_128, DESTINATION)
+        assertEquals(Seen(false, "", EARLIER_UNSETTLED, 1_000_000L, "tb1qbefore"), hot.wallet.seen(returned))
+        assertEquals(1, hot.sends.size, "only the unknown payment reached send")
+    }
+
+    @Test
+    fun anUnknownBroadcastWhoseMessageNamesNoTxidStillHoldsTheWallet() {
+        val hot = FakeHot()
+        val session = hot.goLive()
+        hot.sendResult = { throw MobileSignerException.BroadcastUnknown("the explorer's answer was lost") }
+        assertFalse(hot.wallet.broadcast(session, 100_000, 1_128, DESTINATION))
+        assertEquals(UnconfirmedSend("", SENT_AT), hot.wallet.unconfirmedSend)
+        hot.sendResult = { HotSendResult("txid-2") }
+        assertFalse(hot.wallet.broadcast(session, 100_000, 1_128, DESTINATION))
+        assertEquals(1, hot.sends.size)
+    }
+
+    @Test
+    fun aLoadedBindWhoseHistoryHoldsTheTxidSettlesItAtOnce() {
+        val hot = FakeHot()
+        val session = hot.unknownSend()
+        hot.history = listOf(HotTx(UNKNOWN_TXID, -101_128L, 0u, null)) + hot.history
+        hot.wallet.bindSession(session)
+        assertNull(hot.wallet.unconfirmedSend, "the payment is out and Home lists it")
+        assertTrue(hot.wallet.broadcast(session, 50_000, 1_128, DESTINATION), "a new payment can start")
+    }
+
+    @Test
+    fun aLoadedBindWithoutTheTxidKeepsItUnderTwoMinutes() {
+        val hot = FakeHot()
+        val session = hot.unknownSend()
+        hot.clock = SENT_AT + 119
+        hot.wallet.bindSession(session)
+        assertEquals(UnconfirmedSend(UNKNOWN_TXID, SENT_AT), hot.wallet.unconfirmedSend)
+        assertFalse(hot.wallet.broadcast(session, 50_000, 1_128, DESTINATION))
+        assertEquals(1, hot.sends.size)
+    }
+
+    @Test
+    fun aLoadedBindWithoutTheTxidSettlesItAtTwoMinutes() {
+        val hot = FakeHot()
+        val session = hot.unknownSend()
+        hot.clock = SENT_AT + 120
+        hot.wallet.bindSession(session)
+        assertNull(hot.wallet.unconfirmedSend, "two minutes of a readable explorer without it count as not sent")
+        assertTrue(hot.wallet.broadcast(session, 50_000, 1_128, DESTINATION))
+    }
+
+    @Test
+    fun aBindWhoseHistoryCouldNotBeLoadedNeverSettlesItByTime() {
+        val hot = FakeHot()
+        val session = hot.unknownSend()
+        hot.clock = SENT_AT + 600
+        hot.historyFails = true
+        hot.wallet.bindSession(session)
+        assertTrue(hot.wallet.live, "the snapshot loaded")
+        assertEquals(emptyList<HotTx>(), hot.wallet.history)
+        assertEquals(UnconfirmedSend(UNKNOWN_TXID, SENT_AT), hot.wallet.unconfirmedSend, "an empty list from a failed call says nothing about the payment")
+        assertFalse(hot.wallet.broadcast(session, 50_000, 1_128, DESTINATION))
+        assertEquals(1, hot.sends.size)
+        hot.historyFails = false
+        hot.wallet.bindSession(session)
+        assertNull(hot.wallet.unconfirmedSend, "a list that loads settles it, here by time")
+    }
+
+    @Test
+    fun aFailedBindNeverSettlesItHoweverLongAgo() {
+        val hot = FakeHot()
+        val session = hot.unknownSend()
+        hot.clock = SENT_AT + 600
+        hot.snapshotResult = { throw IllegalStateException("esplora unreachable") }
+        hot.wallet.bindSession(session)
+        assertEquals(UnconfirmedSend(UNKNOWN_TXID, SENT_AT), hot.wallet.unconfirmedSend)
+        assertFalse(hot.wallet.broadcast(session, 50_000, 1_128, DESTINATION))
+        assertEquals(EARLIER_UNSETTLED, hot.wallet.lastError, "the earlier payment is named before the unknown balance")
+    }
+
+    @Test
+    fun theDemoFixtureForgetsAnUnknownBroadcast() {
+        val hot = FakeHot()
+        hot.unknownSend()
+        hot.wallet.useDemoFixture()
+        assertNull(hot.wallet.unconfirmedSend)
+    }
+
+    @Test
+    fun anyOtherSendFailureIsAPlainFailureThatCanBeTriedAgain() {
+        val hot = FakeHot()
+        val session = hot.goLive()
+        hot.sendResult = { throw MobileSignerException.InvalidPsbtJson("esplora post: status code 400") }
+        assertFalse(hot.wallet.broadcast(session, 100_000, 1_128, DESTINATION))
+        assertNull(hot.wallet.unconfirmedSend)
+        hot.sendResult = { HotSendResult("txid-2") }
+        assertTrue(hot.wallet.broadcast(session, 100_000, 1_128, DESTINATION), "the retry reaches send")
+        assertEquals(2, hot.sends.size)
     }
 }
