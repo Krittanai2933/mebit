@@ -45,7 +45,7 @@ The layers, from the platform up:
 |---|---|---|
 | `SecureStore` | `src/SecureStore.kt` | The only platform seam. Six methods on bytes: `probe` and `marker` never prompt, `read` may show the OS sheet, `write` never prompts and is all or nothing, `erase` is idempotent, `writeMarker` reports whether it took effect. Results are closed enums with no free text. |
 | Keychain store | `src@ios/SecureStore.ios.kt` | The iOS actual. It keeps the wallet in one of two fixed Keychain accounts, and a marker file. |
-| `NotWired` | `src@android/SecureStore.android.kt` | The Android actual until step 6. It stores nothing. |
+| Keystore store | `src@android/SecureStore.android.kt` | The Android actual. It keeps the wallet in one envelope file under a Keystore key pair, and no marker. Its sheet is `askOwner` in `src@android/OwnerPrompt.android.kt`. |
 | `SavedWallet` | `src/data/SavedWallet.kt` | The record codec and its version, the testnet guard, the mapping of platform results to `UnlockResult` and `SaveResult`, and the reinstall rule (`start()` with the pure `reinstallPolicy`). The only code that calls `SecureStore`. |
 | `OnboardingSession` | `src/data/OnboardingSession.kt` | One write point (`persist()`), `install`, `proveSavedCopy`, `forgetSavedWallet`, `flushPendingSave`, `recordUnconfirmedSend` and `clearUnconfirmedSend`, and the `saved` and `notSavedBecause` state that screens read. |
 | `WalletGateState` | `src/navigation/WalletGateState.kt` | The boot state, `unlock`, and an owner-checked `forget`. |
@@ -78,18 +78,20 @@ When a broadcast ends in `BroadcastUnknown`, `SingleSigWallet.broadcast` sets it
 - `read` waits up to 3 seconds for the app to be active, evaluates `deviceOwnerAuthentication` (Face ID first, the passcode inside the same card), and hands that context to a data-only read of `wallet.a` and of `wallet.b` (`EVALUATE_BEFORE_READ`). The iPhone answered such a read with no second sheet. A simulator enforces no Keychain access control, so without the evaluation it would show no card at all. One account with bytes is the wallet. Two (a Replace whose delete did not happen) are settled by each item's creation date, read only on that path: the read returns the later copy and deletes the other. With no bytes the read is `NotFound` when both accounts found nothing, else the first account's other answer. The store's lock is held only around the Keychain calls, never while the card is up.
 - The marker file `Application Support/mebit/wallet-marker` holds `empty` or `kept`. It stays in backups on purpose, so a same-device restore keeps a good wallet. `reinstallPolicy(marker, probe)` decides the rest. A fresh install that finds an item left by a deleted install erases it and shows a one-time notice on Welcome. A probe in doubt never wipes.
 
-## Android keeps nothing yet, and a Keystore envelope comes next
+## Android keeps one envelope under a Keystore key
 
-Today `NotWired` answers `Unavailable(NotWired)` to every probe, read and write. The app keeps the wallet in memory only, as before D1, and the not-saved notice says so on Key Created and both Home screens. A cold start opens Welcome.
+Step 6 built the store behind the same seam, following `.audit/d1-secure-storage/android/spike-2026-11-03.md`:
 
-Step 6 plans the real store behind the same seam:
+- An RSA-2048 key pair in AndroidKeyStore under the fixed alias `com.mebit.app.wallet`. Every use of the private half needs the owner (`setUserAuthenticationParameters(0, AUTH_BIOMETRIC_STRONG or AUTH_DEVICE_CREDENTIAL)`). It also needs an unlocked phone (`setUnlockedDeviceRequired(true)`) and survives a new fingerprint. It is made in StrongBox first, and in the TEE on `StrongBoxUnavailableException`.
+- One file, `noBackupFilesDir/wallet`, written through `AtomicFile`, so a reader sees the old copy or the new one. It holds `[MW, version 1][wrapped length][RSA-OAEP-wrapped AES-256 key][12-byte IV][AES-GCM ciphertext and tag]`, and the header is GCM's extra data. A write makes a fresh AES key, wraps it with a software copy of the public half and never prompts. Android needs no two-slot scheme, because its writes never prompt.
+- A read shows one framework `BiometricPrompt` with the private half as its `CryptoObject`, through `askOwner` in `src@android/OwnerPrompt.android.kt`, which step 7 can reuse. The store's lock is never held while the sheet is up.
+- `probe` checks the API level, then the file, then the key, then the screen lock. A file without its key is `KeyGone`, so a phone whose screen lock was removed reaches the recovery screen and not Welcome. No file and no screen lock is `NoScreenLock`.
+- The key is made on a background thread when the probe finds no wallet on a phone with a screen lock, after an erase, or at a write that finds none. It is never made over a stored wallet's key. A write that arrives before it is ready answers `TryLater`, and the session saves again at its next write point or when the app returns.
+- `erase` deletes the key and the file. `marker()` is `Unsupported`, so the reinstall rule never wipes. An uninstall removes the file and the key together.
+- Below API 30 nothing is stored (`OsTooOld`), and the not-saved notice says so. `minSdk` stays 24.
+- The manifest has `allowBackup="false"`, data extraction rules that exclude every domain from cloud backup and device transfer, `USE_BIOMETRIC`, and `launchMode="singleTask"` and `configChanges` on `MainActivity`, so a rotation does not rebuild the gate and ask again.
 
-- a non-exportable RSA-2048 key pair in AndroidKeyStore that needs user authentication on every use (`BIOMETRIC_STRONG` or `DEVICE_CREDENTIAL`), StrongBox first
-- a random AES-256-GCM key per write, wrapped with the public half, so a write never prompts
-- a read that unwraps through the framework `BiometricPrompt` with a `CryptoObject`, which is the one prompt per cold start
-- the ciphertext in `noBackupFilesDir`, written through `AtomicFile`
-- a probe that checks the wallet file first, so a phone whose screen lock was removed reaches the recovery screen and not Welcome
-- API 30 as the floor, with older phones kept memory only, plus `USE_BIOMETRIC`, `configChanges` and `launchMode=singleTask` on `MainActivity`
+The pure decisions (probe, read, prompt error, unwrap, write, key generation, erase) and the envelope have 26 host tests in `test@android/KeystoreMappingTest.kt`.
 
 ## Threat model
 
@@ -150,6 +152,8 @@ Only these rows destroy data. Row 17 erases the orphan of a deleted install, by 
 
 - The second iPhone session (3 Nov 2026, the same iPhone 15, a signed debug build of `7477818` with a throwaway status-logging patch that changes no logic) ran the step 3c store end to end, and every step passed. At the first launch after a delete and a reinstall the probe read its refused list (-25308) as a wallet, `SecItemDelete` of the old item answered 0 in 4 ms with no sheet, and Welcome showed the one-time notice. Create added `wallet.a` silently. Enable cost one Face ID scan. The read of `wallet.a` returned its 173 bytes, the read of the empty `wallet.b` answered not found in 4 ms with no prompt, and the Replace added to `wallet.b` after `wallet.a` answered duplicate, then deleted `wallet.a` silently. After a kill and a relaunch the probe said Present, one scan unlocked the wallet from `wallet.b`, and the fingerprint matched the one shown at creation. After 70 seconds away the unlock screen appeared, so the lock flag written by that Replace survived. A missed face and Cancel left the unlock screen with its button and no error line, and a Forget with one owner scan erased the item with status 0 and opened Welcome. `.audit/d1-secure-storage/phone/` holds both logs and the evidence notes.
 
+- Step 6, the Android Keystore store, has 26 host tests (`KeystoreMappingTest`). The first 24 tests all failed against stubs. Two more were added when a mutation survived or would have. Twenty-six one-rule mutations were all caught (`.audit/d1-secure-storage/android/mutate.py` reruns them). On the `Medium_Phone_API_36.0` emulator (API 36, PIN 1234, a software Keystore), the real UI ran as follows on 3 Nov 2026. Key Created showed the delete warning and no notice, and the wallet file held 459 bytes. App Lock Enable read the copy back through one PIN prompt. After a force-stop and a relaunch, the unlock screen showed the prompt, and the PIN opened first-run Home with the same fingerprint. The system logged one auth session with `IsCrypto: true`. Cancel left the unlock button and no second prompt. A rotation while the prompt was up kept one session. With the PIN removed the next launch showed the recovery screen, and Forget erased the file without a prompt. With no screen lock a new key showed the NoScreenLock notice. An uninstall and a reinstall opened Welcome.
+
 The Kotlin/Native test executable gets `errSecMissingEntitlement` for every Keychain call, so no unit test touches the real Keychain. Those proofs are the simulator runs and the two iPhone sessions.
 
 ## What each platform still owes
@@ -164,11 +168,18 @@ The iPhone sessions of 2 and 3 Nov 2026 settled most of this list. A read shows 
 - removing the passcode, which must make the next launch say the wallet is gone
 - a cold start that stays inactive longer than the 3-second wait. Every cold start on the phone showed the card at once.
 
-Android owes step 6 (the Keystore store) and step 7 (`Biometrics`, so the App Lock screen, the 60-second lock and the sign check work there). The decisions were made on 3 Nov 2026: saving needs API 30 or higher and older phones stay memory-only, `minSdk` stays 24, `allowBackup` is false app-wide, and `MainActivity` gets `launchMode=singleTask`. The emulator proof needs a PIN set with `adb shell locksettings set-pin`. The only Android phone available is the POCO X3 NFC (Android 11, no StrongBox), so the StrongBox path stays unproven until a StrongBox phone such as the Galaxy S25 FE is available.
+Android has step 6, built and proven on an emulator only. It still owes:
+
+- step 7 (`Biometrics`) before step 6 ships. Today App Lock Enable on a saved wallet reads the copy back through the store and turns the lock on. After 60 seconds away the in-session lock then asks the stub `Biometrics`, which answers unavailable to both buttons, so the only way back is to kill the app. This was seen on the emulator.
+- the POCO X3 NFC round with a person (Android 11, MIUI, a TEE and no StrongBox): the key's security level and generation time, whether the `CryptoObject` prompt with the screen lock works on API 30, a fingerprint read, Cancel, a lockout, and whether removing the PIN also deletes the key there
+- API 30 to 32, where the Keystore error code 10 cannot be read, so a wrapped key that is not this one reads as try again, not as damage
+- StrongBox generation and its time, on a phone that has one, such as the Galaxy S25 FE
+- face unlock, Smart Lock and trust agents with `setUnlockedDeviceRequired`
+- a real `KeyPermanentlyInvalidatedException`, which the emulator never sent
 
 ## Known gaps
 
-- Two live app instances can bring back a forgotten wallet over a new one through a stale `Replace` (outcomes row 33). It needs two instances in one process, which happens on Android only. `launchMode=singleTask` and a compare-and-swap `Replace` are the planned fixes. The second touches the store seam and should land before any real money.
+- Two live app instances can bring back a forgotten wallet over a new one through a stale `Replace` (outcomes row 33). It needs two instances in one process, which happens on Android only. Step 6 set `launchMode=singleTask` on `MainActivity`, so the launcher cannot stack a second one. A compare-and-swap `Replace` is still planned. It touches the store seam and should land before any real money.
 - A Forget from the unlock screen whose erase fails reads as "cannot open now", not as a failed erase.
 - The Welcome notice shows again if the user returns to Welcome in the same launch.
 - A user whose probe was in doubt may scan Face ID and then see the recovery screen for a missing item, because the face check now comes before the store looks for an item.
@@ -176,7 +187,7 @@ Android owes step 6 (the Keystore store) and step 7 (`Biometrics`, so the App Lo
 - An item that a build before step 3c wrote (`wallet.<generation>`) opens the recovery screen, where Forget erases it, and a fresh install wipes it (row 75). Only development installs hold one.
 - If the last flag write fails and nothing writes again before the app is killed, the stored `appLockEnabled` can be stale after a restart. The same holds for a payment of unknown outcome whose save failed: this run still refuses a second send, but a restart before the save is repeated forgets the payment.
 - A phone clock moved backwards after a broadcast of unknown outcome makes the two-minute rule slower, because the rule compares the clock with the stored time. A history that lists the txid still settles the payment at once, and a payment whose error named no txid settles only by time. A clock moved forward makes the rule faster, as it did before step 9.
-- Android keeps nothing yet, so a restart there still forgets a payment of unknown outcome, together with the wallet.
+- An Android phone below API 30 keeps nothing, so a restart there still forgets a payment of unknown outcome, together with the wallet.
 - `persist()` was written for the main thread, and `broadcast` and `bindSession` now call it from `Dispatchers.Default`. If a foreground flush after an earlier failed save overlaps, within a few milliseconds, the write of a payment of unknown outcome, the saved copy can end up without the payment while memory still holds it. The next write repairs it, and a restart before that forgets the payment. Serialising `persist()` closes the window.
 - The keyring, vaults, paired devices and the Trezor pairing credential do not survive a restart.
 - No Penpot board exists for the unlock screen, the recovery screen, the Forget sheet, the Welcome notice, the not-saved notice or the delete warning. `docs/04-open-items.md` lists them with their Thai copy.
@@ -184,6 +195,6 @@ Android owes step 6 (the Keystore store) and step 7 (`Biometrics`, so the App Lo
 ## Next steps
 
 1. Add the compare-and-swap `Replace` before any real money.
-2. Build the Android Keystore store (step 6) and Android `Biometrics` (step 7). Run a device spike of the exact Keystore and BiometricPrompt operations first, the hands-free part on an emulator and then one round on the POCO X3 NFC.
+2. Build Android `Biometrics` (step 7), then run the POCO X3 NFC round before step 6 ships.
 3. Optionally hide the screen under the in-session lock from accessibility (step 8).
 4. Have the security review read D1, including the Android envelope, before the testnet-only limit is lifted.
