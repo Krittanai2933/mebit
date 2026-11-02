@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -87,14 +88,16 @@ import com.mebit.app.data.suggestionWindow
 import com.mebit.app.hideWhen
 import com.mebit.app.rememberCaptureGuard
 import com.mebit.app.resources.Res
+import com.mebit.app.resources.ic_check
 import com.mebit.app.resources.ic_eye
-import com.mebit.app.resources.ic_tick_white
+import com.mebit.app.resources.ic_eye_off
 import com.mebit.app.resources.ic_warning
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbEyebrow
+import com.mebit.app.ui.theme.MbGreenWash
 import com.mebit.app.ui.theme.MbIconWash
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
@@ -234,7 +237,7 @@ private fun SeedGrid(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .height(SEED_CARD_HEIGHT.dp)
+            .height((SEED_CARD_HEIGHT + if (draft.passphrase.isNotEmpty()) PASSPHRASE_SET_GROWTH else 0).dp)
             .bringIntoViewRequester(reveal)
             .testTag("seed_grid"),
     ) {
@@ -293,26 +296,34 @@ private fun SeedGrid(
     }
 }
 
-/** Board 1B.1's Passphrase option in the seed card. Set, it is ticked and reads "ตั้งแล้ว" with an edit link, on the same row. Ticking opens the sheet, unticking clears it. */
+// Board 1B.4.3 grows the card from 357 to 374 once the passphrase status row (46 tall) replaces the 34 tall option.
+private const val PASSPHRASE_SET_GROWTH = 17
+
+/** Board 1B.1's empty Passphrase box, and board 1B.4.3's status row once set: a green check (tap clears), "ตั้งแล้ว", and an edit link. */
 @Composable
 private fun PassphraseOption(set: Boolean, onOpen: () -> Unit, onClear: () -> Unit) {
     val box = RoundedCornerShape(10.dp)
-    Row(modifier = Modifier.fillMaxWidth().height(SEED_SLOT.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier = Modifier.fillMaxWidth().height(if (set) 46.dp else SEED_SLOT.dp), verticalAlignment = Alignment.CenterVertically) {
         Row(
             modifier = Modifier
-                .height(SEED_SLOT.dp)
+                // The board puts the check 12dp from the card edge, the card content starts at 16dp.
+                .offset(x = if (set) (-4).dp else 0.dp)
+                .height(if (set) 46.dp else SEED_SLOT.dp)
                 .toggleable(value = set, role = Role.Checkbox, onValueChange = { if (it) onOpen() else onClear() })
                 .testTag("seed_passphrase"),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier.size(width = 28.dp, height = SEED_SLOT.dp).clip(box).background(if (set) MbNavy else MbPage),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (set) Image(painterResource(Res.drawable.ic_tick_white), contentDescription = null, modifier = Modifier.size(24.dp))
+            if (set) {
+                Box(modifier = Modifier.size(26.dp).background(MbGreenWash, CircleShape), contentAlignment = Alignment.Center) {
+                    Image(painterResource(Res.drawable.ic_check), contentDescription = null, modifier = Modifier.size(26.dp))
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Text("Passphrase · ตั้งแล้ว", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            } else {
+                Box(modifier = Modifier.size(width = 28.dp, height = SEED_SLOT.dp).clip(box).background(MbPage))
+                Spacer(modifier = Modifier.width(5.dp))
+                Text("Passphrase", color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
             }
-            Spacer(modifier = Modifier.width(5.dp))
-            Text(if (set) "Passphrase · ตั้งแล้ว" else "Passphrase", color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
         }
         if (set) {
             Spacer(modifier = Modifier.weight(1f))
@@ -321,7 +332,7 @@ private fun PassphraseOption(set: Boolean, onOpen: () -> Unit, onClear: () -> Un
                 color = MbNavy,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.clickable(onClick = onOpen).padding(4.dp).testTag("seed_passphrase_edit"),
+                modifier = Modifier.clickable(onClick = onOpen).padding(vertical = 4.dp).testTag("seed_passphrase_edit"),
             )
         }
     }
@@ -535,8 +546,8 @@ private fun PassphraseSheet(draft: ImportSeedDraft, guard: CaptureGuard, onDone:
                     modifier = Modifier.weight(1f).testTag("seed_passphrase_field"),
                 )
                 Image(
-                    painterResource(Res.drawable.ic_eye),
-                    contentDescription = "แสดง passphrase",
+                    painterResource(if (reveal) Res.drawable.ic_eye else Res.drawable.ic_eye_off),
+                    contentDescription = if (reveal) "ซ่อน passphrase" else "แสดง passphrase",
                     modifier = Modifier.size(24.dp).clickable { reveal = !reveal }.testTag("seed_passphrase_eye"),
                 )
             }
