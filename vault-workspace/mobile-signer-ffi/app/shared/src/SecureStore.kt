@@ -1,5 +1,7 @@
 package com.mebit.app
 
+import androidx.compose.runtime.Composable
+
 /** Why this phone cannot hold or release a wallet right now. A closed set, so no message can ever carry data. */
 enum class Why { NoScreenLock, OsTooOld, NotWired, TryLater, Other }
 
@@ -91,3 +93,7 @@ internal interface SecureStore {
     /** Atomic and never prompts. True when the marker now reads as [marker], and also where the marker is Unsupported, because there it is a no-op. False when the write did not take effect. */
     fun writeMarker(marker: Marker): Boolean
 }
+
+/** This platform's store. Composable because the Android one will need a Context. */
+@Composable
+internal expect fun rememberSecureStore(): SecureStore
