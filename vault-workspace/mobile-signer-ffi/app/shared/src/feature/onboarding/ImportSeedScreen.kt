@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -56,6 +57,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
@@ -72,13 +74,23 @@ import androidx.compose.ui.unit.sp
 import com.mebit.app.CaptureGuard
 import com.mebit.app.data.ImportSeedDraft
 import com.mebit.app.data.OnboardingSession
+import com.mebit.app.data.POPOVER_ROW
+import com.mebit.app.data.SEED_CARD_HEIGHT
+import com.mebit.app.data.SEED_CARD_PAD
+import com.mebit.app.data.SEED_ROWS
+import com.mebit.app.data.SEED_ROW_PITCH
+import com.mebit.app.data.SEED_SLOT
 import com.mebit.app.data.SeedStatus
+import com.mebit.app.data.SuggestionWindow
 import com.mebit.app.data.ffiImportSeedDraft
+import com.mebit.app.data.popoverPlacement
+import com.mebit.app.data.suggestionWindow
 import com.mebit.app.hideWhen
 import com.mebit.app.rememberCaptureGuard
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_check
 import com.mebit.app.resources.ic_eye
+import com.mebit.app.resources.ic_tick_white
 import com.mebit.app.resources.ic_warning
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
@@ -95,11 +107,7 @@ import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbWhite
 import org.jetbrains.compose.resources.painterResource
 
-// Penpot Organize > 1B.1 to 1B.4.5. The grid is 3 columns of 8 slots, numbered down each column.
-private const val ROWS = 8
-private const val ROW_PITCH = 36 // a 30dp slot and a 6dp gap
-private const val GRID_HEIGHT = 320
-private const val DROPDOWN_ROW = 36
+// Penpot Organize > 1B.1 to 1B.4.5. The card's geometry is in SeedPopover.kt, next to the popover rules that use it.
 private const val LAST_SLOT = 23
 
 private enum class ImportSheet { Passphrase, Fingerprint }
@@ -157,26 +165,18 @@ fun ImportSeedScreen(
             } else {
                 Spacer(modifier = Modifier.height(12.dp))
                 PrimaryCta("นำเข้ากุญแจ", "cta_import_seed", ::restore, enabled = draft.canImport)
-                if (draft.passphrase.isEmpty()) {
-                    TextButton(
-                        onClick = { sheet = ImportSheet.Passphrase },
-                        contentPadding = PaddingValues(0.dp),
-                        modifier = Modifier.fillMaxWidth().height(36.dp).testTag("seed_passphrase"),
-                    ) {
-                        Text("ใส่ passphrase", color = MbNavy, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                }
             }
         },
     ) {
         // Penpot sets the grid 59dp under the subtitle (1B.4 y=236); the scaffold leaves 20.
         Spacer(modifier = Modifier.height(39.dp))
-        SeedGrid(draft, engaged, taps, Modifier.hideWhen(guard)) {
+        SeedGrid(draft, engaged, taps, Modifier.hideWhen(guard), onPassphrase = { sheet = ImportSheet.Passphrase }) {
             draft.focus(it)
             engaged = true
             taps += 1
         }
-        Spacer(modifier = Modifier.height(10.dp))
+        // Boards 1B.4.1 and 1B.4.2 set the warning 8dp under the card.
+        Spacer(modifier = Modifier.height(8.dp))
         if (!keyboardUp || draft.committed) SeedStatusRow(draft) { sheet = ImportSheet.Passphrase }
         session.lastError?.let {
             Spacer(modifier = Modifier.height(8.dp))
@@ -204,13 +204,19 @@ fun ImportSeedScreen(
 }
 
 @Composable
-private fun SeedGrid(draft: ImportSeedDraft, engaged: Boolean, taps: Int, modifier: Modifier = Modifier, onSlot: (Int) -> Unit) {
+private fun SeedGrid(
+    draft: ImportSeedDraft,
+    engaged: Boolean,
+    taps: Int,
+    modifier: Modifier = Modifier,
+    onPassphrase: () -> Unit,
+    onSlot: (Int) -> Unit,
+) {
     // Once the 24th word is accepted nothing is being edited: no active slot, no list, no field.
     val editing = engaged && !draft.committed
-    val dropdown = if (editing) draft.dropdown else emptyList()
-    val row = draft.active % ROWS
-    val dropdownTop = 50 + ROW_PITCH * row
-    val dropdownBottom = dropdownTop + DROPDOWN_ROW * dropdown.size
+    val window = suggestionWindow(if (editing) draft.dropdown else emptyList())
+    val placement = popoverPlacement(draft.active, window.shown.size)
+    val slotTop = SEED_CARD_PAD + SEED_ROW_PITCH * (draft.active % SEED_ROWS)
     val focus = remember { FocusRequester() }
     val reveal = remember { BringIntoViewRequester() }
     val density = LocalDensity.current.density
@@ -219,53 +225,57 @@ private fun SeedGrid(draft: ImportSeedDraft, engaged: Boolean, taps: Int, modifi
         if (editing) runCatching { focus.requestFocus() }
     }
     // Keep the active row and its list above the keyboard.
-    LaunchedEffect(draft.active, dropdown.size) {
+    LaunchedEffect(draft.active, window.shown.size) {
         if (editing) {
-            val rowTop = (16 + ROW_PITCH * row) * density
-            reveal.bringIntoView(Rect(0f, rowTop, 1f, maxOf(rowTop + 30 * density, dropdownBottom * density)))
+            val top = if (window.shown.isEmpty()) slotTop else minOf(slotTop, placement.top)
+            val bottom = maxOf(slotTop + SEED_SLOT, placement.top + POPOVER_ROW * window.shown.size)
+            reveal.bringIntoView(Rect(0f, top * density, 1f, bottom * density))
         }
     }
 
-    // The box grows to hold the list, so its rows are inside the box's bounds and can be tapped.
+    // The popover always fits inside the card (popoverPlacement), so its rows are inside the box and can be tapped.
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .height(maxOf(GRID_HEIGHT, dropdownBottom).dp)
+            .height(SEED_CARD_HEIGHT.dp)
             .bringIntoViewRequester(reveal)
             .testTag("seed_grid"),
     ) {
         // The card pads 16dp each side and the three columns are 8dp apart.
         val slotWidth = (maxWidth - 48.dp) / 3
+        val columnX = { column: Int -> SEED_CARD_PAD.dp + (slotWidth + 8.dp) * column }
         val card = RoundedCornerShape(20.dp)
-        Row(
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(GRID_HEIGHT.dp)
+                .fillMaxSize()
                 .clip(card)
                 .background(MbWhite)
                 .border(1.dp, MbBorder, card)
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(start = SEED_CARD_PAD.dp, top = SEED_CARD_PAD.dp, end = SEED_CARD_PAD.dp),
         ) {
-            repeat(3) { column ->
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    repeat(ROWS) { r ->
-                        val i = column * ROWS + r
-                        SeedSlot(
-                            number = i + 1,
-                            word = draft.slots[i],
-                            active = editing && draft.active == i,
-                            flagged = draft.flaggedSlot == i,
-                            onTap = { onSlot(i) },
-                            modifier = Modifier.testTag("seed_slot_$i"),
-                        )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                repeat(3) { column ->
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy((SEED_ROW_PITCH - SEED_SLOT).dp)) {
+                        repeat(SEED_ROWS) { r ->
+                            val i = column * SEED_ROWS + r
+                            SeedSlot(
+                                number = i + 1,
+                                word = draft.slots[i],
+                                active = editing && draft.active == i,
+                                flagged = draft.flaggedSlot == i,
+                                onTap = { onSlot(i) },
+                                modifier = Modifier.testTag("seed_slot_$i"),
+                            )
+                        }
                     }
                 }
             }
+            // Penpot puts the Passphrase option 15dp under the last row (1B.1 y=549).
+            Spacer(modifier = Modifier.height(15.dp))
+            PassphraseOption(set = draft.passphrase.isNotEmpty(), onOpen = onPassphrase, onClear = draft::clearPassphrase)
         }
         if (editing) {
             // One field serves every slot and only moves: the keyboard is never torn down between words.
-            val column = draft.active / ROWS
             SeedInput(
                 word = draft.slots[draft.active],
                 slot = draft.active,
@@ -276,13 +286,35 @@ private fun SeedGrid(draft: ImportSeedDraft, engaged: Boolean, taps: Int, modifi
                 onNext = draft::next,
                 onFocused = draft::onFieldFocused,
                 modifier = Modifier
-                    .offset(x = 16.dp + (slotWidth + 8.dp) * column + WORD_START, y = (16 + ROW_PITCH * row).dp)
-                    .size(width = slotWidth - WORD_START - 6.dp, height = 30.dp),
+                    .offset(x = columnX(draft.active / SEED_ROWS) + WORD_START, y = slotTop.dp)
+                    .size(width = slotWidth - WORD_START - 6.dp, height = SEED_SLOT.dp),
             )
         }
-        if (dropdown.isNotEmpty()) {
-            SeedDropdown(dropdown, draft::accept, Modifier.padding(top = dropdownTop.dp))
+        if (window.shown.isNotEmpty()) {
+            SeedDropdown(window, draft::accept, Modifier.offset(x = columnX(placement.column), y = placement.top.dp).width(slotWidth))
         }
+    }
+}
+
+/** Board 1B.1's Passphrase option in the seed card: ticked while a passphrase is set. Ticking opens the sheet, unticking clears it. */
+@Composable
+private fun PassphraseOption(set: Boolean, onOpen: () -> Unit, onClear: () -> Unit) {
+    val box = RoundedCornerShape(10.dp)
+    Row(
+        modifier = Modifier
+            .height(SEED_SLOT.dp)
+            .toggleable(value = set, role = Role.Checkbox, onValueChange = { if (it) onOpen() else onClear() })
+            .testTag("seed_passphrase"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier.size(width = 28.dp, height = SEED_SLOT.dp).clip(box).background(if (set) MbNavy else MbPage),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (set) Image(painterResource(Res.drawable.ic_tick_white), contentDescription = null, modifier = Modifier.size(24.dp))
+        }
+        Spacer(modifier = Modifier.width(5.dp))
+        Text("Passphrase", color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -381,29 +413,38 @@ private fun SeedInput(
 }
 
 @Composable
-private fun SeedDropdown(words: List<String>, onPick: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun SeedDropdown(window: SuggestionWindow, onPick: (String) -> Unit, modifier: Modifier = Modifier) {
     val shape = RoundedCornerShape(10.dp)
     Column(
         modifier = modifier
-            .fillMaxWidth()
-            .dropShadow(shape, Shadow(radius = 24.dp, color = Color.Black, offset = DpOffset(0.dp, 8.dp), alpha = 0.12f))
+            .dropShadow(shape, Shadow(radius = 16.dp, color = Color.Black, offset = DpOffset(0.dp, 6.dp), alpha = 0.12f))
             .clip(shape)
             .background(MbWhite)
             .border(1.dp, MbBorder, shape),
     ) {
-        words.forEachIndexed { n, word ->
+        window.shown.forEachIndexed { n, word ->
             // The first row is what Next would pick.
-            Box(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(DROPDOWN_ROW.dp)
+                    .height(POPOVER_ROW.dp)
                     .background(if (n == 0) MbPick else if (n % 2 == 1) MbPage else MbWhite)
                     .clickable { onPick(word) }
-                    .padding(horizontal = 14.dp)
+                    .padding(start = 12.dp, end = 10.dp)
                     .testTag("seed_suggestion_$n"),
-                contentAlignment = Alignment.CenterStart,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(word, color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
+                Text(word, style = wordStyle(MbNavyInk), maxLines = 1, softWrap = false, modifier = Modifier.weight(1f))
+                // Matches past the fourth are reached by typing on, so the count is a label and not a row.
+                if (n == window.shown.lastIndex && window.more > 0) {
+                    Text(
+                        "+${window.more}",
+                        color = MbSlate,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.testTag("seed_suggestion_more"),
+                    )
+                }
             }
         }
     }
