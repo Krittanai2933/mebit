@@ -86,7 +86,8 @@ fun AppLockScreen(
         scope.launch {
             val reason = if (enable) "เปิดล็อกแอป mebit" else "ปลดล็อก mebit"
             // A saved wallet's one prompt reads its copy back, so a copy that cannot open shows up while the words can still be written down.
-            val result = if (enable && session.saved == SaveState.Saved) {
+            val readBack = enable && session.saved == SaveState.Saved
+            val result = if (readBack) {
                 readBackScan(session.proveSavedCopy(reason))
             } else {
                 biometrics.authenticate(reason = reason, allowPasscode = allowPasscode)
@@ -108,8 +109,8 @@ fun AppLockScreen(
                 }
                 BiometricResult.Cancelled -> Unit
                 is BiometricResult.Unavailable ->
-                    // Nothing can secure the app here: onboarding goes on without a lock, unlocking does not.
-                    if (enable && allowPasscode) onDone() else unavailable = true
+                    // Nothing can secure the app here, or the saved copy just failed its read-back: onboarding goes on without a lock, unlocking does not.
+                    if (goesOnWithoutLock(enable, allowPasscode, readBack, session.saved)) onDone() else unavailable = true
             }
         }
     }
