@@ -178,12 +178,17 @@ class SavedWallet internal constructor(private val store: SecureStore) {
 }
 
 /**
- * Layout, big endian: magic "MB" (2), version (1), network (1: 0 test, 1 main), flags (1: 1 backup, 2 imported, 4 lock),
- * fingerprint (8 ASCII), words as ONE UTF-8 string joined by single spaces (u16 length + bytes), passphrase (u16 length + bytes, byte exact).
+ * Layout, big endian: magic "MB" (2), version (1), network (1: 0 test, 1 main), flags (1: 1 backup, 2 imported, 4 lock,
+ * 8 unconfirmed send), fingerprint (8 ASCII), words as ONE UTF-8 string joined by single spaces (u16 length + bytes),
+ * passphrase (u16 length + bytes, byte exact), then only with flag 8 the payment of unknown outcome: its txid (u16 length +
+ * ASCII, empty or 64 lowercase hex) and when its broadcast ended (8, Unix seconds, never negative). A record without that
+ * payment has the same bytes as before flag 8 existed, so an older build still reads it, and reads one with it as Newer.
  * encode throws, naming no word, on a record it could not read back exactly: a fingerprint that is not 8 ASCII characters,
- * an empty word or one holding a space, text UTF-8 cannot carry (a lone surrogate), a field over 65,535 bytes.
+ * an empty word or one holding a space, text UTF-8 cannot carry (a lone surrogate), a field over 65,535 bytes, a txid or
+ * time decode would refuse.
  * decode never throws: bad magic, short or trailing bytes, word count outside BIP39_SIZES, an empty word, a fingerprint byte
- * outside ASCII, bad UTF-8 => Corrupt; a version above VERSION, or a network byte or flag bit v1 never writes => Newer.
+ * outside ASCII, bad UTF-8, a txid or time encode never writes => Corrupt; a version above VERSION, or a network byte or
+ * flag bit v1 never writes => Newer.
  */
 private object RecordCodec {
     const val VERSION = 1
@@ -195,20 +200,29 @@ private object RecordCodec {
     private const val BACKUP = 1
     private const val IMPORTED = 2
     private const val LOCK = 4
+    private const val UNCONFIRMED = 8
+    private val TXID = Regex("(?:[0-9a-f]{64})?")
 
     fun encode(r: WalletRecord): ByteArray {
         require(r.fingerprint.length == FINGERPRINT && r.fingerprint.all { it.code < 0x80 }) { "fingerprint shape" }
         require(r.words.none { it.isEmpty() || ' ' in it }) { "word shape" } // either would split into other words on decode
+        val send = r.unconfirmedSend
+        require(send == null || (TXID.matches(send.txid) && send.sinceSeconds >= 0)) { "unconfirmed send shape" }
         return utf8(r.words.joinToString(" ")) { words ->
             utf8(r.passphrase) { passphrase ->
                 require(words.size <= MAX_FIELD && passphrase.size <= MAX_FIELD) { "field length" }
-                val out = ByteArray(HEADER + 2 + words.size + 2 + passphrase.size)
+                val out = ByteArray(HEADER + 2 + words.size + 2 + passphrase.size + (if (send == null) 0 else 2 + send.txid.length + 8))
                 MAGIC.copyInto(out)
                 out[2] = VERSION.toByte()
                 out[3] = NETWORK_BYTE.getValue(r.network)
-                out[4] = ((if (r.backupConfirmed) BACKUP else 0) or (if (r.imported) IMPORTED else 0) or (if (r.appLockEnabled) LOCK else 0)).toByte()
+                out[4] = ((if (r.backupConfirmed) BACKUP else 0) or (if (r.imported) IMPORTED else 0) or (if (r.appLockEnabled) LOCK else 0) or
+                    (if (send != null) UNCONFIRMED else 0)).toByte()
                 r.fingerprint.forEachIndexed { i, c -> out[5 + i] = c.code.toByte() }
-                out.putField(out.putField(HEADER, words), passphrase)
+                val end = out.putField(out.putField(HEADER, words), passphrase)
+                if (send != null) {
+                    val at = out.putField(end, send.txid.encodeToByteArray())
+                    repeat(8) { out[at + it] = (send.sinceSeconds shr (56 - 8 * it)).toByte() }
+                }
                 out
             }
         }
@@ -222,18 +236,28 @@ private object RecordCodec {
         // A value v1 never writes came from a newer app, so the rest is not judged by v1 rules.
         val network = NETWORK_BYTE.entries.firstOrNull { it.value == b[3] }?.key ?: return Decoded.Newer
         val flags = b[4].toInt() and 0xFF
-        if ((flags and (BACKUP or IMPORTED or LOCK).inv()) != 0) return Decoded.Newer
+        if ((flags and (BACKUP or IMPORTED or LOCK or UNCONFIRMED).inv()) != 0) return Decoded.Newer
         if ((5 until HEADER).any { b[it] < 0 }) return Decoded.Corrupt
         val wordsEnd = b.fieldEnd(HEADER) ?: return Decoded.Corrupt
         val passphraseEnd = b.fieldEnd(wordsEnd) ?: return Decoded.Corrupt
-        if (passphraseEnd != b.size) return Decoded.Corrupt
+        val hasSend = (flags and UNCONFIRMED) != 0
+        val txidEnd = if (hasSend) (b.fieldEnd(passphraseEnd) ?: return Decoded.Corrupt) else passphraseEnd
+        if ((if (hasSend) txidEnd + 8 else passphraseEnd) != b.size) return Decoded.Corrupt
         val words = b.utf8OrNull(HEADER + 2, wordsEnd)?.split(' ') ?: return Decoded.Corrupt
         val passphrase = b.utf8OrNull(wordsEnd + 2, passphraseEnd) ?: return Decoded.Corrupt
         if (words.size !in WalletRecord.BIP39_SIZES || words.any { it.isEmpty() }) return Decoded.Corrupt
+        val send = if (hasSend) (b.unconfirmedSendOrNull(passphraseEnd + 2, txidEnd) ?: return Decoded.Corrupt) else null
         val fingerprint = b.decodeToString(5, HEADER)
         return Decoded.Ok(
-            WalletRecord(words, passphrase, network, fingerprint, (flags and BACKUP) != 0, (flags and IMPORTED) != 0, (flags and LOCK) != 0),
+            WalletRecord(words, passphrase, network, fingerprint, (flags and BACKUP) != 0, (flags and IMPORTED) != 0, (flags and LOCK) != 0, send),
         )
+    }
+
+    /** The txid in [from] until [txidEnd] and the 8 bytes of seconds after it, or null when either is something encode never writes. */
+    private fun ByteArray.unconfirmedSendOrNull(from: Int, txidEnd: Int): SingleSigWallet.UnconfirmedSend? {
+        val txid = decodeToString(from, txidEnd)
+        val since = (txidEnd until txidEnd + 8).fold(0L) { acc, i -> (acc shl 8) or (this[i].toLong() and 0xFF) }
+        return if (TXID.matches(txid) && since >= 0) SingleSigWallet.UnconfirmedSend(txid, since) else null
     }
 
     /** Runs [block] on the UTF-8 bytes of [text] and zeroes them afterwards, whatever happens. */

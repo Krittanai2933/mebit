@@ -92,7 +92,8 @@ internal fun testRecord(
     backupConfirmed: Boolean = false,
     imported: Boolean = false,
     appLockEnabled: Boolean = false,
-) = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled)
+    unconfirmedSend: SingleSigWallet.UnconfirmedSend? = null,
+) = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled, unconfirmedSend)
 
 /**
  * Bytes laid out by hand as the codec's KDoc documents version 1, so a test can store what the encoder never writes:
@@ -109,6 +110,13 @@ internal fun v1Bytes(
     fingerprint + u16(words.size) + words + u16(passphrase.size) + passphrase
 
 private fun u16(n: Int) = byteArrayOf((n shr 8).toByte(), n.toByte())
+
+/** The section that follows the passphrase when flag 8 is set, laid out by hand as the codec's KDoc documents it. */
+internal fun sendSection(txid: ByteArray, sinceSeconds: Long): ByteArray =
+    u16(txid.size) + txid + ByteArray(8) { (sinceSeconds shr (56 - 8 * it)).toByte() }
+
+/** A txid as Esplora writes it: 64 lowercase hex characters. */
+internal const val TEST_TXID = "a14858161cc59cc1fdcafd3b8dfa3d8eb1731e69f28a304f806f98c1d2b9eb9f"
 
 /** Every probe, each Unavailable reason included. */
 internal val EVERY_PROBE: List<StoreProbe> =

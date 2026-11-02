@@ -3,8 +3,8 @@ package com.mebit.app.data
 import com.mebit.ffi.signer.KeyNetwork
 
 /**
- * The one record D1 keeps on the phone: key material plus the three flags that drive routing.
- * Nothing the chain can tell us is in it (balance, address, history, wallet mode).
+ * The one record D1 keeps on the phone: key material, the three flags that drive routing, and a payment whose outcome is
+ * not known yet. Nothing the chain can tell us is in it (balance, address, history, wallet mode).
  * Not a data class on purpose: no generated toString, copy or componentN can print the words.
  */
 class WalletRecord(
@@ -16,6 +16,8 @@ class WalletRecord(
     val backupConfirmed: Boolean,
     val imported: Boolean,
     val appLockEnabled: Boolean,
+    /** A broadcast that ended in BroadcastUnknown and has not settled ([SingleSigWallet.unconfirmedSend]), so a restart still refuses to pay it again. Null when there is none. */
+    val unconfirmedSend: SingleSigWallet.UnconfirmedSend? = null,
 ) {
     init {
         require(words.size in BIP39_SIZES) { "word count" } // no record without a key, and the message names no word

@@ -14,9 +14,10 @@ import com.mebit.ffi.signer.restoreSoftwareMultisigKey
 enum class SaveState { NotSaved, Staged, Saved }
 
 /**
- * Onboarding state for Movie Page 00.* screens. Without a [wallet] it lives in memory only. With one, each committed
- * change is saved through one write point, and only [forgetSavedWallet] erases the saved copy. [newKey] and [restoreKey]
- * make the key, and tests replace them because the host JVM has no native library.
+ * Onboarding state for Movie Page 00.* screens, plus the hot wallet's payment of unknown outcome, which is saved with the
+ * key. Without a [wallet] it lives in memory only. With one, each committed change is saved through one write point, and
+ * only [forgetSavedWallet] erases the saved copy. [newKey] and [restoreKey] make the key, and tests replace them because
+ * the host JVM has no native library.
  */
 class OnboardingSession(
     private val wallet: SavedWallet? = null,
@@ -56,6 +57,13 @@ class OnboardingSession(
 
     /** Why the wallet is not saved on this phone, for the notice. Null until a save fails, and again after one succeeds. */
     var notSavedBecause: Why? by mutableStateOf(null)
+        private set
+
+    /**
+     * The wallet's payment of unknown outcome ([SingleSigWallet.unconfirmedSend]), saved with the wallet so a restart cannot
+     * pay it twice. [install] restores it, and a wallet built after a restart takes it at its next bind. Null when there is none.
+     */
+    var unconfirmedSend: SingleSigWallet.UnconfirmedSend? by mutableStateOf(null)
         private set
 
     /** A save that failed and has not been repeated yet. [flushPendingSave] and the next write point repeat it. */
@@ -140,6 +148,7 @@ class OnboardingSession(
         appLockEnabled = false
         lastError = null
         network = KeyNetwork.TEST
+        unconfirmedSend = null
         saved = SaveState.NotSaved
         notSavedBecause = null
         pendingSave = false
@@ -152,6 +161,19 @@ class OnboardingSession(
 
     fun markAppLockEnabled() {
         appLockEnabled = true
+        persist()
+    }
+
+    /** The wallet's broadcast ended in BroadcastUnknown. Saved like a flag, and a failed save keeps it here for the next write point or flush. */
+    fun recordUnconfirmedSend(txid: String, sinceSeconds: Long) {
+        unconfirmedSend = SingleSigWallet.UnconfirmedSend(txid, sinceSeconds)
+        persist()
+    }
+
+    /** The wallet settled the payment. Writes nothing when none is held. */
+    fun clearUnconfirmedSend() {
+        if (unconfirmedSend == null) return
+        unconfirmedSend = null
         persist()
     }
 
@@ -178,6 +200,7 @@ class OnboardingSession(
         backupConfirmed = record.backupConfirmed // from the record, not from how the key was made, which forces these
         imported = record.imported
         appLockEnabled = record.appLockEnabled
+        unconfirmedSend = record.unconfirmedSend
         saved = SaveState.Saved
         return true
     }
@@ -227,7 +250,7 @@ class OnboardingSession(
         return true
     }
 
-    private fun toRecord() = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled)
+    private fun toRecord() = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled, unconfirmedSend)
 
     private fun applyKey(key: SoftwareAccountKey, passphrase: String, network: KeyNetwork) {
         words = key.mnemonicWords

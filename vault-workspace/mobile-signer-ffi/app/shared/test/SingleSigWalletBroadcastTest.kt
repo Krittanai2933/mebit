@@ -1,14 +1,19 @@
 package com.mebit.app.data
 
+import com.mebit.app.Why
+import com.mebit.app.WriteMode
+import com.mebit.app.WriteResult
 import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
 import com.mebit.ffi.signer.HotSendResult
 import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.MobileSignerException
+import com.mebit.ffi.signer.SoftwareAccountKey
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -23,7 +28,7 @@ private const val DESTINATION = "tb1qdestinationfortheseteststhatneverleaves"
 // 23 ต.ค. 2569 · 14:32 น. in Bangkok, the time on board 4.6.
 private const val SENT_AT = 1_792_740_720L
 
-private const val UNKNOWN_TXID = "a14858161cc59cc1fdcafd3b8dfa3d8eb1731e69f28a304f806f98c1d2b9eb9f"
+private const val UNKNOWN_TXID = TEST_TXID
 
 // The Rust MobileSignerError::BroadcastUnknown Display, which is the Kotlin message, so the txid is read from the real wording.
 private const val UNKNOWN_MESSAGE = "it is not known whether transaction $UNKNOWN_TXID was sent, so do not repeat the payment until the wallet and this transaction id have been checked"
@@ -84,6 +89,18 @@ private fun FakeHot.unknownSend(): OnboardingSession {
     assertFalse(wallet.broadcast(session, 100_000, 1_128, DESTINATION))
     assertEquals(UnconfirmedSend(UNKNOWN_TXID, SENT_AT), wallet.unconfirmedSend)
     sendResult = { HotSendResult("txid-2") }
+    return session
+}
+
+/** A phone that saved the public test wallet with [pending]. */
+private fun phoneHolding(pending: UnconfirmedSend?) =
+    FakeSecureStore().also { assertEquals(SaveResult.Written, SavedWallet(it).save(testRecord(unconfirmedSend = pending), WriteMode.Create)) }
+
+/** What the gate does at a cold start: opens the copy [store] holds and installs it into a new session that saves through [store]. The key is made without the native library. */
+private fun restart(store: FakeSecureStore): OnboardingSession {
+    val record = assertIs<UnlockResult.Opened>(SavedWallet(store).openNow(), "the saved copy").record
+    val session = OnboardingSession(SavedWallet(store), restoreKey = { w, _, _, _ -> SoftwareAccountKey(w, record.fingerprint, "tpub-test", "m/48'/1'/0'/2'") })
+    assertTrue(session.install(record), "install")
     return session
 }
 
@@ -342,6 +359,92 @@ class SingleSigWalletBroadcastTest {
         hot.unknownSend()
         hot.wallet.useDemoFixture()
         assertNull(hot.wallet.unconfirmedSend)
+    }
+
+    @Test
+    fun aPaymentOfUnknownOutcomeStillHoldsANewWalletAfterARestart() {
+        val store = phoneHolding(null)
+        val session = restart(store)
+        val before = FakeHot()
+        before.wallet.bindSession(session)
+        before.sendResult = { throw MobileSignerException.BroadcastUnknown(UNKNOWN_MESSAGE) }
+        assertFalse(before.wallet.broadcast(session, 100_000, 1_128, DESTINATION))
+        val after = FakeHot()
+        val restarted = restart(store)
+        after.wallet.bindSession(restarted)
+        assertEquals(UnconfirmedSend(UNKNOWN_TXID, SENT_AT), after.wallet.unconfirmedSend, "the new wallet after the restart")
+        assertFalse(after.wallet.broadcast(restarted, 100_000, 1_128, DESTINATION), "a payment after the restart")
+        assertEquals(EARLIER_UNSETTLED, after.wallet.lastError)
+        assertEquals(emptyList<SendCall>(), after.sends, "a send ran after the restart")
+    }
+
+    @Test
+    fun aRestoredPaymentThatTheHistoryListsSettlesAndLeavesTheSavedWallet() {
+        val store = phoneHolding(UnconfirmedSend(UNKNOWN_TXID, SENT_AT))
+        val session = restart(store)
+        val hot = FakeHot()
+        hot.wallet.bindSession(session)
+        assertEquals(UnconfirmedSend(UNKNOWN_TXID, SENT_AT), hot.wallet.unconfirmedSend, "before the history lists it")
+        hot.history = listOf(HotTx(UNKNOWN_TXID, -101_128L, 0u, null)) + hot.history
+        hot.wallet.bindSession(session)
+        assertNull(hot.wallet.unconfirmedSend, "the payment is out and Home lists it")
+        assertNull(restart(store).unconfirmedSend, "what the next cold start restores")
+        assertTrue(hot.wallet.broadcast(session, 50_000, 1_128, DESTINATION), "a new payment can start")
+    }
+
+    @Test
+    fun aRestoredPaymentSettlesTwoMinutesAfterItsBroadcastEnded() {
+        val store = phoneHolding(UnconfirmedSend(UNKNOWN_TXID, SENT_AT))
+        val session = restart(store)
+        val hot = FakeHot()
+        hot.clock = SENT_AT + 119
+        hot.wallet.bindSession(session)
+        assertEquals(UnconfirmedSend(UNKNOWN_TXID, SENT_AT), hot.wallet.unconfirmedSend, "under two minutes")
+        hot.clock = SENT_AT + 120
+        hot.wallet.bindSession(session)
+        assertNull(hot.wallet.unconfirmedSend, "at two minutes")
+        assertNull(restart(store).unconfirmedSend, "what the next cold start restores")
+    }
+
+    @Test
+    fun aPaymentOfUnknownOutcomeThatCannotBeSavedStillHoldsTheWallet() {
+        val store = phoneHolding(null)
+        val session = restart(store)
+        val hot = FakeHot()
+        hot.wallet.bindSession(session)
+        store.write = WriteResult.Unavailable(Why.TryLater)
+        hot.sendResult = { throw MobileSignerException.BroadcastUnknown(UNKNOWN_MESSAGE) }
+        assertFalse(hot.wallet.broadcast(session, 100_000, 1_128, DESTINATION))
+        assertEquals(UnconfirmedSend(UNKNOWN_TXID, SENT_AT), hot.wallet.unconfirmedSend, "the wallet's guard after a failed save")
+        assertEquals(UnconfirmedSend(UNKNOWN_TXID, SENT_AT), session.unconfirmedSend, "the session's after a failed save")
+        hot.sendResult = { HotSendResult("txid-2") }
+        assertFalse(hot.wallet.broadcast(session, 50_000, 1_128, DESTINATION), "a payment after a failed save")
+        assertEquals(1, hot.sends.size, "only the unknown payment reached send")
+        store.write = null
+        session.flushPendingSave()
+        assertEquals(UnconfirmedSend(UNKNOWN_TXID, SENT_AT), restart(store).unconfirmedSend, "what the next cold start restores after the flush")
+    }
+
+    @Test
+    fun theDemoFixtureNeverTouchesASavedPaymentOfUnknownOutcome() {
+        val store = phoneHolding(UnconfirmedSend(UNKNOWN_TXID, SENT_AT))
+        val session = restart(store)
+        val hot = FakeHot()
+        hot.wallet.bindSession(session)
+        hot.wallet.useDemoFixture()
+        assertNull(hot.wallet.unconfirmedSend, "the fixture's own clear")
+        assertEquals(1, store.writes.size, "the fixture wrote")
+        assertEquals(UnconfirmedSend(UNKNOWN_TXID, SENT_AT), restart(store).unconfirmedSend, "what the next cold start restores")
+        hot.wallet.bindSession(session)
+        assertEquals(UnconfirmedSend(UNKNOWN_TXID, SENT_AT), hot.wallet.unconfirmedSend, "the next bind of the real key")
+    }
+
+    @Test
+    fun aBindOfASessionWithoutAPaymentOfUnknownOutcomeKeepsTheWalletsOwn() {
+        val hot = FakeHot()
+        hot.unknownSend()
+        hot.wallet.bindSession(sessionWithWords(WORDS, PASSPHRASE))
+        assertEquals(UnconfirmedSend(UNKNOWN_TXID, SENT_AT), hot.wallet.unconfirmedSend)
     }
 
     @Test

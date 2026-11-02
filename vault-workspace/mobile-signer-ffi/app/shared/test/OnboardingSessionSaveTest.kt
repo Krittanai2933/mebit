@@ -5,6 +5,7 @@ import com.mebit.app.ReadResult
 import com.mebit.app.Why
 import com.mebit.app.WriteMode
 import com.mebit.app.WriteResult
+import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
 import kotlinx.coroutines.runBlocking
@@ -99,6 +100,8 @@ class OnboardingSessionSaveTest {
         val session = session(store)
         session.markBackupConfirmed()
         session.markAppLockEnabled()
+        session.recordUnconfirmedSend(TEST_TXID, SENT_AT)
+        session.clearUnconfirmedSend()
         assertTrue(store.writes.isEmpty() && store.markerWrites.isEmpty(), "a session with no words wrote")
         assertEquals(SaveState.NotSaved, session.saved, "a wallet was inferred from a flag")
         assertTrue(session.words.isEmpty(), "words appeared")
@@ -205,11 +208,64 @@ class OnboardingSessionSaveTest {
     }
 
     @Test
+    fun aPaymentOfUnknownOutcomeIsSavedWhenRecordedAndRemovedWhenCleared() {
+        val store = FakeSecureStore()
+        val session = session(store)
+        session.generateThisDevice()
+        session.recordUnconfirmedSend(TEST_TXID, SENT_AT)
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), session.unconfirmedSend, "in memory after recording")
+        assertEquals(listOf(WriteMode.Create, WriteMode.Replace), store.modes(), "writes after recording")
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), store.savedCopy().unconfirmedSend, "the copy after recording")
+        assertEquals(listOf(false, false, false), store.savedCopy().flags(), "the flags beside it")
+        session.clearUnconfirmedSend()
+        assertNull(session.unconfirmedSend, "in memory after clearing")
+        assertEquals(listOf(WriteMode.Create, WriteMode.Replace, WriteMode.Replace), store.modes(), "writes after clearing")
+        assertNull(store.savedCopy().unconfirmedSend, "the copy after clearing")
+        session.clearUnconfirmedSend()
+        assertEquals(3, store.writes.size, "a clear with nothing held wrote")
+    }
+
+    @Test
+    fun installRestoresAPaymentOfUnknownOutcomeAndClearDropsIt() {
+        val store = FakeSecureStore()
+        val session = session(store)
+        assertTrue(session.install(testRecord(unconfirmedSend = UnconfirmedSend(TEST_TXID, SENT_AT))), "install")
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), session.unconfirmedSend, "after install")
+        session.clear()
+        assertNull(session.unconfirmedSend, "after clear")
+        assertTrue(store.writes.isEmpty(), "install or clear wrote")
+    }
+
+    @Test
+    fun aFailedSaveOfAPaymentOfUnknownOutcomeKeepsItAndAFlushSavesIt() {
+        val store = FakeSecureStore(failWrite = 2)
+        val session = session(store)
+        session.generateThisDevice()
+        session.recordUnconfirmedSend(TEST_TXID, SENT_AT) // write 2, a Replace, fails
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), session.unconfirmedSend, "in memory after a failed save")
+        assertEquals(SaveState.Saved, session.saved, "saved after a failed Replace")
+        assertNull(store.savedCopy().unconfirmedSend, "the copy before the flush")
+        session.flushPendingSave()
+        assertEquals(listOf(WriteMode.Create, WriteMode.Replace, WriteMode.Replace), store.modes(), "write modes")
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), store.savedCopy().unconfirmedSend, "the copy after the flush")
+        store.write = WriteResult.Unavailable(Why.TryLater)
+        session.clearUnconfirmedSend()
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), store.savedCopy().unconfirmedSend, "the copy while the clear is not saved")
+        store.write = null
+        session.flushPendingSave()
+        assertNull(store.savedCopy().unconfirmedSend, "the copy after the flush of the clear")
+    }
+
+    @Test
     fun everyRecordFieldRoundTripsThroughTheSession() {
         roundTrip("generated, backed up, locked", listOf(true, false, true)) {
             generateThisDevice(TEST_PASSPHRASE)
             markBackupConfirmed()
             markAppLockEnabled()
+        }
+        roundTrip("generated, a payment of unknown outcome", listOf(false, false, false), UnconfirmedSend(TEST_TXID, SENT_AT)) {
+            generateThisDevice(TEST_PASSPHRASE)
+            recordUnconfirmedSend(TEST_TXID, SENT_AT)
         }
         roundTrip("imported, not locked", listOf(true, true, false)) {
             restoreFromWords(PUBLIC_WORDS_12, TEST_PASSPHRASE)
@@ -424,7 +480,7 @@ class OnboardingSessionSaveTest {
     private fun session(store: FakeSecureStore, keys: Keys = Keys()) = OnboardingSession(SavedWallet(store), keys.newKey, keys.restoreKey)
 
     /** Saves through [make], loads the saved copy into a new session, and compares every record field with what was set. */
-    private fun roundTrip(case: String, flags: List<Boolean>, make: OnboardingSession.() -> Unit) {
+    private fun roundTrip(case: String, flags: List<Boolean>, unconfirmedSend: UnconfirmedSend? = null, make: OnboardingSession.() -> Unit) {
         val store = FakeSecureStore()
         val keys = Keys(words = PUBLIC_WORDS_12, fingerprint = OTHER_CHECK)
         session(store, keys).make()
@@ -435,6 +491,7 @@ class OnboardingSessionSaveTest {
         assertTrue(loaded.fingerprint == OTHER_CHECK, "fingerprint, $case")
         assertEquals(KeyNetwork.TEST, loaded.network, "network, $case")
         assertEquals(flags, loaded.flags(), "flags, $case")
+        assertEquals(unconfirmedSend, loaded.unconfirmedSend, "unconfirmed send, $case")
         assertEquals(SaveState.Saved, loaded.saved, "saved, $case")
     }
 
@@ -458,6 +515,9 @@ class OnboardingSessionSaveTest {
 }
 
 private const val TEST_PASSPHRASE = "a test passphrase"
+
+/** When a test broadcast ended, in Unix seconds. */
+private const val SENT_AT = 1_792_740_720L
 
 /** Another wallet's check value, distinct from [TEST_CHECK]. */
 private const val OTHER_CHECK = "9f8e7d6c"

@@ -71,7 +71,10 @@ class SingleSigWallet(
     var history: List<HotTx> by mutableStateOf(emptyList())
         private set
 
-    /** The payment that may be out, or null. While it is set [broadcast] refuses, because the same payment could go out twice. A [bindSession] that loads clears it once [history] holds its txid or two minutes have passed, and [useDemoFixture] clears it. [lastTxid] and [lastSentAtSeconds] stay for payments that went out. */
+    /**
+     * The payment that may be out, or null. While it is set [broadcast] refuses, because the same payment could go out twice. A [bindSession] that loads clears it once [history] holds its txid or two minutes have passed, and [useDemoFixture] clears it. [lastTxid] and [lastSentAtSeconds] stay for payments that went out.
+     * The session saves it with the wallet ([OnboardingSession.unconfirmedSend]), so a wallet built after a restart takes it back at its first bind and clearing it here clears the saved copy too.
+     */
     var unconfirmedSend: UnconfirmedSend? by mutableStateOf(null)
         private set
 
@@ -81,6 +84,8 @@ class SingleSigWallet(
             useDemoFixture()
             return
         }
+        // A wallet built after a restart has no guard of its own yet, so it takes the one the session restored from the saved wallet.
+        if (unconfirmedSend == null) unconfirmedSend = session.unconfirmedSend
         try {
             val snap = snapshot(session.words, session.passphrase, network)
             receiveAddress = snap.receiveAddress
@@ -96,7 +101,10 @@ class SingleSigWallet(
             // Only a list that loaded can settle it, because the empty one of a failed call says nothing about the payment.
             if (loaded != null) {
                 unconfirmedSend?.let { pending ->
-                    if (loaded.any { it.txid == pending.txid } || nowSeconds() - pending.sinceSeconds >= UNCONFIRMED_SEND_SETTLE_SECONDS) unconfirmedSend = null
+                    if (loaded.any { it.txid == pending.txid } || nowSeconds() - pending.sinceSeconds >= UNCONFIRMED_SEND_SETTLE_SECONDS) {
+                        unconfirmedSend = null
+                        session.clearUnconfirmedSend()
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -151,7 +159,9 @@ class SingleSigWallet(
                 feeSats.toULong(),
             )
         } catch (e: MobileSignerException.BroadcastUnknown) {
-            unconfirmedSend = UnconfirmedSend(Regex("""\b[0-9a-f]{64}\b""").find(e.message.orEmpty())?.value.orEmpty(), nowSeconds())
+            val pending = UnconfirmedSend(Regex("""\b[0-9a-f]{64}\b""").find(e.message.orEmpty())?.value.orEmpty(), nowSeconds())
+            unconfirmedSend = pending
+            session.recordUnconfirmedSend(pending.txid, pending.sinceSeconds)
             // Plain Thai, because Home prints lastError raw until its next bind clears it, and the Rust text is English.
             lastError = "ยังไม่ทราบว่าการส่งออกไปแล้วหรือยัง อย่าส่งซ้ำ"
             return false
