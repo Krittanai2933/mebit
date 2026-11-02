@@ -210,7 +210,8 @@ class OnboardingSession(
                     saved = SaveState.NotSaved
                     notSavedBecause = r.why
                 }
-                pendingSave = true
+                // A store that can never keep it here has nothing to retry, and a foreground flush would only encode the record again.
+                pendingSave = r.why != Why.NotWired && r.why != Why.OsTooOld
             }
         }
     }

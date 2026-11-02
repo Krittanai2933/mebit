@@ -387,6 +387,25 @@ class OnboardingSessionSaveTest {
     }
 
     @Test
+    fun aStoreThatCanNeverKeepTheWalletIsNotRetriedByAFlush() {
+        for (why in listOf(Why.NotWired, Why.OsTooOld)) {
+            val store = FakeSecureStore(write = WriteResult.Unavailable(why))
+            val session = session(store)
+            session.generateThisDevice()
+            assertEquals(SaveState.NotSaved, session.saved, "saved with a store that cannot keep it, $why")
+            session.flushPendingSave()
+            assertEquals(1, store.writes.size, "a flush tried again, $why")
+        }
+        for (why in listOf(Why.NoScreenLock, Why.TryLater, Why.Other)) {
+            val store = FakeSecureStore(write = WriteResult.Unavailable(why))
+            val session = session(store)
+            session.generateThisDevice()
+            session.flushPendingSave()
+            assertEquals(2, store.writes.size, "a flush did not try again, $why")
+        }
+    }
+
+    @Test
     fun installDerivesWithTheRecordsPassphraseAndRefusesADamagedOne() {
         val right = "correct horse"
         var derivedWith: String? = null

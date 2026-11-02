@@ -20,9 +20,12 @@ fun WalletGate(wallet: SavedWallet = rememberSavedWallet()) {
     val session = remember(wallet) { OnboardingSession(wallet) }
     val gate = remember(wallet) { WalletGateState(wallet, session) }
 
-    // A failed save is tried again when the app comes back. Only once open: the iOS store holds one lock for a whole
-    // read, so a flush while an unlock's sheet is up would block the main thread until the sheet closes.
-    LifecycleEventEffect(Lifecycle.Event.ON_START) { if (gate.boot is Boot.Open) session.flushPendingSave() }
+    // A failed save is tried again when the app comes back, for example once the user has set a passcode. Not while Locked or
+    // Broken: the iOS store holds one lock for a whole read, so a flush while an unlock's sheet is up would block the main
+    // thread until the sheet closes, and a session with nothing in it has nothing to flush there anyway.
+    LifecycleEventEffect(Lifecycle.Event.ON_START) {
+        if (gate.boot is Boot.Open || gate.boot == Boot.Onboarding) session.flushPendingSave()
+    }
 
     when (val boot = gate.boot) {
         Boot.Onboarding -> MebitNavHost(session, MovieRoute.start, gate.notice)
