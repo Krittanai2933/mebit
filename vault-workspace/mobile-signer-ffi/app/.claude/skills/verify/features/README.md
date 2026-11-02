@@ -46,7 +46,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 - [Movie Page onboarding](./movie-page-onboarding.md) covers 00.* software key → backup → home.
 - [Movie Page import seed](./movie-page-import-seed.md) covers the 24-word grid, suggestions, passphrase, fingerprint check, and import to Home.
 - [Movie Page app lock](./movie-page-app-lock.md) covers Face ID enable, failure, unlock on return, and the sign check (real iPhone).
-- [Wallet restart](./wallet-restart.md) covers the saved wallet: cold-start unlock, the reinstall wipe, Forget, the App Lock read-back, and the not-saved notice.
+- [Wallet restart](./wallet-restart.md) covers the saved wallet: cold-start unlock, a payment of unknown outcome across a restart, the reinstall wipe, Forget, the App Lock read-back, and the not-saved notice.
 - [Movie Page keys](./movie-page-keys.md) covers AddKey three sources, T13, T14.
 - [Movie Page vault](./movie-page-vault.md) covers policy → BSMS file → list/detail/T20.
 - [Movie Page send](./movie-page-send.md) covers S* and M* (mocked chain/PSBT).

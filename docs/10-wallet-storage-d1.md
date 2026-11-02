@@ -47,7 +47,7 @@ The layers, from the platform up:
 | Keychain store | `src@ios/SecureStore.ios.kt` | The iOS actual. It keeps one Keychain item per generation and a marker file. |
 | `NotWired` | `src@android/SecureStore.android.kt` | The Android actual until step 6. It stores nothing. |
 | `SavedWallet` | `src/data/SavedWallet.kt` | The record codec and its version, the testnet guard, the mapping of platform results to `UnlockResult` and `SaveResult`, and the reinstall rule (`start()` with the pure `reinstallPolicy`). The only code that calls `SecureStore`. |
-| `OnboardingSession` | `src/data/OnboardingSession.kt` | One write point (`persist()`), `install`, `proveSavedCopy`, `forgetSavedWallet`, `flushPendingSave`, and the `saved` and `notSavedBecause` state that screens read. |
+| `OnboardingSession` | `src/data/OnboardingSession.kt` | One write point (`persist()`), `install`, `proveSavedCopy`, `forgetSavedWallet`, `flushPendingSave`, `recordUnconfirmedSend` and `clearUnconfirmedSend`, and the `saved` and `notSavedBecause` state that screens read. |
 | `WalletGateState` | `src/navigation/WalletGateState.kt` | The boot state, `unlock`, and an owner-checked `forget`. |
 | `WalletGate`, `UnlockScreen` | `src/navigation/WalletGate.kt`, `src/feature/onboarding/UnlockScreen.kt` | The composables. `UnlockScreen` never holds a record and shows no word or fingerprint. |
 
@@ -61,8 +61,13 @@ The layers, from the platform up:
 | `backupConfirmed`, `imported`, `appLockEnabled` | The flags that choose the start route and the in-session lock. |
 | `network` | Saved and loaded as `TEST` only. |
 | `fingerprint` | A check value. `install` derives the key again and refuses a record whose fingerprint differs, so a damaged passphrase byte cannot open a different, empty wallet. |
+| `unconfirmedSend` | A payment whose broadcast ended in `BroadcastUnknown` and has not settled: its txid (empty when the error named none) and when the broadcast ended, in Unix seconds on the phone clock. A restart therefore keeps refusing a second send of it. It is there only until it settles. |
 
-The codec header holds the magic `MB` and a version byte. A newer version, an unknown flag bit or an unknown network byte decodes as `Newer` and is never overwritten. The phone stores nothing that the chain or the session can rebuild: balance, address, history, wallet mode, `lastTxid`, `unconfirmedSend`, the keyring, drafts and quiz state.
+The codec header holds the magic `MB` and a version byte. A newer version, an unknown flag bit or an unknown network byte decodes as `Newer` and is never overwritten. Flag bit 8 marks the optional section after the passphrase that holds `unconfirmedSend`. A record without that section has the same bytes as before the section existed, so an older build still opens it, and an older build reads a record with the section as `Newer` and never overwrites it. The phone stores nothing that the chain or the session can rebuild: balance, address, history, wallet mode, `lastTxid`, the keyring, drafts and quiz state.
+
+### A payment of unknown outcome across a restart
+
+When a broadcast ends in `BroadcastUnknown`, `SingleSigWallet.broadcast` sets its own guard and calls `session.recordUnconfirmedSend`, which saves the record with the section. After a restart the unlock installs the record, so the session holds the payment again, and the new `SingleSigWallet` takes it at its first bind. From then on the rules are the ones G3 set. `broadcast` refuses, and a bind whose history loaded settles the payment when the history lists the txid or two minutes have passed since the broadcast ended. The settle calls `session.clearUnconfirmedSend`, which saves the record without the section. A failed save never clears the guard in memory. The wallet stays saved, and the next write point or the foreground flush repeats the save.
 
 ## iOS keeps one Keychain item and a marker file
 
@@ -110,7 +115,7 @@ The design proceeds with these defaults until someone decides otherwise. Forget 
 
 ## Outcomes by group
 
-`outcomes.md` lists 66 cases. Two rules hold in every row. Only `forgetSavedWallet()`, after a confirm, deletes the saved copy. A failed write keeps the key in memory and says it is not saved.
+`outcomes.md` lists 71 cases. Two rules hold in every row. Only `forgetSavedWallet()`, after a confirm, deletes the saved copy. A failed write keeps the key in memory and says it is not saved.
 
 | Group | Rows | What the user sees |
 |---|---|---|
@@ -119,7 +124,8 @@ The design proceeds with these defaults until someone decides otherwise. Forget 
 | Damaged, newer and unsupported records | 20 to 26 | The recovery screen, which offers Forget and an import of the 24 words. A newer record is never overwritten. A missing native library crashes on purpose instead of offering to delete a good wallet. |
 | Writes | 27 to 36 | A failed first save shows the not-saved notice and is tried again at the next write point and when the app returns. A failed later save keeps the earlier copy. Create never overwrites a saved wallet. |
 | Process and screen lifecycle | 37 to 42 | A killed app asks again at the next launch. Forget asks for a confirm, then the owner. A failed erase keeps the wallet and the screen. |
-| Added by the synthesis and the reviews | 43 to 66 | The owner-checked Forget, the Enable read-back, the reinstall rule's edge cases, and the foreground flush. |
+| Added by the synthesis and the reviews | 43 to 66 | The owner-checked Forget, the Enable read-back, the reinstall rule's edge cases, and the foreground flush. Row 52 is a payment of unknown outcome across a restart, which step 9 keeps refusing. |
+| Added by step 9 | 67 to 71 | A failed save of a payment of unknown outcome, its settle, a phone clock that moves, an older build that meets the section, and Android, where a restart still forgets it. |
 
 Only these rows destroy data. Row 17 erases the orphan of a deleted install, by the user's decision. Row 18 is the user's own Android uninstall. Rows 41 and 44 are a confirmed Forget. Row 54 erases a good wallet if the marker is lost without a reinstall. Row 33 can replace one wallet with another when two app instances run at once, on Android only. The 24 words recover every one of them.
 
@@ -133,6 +139,8 @@ Only these rows destroy data. Row 17 erases the orphan of a deleted install, by 
 - Step 4a: `WalletGateState` has 13 tests, including 1,000 seeded random walks, with 15 mutations caught.
 - Step 4b, part 1 (`dedd874`, `32a3cd1`), wired the gate, the unlock and recovery screens, Forget and the Welcome notice, and drove them on a simulator and an Android emulator.
 - Step 4b, part 2, added the not-saved notice, the delete warning on Key Created and the Enable read-back. The three pure functions (`notSavedText`, `readBackScan` and `goesOnWithoutLock`) have 12 tests, and 17 one-rule mutations of them were all caught. On an iPhone 17 Pro simulator (iOS 26.5), 118 driven steps passed with none failing: the read-back card at Enable, a miss and a cancel, a cold start that reopened the same key, the reinstall wipe, Forget, and the notice for a store that refused writes or read back a different copy. That run found that after a failed read-back the primary button showed the line for a phone without Face ID, and its link then turned the lock on. `goesOnWithoutLock` (`src/feature/onboarding/ReadBackScan.kt`, `4e31121`) now goes straight on without a lock. A second simulator run with the same probe showed first-run Home with the notice, and the lock still off after 80 seconds away. The simulator's keychain database showed one item of class `akpu`, not synchronized. On the Android emulator, 20 steps passed: the notice on Key Created and Home, and Welcome after a relaunch. `vault-workspace/mobile-signer-ffi/app/.claude/skills/verify/features/wallet-restart.md` holds the commands.
+
+- Step 9 stores a payment of unknown outcome with the wallet. Thirteen new tests and four extended ones cover the codec section, the session's write point and the wallet across a restart, and 18 one-rule mutations of that code were all caught. On an iPhone 17 Pro simulator (iOS 26.5), with a throwaway probe that made a key's bind live and its broadcast end in `BroadcastUnknown`, Send still showed PAYMENT UNCONFIRMED and Review still refused to sign after a kill, a relaunch and the unlock. Two minutes after the broadcast a bind settled the payment, and Send accepted the same payment again. The keychain item was replaced at the broadcast and again at the settle. `vault-workspace/mobile-signer-ffi/app/.claude/skills/verify/features/wallet-restart.md` holds the commands.
 
 The Kotlin/Native test executable gets `errSecMissingEntitlement` for every Keychain call, so no unit test touches the real Keychain. Those proofs are the simulator runs.
 
@@ -156,8 +164,10 @@ Android owes step 6 (the Keystore store) and step 7 (`Biometrics`, so the App Lo
 - A Forget from the unlock screen whose erase fails reads as "cannot open now", not as a failed erase.
 - The Welcome notice shows again if the user returns to Welcome in the same launch.
 - A user whose probe was in doubt may scan Face ID and then see the recovery screen for a missing item, because the face check now comes before the store looks for an item.
-- If the last flag write fails and nothing writes again before the app is killed, the stored `appLockEnabled` can be stale after a restart.
-- A payment of unknown outcome is forgotten by a restart, because `unconfirmedSend` is not stored yet.
+- If the last flag write fails and nothing writes again before the app is killed, the stored `appLockEnabled` can be stale after a restart. The same holds for a payment of unknown outcome whose save failed: this run still refuses a second send, but a restart before the save is repeated forgets the payment.
+- A phone clock moved backwards after a broadcast of unknown outcome makes the two-minute rule slower, because the rule compares the clock with the stored time. A history that lists the txid still settles the payment at once, and a payment whose error named no txid settles only by time. A clock moved forward makes the rule faster, as it did before step 9.
+- Android keeps nothing yet, so a restart there still forgets a payment of unknown outcome, together with the wallet.
+- `persist()` was written for the main thread, and `broadcast` and `bindSession` now call it from `Dispatchers.Default`. If a foreground flush after an earlier failed save overlaps, within a few milliseconds, the write of a payment of unknown outcome, the saved copy can end up without the payment while memory still holds it. The next write repairs it, and a restart before that forgets the payment. Serialising `persist()` closes the window.
 - The keyring, vaults, paired devices and the Trezor pairing credential do not survive a restart.
 - No Penpot board exists for the unlock screen, the recovery screen, the Forget sheet, the Welcome notice, the not-saved notice or the delete warning. `docs/04-open-items.md` lists them with their Thai copy.
 
@@ -165,7 +175,6 @@ Android owes step 6 (the Keystore store) and step 7 (`Biometrics`, so the App Lo
 
 1. Run the iPhone acceptance with a person: create, back up, enable the lock, kill, relaunch and unlock, then the reinstall wipe.
 2. Add the compare-and-swap `Replace` before any real money.
-3. Persist `unconfirmedSend` (step 9), so a restart cannot reopen a double payment.
-4. Build the Android Keystore store (step 6) and Android `Biometrics` (step 7) once the API floor and the manifest questions are decided.
-5. Optionally hide the screen under the in-session lock from accessibility (step 8).
-6. Have the security review read D1, including the Android envelope, before the testnet-only limit is lifted.
+3. Build the Android Keystore store (step 6) and Android `Biometrics` (step 7) once the API floor and the manifest questions are decided.
+4. Optionally hide the screen under the in-session lock from accessibility (step 8).
+5. Have the security review read D1, including the Android envelope, before the testnet-only limit is lifted.
