@@ -171,7 +171,7 @@ fun AppLockScreen(
 }
 
 @Composable
-private fun FaceIdTile(failed: Boolean) {
+internal fun FaceIdTile(failed: Boolean) {
     val shape = RoundedCornerShape(36.dp)
     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Box(
@@ -190,7 +190,7 @@ private fun FaceIdTile(failed: Boolean) {
 }
 
 @Composable
-private fun FailedBanner(attemptsLeft: Int) {
+internal fun FailedBanner(attemptsLeft: Int) {
     val shape = RoundedCornerShape(16.dp)
     Column(
         modifier = Modifier

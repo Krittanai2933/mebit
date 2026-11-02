@@ -32,6 +32,7 @@ import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.MultisigSendDraft
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
+import com.mebit.app.data.StartNotice
 import com.mebit.app.data.VaultDraft
 import com.mebit.app.data.liveQuoteCache
 import com.mebit.app.data.pairedDevice
@@ -82,12 +83,16 @@ import com.mebit.app.ui.theme.MbPage
 
 private val ImplementedRoutes = MovieRoute.entries.toSet()
 
+/** [WalletGate] passes the session, the route a saved wallet opens at and Welcome's [startNotice]. A bare call is memory only and starts at Welcome. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MebitNavHost() {
-    val backStack = remember { mutableStateListOf(MovieRoute.start) }
+fun MebitNavHost(
+    session: OnboardingSession = remember { OnboardingSession() },
+    start: MovieRoute = MovieRoute.start,
+    startNotice: StartNotice? = null,
+) {
+    val backStack = remember { mutableStateListOf(start) }
     var catalogOpen by remember { mutableStateOf(false) }
-    val session = remember { OnboardingSession() }
     val keyring = remember { KeyringStore() }
     val vaultDraft = remember { VaultDraft() }
     val singleSig = remember { SingleSigWallet() }
@@ -136,6 +141,7 @@ fun MebitNavHost() {
             onImport = { navigate(MovieRoute.ImportSeed) },
             onBack = onBack,
             onOpenCatalog = openCatalog,
+            notice = startNotice,
         )
         MovieRoute.KeySource -> KeySourceScreen(
             session = session,

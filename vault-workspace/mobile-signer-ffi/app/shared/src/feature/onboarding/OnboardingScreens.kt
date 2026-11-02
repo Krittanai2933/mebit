@@ -34,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.PairedDevice
+import com.mebit.app.data.StartNotice
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.mebit_logo
 import com.mebit.app.ui.components.BackChip
@@ -83,12 +84,14 @@ import com.mebit.app.rememberCaptureGuard
 import com.mebit.app.resources.ic_warning
 import com.mebit.app.ui.components.IssueBanner
 
+/** [notice]: the one-time line after this launch's start erased or lost a wallet, null on every other launch. */
 @Composable
 fun WelcomeScreen(
     onCreate: () -> Unit,
     onImport: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
+    notice: StartNotice? = null,
 ) {
     // Penpot Organize > 1.1 Welcome: logo and card fan on top, text and CTAs at the bottom, 28dp margins.
     Column(
@@ -121,6 +124,19 @@ fun WelcomeScreen(
             CardFan(Modifier.wrapContentSize(Alignment.TopStart, unbounded = true))
         }
         Column(modifier = Modifier.padding(horizontal = 28.dp)) {
+            if (notice != null) {
+                Text(
+                    text = when (notice) {
+                        StartNotice.OrphanWiped -> "กระเป๋าจากการติดตั้งครั้งก่อนถูกลบแล้ว · นำเข้า 24 คำเพื่อกู้คืน"
+                        StartNotice.WalletVanished -> "เครื่องนี้ไม่มีกระเป๋าบันทึกไว้แล้ว · นำเข้า 24 คำเพื่อกู้คืน"
+                    },
+                    color = MbWhite.copy(alpha = 0.72f),
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    modifier = Modifier.testTag("welcome_notice"),
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
             Text(
                 text = "กุญแจเดียว หรือหลายกุญแจ · คุณถือเองทุกดอก",
                 color = MbGold,
