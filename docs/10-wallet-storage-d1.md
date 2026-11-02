@@ -148,23 +148,23 @@ Only these rows destroy data. Row 17 erases the orphan of a deleted install, by 
 
 - Step 3c keeps the wallet in `wallet.a` or `wallet.b` and lists only in `probe` and a Create's check. `KeychainMappingTest` has 47 tests of the store's pure decisions, 14 of which failed first against stubs, each on the predicted disagreement. Twenty-four one-rule mutations were all caught. A throwaway harness passed 44 of 44 checks twice on an iOS 26.5 simulator, every read through the real Face ID card: the account alternated at each Replace, two copies in either order settled to the later one, and a Replace with both accounts taken changed nothing until a read settled them. On an iPhone 17 Pro simulator the real UI created a key (one item in `wallet.a`), enabled the lock (one item in `wallet.b`), reopened the same key after a kill and a relaunch, enabled the lock again from the catalog (one item in `wallet.a`), forgot the wallet after a missed face and the owner check, and wiped the item left by `simctl uninstall` at the reinstall's first launch, with the Welcome notice once. The simulator lists the item, so the refused listing is covered by the pure tests only.
 
-The Kotlin/Native test executable gets `errSecMissingEntitlement` for every Keychain call, so no unit test touches the real Keychain. Those proofs are the simulator runs.
+- The second iPhone session (3 Nov 2026, the same iPhone 15, a signed debug build of `7477818` with a throwaway status-logging patch that changes no logic) ran the step 3c store end to end, and every step passed. At the first launch after a delete and a reinstall the probe read its refused list (-25308) as a wallet, `SecItemDelete` of the old item answered 0 in 4 ms with no sheet, and Welcome showed the one-time notice. Create added `wallet.a` silently. Enable cost one Face ID scan. The read of `wallet.a` returned its 173 bytes, the read of the empty `wallet.b` answered not found in 4 ms with no prompt, and the Replace added to `wallet.b` after `wallet.a` answered duplicate, then deleted `wallet.a` silently. After a kill and a relaunch the probe said Present, one scan unlocked the wallet from `wallet.b`, and the fingerprint matched the one shown at creation. After 70 seconds away the unlock screen appeared, so the lock flag written by that Replace survived. A missed face and Cancel left the unlock screen with its button and no error line, and a Forget with one owner scan erased the item with status 0 and opened Welcome. `.audit/d1-secure-storage/phone/` holds both logs and the evidence notes.
+
+The Kotlin/Native test executable gets `errSecMissingEntitlement` for every Keychain call, so no unit test touches the real Keychain. Those proofs are the simulator runs and the two iPhone sessions.
 
 ## What each platform still owes
 
-The iPhone session of 2 Nov 2026 settled two items of this list: a read shows one card, not two, and a signed debug build ran. It also found that the store could not list its item, which step 3c answers. The iPhone still owes the parts a simulator cannot show:
+The iPhone sessions of 2 and 3 Nov 2026 settled most of this list. A read shows one card, a signed debug build runs, and the store's create, read, Replace, Forget and delete all work on a device with no extra sheet. A delete and reinstall opens Welcome with the notice. The iPhone still owes:
 
-- the step 3c store end to end on a signed build: create, Enable, kill, relaunch and unlock, a second Replace, Forget, and a delete and reinstall, which must open Welcome with the notice
-- whether `SecItemDelete` of this item shows a sheet or fails. A Replace, Forget and the reinstall wipe all delete. If the delete fails, the next Replace finds both accounts taken and fails, and so does every later one, because the read that would settle them deletes too.
-- whether a data read of an empty account with the evaluated context is silent (inferred: there is no item whose access control could ask)
-- whether the attributes-only read of the creation dates with the evaluated context is silent. Only two copies reach it, after a Replace whose delete did not happen.
+- a Replace from `wallet.b` to `wallet.a`, which only the simulator has run, because the one Replace on the phone went from `wallet.a` to `wallet.b`
+- whether the attributes-only read of the creation dates with the evaluated context is silent. Only two copies reach it, after a Replace whose delete did not happen, and the phone never made two copies.
 - a probe and a Create on a locked phone, which must answer try later
-- a failed face and the passcode inside the store's card
+- a failed face that falls through to the passcode inside the store's card
 - a kill while the card is up
 - removing the passcode, which must make the next launch say the wallet is gone
-- that a cold start never stays inactive longer than the 3-second wait. The one cold start on the phone showed the card, so it held once.
+- a cold start that stays inactive longer than the 3-second wait. Every cold start on the phone showed the card at once.
 
-Android owes step 6 (the Keystore store) and step 7 (`Biometrics`, so the App Lock screen, the 60-second lock and the sign check work there). Both wait for decisions on the API floor, `minSdk`, `allowBackup` and `launchMode`. The emulator proof needs a PIN set with `adb shell locksettings set-pin`, and the hardware proof needs the POCO X3 NFC and the Galaxy S25 FE.
+Android owes step 6 (the Keystore store) and step 7 (`Biometrics`, so the App Lock screen, the 60-second lock and the sign check work there). The decisions were made on 3 Nov 2026: saving needs API 30 or higher and older phones stay memory-only, `minSdk` stays 24, `allowBackup` is false app-wide, and `MainActivity` gets `launchMode=singleTask`. The emulator proof needs a PIN set with `adb shell locksettings set-pin`. The only Android phone available is the POCO X3 NFC (Android 11, no StrongBox), so the StrongBox path stays unproven until a StrongBox phone such as the Galaxy S25 FE is available.
 
 ## Known gaps
 
@@ -183,8 +183,7 @@ Android owes step 6 (the Keystore store) and step 7 (`Biometrics`, so the App Lo
 
 ## Next steps
 
-1. Run the iPhone acceptance of the step 3c store with a person: create, back up, enable the lock, kill, relaunch and unlock, enable the lock again from the catalog (a second Replace), Forget, then the reinstall wipe. Watch for a sheet at each delete.
-2. Add the compare-and-swap `Replace` before any real money.
-3. Build the Android Keystore store (step 6) and Android `Biometrics` (step 7) once the API floor and the manifest questions are decided.
-4. Optionally hide the screen under the in-session lock from accessibility (step 8).
-5. Have the security review read D1, including the Android envelope, before the testnet-only limit is lifted.
+1. Add the compare-and-swap `Replace` before any real money.
+2. Build the Android Keystore store (step 6) and Android `Biometrics` (step 7). Run a device spike of the exact Keystore and BiometricPrompt operations first, the hands-free part on an emulator and then one round on the POCO X3 NFC.
+3. Optionally hide the screen under the in-session lock from accessibility (step 8).
+4. Have the security review read D1, including the Android envelope, before the testnet-only limit is lifted.
