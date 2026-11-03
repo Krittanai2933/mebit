@@ -106,7 +106,7 @@ class SingleSigWallet(
         } catch (e: Exception) {
             // Mode first, so no frame shows the cleared balance as a known one.
             mode = WalletMode.Unavailable
-            lastError = sendErrorThai(e.message)
+            lastError = readErrorThai(e.message)
             balanceSats = 0L
             history = emptyList()
             // The address needs only the key, so the wallet keeps its own address, never the demo's, while the chain is out of reach.
@@ -237,10 +237,18 @@ fun sendErrorThai(message: String?): String {
         m.startsWith("esplora utxo:") || m.startsWith("esplora balance:") -> "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง"
         m == "amount plus fee does not fit u64" -> "จำนวนผิดปกติ"
         m.startsWith("broadcast:") || m.startsWith("esplora post:") -> "ส่งไม่สำเร็จ"
+        // The host throttles unauthenticated clients (Blockstream: 700 requests an hour per IP), after the retries or while probing hosts.
+        m.startsWith("esplora get") && "429" in m -> "explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่"
         m.startsWith("esplora get") -> "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง"
-        else -> "ส่งไม่สำเร็จ ลองใหม่ภายหลัง"
+        else -> SEND_FALLBACK
     }
 }
+
+private const val SEND_FALLBACK = "ส่งไม่สำเร็จ ลองใหม่ภายหลัง"
+
+/** [sendErrorThai] for a failed read of the wallet: its generic fallback would say a send failed when only a fetch did. */
+fun readErrorThai(message: String?): String =
+    sendErrorThai(message).takeUnless { it == SEND_FALLBACK } ?: "ดึงข้อมูลกระเป๋าไม่สำเร็จ ลองใหม่ภายหลัง"
 
 /** A typical 1-input, 2-output P2WPKH payment. The fee tiers are rate times this until coin selection reports the real size. */
 const val TYPICAL_VSIZE = 141L

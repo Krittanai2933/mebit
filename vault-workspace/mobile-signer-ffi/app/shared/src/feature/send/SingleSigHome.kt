@@ -181,9 +181,8 @@ internal fun SingleSigHome(
             NotSavedNotice(session, Modifier.padding(top = 12.dp))
             wallet.lastError?.let {
                 Spacer(modifier = Modifier.height(12.dp))
-                // The raw text of an unreachable chain names the server and the library, so that mode says it in plain words.
-                val text = if (wallet.mode == WalletMode.Unavailable) "ต่อเครือข่าย Bitcoin ไม่ได้ ตรวจอินเทอร์เน็ตแล้วลองใหม่" else it
-                Text(text, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.testTag("error"))
+                // Already plain Thai: every read error goes through readErrorThai, so none names the server or the library.
+                Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.testTag("error"))
             }
             if (rows.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(24.dp))
