@@ -4,20 +4,21 @@
 //! Address/UTXO/sign/broadcast are real against testnet Esplora; full `bdk_wallet`
 //! persistence and coin selection land when Android binary size is measured.
 //!
-//! Every call rescans the account from Esplora: both BIP-84 chains, external `0/i` and internal
-//! `1/i`, until `GAP_LIMIT` consecutive unused indices follow the last used one. Nothing is kept
-//! between calls, so the same words and passphrase always give the same answer.
+//! Every call scans the account from Esplora: both BIP-84 chains, external `0/i` and internal
+//! `1/i`, until `GAP_LIMIT` consecutive unused indices follow the last used one. What a scan
+//! learned (which indices are used, their balances, no key) is kept in `SCAN_CACHE` for the
+//! process, so the next call asks only what can have changed; see `scan_wallet`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use bip39::Mnemonic;
 use bitcoin::absolute::LockTime;
-use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
+use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv, Xpub};
 use bitcoin::consensus::encode::serialize_hex;
-use bitcoin::hashes::Hash;
+use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::{All, Message, Secp256k1};
 use bitcoin::{
     Address, Amount, CompressedPublicKey, Network, OutPoint, PrivateKey, ScriptBuf, Sequence,
@@ -52,6 +53,16 @@ const GAP_LIMIT: u32 = 20;
 /// honest rescan would not find it. The cap bounds that damage and the call count (a lying host got
 /// 5,010 calls before). shortcut: 200 per chain, raise it when a real wallet's chain nears it.
 const MAX_SCAN_PER_CHAIN: usize = 200;
+/// How long a finished scan answers the next call of the same wallet with no request, so the app's
+/// snapshot followed by history costs one scan. A used address's balance is never older than this.
+const SHARE_TTL: Duration = Duration::from_secs(10);
+/// How long the cached used-address set is trusted before the whole gap limit is scanned again.
+const FULL_RESCAN: Duration = Duration::from_secs(30 * 60);
+/// Unused indices after the last used one that an incremental scan asks about. shortcut: a coin paid
+/// to an index further out, or to an unused index below the last used one, shows at the next full
+/// scan (`FULL_RESCAN` or an app restart); raise it when a wallet is seen handing out that many
+/// addresses inside half an hour.
+const LOOKAHEAD: usize = 5;
 // Lookups in flight at once. Ten fills a fresh chain's gap in two windows and is a small burst for a
 // public explorer.
 const WINDOW: usize = 10;
@@ -187,6 +198,44 @@ impl Account {
             address,
         })
     }
+
+    /// SHA-256 of the two chain xpubs. Public data, so the cache can name a wallet without holding
+    /// a key, and different words, passphrase or network give a different id.
+    fn id(&self) -> WalletId {
+        let mut bytes = Vec::with_capacity(2 * 78);
+        for chain in &self.chains {
+            bytes.extend_from_slice(&Xpub::from_priv(&self.secp, chain).encode());
+        }
+        sha256::Hash::hash(&bytes).to_byte_array()
+    }
+}
+
+type WalletId = [u8; 32];
+
+/// What a scan learned about one index. No key: the account rederives it offline.
+#[derive(Clone, Copy)]
+struct Seen {
+    used: bool,
+    balance: u64,
+}
+
+#[derive(Clone)]
+struct CachedScan {
+    chains: [Vec<Seen>; 2],
+    /// When the last scan over the whole gap limit finished.
+    full_at: Instant,
+    /// When this picture was taken.
+    scanned_at: Instant,
+}
+
+type ScanCache = Mutex<HashMap<WalletId, CachedScan>>;
+static SCAN_CACHE: LazyLock<ScanCache> = LazyLock::new(ScanCache::default);
+
+fn forget_scans(scans: &ScanCache) {
+    scans
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
 }
 
 // Retries are for a GET only. A retried broadcast could pay twice, so `broadcast_signed` has none.
@@ -300,12 +349,14 @@ fn pick_host(
 }
 
 /// Forgets the host in use after a connection-level failure (no connection, TLS, a timeout), so the
-/// next call probes again. A status or an unreadable body is the host answering and changes nothing.
-fn forget_host_if_unreachable(answer: &Answer, cache: &HostChoice) {
+/// next call probes again, and every cached scan with it, so the next call scans the whole gap limit.
+/// A status or an unreadable body is the host answering and changes nothing.
+fn forget_host_if_unreachable(answer: &Answer, cache: &HostChoice, scans: &ScanCache) {
     if matches!(answer, Err(ureq::Error::Transport(_))) {
         *cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        forget_scans(scans);
     }
 }
 
@@ -340,7 +391,7 @@ fn http_get(url: &str) -> Result<String, MobileSignerError> {
     let url = on_host(url, selected_base()?);
     let attempt = || {
         let answer = AGENT.get(&url).call();
-        forget_host_if_unreachable(&answer, &CHOSEN_HOST);
+        forget_host_if_unreachable(&answer, &CHOSEN_HOST, &SCAN_CACHE);
         classify(answer)
     };
     get_with_retry(&attempt, &std::thread::sleep)
@@ -421,31 +472,159 @@ impl Wallet {
                 )
             })
     }
+
+    fn seen(&self) -> [Vec<Seen>; 2] {
+        let seen = |scanned: &Vec<Scanned>| {
+            scanned
+                .iter()
+                .map(|s| Seen {
+                    used: s.used,
+                    balance: s.balance,
+                })
+                .collect()
+        };
+        [seen(&self.chains[0]), seen(&self.chains[1])]
+    }
 }
 
+/// `seen` at `index` with its key derived again. No request.
+fn recalled(
+    account: &Account,
+    chain: Chain,
+    index: usize,
+    seen: Seen,
+) -> Result<Scanned, MobileSignerError> {
+    Ok(Scanned {
+        key: account.key(chain, index as u32)?,
+        used: seen.used,
+        balance: seen.balance,
+    })
+}
+
+/// The wallet as of `now`, from `cache` when it can be and from Esplora otherwise. Three scans:
+///
+/// - Shared: a scan of this wallet finished under `SHARE_TTL` ago. Its picture is returned with no
+///   request, so snapshot then history is one scan.
+/// - Incremental: the last full scan is under `FULL_RESCAN` old. Every used index is asked again,
+///   so balances are fresh, plus `LOOKAHEAD` unused indices after the last used one of each chain;
+///   a lookahead index that turned out used continues like a full scan from there.
+/// - Full: nothing cached, or the last full scan is `FULL_RESCAN` old. The whole gap limit.
+///
+/// A scan that fails forgets the wallet's entry, so the cache never answers from a picture a call
+/// refused. The entry holds no key: see `Seen`.
 fn scan_wallet(
     esplora: Esplora,
     words: &[String],
     passphrase: &str,
     network: KeyNetwork,
+    now: Instant,
+    cache: &ScanCache,
 ) -> Result<Wallet, MobileSignerError> {
     let account = Account::new(words, passphrase, network_of(network))?;
     let base = esplora_base(network)?;
-    Ok(Wallet {
-        chains: [
-            scan_chain(esplora, base, &account, Chain::External)?,
-            scan_chain(esplora, base, &account, Chain::Internal)?,
-        ],
-    })
+    let id = account.id();
+    let known = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&id)
+        .cloned();
+    let age = |at: Instant| now.saturating_duration_since(at);
+    let seed = match &known {
+        Some(c) if age(c.scanned_at) < SHARE_TTL => {
+            return Ok(Wallet {
+                chains: [
+                    recall_chain(&account, Chain::External, &c.chains[0])?,
+                    recall_chain(&account, Chain::Internal, &c.chains[1])?,
+                ],
+            });
+        }
+        Some(c) if age(c.full_at) < FULL_RESCAN => Some(c),
+        _ => None,
+    };
+    let scan = |chain: Chain| {
+        let known = seed.map(|c| c.chains[chain as usize].as_slice());
+        scan_chain(esplora, base, &account, chain, known)
+    };
+    let scanned = scan(Chain::External).and_then(|external| {
+        Ok(Wallet {
+            chains: [external, scan(Chain::Internal)?],
+        })
+    });
+    let mut entries = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match scanned {
+        Ok(wallet) => {
+            entries.insert(
+                id,
+                CachedScan {
+                    chains: wallet.seen(),
+                    full_at: seed.map_or(now, |c| c.full_at),
+                    scanned_at: now,
+                },
+            );
+            Ok(wallet)
+        }
+        Err(e) => {
+            entries.remove(&id);
+            Err(e)
+        }
+    }
 }
 
+fn recall_chain(
+    account: &Account,
+    chain: Chain,
+    seen: &[Seen],
+) -> Result<Vec<Scanned>, MobileSignerError> {
+    seen.iter()
+        .enumerate()
+        .map(|(i, s)| recalled(account, chain, i, *s))
+        .collect()
+}
+
+/// `indices` of `chain` asked about, in order. Keys are derived here and never leave.
+fn lookup(
+    esplora: Esplora,
+    base: &str,
+    account: &Account,
+    chain: Chain,
+    indices: impl Iterator<Item = usize>,
+) -> Result<Vec<Scanned>, MobileSignerError> {
+    let keys = indices
+        .map(|i| account.key(chain, i as u32))
+        .collect::<Result<Vec<_>, _>>()?;
+    let urls: Vec<String> = keys
+        .iter()
+        .map(|k| format!("{base}/address/{}", k.address))
+        .collect();
+    let answers = get_all(esplora, &urls)?;
+    keys.into_iter()
+        .zip(answers)
+        .map(|(key, raw)| {
+            let stats = parse_address_stats(&raw)?;
+            Ok(Scanned {
+                key,
+                used: stats.used,
+                balance: stats.balance,
+            })
+        })
+        .collect()
+}
+
+/// A chain scanned until `GAP_LIMIT` unused indices follow the last used one, `WINDOW` lookups at
+/// a time, starting from `refreshed(known)` when there is a cached chain and from nothing otherwise.
 fn scan_chain(
     esplora: Esplora,
     base: &str,
     account: &Account,
     chain: Chain,
+    known: Option<&[Seen]>,
 ) -> Result<Vec<Scanned>, MobileSignerError> {
-    let mut scanned: Vec<Scanned> = Vec::new();
+    let mut scanned = match known {
+        Some(known) => refreshed(esplora, base, account, chain, known)?,
+        None => Vec::new(),
+    };
     loop {
         let after_last_used = scanned
             .iter()
@@ -461,23 +640,49 @@ fn scan_chain(
             return Ok(scanned);
         }
         let from = scanned.len();
-        let keys = (from..wanted.min(from + WINDOW))
-            .map(|i| account.key(chain, i as u32))
-            .collect::<Result<Vec<_>, _>>()?;
-        let urls: Vec<String> = keys
-            .iter()
-            .map(|k| format!("{base}/address/{}", k.address))
-            .collect();
-        let answers = get_all(esplora, &urls)?;
-        for (key, raw) in keys.into_iter().zip(answers) {
-            let stats = parse_address_stats(&raw)?;
-            scanned.push(Scanned {
-                key,
-                used: stats.used,
-                balance: stats.balance,
-            });
+        scanned.extend(lookup(
+            esplora,
+            base,
+            account,
+            chain,
+            from..wanted.min(from + WINDOW),
+        )?);
+    }
+}
+
+/// The cached chain with every used index and the `LOOKAHEAD` indices after the last used one asked
+/// about again, in one batch. Unused indices below the last used one keep their cached zero. When no
+/// lookahead index turned out used the cached tail is kept too, so the chain is complete as it is;
+/// when one did, the chain ends at the lookahead so `scan_chain` scans on from there.
+fn refreshed(
+    esplora: Esplora,
+    base: &str,
+    account: &Account,
+    chain: Chain,
+    known: &[Seen],
+) -> Result<Vec<Scanned>, MobileSignerError> {
+    let after_last_used = known
+        .iter()
+        .rposition(|s| s.used)
+        .map_or(0, |last| last + 1);
+    let edge = after_last_used + LOOKAHEAD;
+    let asked = (0..edge).filter(|&i| i >= after_last_used || known[i].used);
+    let mut fresh = lookup(esplora, base, account, chain, asked)?.into_iter();
+    let mut scanned = Vec::with_capacity(known.len());
+    for i in 0..edge {
+        scanned.push(match known.get(i) {
+            Some(seen) if i < after_last_used && !seen.used => recalled(account, chain, i, *seen)?,
+            _ => fresh.next().ok_or_else(|| {
+                MobileSignerError::InvalidPsbtJson("esplora scan: fewer answers than asked".into())
+            })?,
+        });
+    }
+    if scanned[after_last_used..].iter().all(|s| !s.used) {
+        for (i, seen) in known.iter().enumerate().skip(edge) {
+            scanned.push(recalled(account, chain, i, *seen)?);
         }
     }
+    Ok(scanned)
 }
 
 // The `///` text on each export stays as committed: UniFFI hashes it into the checksum the committed
@@ -503,18 +708,28 @@ pub fn hot_wallet_snapshot(
     passphrase: String,
     network: KeyNetwork,
 ) -> Result<HotWalletSnapshot, MobileSignerError> {
-    snapshot_from(&http_get, &mnemonic_words, &passphrase, network)
+    snapshot_from(
+        &http_get,
+        &mnemonic_words,
+        &passphrase,
+        network,
+        Instant::now(),
+        &SCAN_CACHE,
+    )
 }
 
 /// The first unused receive address and the confirmed + mempool balance over every address of both
-/// chains. About 40 Esplora calls for a fresh wallet, so call it off the main thread.
+/// chains. About 40 Esplora calls for a fresh wallet, fewer after `scan_wallet` cached one, so call
+/// it off the main thread.
 fn snapshot_from(
     esplora: Esplora,
     words: &[String],
     passphrase: &str,
     network: KeyNetwork,
+    now: Instant,
+    cache: &ScanCache,
 ) -> Result<HotWalletSnapshot, MobileSignerError> {
-    let wallet = scan_wallet(esplora, words, passphrase, network)?;
+    let wallet = scan_wallet(esplora, words, passphrase, network, now, cache)?;
     Ok(HotWalletSnapshot {
         receive_address: wallet.next_unused(Chain::External).address.to_string(),
         balance_sats: wallet.balance()?,
@@ -591,23 +806,33 @@ pub fn hot_wallet_history(
     passphrase: String,
     network: KeyNetwork,
 ) -> Result<Vec<HotTx>, MobileSignerError> {
-    history_of(&http_get, &mnemonic_words, &passphrase, network)
+    history_of(
+        &http_get,
+        &mnemonic_words,
+        &passphrase,
+        network,
+        Instant::now(),
+        &SCAN_CACHE,
+    )
 }
 
 /// The latest transactions of every used address of the wallet, each once, as the wallet saw it:
 /// the mempool first, then confirmed transactions newest first. Only each address's first page
 /// comes back (about 25 confirmed transactions plus the mempool), so older history is not here.
 ///
-/// Makes a network call per scanned address and per used address, so call it off the main thread.
-/// An answer it cannot read fails the whole call, never one transaction.
+/// Makes a network call per used address plus one for the tip, on top of whatever `scan_wallet`
+/// needs, so call it off the main thread. An answer it cannot read fails the whole call, never one
+/// transaction.
 fn history_of(
     esplora: Esplora,
     words: &[String],
     passphrase: &str,
     network: KeyNetwork,
+    now: Instant,
+    cache: &ScanCache,
 ) -> Result<Vec<HotTx>, MobileSignerError> {
     let base = esplora_base(network)?;
-    let wallet = scan_wallet(esplora, words, passphrase, network)?;
+    let wallet = scan_wallet(esplora, words, passphrase, network, now, cache)?;
     // shortcut: first page only per address, upgrade when a full History screen exists
     let urls: Vec<String> = wallet
         .used()
@@ -769,6 +994,8 @@ pub fn hot_prepare_send(
         &destination,
         amount_sats,
         fee_sats,
+        Instant::now(),
+        &SCAN_CACHE,
     )?;
     Ok(prepared(&signed, fee_sats))
 }
@@ -804,10 +1031,20 @@ pub fn hot_broadcast(
     // Not /tx/{txid}/status: Esplora answers that one 200 for a txid it never saw (blockstream.info, 2026-11-02).
     let lookup = |base: &str, txid: &str| AGENT.get(&format!("{base}/tx/{txid}")).call();
     let pause = || std::thread::sleep(LOOKUP_PAUSE);
-    broadcast_via(selected_base(), &post, &lookup, &pause, &hex, &txid)
+    broadcast_via(
+        selected_base(),
+        &post,
+        &lookup,
+        &pause,
+        &hex,
+        &txid,
+        &SCAN_CACHE,
+    )
 }
 
 /// `broadcast_matching` on `host`. When `host` is the error from `pick_host`, nothing is posted.
+/// Once the payment is out, or may be, every cached scan is forgotten (the call does not know
+/// which wallet paid), so the next refresh scans the whole gap limit. A refusal posted nothing.
 fn broadcast_via(
     host: Result<&str, MobileSignerError>,
     post: &dyn Fn(&str, &str) -> Answer,
@@ -815,16 +1052,20 @@ fn broadcast_via(
     pause: &dyn Fn(),
     hex: &str,
     txid: &str,
+    scans: &ScanCache,
 ) -> Result<HotSendResult, MobileSignerError> {
     let base = host?;
-    let txid = broadcast_matching(
+    let result = broadcast_matching(
         &|hex| post(base, hex),
         &|txid| lookup(base, txid),
         pause,
         hex,
         txid,
-    )?;
-    Ok(HotSendResult { txid })
+    );
+    if matches!(result, Ok(_) | Err(MobileSignerError::BroadcastUnknown(_))) {
+        forget_scans(scans);
+    }
+    Ok(HotSendResult { txid: result? })
 }
 
 /// `broadcast_signed`, after checking that `hex` is a transaction whose id is `txid`.
@@ -862,7 +1103,9 @@ fn p2wpkh_vsize(inputs: usize, outputs: usize) -> u64 {
 /// A payment from the coins of every used address, each input signed with its own key, any change
 /// paid to the first unused internal (change) address, not yet broadcast. The amount, the fee and
 /// the destination are checked before any network call; the change and the fee rate after the coins
-/// are chosen. Every refusal is an error, never a changed payment.
+/// are chosen. Every refusal is an error, never a changed payment. The used-address set may come
+/// from `scan_wallet`'s cache; the coin lists are asked for on every call, never cached.
+#[allow(clippy::too_many_arguments)]
 fn signed_payment(
     esplora: Esplora,
     words: &[String],
@@ -871,6 +1114,8 @@ fn signed_payment(
     destination: &str,
     amount_sats: u64,
     fee_sats: u64,
+    now: Instant,
+    cache: &ScanCache,
 ) -> Result<Transaction, MobileSignerError> {
     let refuse = |what: String| Err(MobileSignerError::InvalidPsbtJson(what));
     if amount_sats < DUST {
@@ -893,7 +1138,7 @@ fn signed_payment(
         .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?;
 
     let base = esplora_base(network)?;
-    let wallet = scan_wallet(esplora, words, passphrase, network)?;
+    let wallet = scan_wallet(esplora, words, passphrase, network, now, cache)?;
     let owners: Vec<(Chain, &OwnKey)> = wallet.used().collect();
     let urls: Vec<String> = owners
         .iter()
@@ -1998,8 +2243,9 @@ mod tests {
         own(chain, index).address.to_string()
     }
 
-    /// Esplora keyed by address. An address not set up answers as one nobody ever paid.
-    #[derive(Default)]
+    /// Esplora keyed by address. An address not set up answers as one nobody ever paid. Each Fake
+    /// has its own scan cache and a clock that moves only by `tick`, so no test sleeps and none
+    /// sees another's cache.
     struct Fake {
         stats: HashMap<String, String>,
         txs: HashMap<String, String>,
@@ -2007,14 +2253,34 @@ mod tests {
         failing: HashSet<String>,
         tip: String,
         calls: Mutex<Vec<String>>,
+        now: Mutex<Instant>,
+        cache: ScanCache,
     }
 
     impl Fake {
         fn new() -> Self {
             Self {
+                stats: HashMap::new(),
+                txs: HashMap::new(),
+                utxos: HashMap::new(),
+                failing: HashSet::new(),
                 tip: TIP.into(),
-                ..Default::default()
+                calls: Mutex::new(Vec::new()),
+                now: Mutex::new(Instant::now()),
+                cache: ScanCache::default(),
             }
+        }
+
+        fn now(&self) -> Instant {
+            *self.now.lock().unwrap()
+        }
+
+        fn tick(&self, by: Duration) {
+            *self.now.lock().unwrap() += by;
+        }
+
+        fn requests(&self) -> usize {
+            self.calls.lock().unwrap().len()
         }
 
         /// `address` holds one coin of `value` sats, in a transaction whose id repeats `digit`.
@@ -2079,16 +2345,33 @@ mod tests {
         }
 
         fn snapshot(&self, passphrase: &str) -> Result<HotWalletSnapshot, MobileSignerError> {
+            self.snapshot_of(&abandon_about(), passphrase)
+        }
+
+        fn snapshot_of(
+            &self,
+            words: &[String],
+            passphrase: &str,
+        ) -> Result<HotWalletSnapshot, MobileSignerError> {
             snapshot_from(
                 &|url| self.get(url),
-                &abandon_about(),
+                words,
                 passphrase,
                 KeyNetwork::Test,
+                self.now(),
+                &self.cache,
             )
         }
 
         fn history(&self) -> Result<Vec<HotTx>, MobileSignerError> {
-            history_of(&|url| self.get(url), &abandon_about(), "", KeyNetwork::Test)
+            history_of(
+                &|url| self.get(url),
+                &abandon_about(),
+                "",
+                KeyNetwork::Test,
+                self.now(),
+                &self.cache,
+            )
         }
 
         fn send(&self, to: &str, amount: u64, fee: u64) -> Result<Transaction, MobileSignerError> {
@@ -2101,6 +2384,26 @@ mod tests {
                 to,
                 amount,
                 fee,
+                self.now(),
+                &self.cache,
+            )
+        }
+
+        /// `hot_broadcast` as the app would reach it, against this Fake's scan cache.
+        fn broadcast(
+            &self,
+            ready: &PreparedSend,
+            post: Answer,
+        ) -> Result<HotSendResult, MobileSignerError> {
+            let post = Mutex::new(Some(post));
+            broadcast_via(
+                Ok(ESPLORA_TESTNET4),
+                &|_, _| post.lock().unwrap().take().expect("one post"),
+                &|_, _| not_found(),
+                &|| {},
+                &ready.hex,
+                &ready.txid,
+                &self.cache,
             )
         }
     }
@@ -2425,6 +2728,8 @@ mod tests {
         );
         assert_eq!(fake.calls.lock().unwrap().len(), 220);
         fake.touch(&addr(Chain::External, 180));
+        // Past the share window: the incremental scan finds index 180 used and hits the cap too.
+        fake.tick(SHARE_TTL);
         match fake.snapshot("") {
             Err(MobileSignerError::InvalidPsbtJson(m)) => assert_eq!(m, abnormal),
             other => panic!("expected the abnormal-history error, got {other:?}"),
@@ -2435,7 +2740,14 @@ mod tests {
             calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(used_stats(0))
         };
-        let result = snapshot_from(&liar, &abandon_about(), "", KeyNetwork::Test);
+        let result = snapshot_from(
+            &liar,
+            &abandon_about(),
+            "",
+            KeyNetwork::Test,
+            Instant::now(),
+            &ScanCache::default(),
+        );
         assert!(result.is_err());
         assert!(calls.load(std::sync::atomic::Ordering::SeqCst) <= 200);
     }
@@ -2584,6 +2896,215 @@ mod tests {
             }
             other => panic!("expected the call to fail, got {other:?}"),
         }
+    }
+
+    /// Three used receive addresses and one used change address: a full scan is 23 + 21 = 44
+    /// lookups, an incremental one 3 + 5 and 1 + 5 = 14.
+    fn three_used() -> Fake {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 1_000, '1');
+        fake.fund(&addr(Chain::External, 1), 1_000, '2');
+        fake.fund(&addr(Chain::External, 2), 1_000, '3');
+        fake.fund(&addr(Chain::Internal, 0), 1_000, '4');
+        fake
+    }
+
+    fn just_under(window: Duration) -> Duration {
+        window - Duration::from_millis(1)
+    }
+
+    #[test]
+    fn a_cold_wallet_costs_forty_once_then_nothing_inside_the_share_window_then_the_lookahead() {
+        let fake = Fake::new();
+        assert_eq!(
+            receive_and_balance(fake.snapshot("").unwrap()),
+            (addr(Chain::External, 0), 0)
+        );
+        assert_eq!(fake.requests(), 40);
+        fake.tick(just_under(SHARE_TTL));
+        fake.snapshot("").unwrap();
+        assert!(fake.history().unwrap().is_empty());
+        assert_eq!(
+            fake.requests(),
+            40,
+            "shared: no used address, no page, no tip"
+        );
+        fake.tick(Duration::from_millis(1));
+        assert_eq!(
+            receive_and_balance(fake.snapshot("").unwrap()),
+            (addr(Chain::External, 0), 0)
+        );
+        assert_eq!(
+            fake.requests(),
+            50,
+            "incremental: the lookahead of each chain"
+        );
+    }
+
+    #[test]
+    fn a_warm_wallet_asks_its_used_addresses_and_the_lookahead_and_history_adds_the_pages_and_the_tip()
+     {
+        let fake = three_used();
+        assert_eq!(fake.snapshot("").unwrap().balance_sats, 4_000);
+        assert_eq!(fake.requests(), 44);
+        fake.tick(just_under(SHARE_TTL));
+        assert_eq!(fake.snapshot("").unwrap().balance_sats, 4_000);
+        fake.history().unwrap();
+        assert_eq!(fake.requests(), 44 + 5, "shared: four pages and the tip");
+        fake.tick(Duration::from_millis(1));
+        assert_eq!(
+            receive_and_balance(fake.snapshot("").unwrap()),
+            (addr(Chain::External, 3), 4_000)
+        );
+        assert_eq!(fake.requests(), 49 + 14, "incremental");
+        fake.history().unwrap();
+        assert_eq!(fake.requests(), 63 + 5, "shared with the incremental scan");
+        fake.tick(FULL_RESCAN);
+        assert_eq!(fake.snapshot("").unwrap().balance_sats, 4_000);
+        assert_eq!(fake.requests(), 68 + 44, "full again after FULL_RESCAN");
+    }
+
+    #[test]
+    fn a_used_address_balance_is_asked_again_once_the_share_window_has_passed() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 1_000, '1');
+        assert_eq!(fake.snapshot("").unwrap().balance_sats, 1_000);
+        fake.fund(&addr(Chain::External, 0), 5_000, '1');
+        fake.tick(just_under(SHARE_TTL));
+        assert_eq!(fake.snapshot("").unwrap().balance_sats, 1_000, "shared");
+        fake.tick(Duration::from_millis(1));
+        assert_eq!(fake.snapshot("").unwrap().balance_sats, 5_000);
+    }
+
+    #[test]
+    fn a_new_coin_inside_the_lookahead_is_found_and_the_scan_goes_on_past_it() {
+        let mut fake = three_used();
+        fake.snapshot("").unwrap();
+        fake.tick(SHARE_TTL);
+        fake.fund(&addr(Chain::External, 3), 2_000, '5');
+        assert_eq!(
+            receive_and_balance(fake.snapshot("").unwrap()),
+            (addr(Chain::External, 4), 6_000)
+        );
+        // Twenty unused past index 3, as a full scan would: through 23 and not 24.
+        assert!(fake.asked_about(&addr(Chain::External, 23)));
+        assert!(!fake.asked_about(&addr(Chain::External, 24)));
+        assert_eq!(fake.requests(), 44 + 30);
+    }
+
+    // The documented trade-off of the incremental scan.
+    #[test]
+    fn a_new_coin_beyond_the_lookahead_waits_for_the_full_rescan() {
+        let mut fake = three_used();
+        fake.snapshot("").unwrap();
+        fake.tick(SHARE_TTL);
+        let far = addr(Chain::External, 2 + LOOKAHEAD as u32 + 1);
+        fake.fund(&far, 2_000, '5');
+        let before = fake.requests();
+        assert_eq!(
+            receive_and_balance(fake.snapshot("").unwrap()),
+            (addr(Chain::External, 3), 4_000)
+        );
+        assert!(
+            !fake.calls.lock().unwrap()[before..]
+                .iter()
+                .any(|url| url.contains(&far))
+        );
+        fake.tick(FULL_RESCAN);
+        assert_eq!(
+            receive_and_balance(fake.snapshot("").unwrap()),
+            (addr(Chain::External, 9), 6_000)
+        );
+    }
+
+    #[test]
+    fn a_send_after_a_refresh_asks_only_for_the_coin_lists_and_asks_every_time() {
+        let mut fake = three_used();
+        fake.snapshot("").unwrap();
+        let before = fake.requests();
+        fake.send(SOMEONE, 2_000, 300).unwrap();
+        let asked = fake.calls.lock().unwrap()[before..].to_vec();
+        assert_eq!(asked.len(), 4);
+        assert!(asked.iter().all(|url| url.ends_with("/utxo")), "{asked:?}");
+        // Coins spent elsewhere since the refresh are not spent again from a cached list.
+        fake.utxos.clear();
+        assert_refused(
+            fake.send(SOMEONE, 2_000, 300),
+            "insufficient funds: have 0 confirmed, need 2300",
+        );
+        assert_eq!(fake.requests(), before + 8);
+    }
+
+    #[test]
+    fn a_broadcast_that_went_out_or_is_unclear_forgets_the_scan_and_a_refusal_keeps_it() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        let ready = prepared(&fake.send(SOMEONE, 5_000, 500).unwrap(), 500);
+        let full = 41;
+        assert_eq!(fake.requests(), full + 1);
+
+        assert!(fake.broadcast(&ready, answer(400, NODE_REFUSES)).is_err());
+        fake.snapshot("").unwrap();
+        assert_eq!(fake.requests(), full + 1, "a refusal posted nothing");
+
+        assert_eq!(
+            fake.broadcast(&ready, answer(200, &ready.txid))
+                .unwrap()
+                .txid,
+            ready.txid
+        );
+        fake.snapshot("").unwrap();
+        assert_eq!(
+            fake.requests(),
+            2 * full + 1,
+            "sent: the next refresh is a full scan"
+        );
+
+        match fake.broadcast(&ready, no_answer()) {
+            Err(MobileSignerError::BroadcastUnknown(t)) => assert_eq!(t, ready.txid),
+            other => panic!("expected BroadcastUnknown, got {other:?}"),
+        }
+        fake.snapshot("").unwrap();
+        assert_eq!(
+            fake.requests(),
+            3 * full + 1,
+            "unclear: the next refresh is a full scan"
+        );
+    }
+
+    #[test]
+    fn a_scan_that_fails_forgets_the_wallet_so_the_next_call_is_a_full_scan() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 1_000, '1');
+        fake.snapshot("").unwrap();
+        fake.tick(SHARE_TTL);
+        fake.failing.insert(addr(Chain::External, 1));
+        assert!(fake.snapshot("").is_err());
+        fake.failing.clear();
+        let before = fake.requests();
+        assert_eq!(fake.snapshot("").unwrap().balance_sats, 1_000);
+        assert_eq!(fake.requests(), before + 41);
+    }
+
+    #[test]
+    fn two_wallets_never_share_a_scan() {
+        let fake = Fake::new();
+        let other: Vec<String> =
+            "legal winner thank year wave sausage worth useful legal winner thank yellow"
+                .split(' ')
+                .map(String::from)
+                .collect();
+        let first = fake.snapshot("").unwrap().receive_address;
+        assert_eq!(fake.requests(), 40);
+        let second = fake.snapshot("TREZOR").unwrap().receive_address;
+        assert_eq!(fake.requests(), 80, "the same words under a passphrase");
+        let third = fake.snapshot_of(&other, "").unwrap().receive_address;
+        assert_eq!(fake.requests(), 120, "other words");
+        assert_ne!(first, second);
+        assert_ne!(first, third);
+        assert_ne!(second, third);
+        fake.snapshot("").unwrap();
+        assert_eq!(fake.requests(), 120, "each wallet keeps its own entry");
     }
 
     fn txo(address: &str, value: u64) -> String {
@@ -2944,34 +3465,46 @@ mod tests {
     }
 
     #[test]
-    fn a_transport_failure_forgets_the_host_but_a_status_or_a_bad_body_does_not() {
+    fn a_transport_failure_forgets_the_host_and_the_scans_but_a_status_or_a_bad_body_does_not() {
         let cached = || Mutex::new(Some((0, Instant::now())));
         let kept = |cache: &HostChoice| cache.lock().unwrap().map(|(i, _)| i);
+        let scanned = || {
+            let fake = Fake::new();
+            fake.snapshot("").unwrap();
+            fake
+        };
+        let scans_kept = |fake: &Fake| fake.cache.lock().unwrap().len() == 1;
 
-        let cache = cached();
-        forget_host_if_unreachable(&no_answer(), &cache);
+        let (cache, fake) = (cached(), scanned());
+        forget_host_if_unreachable(&no_answer(), &cache, &fake.cache);
         assert_eq!(kept(&cache), None, "a timeout");
+        assert!(!scans_kept(&fake), "a timeout");
 
-        let cache = cached();
+        let (cache, fake) = (cached(), scanned());
         let refused = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "no");
-        forget_host_if_unreachable(&Err(refused.into()), &cache);
+        forget_host_if_unreachable(&Err(refused.into()), &cache, &fake.cache);
         assert_eq!(kept(&cache), None, "a refused connection");
+        assert!(!scans_kept(&fake), "a refused connection");
 
-        let cache = cached();
-        forget_host_if_unreachable(&answer(500, ""), &cache);
+        let (cache, fake) = (cached(), scanned());
+        forget_host_if_unreachable(&answer(500, ""), &cache, &fake.cache);
         assert_eq!(kept(&cache), Some(0), "HTTP 500");
+        assert!(scans_kept(&fake), "HTTP 500");
 
-        let cache = cached();
-        forget_host_if_unreachable(&answer(404, ""), &cache);
+        let (cache, fake) = (cached(), scanned());
+        forget_host_if_unreachable(&answer(404, ""), &cache, &fake.cache);
         assert_eq!(kept(&cache), Some(0), "HTTP 404");
+        assert!(scans_kept(&fake), "HTTP 404");
 
-        let cache = cached();
-        forget_host_if_unreachable(&answer(200, "<html>Sign in</html>"), &cache);
+        let (cache, fake) = (cached(), scanned());
+        forget_host_if_unreachable(&answer(200, "<html>Sign in</html>"), &cache, &fake.cache);
         assert_eq!(kept(&cache), Some(0), "a 200 with a bad body");
+        assert!(scans_kept(&fake), "a 200 with a bad body");
 
-        let cache = cached();
-        forget_host_if_unreachable(&cut_short(200), &cache);
+        let (cache, fake) = (cached(), scanned());
+        forget_host_if_unreachable(&cut_short(200), &cache, &fake.cache);
         assert_eq!(kept(&cache), Some(0), "a body cut short");
+        assert!(scans_kept(&fake), "a body cut short");
     }
 
     #[test]
@@ -2981,7 +3514,7 @@ mod tests {
             (HOSTS[1], Ok(TESTNET4_GENESIS)),
         ]);
         let cache = Mutex::new(Some((0, Instant::now())));
-        forget_host_if_unreachable(&no_answer(), &cache);
+        forget_host_if_unreachable(&no_answer(), &cache, &ScanCache::default());
         assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1);
         assert_eq!(probe.asked(), HOSTS);
     }
@@ -3036,7 +3569,15 @@ mod tests {
         let no_host = Err(MobileSignerError::InvalidPsbtJson(
             "esplora get: no testnet4 host is reachable (both down)".into(),
         ));
-        let result = broadcast_via(no_host, &post, &lookup, &|| {}, &good.hex, &good.txid);
+        let result = broadcast_via(
+            no_host,
+            &post,
+            &lookup,
+            &|| {},
+            &good.hex,
+            &good.txid,
+            &fake.cache,
+        );
         match result {
             Err(MobileSignerError::InvalidPsbtJson(m)) => {
                 assert!(m.starts_with("esplora get: no testnet4 host"), "{m}")
@@ -3045,7 +3586,15 @@ mod tests {
         }
         assert!(posted_to.lock().unwrap().is_empty());
 
-        let result = broadcast_via(Ok(HOSTS[1]), &post, &lookup, &|| {}, &good.hex, &good.txid);
+        let result = broadcast_via(
+            Ok(HOSTS[1]),
+            &post,
+            &lookup,
+            &|| {},
+            &good.hex,
+            &good.txid,
+            &fake.cache,
+        );
         assert_eq!(result.unwrap().txid, good.txid);
         assert_eq!(*posted_to.lock().unwrap(), vec![HOSTS[1]]);
     }
@@ -3059,7 +3608,15 @@ mod tests {
             http_get(url)
         };
         let start = std::time::Instant::now();
-        let wallet = scan_wallet(&counted, &abandon_about(), "", KeyNetwork::Test).unwrap();
+        let wallet = scan_wallet(
+            &counted,
+            &abandon_about(),
+            "",
+            KeyNetwork::Test,
+            Instant::now(),
+            &ScanCache::default(),
+        )
+        .unwrap();
         println!(
             "scan took {:?} for {} requests",
             start.elapsed(),
