@@ -10,8 +10,8 @@
 
 use std::collections::HashSet;
 use std::str::FromStr;
-use std::sync::LazyLock;
-use std::time::Duration;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use bip39::Mnemonic;
 use bitcoin::absolute::LockTime;
@@ -27,7 +27,21 @@ use serde_json::Value;
 
 use crate::{KeyNetwork, MobileSignerError};
 
-const ESPLORA_TESTNET4: &str = "https://mempool.space/testnet4/api";
+/// Testnet4 Esplora hosts in the order they are tried. mempool.space is second because its TLS
+/// handshake hung from a phone on 5G and from the user's networks on 2026-11-03.
+const ESPLORA_TESTNET4_HOSTS: [&str; 2] = [
+    "https://blockstream.info/testnet4/api",
+    "https://mempool.space/testnet4/api",
+];
+/// The base every URL is built on. `http_get` rewrites it to the host in use.
+const ESPLORA_TESTNET4: &str = ESPLORA_TESTNET4_HOSTS[0];
+/// Hash of testnet4 block 0. A host whose `/block-height/0` says anything else serves another
+/// chain, and a balance or a broadcast there would be wrong, so it is never used.
+const TESTNET4_GENESIS: &str = "00000000da84f2bafbbc53dee25a72ae507ff4914b867c565be350b0da8bf043";
+/// How long a host that passed the genesis check is used before it is probed again.
+const HOST_TRUST: Duration = Duration::from_secs(10 * 60);
+const PROBE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const PROBE_READ_TIMEOUT: Duration = Duration::from_secs(8);
 const ACCOUNT_PATH: &str = "m/84'/1'/0'";
 
 /// BIP-44 gap limit. A chain is scanned until this many consecutive unused indices follow the last
@@ -54,6 +68,20 @@ static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
         .timeout_write(IO_TIMEOUT)
         .build()
 });
+
+// Shorter limits for the genesis probe only: a host that cannot say its block 0 hash in 13 s is
+// skipped for the next one instead of holding the scan.
+static PROBE_AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
+    ureq::AgentBuilder::new()
+        .timeout_connect(PROBE_CONNECT_TIMEOUT)
+        .timeout_read(PROBE_READ_TIMEOUT)
+        .timeout_write(PROBE_READ_TIMEOUT)
+        .build()
+});
+
+/// The index into the host list of the host in use, and when it passed the genesis check.
+type HostChoice = Mutex<Option<(usize, Instant)>>;
+static CHOSEN_HOST: HostChoice = Mutex::new(None);
 
 // After an unclear broadcast: about 6 s of asking, for the explorer to index what its node took.
 const LOOKUPS: u32 = 4;
@@ -232,8 +260,90 @@ fn classify(answer: Result<ureq::Response, ureq::Error>) -> Result<String, GetEr
     }
 }
 
+/// The index of the host to use: the cached one while it is under `HOST_TRUST` old, else the first
+/// in `hosts` whose `probe` returns the testnet4 genesis hash, which is then cached as of `now`. A
+/// host that answers another hash is skipped like one that does not answer. No host passing fails
+/// with `esplora get: no testnet4 host is reachable`, naming each host's failure.
+fn pick_host(
+    hosts: &[&str],
+    probe: &dyn Fn(&str) -> Result<String, MobileSignerError>,
+    now: Instant,
+    cache: &HostChoice,
+) -> Result<usize, MobileSignerError> {
+    let mut chosen = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((index, verified)) = *chosen
+        && now.saturating_duration_since(verified) < HOST_TRUST
+    {
+        return Ok(index);
+    }
+    let mut failures = Vec::with_capacity(hosts.len());
+    for (index, host) in hosts.iter().enumerate() {
+        match probe(host) {
+            Ok(body) if body.trim() == TESTNET4_GENESIS => {
+                *chosen = Some((index, now));
+                return Ok(index);
+            }
+            Ok(body) => {
+                let shown: String = body.trim().chars().take(24).collect();
+                failures.push(format!("{host}: block 0 is {shown:?}, not testnet4"));
+            }
+            Err(e) => failures.push(format!("{host}: {e}")),
+        }
+    }
+    *chosen = None;
+    Err(MobileSignerError::InvalidPsbtJson(format!(
+        "esplora get: no testnet4 host is reachable ({})",
+        failures.join("; ")
+    )))
+}
+
+/// Forgets the host in use after a connection-level failure (no connection, TLS, a timeout), so the
+/// next call probes again. A status or an unreadable body is the host answering and changes nothing.
+fn forget_host_if_unreachable(answer: &Answer, cache: &HostChoice) {
+    if matches!(answer, Err(ureq::Error::Transport(_))) {
+        *cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+}
+
+/// `url` with the canonical base swapped for `base`. Any other URL is returned as it is.
+fn on_host(url: &str, base: &str) -> String {
+    match url.strip_prefix(ESPLORA_TESTNET4) {
+        Some(rest) => format!("{base}{rest}"),
+        None => url.to_string(),
+    }
+}
+
+fn probe_genesis(host: &str) -> Result<String, MobileSignerError> {
+    PROBE_AGENT
+        .get(&format!("{host}/block-height/0"))
+        .call()
+        .and_then(|response| response.into_string().map_err(ureq::Error::from))
+        .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))
+}
+
+/// The base of the testnet4 host in use, probing the list when none is cached.
+fn selected_base() -> Result<&'static str, MobileSignerError> {
+    let index = pick_host(
+        &ESPLORA_TESTNET4_HOSTS,
+        &probe_genesis,
+        Instant::now(),
+        &CHOSEN_HOST,
+    )?;
+    Ok(ESPLORA_TESTNET4_HOSTS[index])
+}
+
 fn http_get(url: &str) -> Result<String, MobileSignerError> {
-    get_with_retry(&|| classify(AGENT.get(url).call()), &std::thread::sleep)
+    let url = on_host(url, selected_base()?);
+    let attempt = || {
+        let answer = AGENT.get(&url).call();
+        forget_host_if_unreachable(&answer, &CHOSEN_HOST);
+        classify(answer)
+    };
+    get_with_retry(&attempt, &std::thread::sleep)
 }
 
 /// Every URL's body, in the order given, `WINDOW` requests in flight at a time. One failure fails
@@ -684,17 +794,36 @@ pub fn hot_broadcast(
     hex: String,
     txid: String,
 ) -> Result<HotSendResult, MobileSignerError> {
-    let base = esplora_base(network)?;
-    let post = |hex: &str| {
+    esplora_base(network)?;
+    let post = |base: &str, hex: &str| {
         AGENT
             .post(&format!("{base}/tx"))
             .set("Content-Type", "text/plain")
             .send_string(hex)
     };
     // Not /tx/{txid}/status: Esplora answers that one 200 for a txid it never saw (blockstream.info, 2026-11-02).
-    let lookup = |txid: &str| AGENT.get(&format!("{base}/tx/{txid}")).call();
+    let lookup = |base: &str, txid: &str| AGENT.get(&format!("{base}/tx/{txid}")).call();
     let pause = || std::thread::sleep(LOOKUP_PAUSE);
-    let txid = broadcast_matching(&post, &lookup, &pause, &hex, &txid)?;
+    broadcast_via(selected_base(), &post, &lookup, &pause, &hex, &txid)
+}
+
+/// `broadcast_matching` on `host`. When `host` is the error from `pick_host`, nothing is posted.
+fn broadcast_via(
+    host: Result<&str, MobileSignerError>,
+    post: &dyn Fn(&str, &str) -> Answer,
+    lookup: &dyn Fn(&str, &str) -> Answer,
+    pause: &dyn Fn(),
+    hex: &str,
+    txid: &str,
+) -> Result<HotSendResult, MobileSignerError> {
+    let base = host?;
+    let txid = broadcast_matching(
+        &|hex| post(base, hex),
+        &|txid| lookup(base, txid),
+        pause,
+        hex,
+        txid,
+    )?;
     Ok(HotSendResult { txid })
 }
 
@@ -2670,8 +2799,259 @@ mod tests {
         assert!(parse_address_stats(&result.unwrap()).is_err());
     }
 
+    const HOSTS: [&str; 2] = ["https://first.example/api", "https://second.example/api"];
+    const TESTNET3_GENESIS: &str =
+        "000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943";
+    const MAINNET_GENESIS: &str =
+        "000000000019d6689c085ae165831e9934ff763ae46a2a6c172b3f1b60a8ce26";
+
+    /// A probe scripted per host, counting the hosts it was asked about.
+    struct Probe {
+        answers: HashMap<&'static str, Result<&'static str, &'static str>>,
+        asked: Mutex<Vec<String>>,
+    }
+
+    impl Probe {
+        fn new(answers: &[(&'static str, Result<&'static str, &'static str>)]) -> Self {
+            Self {
+                answers: answers.iter().copied().collect(),
+                asked: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn run(&self, host: &str) -> Result<String, MobileSignerError> {
+            self.asked.lock().unwrap().push(host.to_string());
+            match self.answers.get(host).copied() {
+                Some(Ok(body)) => Ok(body.to_string()),
+                Some(Err(why)) => Err(MobileSignerError::InvalidPsbtJson(why.to_string())),
+                None => panic!("unexpected probe of {host}"),
+            }
+        }
+
+        fn asked(&self) -> Vec<String> {
+            self.asked.lock().unwrap().clone()
+        }
+
+        fn pick(&self, now: Instant, cache: &HostChoice) -> Result<usize, MobileSignerError> {
+            pick_host(&HOSTS, &|host| self.run(host), now, cache)
+        }
+    }
+
+    fn no_host_message(result: Result<usize, MobileSignerError>) -> String {
+        match result {
+            Err(MobileSignerError::InvalidPsbtJson(m)) => m,
+            other => panic!("expected no host, got {other:?}"),
+        }
+    }
+
     #[test]
-    #[ignore = "needs the network and mempool.space/testnet4"]
+    fn the_first_host_with_the_testnet4_genesis_is_chosen_and_the_second_is_not_probed() {
+        let probe = Probe::new(&[
+            (HOSTS[0], Ok(TESTNET4_GENESIS)),
+            (HOSTS[1], Ok(TESTNET4_GENESIS)),
+        ]);
+        let cache = Mutex::new(None);
+        let now = Instant::now();
+        assert_eq!(probe.pick(now, &cache).unwrap(), 0);
+        assert_eq!(probe.asked(), vec![HOSTS[0]]);
+        assert_eq!(*cache.lock().unwrap(), Some((0, now)));
+    }
+
+    #[test]
+    fn an_unreachable_first_host_gives_the_second() {
+        let probe = Probe::new(&[
+            (HOSTS[0], Err("timed out")),
+            (HOSTS[1], Ok(TESTNET4_GENESIS)),
+        ]);
+        let cache = Mutex::new(None);
+        assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1);
+        assert_eq!(probe.asked(), HOSTS);
+    }
+
+    #[test]
+    fn a_first_host_on_another_chain_is_skipped_for_the_second() {
+        let wrong = [
+            TESTNET3_GENESIS,
+            MAINNET_GENESIS,
+            "",
+            "<html><body>Sign in to Wi-Fi</body></html>",
+            // Right hash, wrong framing: a JSON string is not the bare hash Esplora sends.
+            r#""00000000da84f2bafbbc53dee25a72ae507ff4914b867c565be350b0da8bf043""#,
+        ];
+        for body in wrong {
+            let probe = Probe::new(&[(HOSTS[0], Ok(body)), (HOSTS[1], Ok(TESTNET4_GENESIS))]);
+            let cache = Mutex::new(None);
+            assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1, "{body:?}");
+            assert_eq!(cache.lock().unwrap().map(|(i, _)| i), Some(1), "{body:?}");
+        }
+    }
+
+    #[test]
+    fn a_host_on_another_chain_is_never_used_even_when_it_is_the_only_one() {
+        let probe = Probe::new(&[(HOSTS[0], Ok(TESTNET3_GENESIS))]);
+        let cache = Mutex::new(None);
+        let result = pick_host(&HOSTS[..1], &|h| probe.run(h), Instant::now(), &cache);
+        let message = no_host_message(result);
+        assert!(
+            message.starts_with("esplora get: no testnet4 host is reachable"),
+            "{message}"
+        );
+        assert!(
+            message.contains(HOSTS[0]) && message.contains("not testnet4"),
+            "{message}"
+        );
+        assert_eq!(*cache.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn no_host_passing_names_every_failure_and_caches_nothing() {
+        let probe = Probe::new(&[
+            (HOSTS[0], Err("tls handshake hung")),
+            (HOSTS[1], Ok(MAINNET_GENESIS)),
+        ]);
+        let cache = Mutex::new(None);
+        let message = no_host_message(probe.pick(Instant::now(), &cache));
+        assert!(
+            message.starts_with("esplora get: no testnet4 host is reachable"),
+            "{message}"
+        );
+        assert!(message.contains("tls handshake hung"), "{message}");
+        assert!(message.contains(HOSTS[1]), "{message}");
+        assert_eq!(*cache.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn a_verified_host_is_reused_for_ten_minutes_then_probed_again() {
+        let probe = Probe::new(&[(HOSTS[0], Ok(TESTNET4_GENESIS))]);
+        let cache = Mutex::new(None);
+        let t0 = Instant::now();
+        assert_eq!(probe.pick(t0, &cache).unwrap(), 0);
+        let under = t0 + HOST_TRUST - Duration::from_secs(1);
+        assert_eq!(probe.pick(under, &cache).unwrap(), 0);
+        assert_eq!(probe.asked().len(), 1, "no probe inside the trust window");
+        let over = t0 + HOST_TRUST;
+        assert_eq!(probe.pick(over, &cache).unwrap(), 0);
+        assert_eq!(probe.asked().len(), 2, "one probe after the window");
+        assert_eq!(*cache.lock().unwrap(), Some((0, over)));
+    }
+
+    #[test]
+    fn a_cached_host_is_reused_without_probing_even_when_it_would_now_fail() {
+        let probe = Probe::new(&[(HOSTS[1], Err("down"))]);
+        let cache = Mutex::new(Some((1, Instant::now())));
+        assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1);
+        assert!(probe.asked().is_empty());
+    }
+
+    #[test]
+    fn a_transport_failure_forgets_the_host_but_a_status_or_a_bad_body_does_not() {
+        let cached = || Mutex::new(Some((0, Instant::now())));
+        let kept = |cache: &HostChoice| cache.lock().unwrap().map(|(i, _)| i);
+
+        let cache = cached();
+        forget_host_if_unreachable(&no_answer(), &cache);
+        assert_eq!(kept(&cache), None, "a timeout");
+
+        let cache = cached();
+        let refused = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "no");
+        forget_host_if_unreachable(&Err(refused.into()), &cache);
+        assert_eq!(kept(&cache), None, "a refused connection");
+
+        let cache = cached();
+        forget_host_if_unreachable(&answer(500, ""), &cache);
+        assert_eq!(kept(&cache), Some(0), "HTTP 500");
+
+        let cache = cached();
+        forget_host_if_unreachable(&answer(404, ""), &cache);
+        assert_eq!(kept(&cache), Some(0), "HTTP 404");
+
+        let cache = cached();
+        forget_host_if_unreachable(&answer(200, "<html>Sign in</html>"), &cache);
+        assert_eq!(kept(&cache), Some(0), "a 200 with a bad body");
+
+        let cache = cached();
+        forget_host_if_unreachable(&cut_short(200), &cache);
+        assert_eq!(kept(&cache), Some(0), "a body cut short");
+    }
+
+    #[test]
+    fn after_a_transport_failure_the_next_pick_probes_again() {
+        let probe = Probe::new(&[
+            (HOSTS[0], Err("timed out")),
+            (HOSTS[1], Ok(TESTNET4_GENESIS)),
+        ]);
+        let cache = Mutex::new(Some((0, Instant::now())));
+        forget_host_if_unreachable(&no_answer(), &cache);
+        assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1);
+        assert_eq!(probe.asked(), HOSTS);
+    }
+
+    #[test]
+    fn a_url_on_the_canonical_base_moves_to_the_chosen_host_and_others_stay() {
+        let other = "https://mempool.space/testnet4/api";
+        assert_eq!(
+            on_host(&format!("{ESPLORA_TESTNET4}/address/tb1q/utxo"), other),
+            format!("{other}/address/tb1q/utxo")
+        );
+        assert_eq!(
+            on_host(
+                &format!("{ESPLORA_TESTNET4}/blocks/tip/height"),
+                ESPLORA_TESTNET4
+            ),
+            format!("{ESPLORA_TESTNET4}/blocks/tip/height")
+        );
+        // The base is matched as a prefix, not as a host: an unrelated URL is left alone.
+        assert_eq!(
+            on_host("https://example.org/api/tx", other),
+            "https://example.org/api/tx"
+        );
+        assert_eq!(
+            on_host("https://blockstream.info/testnet/api/tx", other),
+            "https://blockstream.info/testnet/api/tx"
+        );
+    }
+
+    #[test]
+    fn the_canonical_base_is_the_first_host_and_every_host_is_distinct_and_unslashed() {
+        assert_eq!(ESPLORA_TESTNET4, ESPLORA_TESTNET4_HOSTS[0]);
+        assert_eq!(ESPLORA_TESTNET4, "https://blockstream.info/testnet4/api");
+        let distinct: HashSet<_> = ESPLORA_TESTNET4_HOSTS.iter().collect();
+        assert_eq!(distinct.len(), ESPLORA_TESTNET4_HOSTS.len());
+        for host in ESPLORA_TESTNET4_HOSTS {
+            assert!(host.ends_with("/testnet4/api"), "{host}");
+        }
+    }
+
+    #[test]
+    fn a_broadcast_posts_nothing_when_no_host_passes_and_posts_to_the_chosen_one_otherwise() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        let good = prepared(&fake.send(SOMEONE, 5_000, 500).unwrap(), 500);
+        let posted_to = Mutex::new(Vec::new());
+        let post = |base: &str, _: &str| {
+            posted_to.lock().unwrap().push(base.to_string());
+            answer(200, &good.txid)
+        };
+        let lookup = |_: &str, _: &str| not_found();
+        let no_host = Err(MobileSignerError::InvalidPsbtJson(
+            "esplora get: no testnet4 host is reachable (both down)".into(),
+        ));
+        let result = broadcast_via(no_host, &post, &lookup, &|| {}, &good.hex, &good.txid);
+        match result {
+            Err(MobileSignerError::InvalidPsbtJson(m)) => {
+                assert!(m.starts_with("esplora get: no testnet4 host"), "{m}")
+            }
+            other => panic!("expected the no-host error, got {other:?}"),
+        }
+        assert!(posted_to.lock().unwrap().is_empty());
+
+        let result = broadcast_via(Ok(HOSTS[1]), &post, &lookup, &|| {}, &good.hex, &good.txid);
+        assert_eq!(result.unwrap().txid, good.txid);
+        assert_eq!(*posted_to.lock().unwrap(), vec![HOSTS[1]]);
+    }
+
+    #[test]
+    #[ignore = "needs the network and blockstream.info/testnet4"]
     fn real_scan_of_the_public_test_phrase() {
         let requests = std::sync::atomic::AtomicUsize::new(0);
         let counted = |url: &str| {
