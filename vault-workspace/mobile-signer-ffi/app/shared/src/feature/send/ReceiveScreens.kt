@@ -49,6 +49,7 @@ import com.mebit.app.QrCode
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SingleSigWallet
+import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.rememberSharer
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_warning
@@ -125,10 +126,11 @@ fun S2ReceiveBackupGateScreen(
 }
 
 /**
- * Penpot 4.3 Receive. Left out: the line about a fresh address every time (the hot wallet watches and spends the
- * first address only, so it does not rotate, item C6), the logo over the QR (it would cover data modules, and each
- * one spends error correction), and QR and share for the demo wallet (money sent to its made-up address is lost). A
- * real key whose balance could not be fetched keeps them, because its address is derived from the key offline. With
+ * Penpot 4.3 Receive. The address is the first one the chain has not used, so it changes after money arrives at it,
+ * and the board's line about a fresh address shows only for a live wallet (C6, see open item 60). Left out: the logo
+ * over the QR (it would cover data modules, and each one spends error correction), and QR and share for the demo
+ * wallet (money sent to its made-up address is lost). A real key whose balance could not be fetched keeps them,
+ * because its address is derived from the key offline and is index 0, which the wallet still sees and spends. With
  * no address at all, copy is off too.
  */
 @Composable
@@ -215,6 +217,17 @@ fun S3ReceiveScreen(
                 )
                 Spacer(modifier = Modifier.height(18.8.dp))
                 ReceiveAddress(wallet.receiveAddress)
+                if (wallet.mode == WalletMode.Live) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "ที่อยู่ใหม่ทุกครั้งเพื่อความเป็นส่วนตัว ที่อยู่เก่ายังรับได้",
+                        color = MbBody,
+                        fontSize = 11.5.sp,
+                        lineHeight = 15.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.testTag("receive_fresh_note"),
+                    )
+                }
             }
         } else {
             Box(
