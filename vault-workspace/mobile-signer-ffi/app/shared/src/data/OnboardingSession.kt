@@ -9,6 +9,8 @@ import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
 import com.mebit.ffi.signer.generateSoftwareMultisigKey
 import com.mebit.ffi.signer.restoreSoftwareMultisigKey
+import kotlinx.atomicfu.locks.SynchronizedObject
+import kotlinx.atomicfu.locks.synchronized
 
 /** Whether the wallet saved on this phone holds this session's key. Staged is a passphrase import waiting for its fingerprint check. */
 enum class SaveState { NotSaved, Staged, Saved }
@@ -205,10 +207,13 @@ class OnboardingSession(
         return true
     }
 
+    // The record is built inside the lock, so the call that writes last always writes the newest state.
+    private val persistLock = SynchronizedObject()
+
     /** The single write point. A hardware-only session has no words and writes nothing. [fresh]: this call saves a key the user has not relied on yet. */
-    private fun persist(fresh: Boolean = false) {
-        val w = wallet ?: return
-        if (words.isEmpty() || saved == SaveState.Staged) return
+    private fun persist(fresh: Boolean = false): Unit = synchronized(persistLock) {
+        val w = wallet ?: return@synchronized
+        if (words.isEmpty() || saved == SaveState.Staged) return@synchronized
         val mode = if (saved == SaveState.Saved) WriteMode.Replace else WriteMode.Create
         when (val r = w.save(toRecord(), mode)) {
             SaveResult.Written -> {

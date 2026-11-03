@@ -8,7 +8,13 @@ import com.mebit.app.WriteResult
 import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
+import com.mebit.app.SecureStore
+import kotlinx.atomicfu.atomic
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -257,6 +263,25 @@ class OnboardingSessionSaveTest {
     }
 
     @Test
+    fun aSaveHeldInTheStoreDoesNotLetALaterSaveOfAPaymentBeOverwritten() = runBlocking {
+        val store = HoldingStore(FakeSecureStore(), holdCall = 3, failCall = 2)
+        val session = session(store)
+        session.generateThisDevice() // write 1
+        session.markBackupConfirmed() // write 2, a Replace, fails and leaves a save pending
+
+        val flush = async(Dispatchers.Default) { session.flushPendingSave() } // write 3, held, its record has no payment
+        store.entered.await()
+        val payment = async(Dispatchers.Default) { session.recordUnconfirmedSend(TEST_TXID, SENT_AT) }
+        withTimeoutOrNull(300) { payment.await() } // done at once without the lock, waits for the held save with it
+        store.release.complete(Unit)
+        flush.await()
+        payment.await()
+
+        assertEquals(1, store.maxInFlight.value, "writes in flight at once")
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), store.inner.savedCopy().unconfirmedSend, "the copy after both saves")
+    }
+
+    @Test
     fun everyRecordFieldRoundTripsThroughTheSession() {
         roundTrip("generated, backed up, locked", listOf(true, false, true)) {
             generateThisDevice(TEST_PASSPHRASE)
@@ -477,7 +502,7 @@ class OnboardingSessionSaveTest {
         assertEmpty(damaged, "a damaged passphrase")
     }
 
-    private fun session(store: FakeSecureStore, keys: Keys = Keys()) = OnboardingSession(SavedWallet(store), keys.newKey, keys.restoreKey)
+    private fun session(store: SecureStore, keys: Keys = Keys()) = OnboardingSession(SavedWallet(store), keys.newKey, keys.restoreKey)
 
     /** Saves through [make], loads the saved copy into a new session, and compares every record field with what was set. */
     private fun roundTrip(case: String, flags: List<Boolean>, unconfirmedSend: UnconfirmedSend? = null, make: OnboardingSession.() -> Unit) {
@@ -537,5 +562,33 @@ private class Keys(val words: List<String> = PUBLIC_WORDS_24, val fingerprint: S
     private fun key(words: List<String>): SoftwareAccountKey {
         made++
         return SoftwareAccountKey(words, fingerprint, "tpub-test", "m/48'/1'/0'/2'")
+    }
+}
+
+/** Delegates to [inner]. Write number [failCall] fails, and write number [holdCall] waits on [release] before it goes through. */
+private class HoldingStore(val inner: FakeSecureStore, val holdCall: Int, val failCall: Int) : SecureStore by inner {
+    val entered = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<Unit>()
+    val maxInFlight = atomic(0)
+    private val inFlight = atomic(0)
+    private val calls = atomic(0)
+
+    override fun write(bytes: ByteArray, mode: WriteMode): WriteResult {
+        val call = calls.incrementAndGet()
+        val now = inFlight.incrementAndGet()
+        while (true) {
+            val m = maxInFlight.value
+            if (now <= m || maxInFlight.compareAndSet(m, now)) break
+        }
+        try {
+            if (call == failCall) return WriteResult.Unavailable(Why.TryLater)
+            if (call == holdCall) {
+                entered.complete(Unit)
+                runBlocking { release.await() }
+            }
+            return inner.write(bytes, mode)
+        } finally {
+            inFlight.decrementAndGet()
+        }
     }
 }
