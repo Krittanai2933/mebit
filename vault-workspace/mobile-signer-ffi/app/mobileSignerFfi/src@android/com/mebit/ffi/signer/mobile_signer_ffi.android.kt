@@ -1048,6 +1048,8 @@ internal typealias UniffiVTableCallbackInterfacePairingCodesUniffiByValue = Unif
 
 
 
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -1112,6 +1114,9 @@ internal object IntegrityCheckingUniffiLib : Library {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_broadcast() != 57407.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_fee_tiers() != 58197.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send() != 51531.toShort()) {
@@ -1194,6 +1199,9 @@ internal object IntegrityCheckingUniffiLib : Library {
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_hot_broadcast(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_hot_fee_tiers(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send(
@@ -1378,6 +1386,11 @@ internal object UniffiLib : Library {
         `network`: RustBufferByValue,
         `hex`: RustBufferByValue,
         `txid`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_hot_fee_tiers(
+        `network`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     @JvmStatic
@@ -2555,6 +2568,34 @@ public object FfiConverterTypeBtcPrice: FfiConverterRustBuffer<BtcPrice> {
 
 
 
+public object FfiConverterTypeFeeTiers: FfiConverterRustBuffer<FeeTiers> {
+    override fun read(buf: ByteBuffer): FeeTiers {
+        return FeeTiers(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FeeTiers): ULong = (
+            FfiConverterULong.allocationSize(value.`slowSatVb`) +
+            FfiConverterULong.allocationSize(value.`normalSatVb`) +
+            FfiConverterULong.allocationSize(value.`fastSatVb`) +
+            FfiConverterBoolean.allocationSize(value.`live`)
+    )
+
+    override fun write(value: FeeTiers, buf: ByteBuffer) {
+        FfiConverterULong.write(value.`slowSatVb`, buf)
+        FfiConverterULong.write(value.`normalSatVb`, buf)
+        FfiConverterULong.write(value.`fastSatVb`, buf)
+        FfiConverterBoolean.write(value.`live`, buf)
+    }
+}
+
+
+
+
 public object FfiConverterTypeFoundWallet: FfiConverterRustBuffer<FoundWallet> {
     override fun read(buf: ByteBuffer): FoundWallet {
         return FoundWallet(
@@ -3395,6 +3436,20 @@ public actual fun `hotBroadcast`(`network`: KeyNetwork, `hex`: kotlin.String, `t
             FfiConverterTypeKeyNetwork.lower(`network`),
             FfiConverterString.lower(`hex`),
             FfiConverterString.lower(`txid`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The fee tiers for the Send screen, from the testnet4 host in use. One network call in the usual
+ * case, answered from memory for five minutes after. Never fails: when no host answers or the
+ * answer is unusable the fixed tiers 4, 8 and 15 come back with `live` false.
+ */
+public actual fun `hotFeeTiers`(`network`: KeyNetwork): FeeTiers {
+    return FfiConverterTypeFeeTiers.lift(uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_fee_tiers(
+            FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,
         )
     })

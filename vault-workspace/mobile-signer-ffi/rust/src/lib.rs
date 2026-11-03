@@ -864,6 +864,10 @@ mod tests {
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_wallet_snapshot(),
             ),
             (
+                "func_hot_fee_tiers",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_fee_tiers(),
+            ),
+            (
                 "func_is_valid_address",
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_is_valid_address(),
             ),

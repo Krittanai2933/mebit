@@ -28,24 +28,46 @@ use serde_json::Value;
 
 use crate::{KeyNetwork, MobileSignerError};
 
-/// Testnet4 Esplora hosts in the order they are tried. mempool.space is second because its TLS
+/// One testnet4 Esplora host and how long its genesis probe may take, DNS to the last body byte.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HostSpec {
+    base: &'static str,
+    probe_timeout: Duration,
+}
+
+/// Testnet4 Esplora hosts in the order they are tried. The user's own mempool instance is first: it
+/// has no request limit, where blockstream.info allows 700 an hour per IP. It is reachable only over
+/// Tailscale, which encrypts the tunnel, so cleartext `http://` is acceptable for this host and no
+/// other. Passing the genesis check does not make a host honest about balances; that residual trust
+/// is the same for every host here, see `MAX_SCAN_PER_CHAIN`. mempool.space is last because its TLS
 /// handshake hung from a phone on 5G and from the user's networks on 2026-11-03.
-const ESPLORA_TESTNET4_HOSTS: [&str; 2] = [
-    "https://blockstream.info/testnet4/api",
-    "https://mempool.space/testnet4/api",
+const ESPLORA_TESTNET4_HOSTS: [HostSpec; 3] = [
+    HostSpec {
+        base: "http://node.internal:8889/api",
+        probe_timeout: OWN_NODE_PROBE_TIMEOUT,
+    },
+    HostSpec {
+        base: "https://blockstream.info/testnet4/api",
+        probe_timeout: PROBE_TIMEOUT,
+    },
+    HostSpec {
+        base: "https://mempool.space/testnet4/api",
+        probe_timeout: PROBE_TIMEOUT,
+    },
 ];
 /// The base every URL is built on. `http_get` rewrites it to the host in use.
-const ESPLORA_TESTNET4: &str = ESPLORA_TESTNET4_HOSTS[0];
+const ESPLORA_TESTNET4: &str = ESPLORA_TESTNET4_HOSTS[0].base;
 /// Hash of testnet4 block 0. A host whose `/block-height/0` says anything else serves another
 /// chain, and a balance or a broadcast there would be wrong, so it is never used.
 const TESTNET4_GENESIS: &str = "00000000da84f2bafbbc53dee25a72ae507ff4914b867c565be350b0da8bf043";
 /// How long a host that passed the genesis check is used before it is probed again.
 const HOST_TRUST: Duration = Duration::from_secs(10 * 60);
-const PROBE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const PROBE_READ_TIMEOUT: Duration = Duration::from_secs(8);
-/// The whole probe, DNS to the last body byte. The per-read limit alone let a host that sent one
-/// byte every 3 s hold the host lock for 30 s.
+/// The whole probe of a public host, DNS to the last body byte. The per-read limit alone let a host
+/// that sent one byte every 3 s hold the host lock for 30 s.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+/// The own node answers in under 100 ms when Tailscale is up and not at all when it is down, so a
+/// phone off the tailnet loses at most this once per `HOST_TRUST` before the public hosts.
+const OWN_NODE_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long a round in which no host passed is answered from memory, so callers that queued on the
 /// host lock during that round do not each probe every host again.
 const PROBE_FAILURE_TTL: Duration = Duration::from_secs(5);
@@ -94,11 +116,6 @@ fn agent(connect: Duration, io: Duration, whole: Duration) -> ureq::Agent {
 
 static AGENT: LazyLock<ureq::Agent> =
     LazyLock::new(|| agent(CONNECT_TIMEOUT, IO_TIMEOUT, REQUEST_TIMEOUT));
-
-// Shorter limits for the genesis probe only: a host that cannot say its block 0 hash in 8 s is
-// skipped for the next one instead of holding the scan.
-static PROBE_AGENT: LazyLock<ureq::Agent> =
-    LazyLock::new(|| agent(PROBE_CONNECT_TIMEOUT, PROBE_READ_TIMEOUT, PROBE_TIMEOUT));
 
 /// What the last probe round decided: the index into the host list of the host in use and when it
 /// passed the genesis check, or that no host passed, when, and the error that says so.
@@ -351,8 +368,8 @@ fn classify(answer: Result<ureq::Response, ureq::Error>) -> Result<String, GetEr
 /// with `esplora get: no testnet4 host is reachable`, naming each host's failure, and that round is
 /// remembered for `PROBE_FAILURE_TTL`: a caller inside it gets the same error with no probe.
 fn pick_host(
-    hosts: &[&str],
-    probe: &dyn Fn(&str) -> Result<String, MobileSignerError>,
+    hosts: &[HostSpec],
+    probe: &dyn Fn(&HostSpec) -> Result<String, MobileSignerError>,
     now: Instant,
     cache: &HostChoice,
 ) -> Result<usize, MobileSignerError> {
@@ -378,9 +395,9 @@ fn pick_host(
             }
             Ok(body) => {
                 let shown: String = body.trim().chars().take(24).collect();
-                failures.push(format!("{host}: block 0 is {shown:?}, not testnet4"));
+                failures.push(format!("{}: block 0 is {shown:?}, not testnet4", host.base));
             }
-            Err(e) => failures.push(format!("{host}: {e}")),
+            Err(e) => failures.push(format!("{}: {e}", host.base)),
         }
     }
     let error = format!(
@@ -416,9 +433,12 @@ fn on_host(url: &str, base: &str) -> String {
     }
 }
 
-fn probe_genesis(host: &str) -> Result<String, MobileSignerError> {
-    PROBE_AGENT
-        .get(&format!("{host}/block-height/0"))
+// The connect and each read get the host's whole-probe limit too: a host that cannot say its block 0
+// hash in time is skipped for the next one instead of holding the scan.
+fn probe_genesis(host: &HostSpec) -> Result<String, MobileSignerError> {
+    let limit = host.probe_timeout;
+    agent(limit, limit, limit)
+        .get(&format!("{}/block-height/0", host.base))
         .call()
         .and_then(|response| response.into_string().map_err(ureq::Error::from))
         .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))
@@ -432,14 +452,28 @@ fn selected_base() -> Result<&'static str, MobileSignerError> {
         Instant::now(),
         &CHOSEN_HOST,
     )?;
-    Ok(ESPLORA_TESTNET4_HOSTS[index])
+    Ok(ESPLORA_TESTNET4_HOSTS[index].base)
 }
 
 fn http_get(url: &str) -> Result<String, MobileSignerError> {
     let url = on_host(url, selected_base()?);
+    get_forgetting(
+        &|| classify(AGENT.get(&url).call()),
+        &CHOSEN_HOST,
+        &SCAN_CACHE,
+    )
+}
+
+/// `call` with the retry, forgetting the host in use and every cached scan after a connection-level
+/// failure. Every GET of the wallet goes through here, the fee tiers included.
+fn get_forgetting(
+    call: &dyn Fn() -> Result<String, GetError>,
+    hosts: &HostChoice,
+    scans: &ScanCache,
+) -> Result<String, MobileSignerError> {
     let attempt = || {
-        let got = classify(AGENT.get(&url).call());
-        forget_host_if_unreachable(&got, &CHOSEN_HOST, &SCAN_CACHE);
+        let got = call();
+        forget_host_if_unreachable(&got, hosts, scans);
         got
     };
     get_with_retry(&attempt, &std::thread::sleep)
@@ -1400,6 +1434,137 @@ fn parse_utxos(json: &str) -> Result<Vec<Utxo>, MobileSignerError> {
             })
         })
         .collect()
+}
+
+/// The fee tiers the Send screen offers, in sat/vB. `slow_sat_vb` aims at confirmation in about an
+/// hour, `normal_sat_vb` in about half an hour and `fast_sat_vb` in the next block or two. `live` is
+/// true when they come from the explorer's view of the mempool and false when they are the fixed
+/// fallback of 4, 8 and 15.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct FeeTiers {
+    pub slow_sat_vb: u64,
+    pub normal_sat_vb: u64,
+    pub fast_sat_vb: u64,
+    pub live: bool,
+}
+
+const DEFAULT_FEE_TIERS: FeeTiers = FeeTiers {
+    slow_sat_vb: 4,
+    normal_sat_vb: 8,
+    fast_sat_vb: 15,
+    live: false,
+};
+/// How long live tiers answer from memory. Fees move over blocks, not seconds.
+const FEE_TIERS_TTL: Duration = Duration::from_secs(5 * 60);
+/// How long the fallback answers from memory, so a host that comes back is noticed soon.
+const FEE_FALLBACK_TTL: Duration = Duration::from_secs(30);
+/// Confirmation targets in blocks for slow, normal and fast. mempool's `hourFee`, `halfHourFee` and
+/// `fastestFee` are read as these same targets, so both answer formats go through one rule.
+const FEE_TARGETS: [u32; 3] = [6, 3, 1];
+
+type FeeCache = Mutex<Option<(FeeTiers, Instant)>>;
+static FEE_CACHE: FeeCache = Mutex::new(None);
+
+/// The fee tiers for the Send screen, from the testnet4 host in use. One network call in the usual
+/// case, answered from memory for five minutes after. Never fails: when no host answers or the
+/// answer is unusable the fixed tiers 4, 8 and 15 come back with `live` false.
+#[uniffi::export]
+pub fn hot_fee_tiers(network: KeyNetwork) -> FeeTiers {
+    fee_tiers_from(&http_get, network, Instant::now(), &FEE_CACHE)
+}
+
+fn fee_tiers_from(
+    esplora: Esplora,
+    network: KeyNetwork,
+    now: Instant,
+    cache: &FeeCache,
+) -> FeeTiers {
+    let Ok(base) = esplora_base(network) else {
+        return DEFAULT_FEE_TIERS;
+    };
+    // The lock is held through the fetch so callers that queue on it get the same answer, not a
+    // fetch each.
+    let mut cached = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((tiers, at)) = &*cached {
+        let ttl = if tiers.live {
+            FEE_TIERS_TTL
+        } else {
+            FEE_FALLBACK_TTL
+        };
+        if now.saturating_duration_since(*at) < ttl {
+            return tiers.clone();
+        }
+    }
+    let tiers = fetch_fee_tiers(esplora, base).unwrap_or(DEFAULT_FEE_TIERS);
+    *cached = Some((tiers.clone(), now));
+    tiers
+}
+
+/// mempool's `/v1/fees/recommended` first, since the own node is one; a host without it
+/// (blockstream.info answers 404) is asked Esplora's `/fee-estimates` instead. `None` when neither
+/// gives a usable rate.
+fn fetch_fee_tiers(esplora: Esplora, base: &str) -> Option<FeeTiers> {
+    let get = |path: &str, estimates: fn(&Value) -> Vec<(u32, &Value)>| {
+        let body = esplora(&format!("{base}{path}")).ok()?;
+        let json: Value = serde_json::from_str(&body).ok()?;
+        tiers_from(&estimates(&json))
+    };
+    get("/v1/fees/recommended", recommended_estimates)
+        .or_else(|| get("/fee-estimates", esplora_estimates))
+}
+
+/// `hourFee`, `halfHourFee` and `fastestFee` as the targets 6, 3 and 1.
+fn recommended_estimates(json: &Value) -> Vec<(u32, &Value)> {
+    ["hourFee", "halfHourFee", "fastestFee"]
+        .into_iter()
+        .zip(FEE_TARGETS)
+        .map(|(field, target)| (target, &json[field]))
+        .collect()
+}
+
+/// Esplora's map from confirmation target in blocks to sat/vB, as `{"1": 12.3, "2": 9.0}`.
+fn esplora_estimates(json: &Value) -> Vec<(u32, &Value)> {
+    json.as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(target, rate)| Some((target.parse().ok()?, rate)))
+        .collect()
+}
+
+/// A rate as the Send screen can use it: a finite positive number rounded up to whole sat/vB and
+/// capped at `MAX_FEE_RATE`, above which `hot_prepare_send` refuses the payment. Anything else
+/// (zero, negative, NaN, a string, a missing field) is no estimate.
+fn whole_sat_vb(rate: &Value) -> Option<u64> {
+    let rate = rate.as_f64().filter(|r| r.is_finite() && *r > 0.0)?;
+    Some((rate.ceil() as u64).min(MAX_FEE_RATE))
+}
+
+/// Slow, normal and fast from whatever targets a host gave. Each tier takes the rate at the nearest
+/// present target, the faster one on a tie, so a sparse map still gives a fee that confirms in the
+/// tier's time. The lower tiers are then raised to keep slow <= normal <= fast: a host's estimates
+/// are not always in that order and the screen promises it.
+fn tiers_from(estimates: &[(u32, &Value)]) -> Option<FeeTiers> {
+    let usable: Vec<(u32, u64)> = estimates
+        .iter()
+        .filter_map(|(target, rate)| Some((*target, whole_sat_vb(rate)?)))
+        .collect();
+    let nearest = |wanted: u32| {
+        usable
+            .iter()
+            .min_by_key(|(target, _)| (target.abs_diff(wanted), *target))
+            .map(|(_, rate)| *rate)
+    };
+    let [slow, normal, fast] = FEE_TARGETS.map(nearest);
+    let (slow, normal, fast) = (slow?, normal?, fast?);
+    let normal = normal.max(slow);
+    Some(FeeTiers {
+        slow_sat_vb: slow,
+        normal_sat_vb: normal,
+        fast_sat_vb: fast.max(normal),
+        live: true,
+    })
 }
 
 #[cfg(test)]
@@ -3378,6 +3543,16 @@ mod tests {
     }
 
     const HOSTS: [&str; 2] = ["https://first.example/api", "https://second.example/api"];
+    const SPECS: [HostSpec; 2] = [
+        HostSpec {
+            base: HOSTS[0],
+            probe_timeout: PROBE_TIMEOUT,
+        },
+        HostSpec {
+            base: HOSTS[1],
+            probe_timeout: PROBE_TIMEOUT,
+        },
+    ];
     const TESTNET3_GENESIS: &str =
         "000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943";
     const MAINNET_GENESIS: &str =
@@ -3411,7 +3586,7 @@ mod tests {
         }
 
         fn pick(&self, now: Instant, cache: &HostChoice) -> Result<usize, MobileSignerError> {
-            pick_host(&HOSTS, &|host| self.run(host), now, cache)
+            pick_host(&SPECS, &|host| self.run(host.base), now, cache)
         }
     }
 
@@ -3462,17 +3637,56 @@ mod tests {
     }
 
     #[test]
-    fn a_probe_of_a_host_that_trickles_its_genesis_hash_fails_inside_the_probe_deadline() {
-        let host = dripping_host(Duration::from_secs(3), 10);
+    fn a_probe_of_a_host_that_trickles_its_genesis_hash_fails_inside_that_hosts_probe_deadline() {
+        for probe_timeout in [OWN_NODE_PROBE_TIMEOUT, PROBE_TIMEOUT] {
+            let host = HostSpec {
+                base: Box::leak(dripping_host(Duration::from_secs(3), 10).into_boxed_str()),
+                probe_timeout,
+            };
+            let cache = Mutex::new(None);
+            let start = Instant::now();
+            let result = pick_host(&[host], &probe_genesis, start, &cache);
+            let took = start.elapsed();
+            let message = no_host_message(result);
+            assert!(message.contains("timed out"), "{message}");
+            assert!(
+                took < probe_timeout + Duration::from_secs(4),
+                "the probe held the host lock for {took:?} against a limit of {probe_timeout:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_own_node_is_probed_first_with_three_seconds_and_a_timeout_there_moves_on_to_blockstream()
+    {
+        let asked = Mutex::new(Vec::new());
+        let probe = |host: &HostSpec| {
+            asked.lock().unwrap().push((host.base, host.probe_timeout));
+            if host.base.starts_with("http://") {
+                Err(MobileSignerError::InvalidPsbtJson(format!(
+                    "timed out after {:?}",
+                    host.probe_timeout
+                )))
+            } else {
+                Ok(TESTNET4_GENESIS.to_string())
+            }
+        };
         let cache = Mutex::new(None);
-        let start = Instant::now();
-        let result = pick_host(&[host.as_str()], &probe_genesis, start, &cache);
-        let took = start.elapsed();
-        let message = no_host_message(result);
-        assert!(message.contains("timed out"), "{message}");
-        assert!(
-            took < PROBE_TIMEOUT + Duration::from_secs(4),
-            "the probe held the host lock for {took:?}"
+        let picked = pick_host(&ESPLORA_TESTNET4_HOSTS, &probe, Instant::now(), &cache).unwrap();
+        assert_eq!(
+            ESPLORA_TESTNET4_HOSTS[picked].base,
+            "https://blockstream.info/testnet4/api"
+        );
+        assert_eq!(
+            *asked.lock().unwrap(),
+            vec![
+                ("http://node.internal:8889/api", Duration::from_secs(3)),
+                (
+                    "https://blockstream.info/testnet4/api",
+                    Duration::from_secs(8)
+                ),
+            ],
+            "a phone off the tailnet waits 3 s for the own node, then 8 s at most for blockstream"
         );
     }
 
@@ -3613,7 +3827,7 @@ mod tests {
     fn a_host_on_another_chain_is_never_used_even_when_it_is_the_only_one() {
         let probe = Probe::new(&[(HOSTS[0], Ok(TESTNET3_GENESIS))]);
         let cache = Mutex::new(None);
-        let result = pick_host(&HOSTS[..1], &|h| probe.run(h), Instant::now(), &cache);
+        let result = pick_host(&SPECS[..1], &|h| probe.run(h.base), Instant::now(), &cache);
         let message = no_host_message(result);
         assert!(
             message.starts_with("esplora get: no testnet4 host is reachable"),
@@ -3749,14 +3963,34 @@ mod tests {
         );
     }
 
+    // The own node (no request limit, Tailscale only) is first and blockstream.info second since
+    // 2026-11-04; blockstream.info was first before.
     #[test]
-    fn the_canonical_base_is_the_first_host_and_every_host_is_distinct_and_unslashed() {
-        assert_eq!(ESPLORA_TESTNET4, ESPLORA_TESTNET4_HOSTS[0]);
-        assert_eq!(ESPLORA_TESTNET4, "https://blockstream.info/testnet4/api");
-        let distinct: HashSet<_> = ESPLORA_TESTNET4_HOSTS.iter().collect();
+    fn the_canonical_base_is_the_own_node_then_blockstream_then_mempool_each_distinct_and_unslashed()
+     {
+        assert_eq!(ESPLORA_TESTNET4, ESPLORA_TESTNET4_HOSTS[0].base);
+        assert_eq!(
+            ESPLORA_TESTNET4_HOSTS.map(|h| h.base),
+            [
+                "http://node.internal:8889/api",
+                "https://blockstream.info/testnet4/api",
+                "https://mempool.space/testnet4/api",
+            ]
+        );
+        assert_eq!(
+            ESPLORA_TESTNET4_HOSTS.map(|h| h.probe_timeout.as_secs()),
+            [3, 8, 8]
+        );
+        let distinct: HashSet<_> = ESPLORA_TESTNET4_HOSTS.iter().map(|h| h.base).collect();
         assert_eq!(distinct.len(), ESPLORA_TESTNET4_HOSTS.len());
         for host in ESPLORA_TESTNET4_HOSTS {
-            assert!(host.ends_with("/testnet4/api"), "{host}");
+            assert!(host.base.ends_with("/api"), "{}", host.base);
+            // Cleartext is acceptable only inside the Tailscale tunnel.
+            assert!(
+                host.base.starts_with("https://") || host.base.starts_with("http://node."),
+                "{}",
+                host.base
+            );
         }
     }
 
@@ -3804,8 +4038,234 @@ mod tests {
         assert_eq!(*posted_to.lock().unwrap(), vec![HOSTS[1]]);
     }
 
+    /// A fee host scripted per endpoint, counting requests, with its own clock and fee cache.
+    struct FeeHost {
+        recommended: Mutex<Result<String, String>>,
+        estimates: Result<String, String>,
+        calls: Mutex<usize>,
+        now: Mutex<Instant>,
+        cache: FeeCache,
+    }
+
+    impl FeeHost {
+        fn new(recommended: Result<&str, &str>, estimates: Result<&str, &str>) -> Self {
+            let owned = |r: Result<&str, &str>| r.map(str::to_string).map_err(str::to_string);
+            Self {
+                recommended: Mutex::new(owned(recommended)),
+                estimates: owned(estimates),
+                calls: Mutex::new(0),
+                now: Mutex::new(Instant::now()),
+                cache: Mutex::new(None),
+            }
+        }
+
+        fn get(&self, url: &str) -> Result<String, MobileSignerError> {
+            *self.calls.lock().unwrap() += 1;
+            let path = url.strip_prefix(ESPLORA_TESTNET4).expect("a testnet4 URL");
+            let answer = match path {
+                "/v1/fees/recommended" => self.recommended.lock().unwrap().clone(),
+                "/fee-estimates" => self.estimates.clone(),
+                other => panic!("unexpected fee URL {other}"),
+            };
+            answer.map_err(MobileSignerError::InvalidPsbtJson)
+        }
+
+        fn tiers(&self) -> FeeTiers {
+            fee_tiers_from(
+                &|url| self.get(url),
+                KeyNetwork::Test,
+                *self.now.lock().unwrap(),
+                &self.cache,
+            )
+        }
+
+        fn tick(&self, by: Duration) {
+            *self.now.lock().unwrap() += by;
+        }
+
+        fn calls(&self) -> usize {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    fn live(slow: u64, normal: u64, fast: u64) -> FeeTiers {
+        FeeTiers {
+            slow_sat_vb: slow,
+            normal_sat_vb: normal,
+            fast_sat_vb: fast,
+            live: true,
+        }
+    }
+
+    const NOT_FOUND: Result<&str, &str> = Err("esplora get: HTTP status 404");
+    const RECOMMENDED: &str =
+        r#"{"fastestFee":15,"halfHourFee":8,"hourFee":4,"economyFee":2,"minimumFee":1}"#;
+
     #[test]
-    #[ignore = "needs the network and blockstream.info/testnet4"]
+    fn mempool_recommended_fees_give_the_three_tiers_in_one_request() {
+        let host = FeeHost::new(Ok(RECOMMENDED), NOT_FOUND);
+        assert_eq!(host.tiers(), live(4, 8, 15));
+        assert_eq!(host.calls(), 1);
+    }
+
+    #[test]
+    fn without_recommended_fees_esplora_estimates_at_targets_six_three_and_one_are_used() {
+        let estimates = r#"{"1":15.0,"2":12.0,"3":8.0,"4":6.0,"6":4.0,"144":1.0,"1008":1.0}"#;
+        let host = FeeHost::new(NOT_FOUND, Ok(estimates));
+        assert_eq!(host.tiers(), live(4, 8, 15));
+        assert_eq!(host.calls(), 2, "the 404 then the estimates");
+    }
+
+    #[test]
+    fn a_missing_target_takes_the_nearest_present_one_and_the_faster_on_a_tie() {
+        // 3 sits between 2 and 4, so normal takes the faster target 2; 6 is nearest 4.
+        let host = FeeHost::new(NOT_FOUND, Ok(r#"{"2":10,"4":6,"25":1}"#));
+        assert_eq!(host.tiers(), live(6, 10, 10));
+        let host = FeeHost::new(NOT_FOUND, Ok(r#"{"5":2.0}"#));
+        assert_eq!(host.tiers(), live(2, 2, 2), "one target serves every tier");
+    }
+
+    #[test]
+    fn fractional_rates_round_up_to_a_whole_sat_per_vb_and_never_below_one() {
+        let host = FeeHost::new(
+            Ok(r#"{"fastestFee":1.2,"halfHourFee":0.5,"hourFee":0.1}"#),
+            NOT_FOUND,
+        );
+        assert_eq!(host.tiers(), live(1, 1, 2));
+        let host = FeeHost::new(NOT_FOUND, Ok(r#"{"1":2.000001,"3":1.0,"6":0.9}"#));
+        assert_eq!(host.tiers(), live(1, 1, 3));
+    }
+
+    #[test]
+    fn rates_above_the_cores_limit_are_capped_at_2000() {
+        let host = FeeHost::new(
+            Ok(r#"{"fastestFee":5000,"halfHourFee":2000.5,"hourFee":100}"#),
+            NOT_FOUND,
+        );
+        assert_eq!(host.tiers(), live(100, 2000, 2000));
+        let host = FeeHost::new(NOT_FOUND, Ok(r#"{"1":1e30,"3":2000,"6":1999.1}"#));
+        assert_eq!(host.tiers(), live(2000, 2000, 2000));
+    }
+
+    #[test]
+    fn zero_negative_nan_string_and_missing_rates_are_no_estimate() {
+        // Nothing usable on either endpoint: the fallback.
+        let host = FeeHost::new(
+            Ok(r#"{"fastestFee":"15","halfHourFee":-8,"hourFee":0}"#),
+            Ok(r#"{"1":"x","3":null,"6":-1,"12":0,"a":5,"":7}"#),
+        );
+        assert_eq!(host.tiers(), DEFAULT_FEE_TIERS);
+        assert_eq!(host.calls(), 2);
+        for body in [
+            "NaN",
+            r#"{"1":NaN}"#,
+            r#"{"1":1e400}"#,
+            "[1,2,3]",
+            "",
+            "<html>",
+        ] {
+            let host = FeeHost::new(Ok(body), Ok(body));
+            assert_eq!(host.tiers(), DEFAULT_FEE_TIERS, "{body:?}");
+        }
+        // The usable fields still serve every tier.
+        let host = FeeHost::new(
+            Ok(r#"{"fastestFee":15,"halfHourFee":"8","hourFee":0}"#),
+            NOT_FOUND,
+        );
+        assert_eq!(host.tiers(), live(15, 15, 15));
+        let host = FeeHost::new(Ok(r#"{"hourFee":4}"#), NOT_FOUND);
+        assert_eq!(host.tiers(), live(4, 4, 4));
+    }
+
+    #[test]
+    fn estimates_out_of_order_are_raised_so_slow_normal_fast_keep_their_order() {
+        let host = FeeHost::new(NOT_FOUND, Ok(r#"{"1":5,"3":8,"6":3}"#));
+        assert_eq!(host.tiers(), live(3, 8, 8));
+        let host = FeeHost::new(
+            Ok(r#"{"fastestFee":1,"halfHourFee":4,"hourFee":9}"#),
+            NOT_FOUND,
+        );
+        assert_eq!(host.tiers(), live(9, 9, 9));
+    }
+
+    #[test]
+    fn both_endpoints_failing_gives_the_defaults_and_mainnet_asks_nothing() {
+        let host = FeeHost::new(NOT_FOUND, Err("esplora get: HTTP status 500"));
+        assert_eq!(host.tiers(), DEFAULT_FEE_TIERS);
+        assert_eq!(DEFAULT_FEE_TIERS, {
+            FeeTiers {
+                slow_sat_vb: 4,
+                normal_sat_vb: 8,
+                fast_sat_vb: 15,
+                live: false,
+            }
+        });
+        assert_eq!(host.calls(), 2);
+        let host = FeeHost::new(Ok(RECOMMENDED), NOT_FOUND);
+        let main = fee_tiers_from(
+            &|url| host.get(url),
+            KeyNetwork::Main,
+            *host.now.lock().unwrap(),
+            &host.cache,
+        );
+        assert_eq!(main, DEFAULT_FEE_TIERS);
+        assert_eq!(host.calls(), 0);
+    }
+
+    #[test]
+    fn live_tiers_are_answered_from_memory_for_five_minutes_then_fetched_once_more() {
+        let host = FeeHost::new(Ok(RECOMMENDED), NOT_FOUND);
+        assert_eq!(host.tiers(), live(4, 8, 15));
+        *host.recommended.lock().unwrap() =
+            Ok(r#"{"fastestFee":30,"halfHourFee":20,"hourFee":10}"#.into());
+        host.tick(Duration::from_secs(5 * 60 - 1));
+        assert_eq!(host.tiers(), live(4, 8, 15));
+        assert_eq!(host.calls(), 1, "no request inside the window");
+        host.tick(Duration::from_secs(1));
+        assert_eq!(host.tiers(), live(10, 20, 30));
+        assert_eq!(host.calls(), 2, "one request after the window");
+        assert_eq!(host.tiers(), live(10, 20, 30));
+        assert_eq!(host.calls(), 2);
+    }
+
+    #[test]
+    fn the_fallback_is_retried_after_thirty_seconds() {
+        let host = FeeHost::new(NOT_FOUND, NOT_FOUND);
+        assert_eq!(host.tiers(), DEFAULT_FEE_TIERS);
+        *host.recommended.lock().unwrap() = Ok(RECOMMENDED.into());
+        host.tick(Duration::from_secs(29));
+        assert_eq!(host.tiers(), DEFAULT_FEE_TIERS);
+        assert_eq!(host.calls(), 2, "the fallback answers inside its window");
+        host.tick(Duration::from_secs(1));
+        assert_eq!(host.tiers(), live(4, 8, 15));
+        assert_eq!(host.calls(), 3);
+    }
+
+    #[test]
+    fn a_transport_failure_while_fetching_fees_forgets_the_host_and_the_scans_and_still_answers() {
+        let hosts = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
+        let fake = Fake::new();
+        fake.snapshot("").unwrap();
+        let get = |_: &str| get_forgetting(&|| classify(no_answer()), &hosts, &fake.cache);
+        let tiers = fee_tiers_from(&get, KeyNetwork::Test, Instant::now(), &Mutex::new(None));
+        assert_eq!(tiers, DEFAULT_FEE_TIERS);
+        assert_eq!(chosen(&hosts), None);
+        assert!(fake.cache.lock().unwrap().entries.is_empty());
+    }
+
+    #[test]
+    #[ignore = "needs the network and a testnet4 host, the own node over Tailscale first"]
+    fn real_fee_tiers_of_the_host_in_use() {
+        let start = Instant::now();
+        let tiers = hot_fee_tiers(KeyNetwork::Test);
+        println!("fee tiers {tiers:?} in {:?}", start.elapsed());
+        assert!(tiers.slow_sat_vb <= tiers.normal_sat_vb);
+        assert!(tiers.normal_sat_vb <= tiers.fast_sat_vb);
+        assert!((1..=MAX_FEE_RATE).contains(&tiers.fast_sat_vb));
+    }
+
+    #[test]
+    #[ignore = "needs the network and a testnet4 host, the own node over Tailscale first"]
     fn real_scan_of_the_public_test_phrase() {
         let requests = std::sync::atomic::AtomicUsize::new(0);
         let counted = |url: &str| {

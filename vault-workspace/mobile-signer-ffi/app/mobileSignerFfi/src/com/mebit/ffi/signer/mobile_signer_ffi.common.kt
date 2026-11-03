@@ -355,6 +355,24 @@ public data class BtcPrice (
 
 
 /**
+ * The fee tiers the Send screen offers, in sat/vB. `slow_sat_vb` aims at confirmation in about an
+ * hour, `normal_sat_vb` in about half an hour and `fast_sat_vb` in the next block or two. `live` is
+ * true when they come from the explorer's view of the mempool and false when they are the fixed
+ * fallback of 4, 8 and 15.
+ */
+
+public data class FeeTiers (
+    var `slowSatVb`: kotlin.ULong, 
+    var `normalSatVb`: kotlin.ULong, 
+    var `fastSatVb`: kotlin.ULong, 
+    var `live`: kotlin.Boolean
+) {
+    public companion object
+}
+
+
+
+/**
  * A wallet a scan saw. Pass it to `WalletLink` unchanged.
  */
 
@@ -923,6 +941,13 @@ public expect fun `generateSoftwareMultisigKey`(`passphrase`: kotlin.String, `ne
  */
 @Throws(MobileSignerException::class)
 public expect fun `hotBroadcast`(`network`: KeyNetwork, `hex`: kotlin.String, `txid`: kotlin.String): HotSendResult
+
+/**
+ * The fee tiers for the Send screen, from the testnet4 host in use. One network call in the usual
+ * case, answered from memory for five minutes after. Never fails: when no host answers or the
+ * answer is unusable the fixed tiers 4, 8 and 15 come back with `live` false.
+ */
+public expect fun `hotFeeTiers`(`network`: KeyNetwork): FeeTiers
 
 /**
  * Scan, select coins, check and sign a payment, and post nothing. The only network use is the
