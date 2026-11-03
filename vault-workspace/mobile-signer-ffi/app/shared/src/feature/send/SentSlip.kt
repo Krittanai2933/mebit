@@ -17,8 +17,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
@@ -83,10 +85,11 @@ fun SentSlip(wallet: SingleSigWallet, draft: SendDraft, quotes: QuoteCache, onHo
     val scope = rememberCoroutineScope()
     Box(modifier = Modifier.fillMaxSize().background(SlipPage).testTag("screen_send/s6_slip")) {
         Column(
-            modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 24.dp).padding(top = 54.dp, bottom = 16.dp),
+            // Scrolls so the share button and the link home cannot fall off a screen shorter than the card plus both buttons (open item 48).
+            modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(top = 54.dp, bottom = 16.dp),
         ) {
             Slip(wallet, draft, quote, card)
-            Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.height(14.dp))
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
