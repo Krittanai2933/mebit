@@ -144,14 +144,14 @@ fun AppLockScreen(
         bottom = {
             BottomActions(
                 primaryLabel = when {
-                    passcodeOnly -> "ใช้รหัส 6 หลัก"
+                    passcodeOnly -> words.codeCta
                     failed -> "ลองอีกครั้ง"
                     enable -> words.enableCta
                     else -> words.unlockCta
                 },
                 primaryTag = if (enable) "cta_enable_lock" else "cta_unlock",
                 onPrimary = { scan(allowPasscode = passcodeOnly) },
-                linkLabel = "ใช้รหัส 6 หลักแทน",
+                linkLabel = words.codeLink,
                 linkTag = if (enable) "cta_skip_lock" else "cta_unlock_passcode",
                 onLink = { scan(allowPasscode = true) },
                 enabled = !busy,
@@ -162,7 +162,7 @@ fun AppLockScreen(
         FaceIdTile(failed = failed, words = words)
         Spacer(modifier = Modifier.height(50.dp))
         when {
-            failed -> FailedBanner(attemptsLeft = maxOf(attemptsLeft, 0))
+            failed -> FailedBanner(attemptsLeft = maxOf(attemptsLeft, 0), words = words)
             unavailable -> Text(
                 text = words.unavailable(enable),
                 color = MaterialTheme.colorScheme.error,
@@ -195,7 +195,7 @@ internal fun FaceIdTile(failed: Boolean, words: LockWords) {
 }
 
 @Composable
-internal fun FailedBanner(attemptsLeft: Int) {
+internal fun FailedBanner(attemptsLeft: Int, words: LockWords) {
     val shape = RoundedCornerShape(16.dp)
     Column(
         modifier = Modifier
@@ -207,10 +207,10 @@ internal fun FailedBanner(attemptsLeft: Int) {
             .padding(start = 16.dp, end = 16.dp, top = 14.dp)
             .testTag("lock_failed"),
     ) {
-        Text("FACE ID · FAILED", color = Color(0xFFF8981C), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Text(words.bannerEyebrow, color = Color(0xFFF8981C), fontSize = 11.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            "ยังไม่ปลดล็อกแอป คุณลองได้อีก $attemptsLeft ครั้ง ก่อนต้องใช้รหัส 6 หลัก",
+            words.triesLeft(attemptsLeft),
             color = Color(0xFF1E1E1E),
             fontSize = 13.sp,
         )

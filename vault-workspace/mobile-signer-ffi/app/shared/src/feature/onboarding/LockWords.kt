@@ -19,8 +19,16 @@ internal class LockWords(private val biometric: String?) {
     /** The tile shows the Face ID glyph only where the check is Face ID, and a neutral shield elsewhere. */
     val faceGlyph = named
 
+    /** The phone's own code. iOS asks for its 6 digit passcode. Android's prompt takes whatever screen lock the phone has (PIN, pattern or password). */
+    val codeCta = if (named) "ใช้รหัส 6 หลัก" else "ใช้รหัสล็อกหน้าจอ"
+    val codeLink = codeCta + "แทน"
+
     fun failedSubtitle(misses: Int) =
-        (if (named) "สแกนใบหน้าไม่ตรง $misses ครั้ง" else "ยืนยันตัวตนไม่ผ่าน $misses ครั้ง") + " ลองอีกครั้ง หรือใช้รหัส 6 หลักแทน"
+        (if (named) "สแกนใบหน้าไม่ตรง $misses ครั้ง" else "ยืนยันตัวตนไม่ผ่าน $misses ครั้ง") + " ลองอีกครั้ง หรือ" + codeLink
+
+    val bannerEyebrow = if (named) "$biometric · FAILED".uppercase() else "SECURITY · FAILED"
+
+    fun triesLeft(attemptsLeft: Int) = "ยังไม่ปลดล็อกแอป คุณลองได้อีก $attemptsLeft ครั้ง ก่อนต้อง" + codeCta
 
     fun unavailable(enable: Boolean) = when {
         enable && named -> "เครื่องนี้ยังไม่ได้ตั้ง $biometric หรือรหัสผ่านเครื่อง · ใช้ปุ่มด้านล่างเพื่อไปต่อโดยไม่ล็อก"

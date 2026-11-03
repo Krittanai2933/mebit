@@ -167,7 +167,7 @@ internal fun UnlockScreen(gate: WalletGateState) {
                 BottomActions(
                     primaryLabel = when (view) {
                         UnlockView.Failed -> "ลองอีกครั้ง"
-                        UnlockView.LockedOut -> "ใช้รหัส 6 หลัก"
+                        UnlockView.LockedOut -> words.codeCta
                         else -> words.unlockCta
                     },
                     primaryTag = "cta_unlock",
@@ -183,8 +183,8 @@ internal fun UnlockScreen(gate: WalletGateState) {
             FaceIdTile(failed = failed, words = words)
             Spacer(modifier = Modifier.height(50.dp))
             when (view) {
-                UnlockView.Failed -> FailedBanner(attemptsLeft = 3)
-                UnlockView.LockedOut -> FailedBanner(attemptsLeft = 0)
+                UnlockView.Failed -> FailedBanner(attemptsLeft = 3, words = words)
+                UnlockView.LockedOut -> FailedBanner(attemptsLeft = 0, words = words)
                 is UnlockView.Unavailable -> Text(
                     text = if (view.tryLater) "ยังเปิดกระเป๋าไม่ได้ตอนนี้ · ลองอีกครั้ง" else "เครื่องนี้เปิดกระเป๋าไม่ได้ตอนนี้ · ลองอีกครั้ง หรือใช้ 24 คำแทน",
                     color = MaterialTheme.colorScheme.error,
