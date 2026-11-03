@@ -3,17 +3,22 @@
 //! Shape matches the BDK hot-wallet half described in `mobile-signer-ffi/README.md`.
 //! Address/UTXO/sign/broadcast are real against testnet Esplora; full `bdk_wallet`
 //! persistence and coin selection land when Android binary size is measured.
+//!
+//! Every call rescans the account from Esplora: both BIP-84 chains, external `0/i` and internal
+//! `1/i`, until `GAP_LIMIT` consecutive unused indices follow the last used one. Nothing is kept
+//! between calls, so the same words and passphrase always give the same answer.
 
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::LazyLock;
 use std::time::Duration;
 
 use bip39::Mnemonic;
 use bitcoin::absolute::LockTime;
-use bitcoin::bip32::{DerivationPath, Xpriv};
+use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
 use bitcoin::consensus::encode::serialize_hex;
-use bitcoin::secp256k1::{Message, Secp256k1};
 use bitcoin::hashes::Hash;
+use bitcoin::secp256k1::{All, Message, Secp256k1};
 use bitcoin::{
     Address, Amount, CompressedPublicKey, Network, OutPoint, PrivateKey, ScriptBuf, Sequence,
     Transaction, TxIn, TxOut, Txid, Witness, sighash::EcdsaSighashType, sighash::SighashCache,
@@ -24,6 +29,13 @@ use crate::{KeyNetwork, MobileSignerError};
 
 const ESPLORA_TESTNET4: &str = "https://mempool.space/testnet4/api";
 const ACCOUNT_PATH: &str = "m/84'/1'/0'";
+
+/// BIP-44 gap limit. A chain is scanned until this many consecutive unused indices follow the last
+/// used one, so funds paid to an address further out than that are not seen or spent.
+const GAP_LIMIT: u32 = 20;
+// Lookups in flight at once. Ten fills a fresh chain's gap in two windows and is a small burst for a
+// public explorer.
+const WINDOW: usize = 10;
 
 // Esplora connects in well under a second. Past 10 s on a weak phone network the host is not answering.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -52,6 +64,10 @@ const ALREADY_HELD: [&str; 5] = [
     "already in utxo set",
     "already in the utxo set",
 ];
+
+/// One GET of an Esplora URL, the whole body as text. Injected so the wallet logic runs without a
+/// network in tests.
+type Esplora<'a> = &'a (dyn Fn(&str) -> Result<String, MobileSignerError> + Sync);
 
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct HotWalletSnapshot {
@@ -82,26 +98,62 @@ fn mnemonic_from(words: &[String]) -> Result<Mnemonic, MobileSignerError> {
         .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))
 }
 
-fn receive_privkey(
-    mnemonic: &Mnemonic,
-    passphrase: &str,
+#[derive(Clone, Copy)]
+enum Chain {
+    External = 0,
+    Internal = 1,
+}
+
+struct OwnKey {
+    privkey: PrivateKey,
+    pubkey: CompressedPublicKey,
+    address: Address,
+}
+
+/// The BIP-84 account's two chain keys, derived once per call. `key` derives one index offline.
+struct Account {
+    secp: Secp256k1<All>,
     network: Network,
-    index: u32,
-) -> Result<(PrivateKey, Address), MobileSignerError> {
-    let secp = Secp256k1::new();
-    let seed = mnemonic.to_seed(passphrase);
-    let master = Xpriv::new_master(network, &seed)
-        .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?;
-    let path = DerivationPath::from_str(&format!("{ACCOUNT_PATH}/0/{index}"))
-        .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?;
-    let child = master
-        .derive_priv(&secp, &path)
-        .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?;
-    let privkey = PrivateKey::new(child.private_key, network);
-    let pubkey = CompressedPublicKey::from_private_key(&secp, &privkey)
-        .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?;
-    let address = Address::p2wpkh(&pubkey, network);
-    Ok((privkey, address))
+    chains: [Xpriv; 2],
+}
+
+impl Account {
+    fn new(
+        words: &[String],
+        passphrase: &str,
+        network: Network,
+    ) -> Result<Self, MobileSignerError> {
+        let bad = |e: bitcoin::bip32::Error| MobileSignerError::InvalidPsbtJson(e.to_string());
+        let mnemonic = mnemonic_from(words)?;
+        let secp = Secp256k1::new();
+        let master = Xpriv::new_master(network, &mnemonic.to_seed(passphrase)).map_err(bad)?;
+        let path = DerivationPath::from_str(ACCOUNT_PATH).map_err(bad)?;
+        let account = master.derive_priv(&secp, &path).map_err(bad)?;
+        let chain = |index| account.derive_priv(&secp, &[ChildNumber::Normal { index }]);
+        let chains = [chain(0).map_err(bad)?, chain(1).map_err(bad)?];
+        Ok(Self {
+            secp,
+            network,
+            chains,
+        })
+    }
+
+    fn key(&self, chain: Chain, index: u32) -> Result<OwnKey, MobileSignerError> {
+        let bad = |e: String| MobileSignerError::InvalidPsbtJson(e);
+        let step = ChildNumber::from_normal_idx(index).map_err(|e| bad(e.to_string()))?;
+        let child = self.chains[chain as usize]
+            .derive_priv(&self.secp, &[step])
+            .map_err(|e| bad(e.to_string()))?;
+        let privkey = PrivateKey::new(child.private_key, self.network);
+        let pubkey = CompressedPublicKey::from_private_key(&self.secp, &privkey)
+            .map_err(|e| bad(e.to_string()))?;
+        let address = Address::p2wpkh(&pubkey, self.network);
+        Ok(OwnKey {
+            privkey,
+            pubkey,
+            address,
+        })
+    }
 }
 
 fn http_get(url: &str) -> Result<String, MobileSignerError> {
@@ -113,6 +165,133 @@ fn http_get(url: &str) -> Result<String, MobileSignerError> {
         .map_err(|e| MobileSignerError::InvalidPsbtJson(format!("esplora body: {e}")))
 }
 
+/// Every URL's body, in the order given, `WINDOW` requests in flight at a time. One failure fails
+/// the whole batch, so a caller never works from a partial picture of the wallet.
+fn get_all(esplora: Esplora, urls: &[String]) -> Result<Vec<String>, MobileSignerError> {
+    let mut bodies = Vec::with_capacity(urls.len());
+    for window in urls.chunks(WINDOW) {
+        let answers = std::thread::scope(|scope| {
+            let handles: Vec<_> = window
+                .iter()
+                .map(|url| scope.spawn(move || esplora(url.as_str())))
+                .collect();
+            handles.into_iter().map(|h| h.join()).collect::<Vec<_>>()
+        });
+        for answer in answers {
+            let body = answer.map_err(|_| {
+                MobileSignerError::InvalidPsbtJson("esplora get: lookup thread panicked".into())
+            })??;
+            bodies.push(body);
+        }
+    }
+    Ok(bodies)
+}
+
+struct Scanned {
+    key: OwnKey,
+    used: bool,
+    balance: u64,
+}
+
+/// Both chains, every scanned index in order. Each chain holds `GAP_LIMIT` unused indices past its
+/// last used one, so the next unused key of either chain is always present.
+struct Wallet {
+    chains: [Vec<Scanned>; 2],
+}
+
+impl Wallet {
+    fn next_unused(&self, chain: Chain) -> &OwnKey {
+        let scanned = &self.chains[chain as usize];
+        let next = scanned
+            .iter()
+            .rposition(|s| s.used)
+            .map_or(0, |last| last + 1);
+        &scanned[next].key
+    }
+
+    fn used(&self) -> impl Iterator<Item = &OwnKey> {
+        self.chains
+            .iter()
+            .flatten()
+            .filter(|s| s.used)
+            .map(|s| &s.key)
+    }
+
+    fn addresses(&self) -> Vec<String> {
+        self.chains
+            .iter()
+            .flatten()
+            .map(|s| s.key.address.to_string())
+            .collect()
+    }
+
+    fn balance(&self) -> Result<u64, MobileSignerError> {
+        self.chains
+            .iter()
+            .flatten()
+            .try_fold(0u64, |sum, s| sum.checked_add(s.balance))
+            .ok_or_else(|| {
+                MobileSignerError::InvalidPsbtJson(
+                    "esplora balance: the sum over the wallet's addresses does not fit u64".into(),
+                )
+            })
+    }
+}
+
+fn scan_wallet(
+    esplora: Esplora,
+    words: &[String],
+    passphrase: &str,
+    network: KeyNetwork,
+) -> Result<Wallet, MobileSignerError> {
+    let account = Account::new(words, passphrase, network_of(network))?;
+    let base = esplora_base(network)?;
+    Ok(Wallet {
+        chains: [
+            scan_chain(esplora, base, &account, Chain::External)?,
+            scan_chain(esplora, base, &account, Chain::Internal)?,
+        ],
+    })
+}
+
+fn scan_chain(
+    esplora: Esplora,
+    base: &str,
+    account: &Account,
+    chain: Chain,
+) -> Result<Vec<Scanned>, MobileSignerError> {
+    let mut scanned: Vec<Scanned> = Vec::new();
+    loop {
+        let after_last_used = scanned
+            .iter()
+            .rposition(|s| s.used)
+            .map_or(0, |last| last + 1);
+        let wanted = after_last_used + GAP_LIMIT as usize;
+        if scanned.len() >= wanted {
+            return Ok(scanned);
+        }
+        let from = scanned.len();
+        let keys = (from..wanted.min(from + WINDOW))
+            .map(|i| account.key(chain, i as u32))
+            .collect::<Result<Vec<_>, _>>()?;
+        let urls: Vec<String> = keys
+            .iter()
+            .map(|k| format!("{base}/address/{}", k.address))
+            .collect();
+        let answers = get_all(esplora, &urls)?;
+        for (key, raw) in keys.into_iter().zip(answers) {
+            let stats = parse_address_stats(&raw)?;
+            scanned.push(Scanned {
+                key,
+                used: stats.used,
+                balance: stats.balance,
+            });
+        }
+    }
+}
+
+// The `///` text on each export stays as committed: UniFFI hashes it into the checksum the committed
+// Kotlin bindings pin. What each call does now is on the inner function it hands over to.
 /// First receive address at BIP-84 index `index` (usually 0). `passphrase` is the
 /// BIP-39 passphrase the key was restored with, empty for none: a different
 /// passphrase is a different wallet.
@@ -123,9 +302,8 @@ pub fn hot_receive_address(
     network: KeyNetwork,
     index: u32,
 ) -> Result<String, MobileSignerError> {
-    let mnemonic = mnemonic_from(&mnemonic_words)?;
-    let (_pk, address) = receive_privkey(&mnemonic, &passphrase, network_of(network), index)?;
-    Ok(address.to_string())
+    let account = Account::new(&mnemonic_words, &passphrase, network_of(network))?;
+    Ok(account.key(Chain::External, index)?.address.to_string())
 }
 
 /// Confirmed + mempool balance for receive index 0 via Esplora.
@@ -135,20 +313,32 @@ pub fn hot_wallet_snapshot(
     passphrase: String,
     network: KeyNetwork,
 ) -> Result<HotWalletSnapshot, MobileSignerError> {
-    let mnemonic = mnemonic_from(&mnemonic_words)?;
-    let (_pk, address) = receive_privkey(&mnemonic, &passphrase, network_of(network), 0)?;
-    let base = esplora_base(network)?;
-    let raw = http_get(&format!("{base}/address/{address}"))?;
-    let balance = parse_address_balance(&raw)?;
+    snapshot_from(&http_get, &mnemonic_words, &passphrase, network)
+}
+
+/// The first unused receive address and the confirmed + mempool balance over every address of both
+/// chains. About 40 Esplora calls for a fresh wallet, so call it off the main thread.
+fn snapshot_from(
+    esplora: Esplora,
+    words: &[String],
+    passphrase: &str,
+    network: KeyNetwork,
+) -> Result<HotWalletSnapshot, MobileSignerError> {
+    let wallet = scan_wallet(esplora, words, passphrase, network)?;
     Ok(HotWalletSnapshot {
-        receive_address: address.to_string(),
-        balance_sats: balance,
+        receive_address: wallet.next_unused(Chain::External).address.to_string(),
+        balance_sats: wallet.balance()?,
         network,
     })
 }
 
+struct AddressStats {
+    used: bool,
+    balance: u64,
+}
+
 // Defaulting a missing field to 0 would show a Wi-Fi sign-in page as an empty wallet.
-fn parse_address_balance(json: &str) -> Result<u64, MobileSignerError> {
+fn parse_address_stats(json: &str) -> Result<AddressStats, MobileSignerError> {
     let bad = |what: String| MobileSignerError::InvalidPsbtJson(format!("esplora balance: {what}"));
     let body: Value = serde_json::from_str(json).map_err(|e| bad(format!("not JSON: {e}")))?;
     if !body.is_object() {
@@ -166,15 +356,22 @@ fn parse_address_balance(json: &str) -> Result<u64, MobileSignerError> {
     let balance = funded
         .checked_sub(spent)
         .ok_or_else(|| bad(format!("spent {spent} is more than funded {funded}")))?;
-    u64::try_from(balance).map_err(|_| bad(format!("{balance} sats does not fit u64")))
+    let balance =
+        u64::try_from(balance).map_err(|_| bad(format!("{balance} sats does not fit u64")))?;
+    let txs = sum("chain_stats", "tx_count")? + sum("mempool_stats", "tx_count")?;
+    Ok(AddressStats {
+        used: txs > 0,
+        balance,
+    })
 }
 
-/// One transaction of the hot wallet's address, seen from the wallet's side.
+/// One transaction of the hot wallet, seen from the wallet's side.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct HotTx {
     pub txid: String,
-    /// Sats the wallet gained (positive) or lost (negative), fee included: the outputs paying the
-    /// address minus the inputs that spent from it. A payment to yourself reads as minus the fee.
+    /// Sats the wallet gained (positive) or lost (negative), fee included: the outputs paying any
+    /// of the wallet's addresses minus the inputs that spent from them. A payment to yourself, and
+    /// change, read as minus the fee.
     pub net_sats: i64,
     /// 0 while in the mempool, 1 in the newest block, and so on. Never 0 once confirmed.
     pub confirmations: u32,
@@ -199,20 +396,60 @@ pub fn hot_wallet_history(
     passphrase: String,
     network: KeyNetwork,
 ) -> Result<Vec<HotTx>, MobileSignerError> {
-    let mnemonic = mnemonic_from(&mnemonic_words)?;
-    let (_pk, address) = receive_privkey(&mnemonic, &passphrase, network_of(network), 0)?;
+    history_of(&http_get, &mnemonic_words, &passphrase, network)
+}
+
+/// The latest transactions of every used address of the wallet, each once, as the wallet saw it:
+/// the mempool first, then confirmed transactions newest first. Only each address's first page
+/// comes back (about 25 confirmed transactions plus the mempool), so older history is not here.
+///
+/// Makes a network call per scanned address and per used address, so call it off the main thread.
+/// An answer it cannot read fails the whole call, never one transaction.
+fn history_of(
+    esplora: Esplora,
+    words: &[String],
+    passphrase: &str,
+    network: KeyNetwork,
+) -> Result<Vec<HotTx>, MobileSignerError> {
     let base = esplora_base(network)?;
-    // shortcut: first page only, upgrade when a full History screen exists
-    let txs = http_get(&format!("{base}/address/{address}/txs"))?;
-    // Second, so a block landing between the two calls only raises the tip above every listed tx.
-    let tip = http_get(&format!("{base}/blocks/tip/height"))?;
-    history_from(&txs, &tip, &address.to_string())
+    let wallet = scan_wallet(esplora, words, passphrase, network)?;
+    // shortcut: first page only per address, upgrade when a full History screen exists
+    let urls: Vec<String> = wallet
+        .used()
+        .map(|k| format!("{base}/address/{}/txs", k.address))
+        .collect();
+    if urls.is_empty() {
+        return Ok(Vec::new());
+    }
+    let pages = get_all(esplora, &urls)?;
+    // Second, so a block landing between the calls only raises the tip above every listed tx.
+    let tip = esplora(&format!("{base}/blocks/tip/height"))?;
+    let own = wallet.addresses();
+    let own: Vec<&str> = own.iter().map(String::as_str).collect();
+    merge_history(&pages, &tip, &own)
+}
+
+fn merge_history(
+    pages: &[String],
+    tip_text: &str,
+    own: &[&str],
+) -> Result<Vec<HotTx>, MobileSignerError> {
+    let mut seen = HashSet::new();
+    let mut all: Vec<HotTx> = Vec::new();
+    for page in pages {
+        let page = history_from(page, tip_text, own)?;
+        all.extend(page.into_iter().filter(|tx| seen.insert(tx.txid.clone())));
+    }
+    // Esplora lists the mempool first, then the newest block first. A stable sort on
+    // confirmations keeps that order once the pages are merged.
+    all.sort_by_key(|tx| tx.confirmations);
+    Ok(all)
 }
 
 fn history_from(
     txs_json: &str,
     tip_text: &str,
-    address: &str,
+    own: &[&str],
 ) -> Result<Vec<HotTx>, MobileSignerError> {
     let bad = |what: String| MobileSignerError::InvalidPsbtJson(format!("esplora history: {what}"));
     let tip: u64 = tip_text
@@ -224,20 +461,25 @@ fn history_from(
     // A bad transaction fails the list. Skipping it would show a history that is quietly wrong.
     txs.iter()
         .enumerate()
-        .map(|(i, tx)| hot_tx(tx, tip, address).map_err(|e| bad(format!("tx {i}: {e}"))))
+        .map(|(i, tx)| hot_tx(tx, tip, own).map_err(|e| bad(format!("tx {i}: {e}"))))
         .collect()
 }
 
-fn hot_tx(tx: &Value, tip: u64, address: &str) -> Result<HotTx, String> {
+fn hot_tx(tx: &Value, tip: u64, own: &[&str]) -> Result<HotTx, String> {
     let txid = tx["txid"].as_str().ok_or("no string txid")?;
     let vin = tx["vin"].as_array().ok_or("vin is not an array")?;
     let vout = tx["vout"].as_array().ok_or("vout is not an array")?;
+    let is_own = |txo: &Value| {
+        txo["scriptpubkey_address"]
+            .as_str()
+            .is_some_and(|a| own.contains(&a))
+    };
 
     let mut net = 0i64;
     for (j, output) in vout.iter().enumerate() {
         let value = sats(&output["value"])
             .ok_or_else(|| format!("output {j} has no unsigned integer value"))?;
-        if output["scriptpubkey_address"].as_str() == Some(address) {
+        if is_own(output) {
             net = net.checked_add(value).ok_or("net sats overflow")?;
         }
     }
@@ -248,7 +490,7 @@ fn hot_tx(tx: &Value, tip: u64, address: &str) -> Result<HotTx, String> {
         }
         let value = sats(&prevout["value"])
             .ok_or_else(|| format!("input {j} has no prevout with an unsigned integer value"))?;
-        if prevout["scriptpubkey_address"].as_str() == Some(address) {
+        if is_own(prevout) {
             net = net.checked_sub(value).ok_or("net sats overflow")?;
         }
     }
@@ -310,23 +552,67 @@ pub fn hot_send(
     amount_sats: u64,
     fee_sats: u64,
 ) -> Result<HotSendResult, MobileSignerError> {
-    let mnemonic = mnemonic_from(&mnemonic_words)?;
+    let signed = signed_payment(
+        &http_get,
+        &mnemonic_words,
+        &passphrase,
+        network,
+        &destination,
+        amount_sats,
+        fee_sats,
+    )?;
+    let base = esplora_base(network)?;
+    let hex = serialize_hex(&signed);
+    let txid = signed.compute_txid().to_string();
+    let post = |hex: &str| {
+        AGENT
+            .post(&format!("{base}/tx"))
+            .set("Content-Type", "text/plain")
+            .send_string(hex)
+    };
+    // Not /tx/{txid}/status: Esplora answers that one 200 for a txid it never saw (blockstream.info, 2026-11-02).
+    let lookup = |txid: &str| AGENT.get(&format!("{base}/tx/{txid}")).call();
+    let pause = || std::thread::sleep(LOOKUP_PAUSE);
+    let txid = broadcast_signed(&post, &lookup, &pause, &hex, &txid)?;
+    Ok(HotSendResult { txid })
+}
+
+/// A payment from the coins of every used address, each input signed with its own key, any change
+/// over dust paid to the first unused internal (change) address, not yet broadcast. The destination
+/// is checked before any network call.
+fn signed_payment(
+    esplora: Esplora,
+    words: &[String],
+    passphrase: &str,
+    network: KeyNetwork,
+    destination: &str,
+    amount_sats: u64,
+    fee_sats: u64,
+) -> Result<Transaction, MobileSignerError> {
     let net = network_of(network);
-    let (privkey, from_address) = receive_privkey(&mnemonic, &passphrase, net, 0)?;
-    let dest = Address::from_str(&destination)
+    let dest = Address::from_str(destination)
         .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?
         .require_network(net)
         .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?;
 
     let base = esplora_base(network)?;
-    let utxo_json = http_get(&format!("{base}/address/{from_address}/utxo"))?;
-    let utxos = parse_utxos(&utxo_json)?;
+    let wallet = scan_wallet(esplora, words, passphrase, network)?;
+    let owners: Vec<&OwnKey> = wallet.used().collect();
+    let urls: Vec<String> = owners
+        .iter()
+        .map(|k| format!("{base}/address/{}/utxo", k.address))
+        .collect();
+    let lists = get_all(esplora, &urls)?;
+    let mut utxos: Vec<(Utxo, &OwnKey)> = Vec::new();
+    for (owner, list) in owners.iter().zip(&lists) {
+        utxos.extend(parse_utxos(list)?.into_iter().map(|u| (u, *owner)));
+    }
     let need = amount_sats.saturating_add(fee_sats);
     let mut selected = Vec::new();
     let mut total = 0u64;
-    for u in utxos {
-        total += u.value;
-        selected.push(u);
+    for (utxo, owner) in utxos {
+        total += utxo.value;
+        selected.push((utxo, owner));
         if total >= need {
             break;
         }
@@ -343,7 +629,7 @@ pub fn hot_send(
         lock_time: LockTime::ZERO,
         input: selected
             .iter()
-            .map(|u| TxIn {
+            .map(|(u, _)| TxIn {
                 previous_output: OutPoint {
                     txid: u.txid,
                     vout: u.vout,
@@ -362,45 +648,30 @@ pub fn hot_send(
     if change > 546 {
         tx.output.push(TxOut {
             value: Amount::from_sat(change),
-            script_pubkey: from_address.script_pubkey(),
+            script_pubkey: wallet.next_unused(Chain::Internal).address.script_pubkey(),
         });
     }
 
-    let pubkey = CompressedPublicKey::from_private_key(&secp, &privkey)
-        .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?;
     let mut cache = SighashCache::new(tx);
-    for i in 0..selected.len() {
+    for (i, (utxo, owner)) in selected.iter().enumerate() {
         let sighash = cache
             .p2wpkh_signature_hash(
                 i,
-                &from_address.script_pubkey(),
-                Amount::from_sat(selected[i].value),
+                &owner.address.script_pubkey(),
+                Amount::from_sat(utxo.value),
                 EcdsaSighashType::All,
             )
             .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?;
         let msg = Message::from_digest(sighash.to_byte_array());
-        let sig = secp.sign_ecdsa(&msg, &privkey.inner);
+        let sig = secp.sign_ecdsa(&msg, &owner.privkey.inner);
         let mut der = sig.serialize_der().to_vec();
         der.push(EcdsaSighashType::All as u8);
         let witness = cache
             .witness_mut(i)
             .ok_or_else(|| MobileSignerError::InvalidPsbtJson("missing witness slot".into()))?;
-        *witness = Witness::from_slice(&[der.as_slice(), &pubkey.to_bytes()]);
+        *witness = Witness::from_slice(&[der.as_slice(), &owner.pubkey.to_bytes()]);
     }
-    let signed = cache.into_transaction();
-    let hex = serialize_hex(&signed);
-    let txid = signed.compute_txid().to_string();
-    let post = |hex: &str| {
-        AGENT
-            .post(&format!("{base}/tx"))
-            .set("Content-Type", "text/plain")
-            .send_string(hex)
-    };
-    // Not /tx/{txid}/status: Esplora answers that one 200 for a txid it never saw (blockstream.info, 2026-11-02).
-    let lookup = |txid: &str| AGENT.get(&format!("{base}/tx/{txid}")).call();
-    let pause = || std::thread::sleep(LOOKUP_PAUSE);
-    let txid = broadcast_signed(&post, &lookup, &pause, &hex, &txid)?;
-    Ok(HotSendResult { txid })
+    Ok(cache.into_transaction())
 }
 
 type Answer = Result<ureq::Response, ureq::Error>;
@@ -496,7 +767,8 @@ fn parse_utxos(json: &str) -> Result<Vec<Utxo>, MobileSignerError> {
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
-    use std::collections::VecDeque;
+    use std::collections::{HashMap, HashSet, VecDeque};
+    use std::sync::Mutex;
 
     use super::*;
 
@@ -507,25 +779,58 @@ mod tests {
             .collect()
     }
 
-    // Both addresses were derived outside this crate (stdlib PBKDF2 + BIP-32 + bech32,
-    // BIP-84 path m/84'/1'/0'/0/0). The empty-passphrase one is the published BIP-84
-    // testnet vector, so it also pins the behaviour from before passphrases existed.
+    // Every address here was derived outside this crate (stdlib PBKDF2 + BIP-32 + bech32) at
+    // BIP-84 paths m/84'/1'/0'/{0,1}/{0,1}. The empty-passphrase 0/0 and 0/1 are the published
+    // BIP-84 testnet vectors, so they also pin the behaviour from before passphrases existed.
     #[test]
-    fn receive_address_matches_an_independent_derivation() {
-        let none = hot_receive_address(abandon_about(), String::new(), KeyNetwork::Test, 0).unwrap();
-        assert_eq!(none, "tb1q6rz28mcfaxtmd6v789l9rrlrusdprr9pqcpvkl");
-        let trezor =
-            hot_receive_address(abandon_about(), "TREZOR".into(), KeyNetwork::Test, 0).unwrap();
-        assert_eq!(trezor, "tb1qfwxzlmn42rh6wu6gt4f0yrfpe4gf0jtwgxagrr");
+    fn receive_and_change_addresses_match_an_independent_derivation() {
+        let vectors = [
+            ("", 0, 0, "tb1q6rz28mcfaxtmd6v789l9rrlrusdprr9pqcpvkl"),
+            ("", 0, 1, "tb1qd7spv5q28348xl4myc8zmh983w5jx32cjhkn97"),
+            ("", 1, 0, "tb1q9u62588spffmq4dzjxsr5l297znf3z6j5p2688"),
+            ("", 1, 1, "tb1qkwgskuzmmwwvqajnyr7yp9hgvh5y45kg8wvdmd"),
+            ("TREZOR", 0, 0, "tb1qfwxzlmn42rh6wu6gt4f0yrfpe4gf0jtwgxagrr"),
+            ("TREZOR", 0, 1, "tb1qvn0rdysj4pzc6mq6pswv3q3dwlppl3zqc9e654"),
+            ("TREZOR", 1, 0, "tb1qqdza7pkyjfvqx5tzy4kw7x5rcvs4lfg8ce2nq8"),
+            ("TREZOR", 1, 1, "tb1q0vy7ch5mc63e3kz5ns8k2s7xxrfygjhesv9l0e"),
+        ];
+        for (passphrase, chain, index, expected) in vectors {
+            let account = Account::new(&abandon_about(), passphrase, Network::Testnet4).unwrap();
+            let chain = if chain == 0 {
+                Chain::External
+            } else {
+                Chain::Internal
+            };
+            let found = account.key(chain, index).unwrap().address.to_string();
+            assert_eq!(found, expected, "{passphrase:?} {}/{index}", chain as u32);
+            if chain as u32 == 0 {
+                let public = hot_receive_address(
+                    abandon_about(),
+                    passphrase.into(),
+                    KeyNetwork::Test,
+                    index,
+                );
+                assert_eq!(public.unwrap(), expected, "{passphrase:?} 0/{index}");
+            }
+        }
     }
 
     #[test]
     fn address_check_matches_what_hot_send_accepts() {
         let own = hot_receive_address(abandon_about(), String::new(), KeyNetwork::Test, 0).unwrap();
         assert!(is_valid_address(own.clone(), KeyNetwork::Test));
-        assert!(!is_valid_address(own, KeyNetwork::Main), "a testnet address is not a mainnet one");
-        assert!(is_valid_address("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".into(), KeyNetwork::Main));
-        assert!(!is_valid_address("tb1qnotanaddress".into(), KeyNetwork::Test));
+        assert!(
+            !is_valid_address(own, KeyNetwork::Main),
+            "a testnet address is not a mainnet one"
+        );
+        assert!(is_valid_address(
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".into(),
+            KeyNetwork::Main
+        ));
+        assert!(!is_valid_address(
+            "tb1qnotanaddress".into(),
+            KeyNetwork::Test
+        ));
         assert!(!is_valid_address(" ".into(), KeyNetwork::Test));
         assert!(!is_valid_address(String::new(), KeyNetwork::Test));
     }
@@ -534,46 +839,66 @@ mod tests {
     fn a_different_passphrase_is_a_different_wallet() {
         let a = hot_receive_address(abandon_about(), "a".into(), KeyNetwork::Test, 0).unwrap();
         let b = hot_receive_address(abandon_about(), "b".into(), KeyNetwork::Test, 0).unwrap();
-        let none = hot_receive_address(abandon_about(), String::new(), KeyNetwork::Test, 0).unwrap();
+        let none =
+            hot_receive_address(abandon_about(), String::new(), KeyNetwork::Test, 0).unwrap();
         assert!(a != b && a != none && b != none);
+    }
+
+    fn balance_and_used(json: &str) -> (u64, bool) {
+        let stats = parse_address_stats(json).unwrap();
+        (stats.balance, stats.used)
     }
 
     #[test]
     fn parse_balance_reads_chain_stats() {
-        let json = r#"{"chain_stats":{"funded_txo_sum":1000,"spent_txo_sum":200},"mempool_stats":{"funded_txo_sum":50,"spent_txo_sum":0}}"#;
-        assert_eq!(parse_address_balance(json).unwrap(), 850);
+        let json = r#"{"chain_stats":{"funded_txo_sum":1000,"spent_txo_sum":200,"tx_count":2},"mempool_stats":{"funded_txo_sum":50,"spent_txo_sum":0,"tx_count":1}}"#;
+        assert_eq!(balance_and_used(json), (850, true));
     }
 
     #[test]
     fn real_address_summary_gives_its_balance() {
         let real = include_str!("../fixtures/esplora/blockstream_testnet_address_real.json");
-        assert_eq!(parse_address_balance(real).unwrap(), 79_177_760);
+        assert_eq!(balance_and_used(real), (79_177_760, true));
     }
 
     // 10000 confirmed, then spent in the mempool with 4000 back as change. 10000 + 4000 - 10000.
     #[test]
     fn a_pending_spend_leaves_only_the_change() {
-        let json = r#"{"chain_stats":{"funded_txo_sum":10000,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":4000,"spent_txo_sum":10000}}"#;
-        assert_eq!(parse_address_balance(json).unwrap(), 4_000);
+        let json = r#"{"chain_stats":{"funded_txo_sum":10000,"spent_txo_sum":0,"tx_count":1},"mempool_stats":{"funded_txo_sum":4000,"spent_txo_sum":10000,"tx_count":1}}"#;
+        assert_eq!(balance_and_used(json), (4_000, true));
     }
 
-    // Nothing confirmed, 2500 arriving in the mempool. 0 + 2500 - 0.
+    // Nothing confirmed, 2500 arriving in the mempool. 0 + 2500 - 0. A mempool tx counts as used.
     #[test]
     fn a_receive_still_in_the_mempool_counts() {
-        let json = r#"{"chain_stats":{"funded_txo_sum":0,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":2500,"spent_txo_sum":0}}"#;
-        assert_eq!(parse_address_balance(json).unwrap(), 2_500);
+        let json = r#"{"chain_stats":{"funded_txo_sum":0,"spent_txo_sum":0,"tx_count":0},"mempool_stats":{"funded_txo_sum":2500,"spent_txo_sum":0,"tx_count":1}}"#;
+        assert_eq!(balance_and_used(json), (2_500, true));
     }
 
-    // 5000 received and all of it spent, both confirmed. An empty wallet is a real 0, not an error.
+    // 5000 received and all of it spent, both confirmed. An empty wallet is a real 0, not an error,
+    // and the address stays used.
     #[test]
     fn a_fully_spent_address_is_a_real_zero() {
-        let json = r#"{"chain_stats":{"funded_txo_sum":5000,"spent_txo_sum":5000},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#;
-        assert_eq!(parse_address_balance(json).unwrap(), 0);
+        let json = r#"{"chain_stats":{"funded_txo_sum":5000,"spent_txo_sum":5000,"tx_count":2},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0,"tx_count":0}}"#;
+        assert_eq!(balance_and_used(json), (0, true));
+    }
+
+    #[test]
+    fn an_address_nobody_paid_is_unused() {
+        assert_eq!(balance_and_used(UNUSED), (0, false));
     }
 
     #[test]
     fn an_answer_it_cannot_read_is_an_error_not_a_balance() {
         let cases = [
+            (
+                r#"{"chain_stats":{"funded_txo_sum":0,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0,"tx_count":0}}"#,
+                "chain_stats.tx_count",
+            ),
+            (
+                r#"{"chain_stats":{"funded_txo_sum":0,"spent_txo_sum":0,"tx_count":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0,"tx_count":"0"}}"#,
+                "mempool_stats.tx_count",
+            ),
             ("<html>Sign in to Wi-Fi</html>", "not JSON"),
             ("[]", "not an object"),
             (
@@ -610,13 +935,13 @@ mod tests {
             ),
         ];
         for (body, rule) in cases {
-            match parse_address_balance(body) {
+            match parse_address_stats(body) {
                 Err(MobileSignerError::InvalidPsbtJson(m)) => {
                     assert!(m.starts_with("esplora balance:"), "{body}: {m}");
                     assert!(m.contains(rule), "{body}: {m}");
                 }
                 Err(e) => panic!("{body}: wrong error {e:?}"),
-                Ok(sats) => panic!("{body}: accepted as {sats} sats"),
+                Ok(stats) => panic!("{body}: accepted as {} sats", stats.balance),
             }
         }
     }
@@ -710,7 +1035,7 @@ mod tests {
     }
 
     fn history(fixture: &str) -> Vec<HotTx> {
-        history_from(fixture, TIP, WALLET).unwrap()
+        history_from(fixture, TIP, &[WALLET]).unwrap()
     }
 
     const REAL_TXS: &str = history_fixture!("blockstream_testnet_txs_real.json");
@@ -755,7 +1080,7 @@ mod tests {
                 .map(|(txid, net)| hot(txid, net, 2, Some(1_793_560_954)))
                 .collect();
             assert_eq!(
-                history_from(REAL_TXS, REAL_TIP, address).unwrap(),
+                history_from(REAL_TXS, REAL_TIP, &[address]).unwrap(),
                 expected,
                 "{address}"
             );
@@ -765,14 +1090,14 @@ mod tests {
     #[test]
     fn whitespace_around_the_tip_is_ignored() {
         for tip in ["5259565\n", " 5259565 "] {
-            let found = history_from(REAL_TXS, tip, REAL_COINBASE_PAYEE).unwrap();
+            let found = history_from(REAL_TXS, tip, &[REAL_COINBASE_PAYEE]).unwrap();
             assert!(found.iter().all(|t| t.confirmations == 2), "{tip:?}");
         }
     }
 
     #[test]
     fn a_tip_beyond_u32_saturates_the_confirmations() {
-        let found = history_from(REAL_TXS, "99999999999", REAL_COINBASE_PAYEE).unwrap();
+        let found = history_from(REAL_TXS, "99999999999", &[REAL_COINBASE_PAYEE]).unwrap();
         assert_eq!(found.len(), 4);
         assert!(found.iter().all(|t| t.confirmations == u32::MAX));
     }
@@ -870,7 +1195,7 @@ mod tests {
     }
 
     fn assert_rejected(txs: &str, tip: &str, rule: &str) {
-        match history_from(txs, tip, WALLET) {
+        match history_from(txs, tip, &[WALLET]) {
             Err(MobileSignerError::InvalidPsbtJson(m)) => {
                 assert!(m.starts_with("esplora history:"), "{rule}: {m}");
                 assert!(m.contains(rule), "{rule}: {m}");
@@ -1020,7 +1345,11 @@ mod tests {
     // An answer as ureq hands it over: a status of 400 or more arrives as an error.
     fn answer(status: u16, body: &str) -> Answer {
         let response = ureq::Response::new(status, "-", body).unwrap();
-        if status >= 400 { Err(response.into()) } else { Ok(response) }
+        if status >= 400 {
+            Err(response.into())
+        } else {
+            Ok(response)
+        }
     }
 
     // What ureq returns when a read times out: a transport error with no status.
@@ -1031,13 +1360,22 @@ mod tests {
     // A body announced as 100 bytes that stops after 5, so reading it fails.
     fn cut_short(status: u16) -> Answer {
         let response: ureq::Response =
-            format!("HTTP/1.1 {status} -\r\nContent-Length: 100\r\n\r\nshort").parse().unwrap();
-        if status >= 400 { Err(response.into()) } else { Ok(response) }
+            format!("HTTP/1.1 {status} -\r\nContent-Length: 100\r\n\r\nshort")
+                .parse()
+                .unwrap();
+        if status >= 400 {
+            Err(response.into())
+        } else {
+            Ok(response)
+        }
     }
 
     // What /tx/{txid} answers for a transaction the explorer holds, cut to the field that is read.
     fn found() -> Answer {
-        answer(200, &format!(r#"{{"txid":"{TXID}","status":{{"confirmed":false}}}}"#))
+        answer(
+            200,
+            &format!(r#"{{"txid":"{TXID}","status":{{"confirmed":false}}}}"#),
+        )
     }
 
     // What /tx/{txid} answers for a txid it never saw (blockstream.info testnet, 2026-11-02).
@@ -1124,7 +1462,10 @@ mod tests {
     fn a_refusal_fails_as_before_with_no_lookup() {
         let refusals = [
             (400, NODE_REFUSES),
-            (400, "sendrawtransaction RPC error -26: min relay fee not met, 110 < 141"),
+            (
+                400,
+                "sendrawtransaction RPC error -26: min relay fee not met, 110 < 141",
+            ),
             (404, "Not Found"),
             (429, "Too Many Requests"),
         ];
@@ -1215,7 +1556,12 @@ mod tests {
     #[test]
     fn a_lookup_200_that_is_not_the_transaction_is_not_a_find() {
         let other_txid = format!(r#"{{"txid":"{}"}}"#, "1".repeat(64));
-        let bodies = [r#"{"confirmed":false}"#, "<html>Sign in to Wi-Fi</html>", other_txid.as_str(), ""];
+        let bodies = [
+            r#"{"confirmed":false}"#,
+            "<html>Sign in to Wi-Fi</html>",
+            other_txid.as_str(),
+            "",
+        ];
         for body in bodies {
             let run = broadcast(no_answer(), (0..4).map(|_| answer(200, body)).collect());
             assert_unknown(&run, body);
@@ -1225,7 +1571,10 @@ mod tests {
 
     #[test]
     fn a_body_that_cannot_be_read_leaves_the_payment_unclear() {
-        assert!(cut_short(200).unwrap().into_string().is_err(), "the fixture must not be readable");
+        assert!(
+            cut_short(200).unwrap().into_string().is_err(),
+            "the fixture must not be readable"
+        );
         // A 4xx reason that breaks off may have said the node holds the transaction.
         for status in [200, 400] {
             let run = broadcast(cut_short(status), vec![found()]);
@@ -1252,5 +1601,421 @@ mod tests {
         for (i, first) in first_answers.iter().enumerate() {
             assert_eq!(broadcast(first(), vec![]).posts, 1, "first answer {i}");
         }
+    }
+
+    const UNUSED: &str = r#"{"chain_stats":{"funded_txo_sum":0,"spent_txo_sum":0,"tx_count":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0,"tx_count":0}}"#;
+
+    // A real testnet address that is not the wallet's: the coinbase payee of the recording.
+    const SOMEONE: &str = REAL_COINBASE_PAYEE;
+
+    fn used_stats(balance: u64) -> String {
+        format!(
+            r#"{{"chain_stats":{{"funded_txo_sum":{balance},"spent_txo_sum":0,"tx_count":1}},"mempool_stats":{{"funded_txo_sum":0,"spent_txo_sum":0,"tx_count":0}}}}"#
+        )
+    }
+
+    fn own(chain: Chain, index: u32) -> OwnKey {
+        Account::new(&abandon_about(), "", Network::Testnet4)
+            .unwrap()
+            .key(chain, index)
+            .unwrap()
+    }
+
+    fn addr(chain: Chain, index: u32) -> String {
+        own(chain, index).address.to_string()
+    }
+
+    /// Esplora keyed by address. An address not set up answers as one nobody ever paid.
+    #[derive(Default)]
+    struct Fake {
+        stats: HashMap<String, String>,
+        txs: HashMap<String, String>,
+        utxos: HashMap<String, String>,
+        failing: HashSet<String>,
+        tip: String,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl Fake {
+        fn new() -> Self {
+            Self {
+                tip: TIP.into(),
+                ..Default::default()
+            }
+        }
+
+        /// `address` holds one coin of `value` sats, in a transaction whose id repeats `digit`.
+        fn fund(&mut self, address: &str, value: u64, digit: char) {
+            self.stats.insert(address.into(), used_stats(value));
+            let coin = format!(r#"[{{"txid":"{}","vout":0,"value":{value}}}]"#, id(digit));
+            self.utxos.insert(address.into(), coin);
+        }
+
+        /// `address` was paid once and emptied again: used, with nothing to spend.
+        fn touch(&mut self, address: &str) {
+            self.stats.insert(address.into(), used_stats(0));
+        }
+
+        fn get(&self, url: &str) -> Result<String, MobileSignerError> {
+            self.calls.lock().unwrap().push(url.to_string());
+            let path = url
+                .strip_prefix(ESPLORA_TESTNET4)
+                .expect("a testnet4 Esplora URL");
+            if path == "/blocks/tip/height" {
+                return Ok(self.tip.clone());
+            }
+            let rest = path.strip_prefix("/address/").expect("an address URL");
+            let (address, what) = rest.split_once('/').unwrap_or((rest, ""));
+            if self.failing.contains(address) {
+                return Err(MobileSignerError::InvalidPsbtJson(format!(
+                    "esplora get: {address}: timed out"
+                )));
+            }
+            let (table, fresh) = match what {
+                "" => (&self.stats, UNUSED),
+                "txs" => (&self.txs, "[]"),
+                "utxo" => (&self.utxos, "[]"),
+                other => panic!("unexpected Esplora path /address/{address}/{other}"),
+            };
+            Ok(table
+                .get(address)
+                .cloned()
+                .unwrap_or_else(|| fresh.to_string()))
+        }
+
+        fn asked_about(&self, address: &str) -> bool {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|url| url.contains(address))
+        }
+
+        fn snapshot(&self, passphrase: &str) -> Result<HotWalletSnapshot, MobileSignerError> {
+            snapshot_from(
+                &|url| self.get(url),
+                &abandon_about(),
+                passphrase,
+                KeyNetwork::Test,
+            )
+        }
+
+        fn history(&self) -> Result<Vec<HotTx>, MobileSignerError> {
+            history_of(&|url| self.get(url), &abandon_about(), "", KeyNetwork::Test)
+        }
+
+        fn send(&self, to: &str, amount: u64, fee: u64) -> Result<Transaction, MobileSignerError> {
+            let words = abandon_about();
+            signed_payment(
+                &|url| self.get(url),
+                &words,
+                "",
+                KeyNetwork::Test,
+                to,
+                amount,
+                fee,
+            )
+        }
+    }
+
+    fn receive_and_balance(snapshot: HotWalletSnapshot) -> (String, u64) {
+        assert_eq!(snapshot.network, KeyNetwork::Test);
+        (snapshot.receive_address, snapshot.balance_sats)
+    }
+
+    fn pays(output: &TxOut) -> String {
+        Address::from_script(&output.script_pubkey, Network::Testnet4)
+            .unwrap()
+            .to_string()
+    }
+
+    #[track_caller]
+    fn assert_outputs(tx: &Transaction, expected: &[(&str, u64)]) {
+        let found: Vec<(String, u64)> = tx
+            .output
+            .iter()
+            .map(|o| (pays(o), o.value.to_sat()))
+            .collect();
+        let expected: Vec<(String, u64)> =
+            expected.iter().map(|(a, v)| (a.to_string(), *v)).collect();
+        assert_eq!(found, expected);
+    }
+
+    // True when input `i`'s witness is a SIGHASH_ALL signature by `key` over the P2WPKH sighash of
+    // `key`'s own script, with `key`'s public key beside it.
+    fn signed_by(tx: &Transaction, i: usize, value: u64, key: &OwnKey) -> bool {
+        let sighash = SighashCache::new(tx)
+            .p2wpkh_signature_hash(
+                i,
+                &key.address.script_pubkey(),
+                Amount::from_sat(value),
+                EcdsaSighashType::All,
+            )
+            .unwrap();
+        let witness = &tx.input[i].witness;
+        let der = witness.nth(0).unwrap();
+        let (sig, hash_type) = der.split_at(der.len() - 1);
+        let sig = bitcoin::secp256k1::ecdsa::Signature::from_der(sig).unwrap();
+        let msg = Message::from_digest(sighash.to_byte_array());
+        hash_type == [EcdsaSighashType::All as u8]
+            && witness.nth(1) == Some(key.pubkey.to_bytes().as_slice())
+            && Secp256k1::verification_only()
+                .verify_ecdsa(&msg, &sig, &key.pubkey.0)
+                .is_ok()
+    }
+
+    #[test]
+    fn a_fresh_wallet_receives_at_index_0_and_holds_nothing() {
+        let fake = Fake::new();
+        assert_eq!(
+            receive_and_balance(fake.snapshot("").unwrap()),
+            (addr(Chain::External, 0), 0)
+        );
+        // The documented cost of a wallet nobody paid: GAP_LIMIT lookups per chain and no more.
+        assert_eq!(fake.calls.lock().unwrap().len(), 40);
+        assert!(fake.history().unwrap().is_empty());
+        match fake.send(SOMEONE, 1_000, 100) {
+            Err(MobileSignerError::InvalidPsbtJson(m)) => {
+                assert_eq!(m, "insufficient funds: have 0 need 1100")
+            }
+            other => panic!("expected insufficient funds, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_used_index_0_moves_the_receive_address_to_index_1() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 1_000, '1');
+        assert_eq!(
+            receive_and_balance(fake.snapshot("").unwrap()),
+            (addr(Chain::External, 1), 1_000)
+        );
+    }
+
+    #[test]
+    fn a_coin_at_index_3_behind_three_unused_indices_is_found_counted_and_spent() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 3), 7_000, '3');
+        assert_eq!(
+            receive_and_balance(fake.snapshot("").unwrap()),
+            (addr(Chain::External, 4), 7_000)
+        );
+        let tx = fake.send(SOMEONE, 5_000, 500).unwrap();
+        assert_eq!(tx.input.len(), 1);
+        assert_eq!(tx.input[0].previous_output.txid.to_string(), id('3'));
+        assert!(signed_by(&tx, 0, 7_000, &own(Chain::External, 3)));
+        assert_outputs(&tx, &[(SOMEONE, 5_000), (&addr(Chain::Internal, 0), 1_500)]);
+    }
+
+    #[test]
+    fn a_coin_on_a_change_address_is_counted_and_spent() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::Internal, 0), 3_000, '4');
+        assert_eq!(
+            receive_and_balance(fake.snapshot("").unwrap()),
+            (addr(Chain::External, 0), 3_000)
+        );
+        let tx = fake.send(SOMEONE, 2_000, 200).unwrap();
+        assert!(signed_by(&tx, 0, 3_000, &own(Chain::Internal, 0)));
+        assert_outputs(&tx, &[(SOMEONE, 2_000), (&addr(Chain::Internal, 1), 800)]);
+    }
+
+    // The documented limit. Index 20 is the first past twenty unused ones and is never asked about.
+    #[test]
+    fn a_coin_past_the_gap_limit_is_not_seen() {
+        for index in [20, 21] {
+            let mut fake = Fake::new();
+            let far = addr(Chain::External, index);
+            fake.fund(&far, 9_000, '5');
+            assert_eq!(
+                receive_and_balance(fake.snapshot("").unwrap()),
+                (addr(Chain::External, 0), 0),
+                "{index}"
+            );
+            assert!(!fake.asked_about(&far), "{index}");
+            assert!(fake.history().unwrap().is_empty(), "{index}");
+            assert!(fake.send(SOMEONE, 1_000, 100).is_err(), "{index}");
+        }
+    }
+
+    #[test]
+    fn a_coin_after_exactly_nineteen_unused_indices_is_found() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 19), 1_000, '6');
+        assert_eq!(
+            receive_and_balance(fake.snapshot("").unwrap()),
+            (addr(Chain::External, 20), 1_000)
+        );
+        // The scan went on past it: twenty more external lookups, so 39 of them were asked about.
+        assert!(fake.asked_about(&addr(Chain::External, 39)));
+        assert!(!fake.asked_about(&addr(Chain::External, 40)));
+    }
+
+    #[test]
+    fn the_same_words_give_the_same_answer_twice() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 4_000, '1');
+        fake.fund(&addr(Chain::External, 2), 4_000, '2');
+        fake.fund(&addr(Chain::Internal, 1), 500, '7');
+        assert_eq!(fake.snapshot("").unwrap(), fake.snapshot("").unwrap());
+        assert_eq!(fake.history().unwrap(), fake.history().unwrap());
+        let (a, b) = (
+            fake.send(SOMEONE, 6_000, 500).unwrap(),
+            fake.send(SOMEONE, 6_000, 500).unwrap(),
+        );
+        assert_eq!(serialize_hex(&a), serialize_hex(&b));
+    }
+
+    #[test]
+    fn a_different_passphrase_sees_none_of_these_coins() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 1_000, '1');
+        assert_eq!(fake.snapshot("").unwrap().balance_sats, 1_000);
+        assert_eq!(
+            receive_and_balance(fake.snapshot("TREZOR").unwrap()),
+            ("tb1qfwxzlmn42rh6wu6gt4f0yrfpe4gf0jtwgxagrr".into(), 0)
+        );
+    }
+
+    #[test]
+    fn two_coins_on_two_addresses_are_each_signed_with_their_own_key() {
+        let mut fake = Fake::new();
+        let (first, third) = (own(Chain::External, 0), own(Chain::External, 2));
+        fake.fund(&first.address.to_string(), 4_000, '1');
+        fake.fund(&third.address.to_string(), 4_000, '2');
+        let tx = fake.send(SOMEONE, 6_000, 500).unwrap();
+        assert_eq!(tx.input.len(), 2);
+        assert!(signed_by(&tx, 0, 4_000, &first));
+        assert!(signed_by(&tx, 1, 4_000, &third));
+        // The check can tell the keys apart.
+        assert!(!signed_by(&tx, 0, 4_000, &third));
+        assert!(!signed_by(&tx, 1, 4_000, &first));
+        assert_outputs(&tx, &[(SOMEONE, 6_000), (&addr(Chain::Internal, 0), 1_500)]);
+    }
+
+    #[test]
+    fn change_goes_to_the_first_unused_internal_address_and_never_an_external_one() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        fake.touch(&addr(Chain::Internal, 0));
+        fake.touch(&addr(Chain::Internal, 1));
+        let tx = fake.send(SOMEONE, 1_000, 100).unwrap();
+        assert_outputs(&tx, &[(SOMEONE, 1_000), (&addr(Chain::Internal, 2), 8_900)]);
+        let externals: Vec<String> = (0..40).map(|i| addr(Chain::External, i)).collect();
+        assert!(!externals.contains(&pays(&tx.output[1])));
+    }
+
+    #[test]
+    fn dust_change_is_dropped_as_before() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        assert_outputs(&fake.send(SOMEONE, 9_454, 0).unwrap(), &[(SOMEONE, 9_454)]);
+        assert_outputs(
+            &fake.send(SOMEONE, 9_453, 0).unwrap(),
+            &[(SOMEONE, 9_453), (&addr(Chain::Internal, 0), 547)],
+        );
+    }
+
+    #[test]
+    fn a_malformed_answer_for_any_scanned_address_fails_the_whole_call() {
+        for (chain, index) in [(Chain::External, 17), (Chain::Internal, 5)] {
+            let mut fake = Fake::new();
+            fake.fund(&addr(Chain::External, 0), 1_000, '1');
+            fake.stats
+                .insert(addr(chain, index), "<html>Sign in to Wi-Fi</html>".into());
+            for result in [
+                fake.snapshot("").map(|_| ()),
+                fake.history().map(|_| ()),
+                fake.send(SOMEONE, 100, 10).map(|_| ()),
+            ] {
+                match result {
+                    Err(MobileSignerError::InvalidPsbtJson(m)) => {
+                        assert!(m.starts_with("esplora balance: not JSON"), "{index}: {m}")
+                    }
+                    other => panic!("{index}: expected the call to fail, got {other:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_esplora_error_on_one_address_of_a_window_fails_the_whole_call() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 1_000, '1');
+        fake.failing.insert(addr(Chain::External, 4));
+        match fake.snapshot("") {
+            Err(MobileSignerError::InvalidPsbtJson(m)) => {
+                assert!(m.starts_with("esplora get:"), "{m}")
+            }
+            other => panic!("expected the call to fail, got {other:?}"),
+        }
+    }
+
+    fn txo(address: &str, value: u64) -> String {
+        format!(r#"{{"scriptpubkey_address":"{address}","value":{value}}}"#)
+    }
+
+    fn spent(address: &str, value: u64) -> String {
+        format!(
+            r#"{{"is_coinbase":false,"prevout":{}}}"#,
+            txo(address, value)
+        )
+    }
+
+    fn tx_json(digit: char, vin: &[String], vout: &[String], status: &str) -> String {
+        format!(
+            r#"{{"txid":"{}","vin":[{}],"vout":[{}],"status":{status}}}"#,
+            id(digit),
+            vin.join(","),
+            vout.join(",")
+        )
+    }
+
+    fn at(height: u32) -> String {
+        format!(r#"{{"confirmed":true,"block_height":{height},"block_time":1790000000}}"#)
+    }
+
+    // 10000 at 0/0 is spent: 6000 to someone, 3000 back as change to 1/0, 1000 fee. Both pages
+    // list that transaction. The wallet is 7000 lighter, once. A mempool receive on 1/0 comes
+    // first and the older funding of 0/0 last.
+    #[test]
+    fn a_send_with_change_is_one_outgoing_transaction_in_the_history() {
+        let (ext0, int0) = (addr(Chain::External, 0), addr(Chain::Internal, 0));
+        let funding = tx_json(
+            '0',
+            &[spent(SOMEONE, 20_000)],
+            &[txo(&ext0, 10_000)],
+            &at(90),
+        );
+        let payment = tx_json(
+            '1',
+            &[spent(&ext0, 10_000)],
+            &[txo(SOMEONE, 6_000), txo(&int0, 3_000)],
+            &at(100),
+        );
+        let receive = tx_json('2', &[spent(SOMEONE, 900)], &[txo(&int0, 500)], MEMPOOL);
+        let mut fake = Fake::new();
+        fake.touch(&ext0);
+        fake.touch(&int0);
+        fake.txs.insert(ext0, format!("[{payment},{funding}]"));
+        fake.txs.insert(int0, format!("[{receive},{payment}]"));
+        assert_eq!(
+            fake.history().unwrap(),
+            [
+                hot(&id('2'), 500, 0, None),
+                hot(&id('1'), -7_000, 6, Some(1_790_000_000)),
+                hot(&id('0'), 10_000, 16, Some(1_790_000_000)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_destination_on_the_wrong_network_is_refused_before_any_lookup() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        let mainnet = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+        assert!(fake.send(mainnet, 1_000, 100).is_err());
+        assert!(fake.send("tb1qnotanaddress", 1_000, 100).is_err());
+        assert!(fake.calls.lock().unwrap().is_empty());
     }
 }
