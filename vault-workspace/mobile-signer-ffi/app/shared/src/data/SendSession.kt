@@ -224,7 +224,8 @@ fun offersUnconfirmedClear(sinceSeconds: Long, nowSeconds: Long): Boolean = (now
  * Each row names the Rust text it answers. `esplora post:` is the node's refusal with its reason, not a network failure.
  */
 fun sendErrorThai(message: String?): String {
-    val m = message.orEmpty()
+    // The bindings print every Rust refusal as "invalid PSBT json: {text}", so the rows below match the text after it.
+    val m = message.orEmpty().removePrefix("invalid PSBT json: ")
     return when {
         m.startsWith("amount ") && m.endsWith("dust limit") -> "จำนวนน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)"
         m.startsWith("fee ") && " is more than the amount " in m -> "ค่าธรรมเนียมสูงกว่าจำนวนที่ส่ง เลือกระดับที่ต่ำลง"

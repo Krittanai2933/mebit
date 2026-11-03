@@ -23,22 +23,27 @@ class SendErrorThaiTest {
         "esplora post: https://mempool.space/testnet/api/tx: status code 400: bad-txns-inputs-missingorspent" to "ส่งไม่สำเร็จ",
         "esplora get: https://mempool.space/testnet/api/address/tb1q/utxo: Network Error: connection refused" to "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง",
         "esplora get: lookup thread panicked" to "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง",
+        // Seen on an iPhone 15 over 5G on 3 Nov 2026, as the bindings print it.
+        "esplora get: https://mempool.space/testnet4/api/address/tb1q5squ69zn40x44ewqgl6dsaqgwjj38pc7f7j9hp: Connection Failed: tls connection init failed: Resource temporarily unavailable (os error 35)" to "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง",
         "missing witness slot" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
         "" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
     )
 
+    // The bindings print every refusal with this prefix, so a mapping that only knows the bare text never matches a real error.
+    private val shapes = listOf("", "invalid PSBT json: ")
+
     @Test
-    fun everyRustRefusalHasItsThaiLine() {
-        for ((rust, thai) in rows) assertEquals(thai, sendErrorThai(rust), rust)
+    fun everyRustRefusalHasItsThaiLineInTheShapeTheBindingsPrint() {
+        for ((rust, thai) in rows) for (prefix in shapes) assertEquals(thai, sendErrorThai(prefix + rust), prefix + rust)
         assertEquals("ส่งไม่สำเร็จ ลองใหม่ภายหลัง", sendErrorThai(null), "a null message")
     }
 
     @Test
     fun noEnglishWordOfTheRustTextReachesTheScreen() {
-        for ((rust, _) in rows) {
-            val shown = sendErrorThai(rust)
-            for (word in rust.split(' ').filter { it.length > 3 && it.all { c -> c.isLetter() } }) {
-                assertFalse(word in shown, "'$word' of '$rust' in '$shown'")
+        for ((rust, _) in rows) for (prefix in shapes) {
+            val shown = sendErrorThai(prefix + rust)
+            for (word in (prefix + rust).split(' ').filter { it.length > 3 && it.all { c -> c.isLetter() } }) {
+                assertFalse(word in shown, "'$word' of '${prefix + rust}' in '$shown'")
             }
         }
     }
