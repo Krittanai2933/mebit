@@ -266,17 +266,22 @@ fun KeyCreatedScreen(
         Spacer(modifier = Modifier.height(20.dp))
         NextStepCard()
         // Not on board 1.3: an iOS reinstall wipes the wallet (the user's decision), so say so where it is made.
-        if (session.saved == SaveState.Saved) {
-            Text(
-                text = "ลบแอปแล้วกระเป๋าในเครื่องนี้จะหาย · กู้คืนได้ด้วย 24 คำเท่านั้น",
-                color = MbBody,
-                fontSize = 12.sp,
-                lineHeight = 17.sp,
-                modifier = Modifier.padding(top = 16.dp).testTag("delete_warning"),
-            )
-        }
+        DeleteWarning(session, "delete_warning")
         NotSavedNotice(session, Modifier.padding(top = 16.dp))
     }
+}
+
+/** Said where the key is made and where its words are read: once the wallet is on the phone, deleting the app erases it and the words are the only way back. */
+@Composable
+private fun DeleteWarning(session: OnboardingSession, tag: String) {
+    if (session.saved != SaveState.Saved) return
+    Text(
+        text = "ลบแอปแล้วกระเป๋าในเครื่องนี้จะหาย · กู้คืนได้ด้วย 24 คำเท่านั้น",
+        color = MbBody,
+        fontSize = 12.sp,
+        lineHeight = 17.sp,
+        modifier = Modifier.padding(top = 16.dp).testTag(tag),
+    )
 }
 
 /** Penpot 1.3 and 1.2.1 key card: monogram tile, name, one meta line and a status pill. */
@@ -388,6 +393,8 @@ fun BackupWordsScreen(
         } else {
             CaptureBanner(guard.claim)
         }
+        // Not on board 1.4. A user who reads the words here is the one who must know the words are the only recovery.
+        DeleteWarning(session, "backup_delete_warning")
     }
 }
 
