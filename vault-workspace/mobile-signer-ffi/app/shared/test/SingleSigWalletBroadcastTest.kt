@@ -94,13 +94,13 @@ private fun FakeHot.unknownSend(): OnboardingSession {
 
 /** A phone that saved the public test wallet with [pending]. */
 private fun phoneHolding(pending: UnconfirmedSend?) =
-    FakeSecureStore().also { assertEquals(SaveResult.Written, SavedWallet(it).save(testRecord(unconfirmedSend = pending), WriteMode.Create)) }
+    FakeSecureStore().also { assertIs<SaveResult.Written>(SavedWallet(it).save(testRecord(unconfirmedSend = pending), WriteMode.Create)) }
 
 /** What the gate does at a cold start: opens the copy [store] holds and installs it into a new session that saves through [store]. The key is made without the native library. */
 private fun restart(store: FakeSecureStore): OnboardingSession {
-    val record = assertIs<UnlockResult.Opened>(SavedWallet(store).openNow(), "the saved copy").record
-    val session = OnboardingSession(SavedWallet(store), restoreKey = { w, _, _, _ -> SoftwareAccountKey(w, record.fingerprint, "tpub-test", "m/48'/1'/0'/2'") })
-    assertTrue(session.install(record), "install")
+    val opened = assertIs<UnlockResult.Opened>(SavedWallet(store).openNow(), "the saved copy")
+    val session = OnboardingSession(SavedWallet(store), restoreKey = { w, _, _, _ -> SoftwareAccountKey(w, opened.record.fingerprint, "tpub-test", "m/48'/1'/0'/2'") })
+    assertTrue(session.install(opened.record, opened.version), "install")
     return session
 }
 

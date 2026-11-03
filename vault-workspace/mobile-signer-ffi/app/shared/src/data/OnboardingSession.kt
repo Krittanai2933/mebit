@@ -3,6 +3,7 @@ package com.mebit.app.data
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.mebit.app.StoreVersion
 import com.mebit.app.Why
 import com.mebit.app.WriteMode
 import com.mebit.ffi.signer.KeyNetwork
@@ -53,9 +54,30 @@ class OnboardingSession(
     var network: KeyNetwork by mutableStateOf(KeyNetwork.TEST)
         private set
 
+    /** What this session knows about the copy on the phone. One state, so Saved can never exist without the copy it refers to. */
+    private sealed interface Held {
+        /** No copy of this key is known to be on the phone. */
+        data object Nothing : Held
+
+        /** A passphrase import waiting for its fingerprint check. */
+        data object Staged : Held
+
+        /** The phone held this copy at our last read or write. */
+        class Copy(val version: StoreVersion) : Held
+
+        /** Another instance changed the phone since. This session never writes again in this run. */
+        data object Stale : Held
+    }
+
+    private var held: Held by mutableStateOf(Held.Nothing)
+
     /** NotSaved is today's memory-only state. Screens read it to say "saved on this phone" only when it is true. */
-    var saved: SaveState by mutableStateOf(SaveState.NotSaved)
-        private set
+    val saved: SaveState
+        get() = when (held) {
+            Held.Nothing, Held.Stale -> SaveState.NotSaved
+            Held.Staged -> SaveState.Staged
+            is Held.Copy -> SaveState.Saved
+        }
 
     /** Why the wallet is not saved on this phone, for the notice. Null until a save fails, and again after one succeeds. */
     var notSavedBecause: Why? by mutableStateOf(null)
@@ -99,13 +121,13 @@ class OnboardingSession(
             lastError = e.message
             return
         }
-        if (accepted) persist(fresh = true) else saved = SaveState.Staged
+        if (accepted) persist(fresh = true) else held = Held.Staged
     }
 
     /** The fingerprint sheet said "matches". Nothing was written before this. */
     fun acceptStagedKey() {
-        if (saved != SaveState.Staged) return
-        saved = SaveState.NotSaved
+        if (held != Held.Staged) return
+        held = Held.Nothing
         persist(fresh = true)
     }
 
@@ -122,6 +144,7 @@ class OnboardingSession(
         val w = wallet ?: return UnlockResult.Unavailable(Why.NotWired)
         if (saved != SaveState.Saved) return UnlockResult.Unavailable(notSavedBecause ?: Why.Other)
         return when (val r = w.open(reason)) {
+            // r.version is not adopted: it may name a newer copy another instance wrote, which this session's older flags must never overwrite.
             is UnlockResult.Opened -> if (holdsThisKey(r.record)) UnlockResult.Verified else notSaved(UnlockResult.Broken(Cause.Corrupt))
             is UnlockResult.Broken -> notSaved(r) // a copy that cannot open is not a saved wallet, whatever the reason
             else -> r // cancelled, denied, locked out or try later: nothing is learned, and the user can try again
@@ -133,7 +156,7 @@ class OnboardingSession(
 
     /** The copy on the phone is not this wallet or cannot be opened, so this wallet is not saved after all. The key stays in memory. */
     private fun notSaved(result: UnlockResult): UnlockResult {
-        saved = SaveState.NotSaved
+        held = Held.Nothing
         notSavedBecause = Why.Other
         return result
     }
@@ -151,7 +174,7 @@ class OnboardingSession(
         lastError = null
         network = KeyNetwork.TEST
         unconfirmedSend = null
-        saved = SaveState.NotSaved
+        held = Held.Nothing
         notSavedBecause = null
         pendingSave = false
     }
@@ -191,7 +214,7 @@ class OnboardingSession(
      * record's. Derives once. Catches Exception only: a missing native library is a packaging bug and must crash, not
      * offer to delete a good wallet.
      */
-    internal fun install(record: WalletRecord): Boolean {
+    internal fun install(record: WalletRecord, version: StoreVersion): Boolean {
         val key = try {
             restoreKey(record.words, record.passphrase, record.network, 0u)
         } catch (e: Exception) {
@@ -203,7 +226,7 @@ class OnboardingSession(
         imported = record.imported
         appLockEnabled = record.appLockEnabled
         unconfirmedSend = record.unconfirmedSend
-        saved = SaveState.Saved
+        held = Held.Copy(version)
         return true
     }
 
@@ -213,12 +236,23 @@ class OnboardingSession(
     /** The single write point. A hardware-only session has no words and writes nothing. [fresh]: this call saves a key the user has not relied on yet. */
     private fun persist(fresh: Boolean = false): Unit = synchronized(persistLock) {
         val w = wallet ?: return@synchronized
-        if (words.isEmpty() || saved == SaveState.Staged) return@synchronized
-        val mode = if (saved == SaveState.Saved) WriteMode.Replace else WriteMode.Create
+        if (words.isEmpty()) return@synchronized
+        val mode = when (val h = held) {
+            Held.Staged, Held.Stale -> return@synchronized
+            Held.Nothing -> WriteMode.Create
+            is Held.Copy -> WriteMode.Replace(h.version)
+        }
         when (val r = w.save(toRecord(), mode)) {
-            SaveResult.Written -> {
-                saved = SaveState.Saved
+            is SaveResult.Written -> {
+                held = Held.Copy(r.version)
                 notSavedBecause = null
+                pendingSave = false
+            }
+            SaveResult.Conflict -> {
+                // The phone holds the result of the user's latest act in another instance (a newer copy, or a Forget). A Create here
+                // would bring a forgotten wallet back, so this session keeps its key in memory and writes nothing more this run.
+                held = Held.Stale
+                notSavedBecause = Why.Other
                 pendingSave = false
             }
             SaveResult.AlreadyExists -> {
@@ -227,15 +261,15 @@ class OnboardingSession(
                     clear() // lost a race on a key nobody has seen yet: drop ours, never overwrite theirs
                     lastError = TAKEN
                 } else {
-                    saved = SaveState.NotSaved // never drop a key the user may have written down
+                    held = Held.Nothing // never drop a key the user may have written down
                     notSavedBecause = Why.Other
                 }
             }
             is SaveResult.NotSaved -> {
-                // A failed Replace leaves the earlier copy on the phone, so the wallet stays Saved and only a failed Create is not saved.
-                // Downgrading it would make every later write a Create, which meets that copy and is lost for good.
+                // A failed Replace leaves the earlier copy on the phone, so the wallet stays Saved under the same version and only a
+                // failed Create is not saved. Downgrading it would make every later write a Create, which meets that copy and is lost for good.
                 if (mode == WriteMode.Create) {
-                    saved = SaveState.NotSaved
+                    held = Held.Nothing
                     notSavedBecause = r.why
                 }
                 // A store that can never keep it here has nothing to retry, and a foreground flush would only encode the record again.
@@ -250,7 +284,7 @@ class OnboardingSession(
     }
 
     private fun refuseToReplace(): Boolean {
-        if (saved != SaveState.Saved) return false
+        if (held !is Held.Copy && held != Held.Stale) return false // a Stale session still holds a key the user may have written down
         lastError = TAKEN // the debug catalog can still reach Create and Import, and this stops them
         return true
     }
@@ -266,7 +300,7 @@ class OnboardingSession(
         this.network = network
         backupConfirmed = false
         imported = false
-        saved = SaveState.NotSaved
+        held = Held.Nothing
     }
 
     private companion object {

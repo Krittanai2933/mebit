@@ -2,6 +2,7 @@ package com.mebit.app.feature.onboarding
 
 import com.mebit.app.BiometricResult
 import com.mebit.app.Why
+import com.mebit.app.data.ANY_VERSION
 import com.mebit.app.data.Cause
 import com.mebit.app.data.PUBLIC_WORDS_12
 import com.mebit.app.data.SaveState
@@ -71,6 +72,6 @@ class ReadBackScanTest {
     @Test
     fun aCopyNobodyComparedNeverTurnsTheLockOn() {
         val record = WalletRecord(PUBLIC_WORDS_12, "", KeyNetwork.TEST, "00000000", backupConfirmed = false, imported = false, appLockEnabled = false)
-        assertIs<BiometricResult.Unavailable>(readBackScan(UnlockResult.Opened(record)))
+        assertIs<BiometricResult.Unavailable>(readBackScan(UnlockResult.Opened(record, ANY_VERSION)))
     }
 }

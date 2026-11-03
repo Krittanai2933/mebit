@@ -43,11 +43,11 @@ The layers, from the platform up:
 
 | Layer | File | What it owns |
 |---|---|---|
-| `SecureStore` | `src/SecureStore.kt` | The only platform seam. Six methods on bytes: `probe` and `marker` never prompt, `read` may show the OS sheet, `write` never prompts and is all or nothing, `erase` is idempotent, `writeMarker` reports whether it took effect. Results are closed enums with no free text. |
+| `SecureStore` | `src/SecureStore.kt` | The only platform seam. Six methods on bytes: `probe` and `marker` never prompt, `read` may show the OS sheet, `write` never prompts and is all or nothing, `erase` is idempotent, `writeMarker` reports whether it took effect. Results are closed enums with no free text. Each store counts its copies in memory (`CopyCounter`, one per process, never written to disk): a read returns the copy's `StoreVersion` with the bytes, a `Replace` names the version it expects, and a store refuses a stale one with `Conflict` under its lock before any Keychain or file call. |
 | Keychain store | `src@ios/SecureStore.ios.kt` | The iOS actual. It keeps the wallet in one of two fixed Keychain accounts, and a marker file. |
 | Keystore store | `src@android/SecureStore.android.kt` | The Android actual. It keeps the wallet in one envelope file under a Keystore key pair, and no marker. Its sheet is `askOwner` in `src@android/OwnerPrompt.android.kt`. |
 | `SavedWallet` | `src/data/SavedWallet.kt` | The record codec and its version, the testnet guard, the mapping of platform results to `UnlockResult` and `SaveResult`, and the reinstall rule (`start()` with the pure `reinstallPolicy`). The only code that calls `SecureStore`. |
-| `OnboardingSession` | `src/data/OnboardingSession.kt` | One write point (`persist()`), `install`, `proveSavedCopy`, `forgetSavedWallet`, `flushPendingSave`, `recordUnconfirmedSend` and `clearUnconfirmedSend`, and the `saved` and `notSavedBecause` state that screens read. |
+| `OnboardingSession` | `src/data/OnboardingSession.kt` | One write point (`persist()`), `install`, `proveSavedCopy`, `forgetSavedWallet`, `flushPendingSave`, `recordUnconfirmedSend` and `clearUnconfirmedSend`, and the `saved` and `notSavedBecause` state that screens read. `saved` is derived from one private state that holds the version of the copy this session last read or wrote, so a cold start can only `Create`, and a session whose `Replace` met `Conflict` goes stale: it keeps the key in memory, shows the not-saved notice and writes nothing more in that run. |
 | `WalletGateState` | `src/navigation/WalletGateState.kt` | The boot state, `unlock`, and an owner-checked `forget`. |
 | `WalletGate`, `UnlockScreen` | `src/navigation/WalletGate.kt`, `src/feature/onboarding/UnlockScreen.kt` | The composables. `UnlockScreen` never holds a record and shows no word or fingerprint. |
 
@@ -118,20 +118,21 @@ The design proceeds with these defaults until someone decides otherwise. Forget 
 
 ## Outcomes by group
 
-`outcomes.md` lists 75 cases. Two rules hold in every row. Only `forgetSavedWallet()`, after a confirm, deletes the saved copy. A failed write keeps the key in memory and says it is not saved.
+`outcomes.md` lists 78 cases. Two rules hold in every row. Only `forgetSavedWallet()`, after a confirm, deletes the saved copy. A failed write keeps the key in memory and says it is not saved.
 
 | Group | Rows | What the user sees |
 |---|---|---|
 | Start and read | 1 to 11 | Welcome when nothing is saved or the phone cannot hold a wallet. Otherwise the unlock screen. A cancel, a wrong face, a lockout or a busy phone keeps it locked and installs nothing. |
 | Key loss and platform changes | 12 to 19 | A removed passcode, a backup restored on a new phone, or an iOS reinstall opens Welcome with a one-time notice. A record left without its key (Android) opens the recovery screen. |
 | Damaged, newer and unsupported records | 20 to 26 | The recovery screen, which offers Forget and an import of the 24 words. A newer record is never overwritten. A missing native library crashes on purpose instead of offering to delete a good wallet. |
-| Writes | 27 to 36 | A failed first save shows the not-saved notice and is tried again at the next write point and when the app returns. A failed later save keeps the earlier copy. Create never overwrites a saved wallet. |
+| Writes | 27 to 36 | A failed first save shows the not-saved notice and is tried again at the next write point and when the app returns. A failed later save keeps the earlier copy, under the same copy version, so its retry is not a Conflict (row 27). Create never overwrites a saved wallet. In row 33 another instance's Forget and Create advance the store's copy counter, so the first instance's stale Replace answers Conflict before any Keychain or file call: the new wallet stays, and the first instance keeps its key and flags in memory and shows the not-saved notice. |
 | Process and screen lifecycle | 37 to 42 | A killed app asks again at the next launch. Forget asks for a confirm, then the owner. A failed erase keeps the wallet and the screen. |
-| Added by the synthesis and the reviews | 43 to 66 | The owner-checked Forget, the Enable read-back, the reinstall rule's edge cases, and the foreground flush. Row 52 is a payment of unknown outcome across a restart, which step 9 keeps refusing. |
+| Added by the synthesis and the reviews | 43 to 66 | The owner-checked Forget, the Enable read-back, the reinstall rule's edge cases, and the foreground flush. Row 52 is a payment of unknown outcome across a restart, which step 9 keeps refusing. A Conflict is another way the phone's copy can lack this run's latest flag or payment of unknown outcome until the next launch (rows 66 and 67). |
 | Added by step 9 | 67 to 71 | A failed save of a payment of unknown outcome, its settle, a phone clock that moves, an older build that meets the section, and Android, where a restart still forgets it. |
-| Corrected by step 3c | 72 to 75 | A table of the earlier rows that failed on the iPhone because the store listed its item, then two copies in both Keychain accounts, their creation dates, and an item from a build before step 3c. |
+| Corrected by step 3c | 72 to 75 | A table of the earlier rows that failed on the iPhone because the store listed its item, then two copies in both Keychain accounts, their creation dates, and an item from a build before step 3c. The read that settles two copies does not advance the copy counter, so the writer of the newest copy keeps saving (rows 28 and 72). |
+| Added by the compare-and-swap Replace | 76 to 78 | Two live instances opened the same wallet and one saved a newer copy, a flag or a payment of unknown outcome: the other's Replace answers Conflict and the newer copy stays (row 76). Another instance forgot the wallet and saved nothing new: the stale Replace answers Conflict, later write points write nothing, and the forgotten wallet stays forgotten on the phone while the key stays in that instance's memory until the process ends (row 77). One session never meets a false Conflict, because a Replace that answered Unavailable, a Replace that met both Keychain accounts taken, and the read that settled them do not advance the counter (row 78). |
 
-Only these rows destroy data. Row 17 erases the orphan of a deleted install, by the user's decision. Row 18 is the user's own Android uninstall. Rows 41, 44 and 75 are a confirmed Forget. Row 54 erases a good wallet if the marker is lost without a reinstall. Row 33 can replace one wallet with another when two app instances run at once, on Android only. The 24 words recover every one of them. Rows 72 to 74 delete only a second copy of the same wallet, and a wrong pick there drops at most its latest flags or payment of unknown outcome.
+Only these rows destroy data. Row 17 erases the orphan of a deleted install, by the user's decision. Row 18 is the user's own Android uninstall. Rows 41, 44 and 75 are a confirmed Forget. Row 54 erases a good wallet if the marker is lost without a reinstall. The 24 words recover every one of them. Rows 72 to 74 delete only a second copy of the same wallet, and a wrong pick there drops at most its latest flags or payment of unknown outcome. Row 33 no longer destroys data: the stale Replace is refused.
 
 ## What has been proven
 
@@ -155,6 +156,8 @@ Only these rows destroy data. Row 17 erases the orphan of a deleted install, by 
 - Step 6, the Android Keystore store, has 26 host tests (`KeystoreMappingTest`). The first 24 tests all failed against stubs. Two more were added when a mutation survived or would have. Twenty-six one-rule mutations were all caught (`.audit/d1-secure-storage/android/mutate.py` reruns them). On the `Medium_Phone_API_36.0` emulator (API 36, PIN 1234, a software Keystore), the real UI ran as follows on 3 Nov 2026. Key Created showed the delete warning and no notice, and the wallet file held 459 bytes. App Lock Enable read the copy back through one PIN prompt. After a force-stop and a relaunch, the unlock screen showed the prompt, and the PIN opened first-run Home with the same fingerprint. The system logged one auth session with `IsCrypto: true`. Cancel left the unlock button and no second prompt. A rotation while the prompt was up kept one session. With the PIN removed the next launch showed the recovery screen, and Forget erased the file without a prompt. With no screen lock a new key showed the NoScreenLock notice. An uninstall and a reinstall opened Welcome.
 - Step 7, Android `Biometrics`, made `platformBiometrics()` the composable `rememberBiometrics()` and backs the Android actual with the store's `askOwner` sheet without a crypto object (a strong biometric or the screen lock). `androidBiometricOutcome` maps the sheet's answer through the store's `androidPromptOutcome`, and it has 5 host tests (`AndroidBiometricsTest`). Three failed against a stub that kept the old answer, and the two that passed check the Unavailable rules the stub already met. Five one-rule mutations were all caught. On the same emulator on 3 Nov 2026, Enable took one PIN prompt (`IsCrypto: true`). After 65 seconds away the same process showed the unlock screen with the prompt up, and the PIN opened Home: the case step 6 left stuck. Cancel (error 10) left the unlock button with no error line and no second prompt. The sign check showed the prompt over Review. Cancel gave the refusal banner with nothing signed, and the PIN let signing go on (a throwaway probe supplied the balance).
 
+- The compare-and-swap Replace (3 Nov 2026) added `StoreVersion` and `CopyCounter` to the seam, `Conflict` to the write and save results, and the session's one held state. Its three race tests (`OnboardingSessionSaveTest.aStaleReplaceNeverBringsBackAForgottenWalletOverANewOne`, `aStaleReplaceNeverOverwritesANewerCopyThatHoldsAPayment` and `aStaleReplaceAfterAForgetElsewhereNeverSavesTheForgottenWalletAgain`) were written against the earlier code first and failed on the predicted assertions: the saved copy held the forgotten wallet's check value, the payment of unknown outcome read back as null, and the forgotten wallet's probe read Present. Four no-false-Conflict tests, two `SavedWalletTest` tests, three `CopyCounterTest` tests, the version pass-through in both platform mapping tests and a host test that pins one Android process and `singleTask` on `MainActivity` came with them. Three one-rule mutations were all caught: a counter that advances on an Unavailable write (3 tests), a read-back that adopts the version it read (1 test), and a Replace that ignores its expected version (6 tests). The real Keychain and Keystore under a stale Replace are unrun. The harness checks below are owed.
+
 The Kotlin/Native test executable gets `errSecMissingEntitlement` for every Keychain call, so no unit test touches the real Keychain. Those proofs are the simulator runs and the two iPhone sessions.
 
 ## What each platform still owes
@@ -168,8 +171,11 @@ The iPhone sessions of 2 and 3 Nov 2026 settled most of this list. A read shows 
 - a kill while the card is up
 - removing the passcode, which must make the next launch say the wallet is gone
 - a cold start that stays inactive longer than the 3-second wait. Every cold start on the phone showed the card at once.
+- the compare-and-swap Replace on a simulator or the phone: Create X and keep its version, erase, Create Y, then a Replace of X with the old version must answer Conflict, and the read through the Face ID card must return Y from `wallet.a` with `wallet.b` empty. This is the exact ABA of row 33.
 
 Android has step 6, built and proven on an emulator only. It still owes:
+
+- the same compare-and-swap sequence through `KeystoreStore(activity)` and `KeystoreStore(activity.applicationContext)`, which proves the copy counter is process-wide and not per instance
 
 - step 7 (`Biometrics`) on hardware. It is done and proven on the emulator only. A fingerprint, a real lockout (codes 7 and 9, which the emulator never sent with the PIN allowed), API 30 to 32 and MIUI's sheet are unrun.
 - the POCO X3 NFC round with a person (Android 11, MIUI, a TEE and no StrongBox): the key's security level and generation time, whether the `CryptoObject` prompt with the screen lock works on API 30, a fingerprint read, Cancel, a lockout, and whether removing the PIN also deletes the key there
@@ -180,7 +186,9 @@ Android has step 6, built and proven on an emulator only. It still owes:
 
 ## Known gaps
 
-- Two live app instances can bring back a forgotten wallet over a new one through a stale `Replace` (outcomes row 33). It needs two instances in one process, which happens on Android only. Step 6 set `launchMode=singleTask` on `MainActivity`, so the launcher cannot stack a second one. A compare-and-swap `Replace` is still planned. It touches the store seam and should land before any real money.
+- A stale `Replace` from a second live instance (outcomes row 33) is now refused: every store counts its copies in memory, a `Replace` names the copy it expects, and `OnboardingSessionSaveTest.aStaleReplaceNeverBringsBackAForgottenWalletOverANewOne` pins it.
+- Only the app's own process writes the store, and a second writer process would bypass the copy counter. None exists, and `AndroidManifestTest` pins that no element sets `android:process` and `MainActivity` stays `singleTask`.
+- A payment of unknown outcome recorded by an instance that met a Conflict lives only in that instance's memory, as in row 67, until the next launch reads the phone's copy.
 - A Forget from the unlock screen whose erase fails reads as "cannot open now", not as a failed erase.
 - The Welcome notice shows again if the user returns to Welcome in the same launch.
 - A user whose probe was in doubt may scan Face ID and then see the recovery screen for a missing item, because the face check now comes before the store looks for an item.
@@ -195,7 +203,6 @@ Android has step 6, built and proven on an emulator only. It still owes:
 
 ## Next steps
 
-1. Add the compare-and-swap `Replace` before any real money.
-2. Run the POCO X3 NFC round, which now covers steps 6 and 7, before step 6 ships.
-3. Optionally hide the screen under the in-session lock from accessibility (step 8).
-4. Have the security review read D1, including the Android envelope, before the testnet-only limit is lifted.
+1. Run the POCO X3 NFC round, which now covers steps 6 and 7, before step 6 ships.
+2. Optionally hide the screen under the in-session lock from accessibility (step 8).
+3. Have the security review read D1, including the Android envelope, before the testnet-only limit is lifted.

@@ -43,7 +43,7 @@ class WalletGateState internal constructor(
         try {
             when (val r = wallet.open(reason)) {
                 is UnlockResult.Opened ->
-                    boot = if (session.install(r.record)) Boot.Open(startRoute(r.record.backupConfirmed)) else Boot.Broken(Cause.Corrupt)
+                    boot = if (session.install(r.record, r.version)) Boot.Open(startRoute(r.record.backupConfirmed)) else Boot.Broken(Cause.Corrupt)
                 is UnlockResult.Broken -> boot = Boot.Broken(r.cause)
                 else -> lastAttempt = r // Cancelled, Denied, LockedOut and Unavailable stay locked with nothing installed
             }

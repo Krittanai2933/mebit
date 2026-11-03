@@ -11,6 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class SavedWalletTest {
@@ -22,9 +23,29 @@ class SavedWalletTest {
         assertEquals(StoreProbe.Empty, store.probe(), "the wallet stayed")
         val kept = FakeSecureStore(failMarker = setOf(2)) // the Replace cannot rewrite a marker that is already Kept
         val wallet = SavedWallet(kept)
-        assertEquals(SaveResult.Written, wallet.save(testRecord(), WriteMode.Create), "the first save")
-        assertEquals(SaveResult.Written, wallet.save(testRecord(backupConfirmed = true), WriteMode.Replace), "a Replace whose marker write failed")
+        val first = assertIs<SaveResult.Written>(wallet.save(testRecord(), WriteMode.Create), "the first save")
+        assertIs<SaveResult.Written>(wallet.save(testRecord(backupConfirmed = true), WriteMode.Replace(first.version)), "a Replace whose marker write failed")
         assertEquals(0, kept.erases, "a Replace erased the wallet")
+    }
+
+    @Test
+    fun aConflictWritesNoMarkerAndErasesNothing() {
+        val store = FakeSecureStore(write = WriteResult.Conflict)
+        assertEquals(SaveResult.Conflict, SavedWallet(store).save(testRecord(), WriteMode.Replace(ANY_VERSION)))
+        assertEquals(1, store.writes.size, "writes")
+        assertTrue(store.markerWrites.isEmpty() && store.erases == 0, "a Conflict touched the marker or erased")
+    }
+
+    @Test
+    fun openCarriesTheVersionOfTheBytesItRead() {
+        val store = FakeSecureStore()
+        val wallet = SavedWallet(store)
+        val written = assertIs<SaveResult.Written>(wallet.save(testRecord(), WriteMode.Create), "save")
+        val first = assertIs<UnlockResult.Opened>(wallet.openNow(), "first open").version
+        assertEquals(written.version, first, "the version save returned")
+        assertEquals(first, assertIs<UnlockResult.Opened>(wallet.openNow(), "second open").version, "two opens with no write between")
+        assertIs<SaveResult.Written>(wallet.save(testRecord(backupConfirmed = true), WriteMode.Replace(first)), "the Replace")
+        assertNotEquals(first, assertIs<UnlockResult.Opened>(wallet.openNow(), "open after a write").version, "a write between")
     }
 
     @Test
@@ -57,7 +78,7 @@ class SavedWalletTest {
     @Test
     fun everyReadResultMapsToExactlyOneUnlockResult() {
         val reads = listOf(
-            ReadResult.Bytes(v1Bytes()), ReadResult.NotFound, ReadResult.Cancelled, ReadResult.Denied,
+            ReadResult.Bytes(v1Bytes(), ANY_VERSION), ReadResult.NotFound, ReadResult.Cancelled, ReadResult.Denied,
             ReadResult.LockedOut, ReadResult.KeyGone, ReadResult.Unreadable,
         ) + Why.entries.map { ReadResult.Unavailable(it) }
         for (read in reads) {
@@ -79,7 +100,7 @@ class SavedWalletTest {
             "Broken(UnsupportedNetwork)" to v1Bytes(network = 1),
         )
         for ((outcome, bytes) in reads) {
-            val store = FakeSecureStore(read = ReadResult.Bytes(bytes))
+            val store = FakeSecureStore(read = ReadResult.Bytes(bytes, ANY_VERSION))
             assertEquals(outcome, shown(SavedWallet(store).openNow()), outcome)
             assertTrue(store.served.single().isZeroed(), "bytes left after $outcome")
         }
@@ -88,7 +109,7 @@ class SavedWalletTest {
     @Test
     fun saveZeroesItsEncodedBytes() {
         val answers = listOf(
-            "Written" to WriteResult.Written,
+            "Written" to WriteResult.Written(ANY_VERSION),
             "AlreadyExists" to WriteResult.AlreadyExists,
             "Unavailable" to WriteResult.Unavailable(Why.TryLater),
         )
@@ -107,7 +128,7 @@ class SavedWalletTest {
         val saved = SavedWallet(store).save(testRecord(network = KeyNetwork.MAIN), WriteMode.Create)
         assertEquals(Why.Other, assertIs<SaveResult.NotSaved>(saved, "save MAIN").why)
         assertTrue(store.writes.isEmpty() && store.markerWrites.isEmpty(), "save MAIN wrote")
-        val opened = SavedWallet(FakeSecureStore(read = ReadResult.Bytes(v1Bytes(network = 1)))).openNow()
+        val opened = SavedWallet(FakeSecureStore(read = ReadResult.Bytes(v1Bytes(network = 1), ANY_VERSION))).openNow()
         assertEquals(Cause.UnsupportedNetwork, assertIs<UnlockResult.Broken>(opened, "open MAIN").cause)
     }
 
@@ -121,18 +142,19 @@ class SavedWalletTest {
 
     @Test
     fun aNewerRecordIsNeverReplaced() {
-        val store = FakeSecureStore(read = ReadResult.Bytes(v1Bytes(version = 2)))
+        val store = FakeSecureStore(read = ReadResult.Bytes(v1Bytes(version = 2), ANY_VERSION))
         assertEquals(Cause.NewerVersion, assertIs<UnlockResult.Broken>(SavedWallet(store).openNow(), "newer").cause)
         assertTrue(store.writes.isEmpty() && store.erases == 0 && store.markerWrites.isEmpty(), "open changed the store")
     }
 
     @Test
     fun everyWriteResultMapsToExactlyOneSaveResult() {
-        assertEquals(SaveResult.Written, SavedWallet(FakeSecureStore()).save(testRecord(), WriteMode.Create))
+        assertIs<SaveResult.Written>(SavedWallet(FakeSecureStore()).save(testRecord(), WriteMode.Create))
         val taken = FakeSecureStore(write = WriteResult.AlreadyExists)
         assertEquals(SaveResult.AlreadyExists, SavedWallet(taken).save(testRecord(), WriteMode.Create))
+        assertEquals(SaveResult.Conflict, SavedWallet(FakeSecureStore(write = WriteResult.Conflict)).save(testRecord(), WriteMode.Replace(ANY_VERSION)))
         for (why in Why.entries) {
-            val result = SavedWallet(FakeSecureStore(write = WriteResult.Unavailable(why))).save(testRecord(), WriteMode.Replace)
+            val result = SavedWallet(FakeSecureStore(write = WriteResult.Unavailable(why))).save(testRecord(), WriteMode.Replace(ANY_VERSION))
             assertEquals(why, assertIs<SaveResult.NotSaved>(result, "Unavailable($why)").why, "Unavailable($why)")
         }
     }
@@ -141,8 +163,8 @@ class SavedWalletTest {
     fun aFailedWriteErasesNothingAndKeepsTheSavedCopy() {
         val store = FakeSecureStore(failWrite = 2)
         val wallet = SavedWallet(store)
-        assertEquals(SaveResult.Written, wallet.save(testRecord(), WriteMode.Create))
-        val failed = wallet.save(testRecord(backupConfirmed = true), WriteMode.Replace)
+        val first = assertIs<SaveResult.Written>(wallet.save(testRecord(), WriteMode.Create))
+        val failed = wallet.save(testRecord(backupConfirmed = true), WriteMode.Replace(first.version))
         assertEquals(Why.Other, assertIs<SaveResult.NotSaved>(failed, "second write").why)
         assertEquals(0, store.erases)
         assertEquals(listOf(Marker.Kept), store.markerWrites)

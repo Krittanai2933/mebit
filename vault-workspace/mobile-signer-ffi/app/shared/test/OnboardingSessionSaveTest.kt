@@ -2,10 +2,13 @@ package com.mebit.app.data
 
 import com.mebit.app.EraseResult
 import com.mebit.app.ReadResult
+import com.mebit.app.StoreProbe
 import com.mebit.app.Why
 import com.mebit.app.WriteMode
 import com.mebit.app.WriteResult
 import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
+import com.mebit.app.navigation.Boot
+import com.mebit.app.navigation.WalletGateState
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
 import com.mebit.app.SecureStore
@@ -30,7 +33,7 @@ class OnboardingSessionSaveTest {
         val store = FakeSecureStore()
         val session = session(store)
         session.generateThisDevice()
-        assertEquals(listOf(WriteMode.Create), store.modes(), "writes when generate returned")
+        assertEquals(listOf("Create"), store.modes(), "writes when generate returned")
         assertEquals(SaveState.Saved, session.saved, "saved after generate")
         assertNull(session.notSavedBecause)
         val copy = store.savedCopy()
@@ -43,7 +46,7 @@ class OnboardingSessionSaveTest {
         val store = FakeSecureStore()
         val session = session(store)
         session.restoreFromWords(PUBLIC_WORDS_12)
-        assertEquals(listOf(WriteMode.Create), store.modes(), "writes when import returned")
+        assertEquals(listOf("Create"), store.modes(), "writes when import returned")
         assertEquals(SaveState.Saved, session.saved, "saved after import")
         val copy = store.savedCopy()
         assertTrue(copy.words == PUBLIC_WORDS_12, "the saved words")
@@ -59,7 +62,7 @@ class OnboardingSessionSaveTest {
         assertEquals(SaveState.Staged, session.saved, "saved before the fingerprint was confirmed")
         assertTrue(session.words == PUBLIC_WORDS_12, "the staged words")
         session.acceptStagedKey()
-        assertEquals(listOf(WriteMode.Create), store.modes(), "writes after accept")
+        assertEquals(listOf("Create"), store.modes(), "writes after accept")
         assertEquals(SaveState.Saved, session.saved, "saved after accept")
         assertTrue(store.savedCopy().passphrase == TEST_PASSPHRASE, "the saved passphrase")
         session.acceptStagedKey()
@@ -80,10 +83,10 @@ class OnboardingSessionSaveTest {
         val session = session(store)
         session.generateThisDevice()
         session.markBackupConfirmed()
-        assertEquals(listOf(WriteMode.Create, WriteMode.Replace), store.modes(), "writes after backup")
+        assertEquals(listOf("Create", "Replace"), store.modes(), "writes after backup")
         assertEquals(listOf(true, false, false), store.savedCopy().flags(), "the copy after backup")
         session.markAppLockEnabled()
-        assertEquals(listOf(WriteMode.Create, WriteMode.Replace, WriteMode.Replace), store.modes(), "writes after lock")
+        assertEquals(listOf("Create", "Replace", "Replace"), store.modes(), "writes after lock")
         assertEquals(listOf(true, false, true), store.savedCopy().flags(), "the copy after lock")
         assertEquals(SaveState.Saved, session.saved, "saved after the flag changes")
     }
@@ -94,7 +97,7 @@ class OnboardingSessionSaveTest {
             val flags = listOf((bits and 1) != 0, (bits and 2) != 0, (bits and 4) != 0)
             val case = "install backup, imported, lock = $flags"
             val session = session(FakeSecureStore())
-            assertTrue(session.install(testRecord(backupConfirmed = flags[0], imported = flags[1], appLockEnabled = flags[2])), case)
+            assertTrue(session.install(testRecord(backupConfirmed = flags[0], imported = flags[1], appLockEnabled = flags[2]), ANY_VERSION), case)
             assertEquals(flags, session.flags(), case)
             assertEquals(SaveState.Saved, session.saved, case)
         }
@@ -125,7 +128,7 @@ class OnboardingSessionSaveTest {
         assertNull(session.lastError)
         store.write = null
         session.markBackupConfirmed()
-        assertEquals(listOf(WriteMode.Create, WriteMode.Create), store.modes(), "the retry")
+        assertEquals(listOf("Create", "Create"), store.modes(), "the retry")
         assertEquals(SaveState.Saved, session.saved, "saved after the retry")
         assertNull(session.notSavedBecause)
         assertEquals(listOf(true, false, false), store.savedCopy().flags(), "the copy after the retry")
@@ -147,7 +150,7 @@ class OnboardingSessionSaveTest {
             replace()
             assertNotNull(session.lastError, "no refusal, $case")
             assertEquals(made, keys.made, "a key was made, $case")
-            assertEquals(listOf(WriteMode.Create), store.modes(), "the store was written, $case")
+            assertEquals(listOf("Create"), store.modes(), "the store was written, $case")
             assertEquals(0, store.erases, "the store was erased, $case")
             assertEquals(SaveState.Saved, session.saved, case)
             assertTrue(session.words == PUBLIC_WORDS_24, "the saved key left memory, $case")
@@ -166,7 +169,7 @@ class OnboardingSessionSaveTest {
             session(store, Keys(fingerprint = OTHER_CHECK)).generateThisDevice()
             val loser = session(store)
             loser.create()
-            assertEquals(listOf(WriteMode.Create, WriteMode.Create), store.modes(), case)
+            assertEquals(listOf("Create", "Create"), store.modes(), case)
             assertTrue(loser.words.isEmpty() && loser.fingerprint.isEmpty() && loser.passphrase.isEmpty(), "the losing key was kept, $case")
             assertEquals(SaveState.NotSaved, loser.saved, case)
             assertNotNull(loser.lastError, "no refusal, $case")
@@ -183,13 +186,123 @@ class OnboardingSessionSaveTest {
         store.write = null
         session(store, Keys(fingerprint = OTHER_CHECK)).generateThisDevice()
         loser.markBackupConfirmed()
-        assertEquals(listOf(WriteMode.Create, WriteMode.Create, WriteMode.Create), store.modes())
+        assertEquals(listOf("Create", "Create", "Create"), store.modes())
         assertTrue(loser.words == PUBLIC_WORDS_24 && loser.fingerprint == TEST_CHECK, "the key the user may have written down was dropped")
         assertEquals(SaveState.NotSaved, loser.saved, "saved after losing the race")
         assertEquals(Why.Other, loser.notSavedBecause)
         assertNull(loser.lastError)
         assertTrue(loser.backupConfirmed, "the flag change was lost")
         assertTrue(store.savedCopy().fingerprint == OTHER_CHECK, "the winner's copy was replaced")
+    }
+
+    @Test
+    fun aStaleReplaceNeverBringsBackAForgottenWalletOverANewOne() {
+        val store = FakeSecureStore()
+        val a = session(store)
+        a.generateThisDevice() // X in the store, A Saved
+        val b = session(store, Keys(words = PUBLIC_WORDS_12, fingerprint = OTHER_CHECK))
+        assertTrue(b.forgetSavedWallet(), "B erases X")
+        b.generateThisDevice() // Y, a Create into the empty store
+        a.markBackupConfirmed() // A's stale Replace
+        assertEquals(OTHER_CHECK, store.savedCopy().fingerprint, "Y was replaced by X")
+        assertEquals(SaveState.NotSaved, a.saved, "saved after the Conflict")
+        assertEquals(Why.Other, a.notSavedBecause)
+        assertTrue(a.words == PUBLIC_WORDS_24 && a.fingerprint == TEST_CHECK && a.backupConfirmed, "A's key or flag left memory")
+        val writes = store.writes.size
+        a.markAppLockEnabled()
+        a.flushPendingSave()
+        assertEquals(writes, store.writes.size, "a stale session wrote again")
+        assertEquals(OTHER_CHECK, store.savedCopy().fingerprint, "Y after A's later write points")
+    }
+
+    @Test
+    fun aStaleReplaceNeverOverwritesANewerCopyThatHoldsAPayment() {
+        val store = FakeSecureStore()
+        val a = session(store)
+        a.generateThisDevice()
+        val b = session(store)
+        val gate = WalletGateState(SavedWallet(store), b)
+        runBlocking { gate.unlock("test") }
+        assertIs<Boot.Open>(gate.boot, "B's unlock")
+        b.recordUnconfirmedSend(TEST_TXID, SENT_AT)
+        a.markBackupConfirmed()
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), store.savedCopy().unconfirmedSend, "the payment of unknown outcome was overwritten")
+        assertEquals(SaveState.NotSaved, a.saved, "the session that lost")
+        assertEquals(SaveState.Saved, b.saved, "the session that wrote last")
+    }
+
+    @Test
+    fun aStaleReplaceAfterAForgetElsewhereNeverSavesTheForgottenWalletAgain() {
+        val store = FakeSecureStore()
+        val a = session(store)
+        a.generateThisDevice()
+        assertTrue(session(store).forgetSavedWallet(), "B forgets X")
+        a.markBackupConfirmed()
+        assertEquals(StoreProbe.Empty, store.probe, "the forgotten wallet came back")
+        assertEquals(SaveState.NotSaved, a.saved, "saved after the Conflict")
+        val writes = store.writes.size
+        a.markAppLockEnabled()
+        a.flushPendingSave()
+        assertEquals(writes, store.writes.size, "a stale session wrote again")
+        assertEquals(StoreProbe.Empty, store.probe, "the forgotten wallet came back at a later write point")
+    }
+
+    @Test
+    fun oneSessionNeverMeetsAConflict() {
+        val store = FakeSecureStore()
+        val session = session(store)
+        session.generateThisDevice()
+        session.markBackupConfirmed()
+        session.markAppLockEnabled()
+        session.markBackupConfirmed()
+        session.recordUnconfirmedSend(TEST_TXID, SENT_AT)
+        session.clearUnconfirmedSend()
+        assertEquals(SaveState.Saved, session.saved, "saved after five Replaces")
+        assertNull(session.notSavedBecause, "a Replace of this session's own copy failed")
+        val next = session(store)
+        val gate = WalletGateState(SavedWallet(store), next)
+        runBlocking { gate.unlock("test") }
+        assertIs<Boot.Open>(gate.boot, "the next launch's unlock")
+        next.markAppLockEnabled()
+        assertEquals(listOf("Create") + List(6) { "Replace" }, store.modes(), "write kinds")
+        assertEquals(SaveState.Saved, next.saved, "saved after the next launch's Replace")
+        assertNull(next.notSavedBecause, "the next launch's Replace failed")
+        assertEquals(listOf(true, false, true), store.savedCopy().flags(), "the copy at the end")
+    }
+
+    @Test
+    fun theReadBackNeverAdoptsTheVersionItRead() {
+        val store = FakeSecureStore()
+        val a = session(store)
+        a.generateThisDevice()
+        val b = session(store)
+        val gate = WalletGateState(SavedWallet(store), b)
+        runBlocking { gate.unlock("test") }
+        b.recordUnconfirmedSend(TEST_TXID, SENT_AT)
+        assertEquals(UnlockResult.Verified, a.proveNow(), "A's read-back of the same key, now with B's payment")
+        a.markBackupConfirmed()
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), store.savedCopy().unconfirmedSend, "the read-back adopted B's version and A overwrote the payment")
+        assertEquals(SaveState.NotSaved, a.saved, "A after its stale Replace")
+    }
+
+    @Test
+    fun aStaleSessionRefusesCreateAndImport() {
+        val store = FakeSecureStore()
+        val keys = Keys()
+        val a = session(store, keys)
+        a.generateThisDevice()
+        assertTrue(session(store).forgetSavedWallet(), "B forgets")
+        a.markBackupConfirmed() // the Conflict
+        assertEquals(SaveState.NotSaved, a.saved, "saved after the Conflict")
+        val made = keys.made
+        val writes = store.writes.size
+        for ((case, replace) in listOf<Pair<String, () -> Unit>>("generate" to { a.generateThisDevice() }, "import" to { a.restoreFromWords(PUBLIC_WORDS_12) })) {
+            replace()
+            assertNotNull(a.lastError, "no refusal, $case")
+            assertEquals(made, keys.made, "a key was made, $case")
+            assertEquals(writes, store.writes.size, "the store was written, $case")
+            assertTrue(a.words == PUBLIC_WORDS_24, "the stale key left memory, $case")
+        }
     }
 
     @Test
@@ -220,12 +333,12 @@ class OnboardingSessionSaveTest {
         session.generateThisDevice()
         session.recordUnconfirmedSend(TEST_TXID, SENT_AT)
         assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), session.unconfirmedSend, "in memory after recording")
-        assertEquals(listOf(WriteMode.Create, WriteMode.Replace), store.modes(), "writes after recording")
+        assertEquals(listOf("Create", "Replace"), store.modes(), "writes after recording")
         assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), store.savedCopy().unconfirmedSend, "the copy after recording")
         assertEquals(listOf(false, false, false), store.savedCopy().flags(), "the flags beside it")
         session.clearUnconfirmedSend()
         assertNull(session.unconfirmedSend, "in memory after clearing")
-        assertEquals(listOf(WriteMode.Create, WriteMode.Replace, WriteMode.Replace), store.modes(), "writes after clearing")
+        assertEquals(listOf("Create", "Replace", "Replace"), store.modes(), "writes after clearing")
         assertNull(store.savedCopy().unconfirmedSend, "the copy after clearing")
         session.clearUnconfirmedSend()
         assertEquals(3, store.writes.size, "a clear with nothing held wrote")
@@ -235,7 +348,7 @@ class OnboardingSessionSaveTest {
     fun installRestoresAPaymentOfUnknownOutcomeAndClearDropsIt() {
         val store = FakeSecureStore()
         val session = session(store)
-        assertTrue(session.install(testRecord(unconfirmedSend = UnconfirmedSend(TEST_TXID, SENT_AT))), "install")
+        assertTrue(session.install(testRecord(unconfirmedSend = UnconfirmedSend(TEST_TXID, SENT_AT)), ANY_VERSION), "install")
         assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), session.unconfirmedSend, "after install")
         session.clear()
         assertNull(session.unconfirmedSend, "after clear")
@@ -252,7 +365,7 @@ class OnboardingSessionSaveTest {
         assertEquals(SaveState.Saved, session.saved, "saved after a failed Replace")
         assertNull(store.savedCopy().unconfirmedSend, "the copy before the flush")
         session.flushPendingSave()
-        assertEquals(listOf(WriteMode.Create, WriteMode.Replace, WriteMode.Replace), store.modes(), "write modes")
+        assertEquals(listOf("Create", "Replace", "Replace"), store.modes(), "write modes")
         assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), store.savedCopy().unconfirmedSend, "the copy after the flush")
         store.write = WriteResult.Unavailable(Why.TryLater)
         session.clearUnconfirmedSend()
@@ -305,7 +418,7 @@ class OnboardingSessionSaveTest {
         session(store).generateThisDevice(network = KeyNetwork.MAIN)
         assertTrue(store.writes.isEmpty(), "a MAIN key was saved")
         val loaded = session(FakeSecureStore())
-        assertTrue(loaded.install(testRecord(network = KeyNetwork.MAIN)), "install MAIN")
+        assertTrue(loaded.install(testRecord(network = KeyNetwork.MAIN), ANY_VERSION), "install MAIN")
         assertEquals(KeyNetwork.MAIN, loaded.network, "network after install")
     }
 
@@ -329,7 +442,7 @@ class OnboardingSessionSaveTest {
         val store = FakeSecureStore()
         val session = session(store)
         session.generateThisDevice()
-        store.read = ReadResult.Bytes(v1Bytes(fingerprint = OTHER_CHECK.encodeToByteArray()))
+        store.read = ReadResult.Bytes(v1Bytes(fingerprint = OTHER_CHECK.encodeToByteArray()), ANY_VERSION)
         assertEquals(Cause.Corrupt, assertIs<UnlockResult.Broken>(session.proveNow(), "the read-back of another wallet").cause)
         assertEquals(SaveState.NotSaved, session.saved, "saved after a mismatched read-back")
         assertNotNull(session.notSavedBecause, "no cause for not saved")
@@ -349,7 +462,7 @@ class OnboardingSessionSaveTest {
             val store = FakeSecureStore()
             val session = session(store)
             session.generateThisDevice()
-            store.read = ReadResult.Bytes(bytes)
+            store.read = ReadResult.Bytes(bytes, ANY_VERSION)
             assertEquals(Cause.Corrupt, assertIs<UnlockResult.Broken>(session.proveNow(), case).cause, case)
             assertEquals(SaveState.NotSaved, session.saved, "saved after a read-back with $case")
         }
@@ -377,7 +490,7 @@ class OnboardingSessionSaveTest {
 
     @Test
     fun enableOnAPhoneThatCouldNotSaveReportsWhyAndLeavesTheBiometricsScan() {
-        val store = FakeSecureStore(read = ReadResult.Bytes(v1Bytes()), write = WriteResult.Unavailable(Why.NoScreenLock))
+        val store = FakeSecureStore(read = ReadResult.Bytes(v1Bytes(), ANY_VERSION), write = WriteResult.Unavailable(Why.NoScreenLock))
         val session = session(store)
         session.generateThisDevice()
         assertEquals(Why.NoScreenLock, assertIs<UnlockResult.Unavailable>(session.proveNow(), "a phone that could not save").why)
@@ -388,17 +501,17 @@ class OnboardingSessionSaveTest {
     @Test
     fun installFailsClosed() {
         val throws = OnboardingSession(SavedWallet(FakeSecureStore()), restoreKey = { _, _, _, _ -> throw IllegalStateException("derive") })
-        assertFalse(throws.install(testRecord(appLockEnabled = true)), "a restore that throws")
+        assertFalse(throws.install(testRecord(appLockEnabled = true), ANY_VERSION), "a restore that throws")
         assertEmpty(throws, "a restore that throws")
 
         val keys = Keys()
         val mismatch = session(FakeSecureStore(), keys)
-        assertFalse(mismatch.install(testRecord(fingerprint = OTHER_CHECK, appLockEnabled = true)), "a fingerprint mismatch")
+        assertFalse(mismatch.install(testRecord(fingerprint = OTHER_CHECK, appLockEnabled = true), ANY_VERSION), "a fingerprint mismatch")
         assertEquals(1, keys.made, "derives for a mismatch")
         assertEmpty(mismatch, "a fingerprint mismatch")
 
         val crash = OnboardingSession(SavedWallet(FakeSecureStore()), restoreKey = { _, _, _, _ -> throw Error("native library") })
-        assertFailsWith<Error>("an Error was caught") { crash.install(testRecord()) }
+        assertFailsWith<Error>("an Error was caught") { crash.install(testRecord(), ANY_VERSION) }
         assertEmpty(crash, "an Error")
     }
 
@@ -419,21 +532,23 @@ class OnboardingSessionSaveTest {
         session.restoreFromWords(PUBLIC_WORDS_12, TEST_PASSPHRASE)
         session.acceptStagedKey()
         session.markBackupConfirmed()
-        assertTrue(store.writes.none { it.mode == WriteMode.Replace }, "a Replace was written over a newer record")
+        assertTrue(store.writes.none { it.mode is WriteMode.Replace }, "a Replace was written over a newer record")
         assertEquals(0, store.erases, "erases")
         assertEquals(Cause.NewerVersion, assertIs<UnlockResult.Broken>(SavedWallet(store).openNow(), "the copy afterwards").cause)
     }
 
     @Test
-    fun aFailedReplaceKeepsTheWalletSavedAndTheNextWritePointSavesIt() {
+    fun aFailedReplaceKeepsItsVersionSoTheNextReplaceGoesThrough() {
         val store = FakeSecureStore(failWrite = 2)
         val keys = Keys()
         val session = session(store, keys)
         session.generateThisDevice()
         session.markBackupConfirmed() // write 2, a Replace, fails
         assertEquals(SaveState.Saved, session.saved, "saved after a failed Replace: the earlier copy is still on the phone")
-        session.markAppLockEnabled() // write 3 must be a Replace again, not a Create that meets the copy
-        assertEquals(listOf(WriteMode.Create, WriteMode.Replace, WriteMode.Replace), store.modes(), "write modes")
+        session.markAppLockEnabled() // write 3 must be a Replace of the same copy again, not a Create that meets it and not a Conflict
+        assertEquals(listOf("Create", "Replace", "Replace"), store.modes(), "write modes")
+        assertEquals(SaveState.Saved, session.saved, "saved after the retry")
+        assertNull(session.notSavedBecause, "the retry was refused")
         assertEquals(listOf(true, false, true), store.savedCopy().flags(), "flags in the store")
         assertIs<UnlockResult.Verified>(session.proveNow(), "the read-back after the retry")
         val made = keys.made
@@ -451,14 +566,14 @@ class OnboardingSessionSaveTest {
         closed.write = null // the phone has a screen lock now
         first.flushPendingSave()
         assertEquals(SaveState.Saved, first.saved, "saved after the flush")
-        assertEquals(listOf(WriteMode.Create, WriteMode.Create), closed.modes(), "write modes of a failed Create then its flush")
+        assertEquals(listOf("Create", "Create"), closed.modes(), "write modes of a failed Create then its flush")
 
         val flaky = FakeSecureStore(failWrite = 2)
         val second = session(flaky)
         second.generateThisDevice()
         second.markBackupConfirmed() // fails
         second.flushPendingSave()
-        assertEquals(listOf(WriteMode.Create, WriteMode.Replace, WriteMode.Replace), flaky.modes(), "write modes of a failed Replace then its flush")
+        assertEquals(listOf("Create", "Replace", "Replace"), flaky.modes(), "write modes of a failed Replace then its flush")
         assertEquals(listOf(true, false, false), flaky.savedCopy().flags(), "flags in the store after the flush")
 
         val writes = flaky.writes.size
@@ -495,10 +610,10 @@ class OnboardingSessionSaveTest {
             SoftwareAccountKey(w, if (p == right) TEST_CHECK else OTHER_CHECK, "tpub-test", "m/48'/1'/0'/2'")
         }
         val session = OnboardingSession(SavedWallet(FakeSecureStore()), restoreKey = restore)
-        assertTrue(session.install(testRecord(passphrase = right)), "the right passphrase did not install")
+        assertTrue(session.install(testRecord(passphrase = right), ANY_VERSION), "the right passphrase did not install")
         assertTrue(derivedWith == right, "the derivation did not get the record's passphrase")
         val damaged = OnboardingSession(SavedWallet(FakeSecureStore()), restoreKey = restore)
-        assertFalse(damaged.install(testRecord(passphrase = "correct horsf")), "a damaged passphrase installed")
+        assertFalse(damaged.install(testRecord(passphrase = "correct horsf"), ANY_VERSION), "a damaged passphrase installed")
         assertEmpty(damaged, "a damaged passphrase")
     }
 
@@ -510,7 +625,7 @@ class OnboardingSessionSaveTest {
         val keys = Keys(words = PUBLIC_WORDS_12, fingerprint = OTHER_CHECK)
         session(store, keys).make()
         val loaded = session(FakeSecureStore(), keys)
-        assertTrue(loaded.install(store.savedCopy()), "install, $case")
+        assertTrue(loaded.install(store.savedCopy(), ANY_VERSION), "install, $case")
         assertTrue(loaded.words == PUBLIC_WORDS_12, "words, $case")
         assertTrue(loaded.passphrase == TEST_PASSPHRASE, "passphrase, $case")
         assertTrue(loaded.fingerprint == OTHER_CHECK, "fingerprint, $case")
@@ -528,8 +643,6 @@ class OnboardingSessionSaveTest {
 
     /** The record the store holds now, opened the way the app opens it. */
     private fun FakeSecureStore.savedCopy(): WalletRecord = assertIs<UnlockResult.Opened>(SavedWallet(this).openNow(), "the saved copy").record
-
-    private fun FakeSecureStore.modes() = writes.map { it.mode }
 
     private fun OnboardingSession.proveNow(): UnlockResult = runBlocking { proveSavedCopy("test") }
 

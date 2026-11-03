@@ -1,10 +1,12 @@
 package com.mebit.app.data
 
+import com.mebit.app.CopyCounter
 import com.mebit.app.EraseResult
 import com.mebit.app.Marker
 import com.mebit.app.ReadResult
 import com.mebit.app.SecureStore
 import com.mebit.app.StoreProbe
+import com.mebit.app.StoreVersion
 import com.mebit.app.Why
 import com.mebit.app.WriteMode
 import com.mebit.app.WriteResult
@@ -31,6 +33,7 @@ internal class FakeSecureStore(
     class Write(val mode: WriteMode, val bytes: ByteArray, val handed: ByteArray)
 
     private var held: ByteArray? = null
+    private val copies = CopyCounter()
     val writes = mutableListOf<Write>()
     val served = mutableListOf<ByteArray>()
     val markerWrites = mutableListOf<Marker>()
@@ -40,26 +43,27 @@ internal class FakeSecureStore(
     override fun probe(): StoreProbe = probe
 
     override suspend fun read(reason: String): ReadResult {
-        val answer = read ?: held?.let { ReadResult.Bytes(it.copyOf()) } ?: ReadResult.NotFound
+        val answer = read ?: held?.let { ReadResult.Bytes(it.copyOf(), copies.current) } ?: ReadResult.NotFound
         if (answer is ReadResult.Bytes) served += answer.bytes
         return answer
     }
 
     override fun write(bytes: ByteArray, mode: WriteMode): WriteResult {
         writes += Write(mode, bytes.copyOf(), bytes)
+        copies.refuse(mode)?.let { return it }
         val answer = when {
             writes.size == failWrite -> WriteResult.Unavailable(Why.Other)
-            else -> write ?: if (mode == WriteMode.Create && held != null) WriteResult.AlreadyExists else WriteResult.Written
+            else -> write ?: if (mode == WriteMode.Create && held != null) WriteResult.AlreadyExists else WriteResult.Written(copies.current)
         }
-        if (answer == WriteResult.Written) {
-            held = bytes.copyOf()
-            probe = StoreProbe.Present
-        }
-        return answer
+        if (answer !is WriteResult.Written) return answer
+        held = bytes.copyOf()
+        probe = StoreProbe.Present
+        return WriteResult.Written(copies.advance())
     }
 
     override fun erase(): EraseResult {
         erases++
+        copies.advance()
         if (erase == EraseResult.Erased) {
             held = null
             probe = StoreProbe.Empty
@@ -82,6 +86,12 @@ internal class FakeSecureStore(
 
 /** An 8-character check value for test records. Nothing derives a key in these tests, so any 8 ASCII characters fit. */
 internal const val TEST_CHECK = "0a1b2c3d"
+
+/** A copy version for a test that scripts a read or installs a record by hand, where no store counted one. A fresh store's own. */
+internal val ANY_VERSION: StoreVersion = CopyCounter().current
+
+/** Each write's kind, for a test that checks which writes a session made. */
+internal fun FakeSecureStore.modes(): List<String> = writes.map { if (it.mode is WriteMode.Replace) "Replace" else "Create" }
 
 /** A record of the public test words. Arguments name only what a test changes. */
 internal fun testRecord(

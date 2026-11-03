@@ -1,5 +1,6 @@
 package com.mebit.app
 
+import com.mebit.app.data.ANY_VERSION
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -102,42 +103,43 @@ class KeychainMappingTest {
     }
 
     @Test
-    fun aSuccessfulReadHandsOverTheBytes() {
-        val result = readOutcome(errSecSuccess, byteArrayOf(1, 2, 3))
-        assertContentEquals(byteArrayOf(1, 2, 3), assertIs<ReadResult.Bytes>(result).bytes)
+    fun aSuccessfulReadHandsOverTheBytesAndTheCopyTheyCameFrom() {
+        val result = assertIs<ReadResult.Bytes>(readOutcome(errSecSuccess, byteArrayOf(1, 2, 3), LATER_VERSION))
+        assertContentEquals(byteArrayOf(1, 2, 3), result.bytes)
+        assertEquals(LATER_VERSION, result.version, "the copy the bytes came from")
     }
 
     @Test
     fun aReadThatFindsNothingIsNotFound() {
-        assertEquals("NotFound", name(readOutcome(errSecItemNotFound, null)))
-        assertEquals("NotFound", name(readOutcome(errSecSuccess, null)))
+        assertEquals("NotFound", name(readOutcome(errSecItemNotFound, null, ANY_VERSION)))
+        assertEquals("NotFound", name(readOutcome(errSecSuccess, null, ANY_VERSION)))
     }
 
     @Test
     fun aCancelledSheetIsCancelled() {
-        assertEquals("Cancelled", name(readOutcome(errSecUserCanceled, null)))
+        assertEquals("Cancelled", name(readOutcome(errSecUserCanceled, null, ANY_VERSION)))
     }
 
     @Test
     fun aFailedOwnerCheckIsDenied() {
-        assertEquals("Denied", name(readOutcome(errSecAuthFailed, null)))
+        assertEquals("Denied", name(readOutcome(errSecAuthFailed, null, ANY_VERSION)))
     }
 
     @Test
     fun aReadWhileLockedIsTryLater() {
-        assertEquals("Unavailable(TryLater)", name(readOutcome(errSecInteractionNotAllowed, null)))
+        assertEquals("Unavailable(TryLater)", name(readOutcome(errSecInteractionNotAllowed, null, ANY_VERSION)))
     }
 
     @Test
     fun anyOtherReadStatusIsOther() {
         listOf(errSecMissingEntitlement, errSecNotAvailable, errSecParam, errSecDuplicateItem).forEach { status ->
-            assertEquals("Unavailable(Other)", name(readOutcome(status, null)), "status $status")
+            assertEquals("Unavailable(Other)", name(readOutcome(status, null, ANY_VERSION)), "status $status")
         }
     }
 
     @Test
     fun aSlotWithBytesIsTheWalletWhateverTheOtherSlotAnswers() {
-        val copy = ReadResult.Bytes(byteArrayOf(1, 2, 3))
+        val copy = ReadResult.Bytes(byteArrayOf(1, 2, 3), ANY_VERSION)
         listOf(ReadResult.NotFound, ReadResult.Cancelled, ReadResult.Denied, ReadResult.Unavailable(Why.TryLater)).forEach { other ->
             assertSame(copy, slotsOutcome(mapOf(Slot.A to copy, Slot.B to other), ::noDateRead), "the copy in A, B answers ${name(other)}")
             assertSame(copy, slotsOutcome(mapOf(Slot.A to other, Slot.B to copy), ::noDateRead), "the copy in B, A answers ${name(other)}")
@@ -146,8 +148,8 @@ class KeychainMappingTest {
 
     @Test
     fun twoCopiesGoToTheNewestAndOnlyTheyReadTheDates() {
-        val inA = ReadResult.Bytes(byteArrayOf(1))
-        val inB = ReadResult.Bytes(byteArrayOf(2))
+        val inA = ReadResult.Bytes(byteArrayOf(1), ANY_VERSION)
+        val inB = ReadResult.Bytes(byteArrayOf(2), LATER_VERSION)
         Slot.entries.forEach { newest ->
             var datesRead = 0
             val result = slotsOutcome(mapOf(Slot.A to inA, Slot.B to inB)) {
@@ -155,6 +157,7 @@ class KeychainMappingTest {
                 newest
             }
             assertSame(if (newest == Slot.A) inA else inB, result, "newest $newest")
+            assertEquals(if (newest == Slot.A) ANY_VERSION else LATER_VERSION, assertIs<ReadResult.Bytes>(result).version, "the version of $newest")
             assertEquals(1, datesRead, "newest $newest")
         }
     }
@@ -270,18 +273,18 @@ class KeychainMappingTest {
 
     @Test
     fun aWriteToAnEmptyStoreGoesToSlotA() {
-        WriteMode.entries.forEach { mode -> assertEquals(Slot.A, slotToAdd(mode, emptySet()), "$mode") }
+        MODES.forEach { mode -> assertEquals(Slot.A, slotToAdd(mode, emptySet()), "$mode") }
     }
 
     @Test
     fun aReplaceGoesToTheFirstSlotWhoseAddWasNotADuplicate() {
-        assertEquals(Slot.B, slotToAdd(WriteMode.Replace, setOf(Slot.A)))
-        assertEquals(Slot.A, slotToAdd(WriteMode.Replace, setOf(Slot.B)))
+        assertEquals(Slot.B, slotToAdd(WriteMode.Replace(ANY_VERSION),setOf(Slot.A)))
+        assertEquals(Slot.A, slotToAdd(WriteMode.Replace(ANY_VERSION),setOf(Slot.B)))
     }
 
     @Test
     fun aReplaceWithBothSlotsTakenAddsNothing() {
-        assertNull(slotToAdd(WriteMode.Replace, setOf(Slot.A, Slot.B)))
+        assertNull(slotToAdd(WriteMode.Replace(ANY_VERSION),setOf(Slot.A, Slot.B)))
     }
 
     @Test
@@ -296,26 +299,26 @@ class KeychainMappingTest {
     }
 
     @Test
-    fun anAddThatSucceedsIsWritten() {
-        WriteMode.entries.forEach { mode -> assertEquals("Written", name(writeOutcome(errSecSuccess, mode, passcodeSet = true)), "$mode") }
+    fun anAddThatSucceedsIsNotRefusedUnderEitherKind() {
+        MODES.forEach { mode -> assertNull(writeRefusal(errSecSuccess, mode, passcodeSet = true), "$mode") }
     }
 
     @Test
     fun aDuplicateOnCreateIsAlreadyExists() {
-        assertEquals("AlreadyExists", name(writeOutcome(errSecDuplicateItem, WriteMode.Create, passcodeSet = true)))
+        assertEquals("AlreadyExists", name(writeRefusal(errSecDuplicateItem, WriteMode.Create, passcodeSet = true)))
     }
 
     @Test
     fun aDuplicateOnReplaceIsAFailureNotAnExistingWallet() {
         // A Replace reaches this only when both slots answered duplicate.
-        assertEquals("Unavailable(Other)", name(writeOutcome(errSecDuplicateItem, WriteMode.Replace, passcodeSet = true)))
+        assertEquals("Unavailable(Other)", name(writeRefusal(errSecDuplicateItem, WriteMode.Replace(ANY_VERSION), passcodeSet = true)))
     }
 
     @Test
     fun aFailedWriteOnAPhoneWithoutAPasscodeIsNoScreenLock() {
         listOf(errSecParam, errSecNotAvailable, errSecInteractionNotAllowed).forEach { status ->
-            WriteMode.entries.forEach { mode ->
-                assertEquals("Unavailable(NoScreenLock)", name(writeOutcome(status, mode, passcodeSet = false)), "status $status $mode")
+            MODES.forEach { mode ->
+                assertEquals("Unavailable(NoScreenLock)", name(writeRefusal(status, mode, passcodeSet = false)), "status $status $mode")
             }
         }
     }
@@ -323,8 +326,8 @@ class KeychainMappingTest {
     @Test
     fun anyOtherWriteFailureIsOther() {
         listOf(errSecInteractionNotAllowed, errSecNotAvailable, errSecMissingEntitlement).forEach { status ->
-            WriteMode.entries.forEach { mode ->
-                assertEquals("Unavailable(Other)", name(writeOutcome(status, mode, passcodeSet = true)), "status $status $mode")
+            MODES.forEach { mode ->
+                assertEquals("Unavailable(Other)", name(writeRefusal(status, mode, passcodeSet = true)), "status $status $mode")
             }
         }
     }
@@ -361,6 +364,12 @@ class KeychainMappingTest {
         listOf(Marker.Absent, Marker.Unsupported, Marker.Unreadable).forEach { assertNull(markerContent(it), "$it") }
     }
 }
+
+/** Both write kinds. A Replace names a version, so the sealed WriteMode has no entries list. */
+private val MODES = listOf(WriteMode.Create, WriteMode.Replace(ANY_VERSION))
+
+/** A version after one advance, distinct from [ANY_VERSION]. */
+private val LATER_VERSION = CopyCounter().advance()
 
 /** Runs [check] for every phone: with and without a passcode, unlocked and locked. */
 private fun everyPhone(check: (passcodeSet: Boolean, unlocked: Boolean) -> Unit) =

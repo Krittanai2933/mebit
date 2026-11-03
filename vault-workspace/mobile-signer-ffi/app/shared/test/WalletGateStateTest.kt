@@ -7,6 +7,7 @@ import com.mebit.app.SecureStore
 import com.mebit.app.StoreProbe
 import com.mebit.app.Why
 import com.mebit.app.WriteMode
+import com.mebit.app.data.ANY_VERSION
 import com.mebit.app.data.Cause
 import com.mebit.app.data.FakeSecureStore
 import com.mebit.app.data.OnboardingSession
@@ -145,7 +146,7 @@ class WalletGateStateTest {
         assertEquals(1, broken.sheets.reads, "sheets from Broken")
         assertNothingInstalled(broken.session, "an unlock from Broken")
 
-        val none = AppLaunch(FakeSecureStore(read = ReadResult.Bytes(v1Bytes())))
+        val none = AppLaunch(FakeSecureStore(read = ReadResult.Bytes(v1Bytes(), ANY_VERSION)))
         none.gate.unlock("test")
         assertEquals(Boot.Onboarding, none.gate.boot, "an unlock from Onboarding")
         assertEquals(0, none.sheets.reads, "sheets from Onboarding")
@@ -331,8 +332,8 @@ private fun brokenAnswers() = listOf(
     Triple("not found", ReadResult.NotFound, Cause.Missing),
     Triple("key gone", ReadResult.KeyGone, Cause.KeyGone),
     Triple("unreadable", ReadResult.Unreadable, Cause.Corrupt),
-    Triple("a newer version", ReadResult.Bytes(v1Bytes(version = 2)), Cause.NewerVersion),
-    Triple("a MAIN record", ReadResult.Bytes(v1Bytes(network = 1)), Cause.UnsupportedNetwork),
+    Triple("a newer version", ReadResult.Bytes(v1Bytes(version = 2), ANY_VERSION), Cause.NewerVersion),
+    Triple("a MAIN record", ReadResult.Bytes(v1Bytes(network = 1), ANY_VERSION), Cause.UnsupportedNetwork),
 )
 
 /** What the phone answers in one step of a walk, named for the failure message. */
@@ -364,7 +365,7 @@ private fun startPhone(random: Random): Pair<String, FakeSecureStore> = when (ra
 /** A phone where an earlier launch saved [record]. The store holds it under a kept marker, so this launch starts Locked. */
 private fun savedPhone(record: WalletRecord = testRecord()): FakeSecureStore {
     val store = FakeSecureStore()
-    assertEquals(SaveResult.Written, SavedWallet(store).save(record, WriteMode.Create), "the earlier launch's save")
+    assertIs<SaveResult.Written>(SavedWallet(store).save(record, WriteMode.Create), "the earlier launch's save")
     store.writes.clear()
     store.markerWrites.clear()
     return store

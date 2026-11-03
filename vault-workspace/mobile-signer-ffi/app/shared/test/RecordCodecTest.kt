@@ -17,11 +17,11 @@ import kotlin.test.fail
 class RecordCodecTest {
     private fun roundTrip(record: WalletRecord, case: String): WalletRecord {
         val wallet = SavedWallet(FakeSecureStore())
-        assertEquals(SaveResult.Written, wallet.save(record, WriteMode.Create), "save, $case")
+        assertIs<SaveResult.Written>(wallet.save(record, WriteMode.Create), "save, $case")
         return assertIs<UnlockResult.Opened>(wallet.openNow(), "open, $case").record
     }
 
-    private fun opened(bytes: ByteArray) = SavedWallet(FakeSecureStore(read = ReadResult.Bytes(bytes))).openNow()
+    private fun opened(bytes: ByteArray) = SavedWallet(FakeSecureStore(read = ReadResult.Bytes(bytes, ANY_VERSION))).openNow()
 
     private fun assertBroken(cause: Cause, bytes: ByteArray, case: String) =
         assertEquals(cause, assertIs<UnlockResult.Broken>(opened(bytes), case).cause, case)
@@ -141,7 +141,7 @@ class RecordCodecTest {
                     when (val r = opened(bytes.copyOf())) {
                         is UnlockResult.Opened -> {
                             val again = FakeSecureStore()
-                            assertEquals(SaveResult.Written, SavedWallet(again).save(r.record, WriteMode.Create), case)
+                            assertIs<SaveResult.Written>(SavedWallet(again).save(r.record, WriteMode.Create), case)
                             assertTrue(again.writes.single().bytes.contentEquals(bytes), "opened, but writes back other bytes, $case")
                         }
                         is UnlockResult.Broken -> assertTrue(r.cause == Cause.Corrupt || r.cause == Cause.NewerVersion, "${r.cause}, $case")

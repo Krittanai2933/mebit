@@ -5,13 +5,32 @@ import androidx.compose.runtime.Composable
 /** Why this phone cannot hold or release a wallet right now. A closed set, so no message can ever carry data. */
 enum class Why { NoScreenLock, OsTooOld, NotWired, TryLater, Other }
 
-/** How a write treats a wallet that is already on the phone. */
-enum class WriteMode {
-    /** Fails with [WriteResult.AlreadyExists] if any wallet is there. */
-    Create,
+/** Which copy the store holds, as counted by this process. Opaque. Never written to disk, never compared across launches. */
+data class StoreVersion internal constructor(private val n: Long)
 
-    /** The same wallet with new flags. Creates it if absent. */
-    Replace,
+/**
+ * The copy counter of one store. Exactly one per process per store, beside the store's lock, touched only under it.
+ * Advances when a write took effect and at every erase, and at nothing else, so the session that wrote last can always write again.
+ */
+internal class CopyCounter {
+    private var n = 0L
+
+    val current: StoreVersion get() = StoreVersion(n)
+
+    /** Conflict for a Replace that does not expect [current]. Null for a Create, whose existence rule stays the store's own. */
+    fun refuse(mode: WriteMode): WriteResult.Conflict? = if (mode is WriteMode.Replace && mode.expected != current) WriteResult.Conflict else null
+
+    /** After a write that took effect, and at every erase whatever it answered. Returns the new [current]. */
+    fun advance(): StoreVersion = StoreVersion(++n)
+}
+
+/** How a write treats a wallet that is already on the phone. */
+sealed interface WriteMode {
+    /** Fails with [WriteResult.AlreadyExists] if any wallet is there. */
+    data object Create : WriteMode
+
+    /** The same wallet with new data, only while the store still holds [expected]. Creates it if absent and nothing advanced since. */
+    class Replace(val expected: StoreVersion) : WriteMode
 }
 
 /**
@@ -35,7 +54,8 @@ sealed interface StoreProbe {
 
 /** How a read ended. Only [Bytes] carries data, and its array belongs to the caller, which zeroes it. */
 sealed interface ReadResult {
-    class Bytes(val bytes: ByteArray) : ReadResult
+    /** [version] is the copy these bytes came from, taken under the store's lock in the same step as the bytes. */
+    class Bytes(val bytes: ByteArray, val version: StoreVersion) : ReadResult
 
     data object NotFound : ReadResult
 
@@ -55,9 +75,12 @@ sealed interface ReadResult {
 
 /** How a write ended. */
 sealed interface WriteResult {
-    data object Written : WriteResult
+    class Written(val version: StoreVersion) : WriteResult
 
     data object AlreadyExists : WriteResult
+
+    /** A Replace whose expected copy is gone or changed. Nothing was written or deleted. */
+    data object Conflict : WriteResult
 
     class Unavailable(val why: Why) : WriteResult
 }
@@ -75,7 +98,9 @@ sealed interface EraseResult {
  * - device-only: no cloud sync, no backup, no transfer to another phone;
  * - gate or nothing: a phone that cannot enforce an owner check on [read] reports Unavailable and stores nothing;
  * - [write] never prompts and is all or nothing; [read] may show the OS sheet and never blocks the main thread;
- * - [erase] is idempotent and the only thing that deletes.
+ * - a [WriteMode.Replace] takes effect only while the store still holds its expected copy, checked under the lock the write
+ *   holds, else [WriteResult.Conflict] and nothing changes;
+ * - [erase] is idempotent and the only thing that deletes, and it advances the copy whatever it answers.
  */
 internal interface SecureStore {
     /** Never prompts. */

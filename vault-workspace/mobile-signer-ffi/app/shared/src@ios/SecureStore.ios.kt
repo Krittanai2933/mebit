@@ -144,6 +144,9 @@ private object KeychainStore : SecureStore {
      */
     private val lock = NSLock()
 
+    /** Which copy the two slots hold, as this process counts it. Guarded by [lock]. One per process, because this object is. */
+    private val copies = CopyCounter()
+
     /** Application Support/mebit/wallet-marker. Application Support is in backups, which the reinstall rule needs. */
     private val markerFile =
         (NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, true).first() as String) + "/mebit/wallet-marker"
@@ -174,12 +177,17 @@ private object KeychainStore : SecureStore {
     override fun write(bytes: ByteArray, mode: WriteMode): WriteResult {
         val unlocked = mode == WriteMode.Create && protectedDataAvailable() // before the lock, see protectedDataAvailable
         return locked {
+            copies.refuse(mode)?.let { return@locked it } // a stale Replace makes no Keychain call
             if (mode == WriteMode.Create) createRefusal(silentProbe(unlocked))?.let { return@locked it }
-            writeOutcome(addToFreeSlot(bytes, mode), mode, passcodeSet())
+            // An add that succeeded advances even if its delete of the other slot failed, because the phone did change.
+            writeRefusal(addToFreeSlot(bytes, mode), mode, passcodeSet()) ?: WriteResult.Written(copies.advance())
         }
     }
 
-    override fun erase(): EraseResult = locked { eraseOutcome(delete(null)) }
+    override fun erase(): EraseResult = locked {
+        copies.advance()
+        eraseOutcome(delete(null))
+    }
 
     override fun marker(): Marker = locked {
         if (!NSFileManager.defaultManager.fileExistsAtPath(markerFile)) {
@@ -211,9 +219,11 @@ private object KeychainStore : SecureStore {
      * Blocks while a sheet is up. Every copy it does not return is zeroed.
      */
     private fun readSlots(context: LAContext): ReadResult {
-        val reads = Slot.entries.associateWith { readData(it, context) }
+        val version = copies.current
+        val reads = Slot.entries.associateWith { readData(it, context, version) }
         val result = slotsOutcome(reads) {
-            // Two copies mean a write's delete did not happen, so the older copy is deleted here, best effort.
+            // Two copies mean a write's delete did not happen, so the older copy is deleted here, best effort. The counter does not
+            // advance: both copies are this process's own writer's, and advancing would give that writer a false Conflict.
             pickNewest(Slot.entries.associateWith { creationDate(it, context) }).also { delete(it.other.account) }
         }
         reads.values.forEach { if (it !== result) (it as? ReadResult.Bytes)?.bytes?.fill(0) }
@@ -263,14 +273,14 @@ private fun protectedDataAvailable(): Boolean {
 }
 
 /** A data-only read of [slot] with [context]: the query an iPhone answered with no second sheet once the context had passed. */
-private fun readData(slot: Slot, context: LAContext): ReadResult = memScoped {
+private fun readData(slot: Slot, context: LAContext, version: StoreVersion): ReadResult = memScoped {
     val out = alloc<CFTypeRefVar>()
     val status = SecItemCopyMatching(
         query(slot.account, kSecReturnData to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne, kSecUseAuthenticationContext to owned(CFBridgingRetain(context))),
         out.ptr,
     )
     val data = owned(out.value)?.reinterpret<__CFData>()
-    readOutcome(status, data?.let { CFDataGetBytePtr(it)?.readBytes(CFDataGetLength(it).toInt()) ?: ByteArray(0) })
+    readOutcome(status, data?.let { CFDataGetBytePtr(it)?.readBytes(CFDataGetLength(it).toInt()) ?: ByteArray(0) }, version)
 }
 
 /** When [slot]'s item was added, in seconds from 1 Jan 2001, by an attributes-only read with [context], or null if unreadable. */
@@ -293,7 +303,7 @@ private tailrec fun addToFreeSlot(bytes: ByteArray, mode: WriteMode, taken: Set<
     val slot = slotToAdd(mode, taken) ?: return errSecDuplicateItem
     val added = add(slot.account, bytes)
     if (added == errSecDuplicateItem) return addToFreeSlot(bytes, mode, taken + slot)
-    if (added == errSecSuccess && mode == WriteMode.Replace) delete(slot.other.account)
+    if (added == errSecSuccess && mode is WriteMode.Replace) delete(slot.other.account)
     return added
 }
 
@@ -369,9 +379,9 @@ internal fun probeOutcome(status: Int, accounts: List<String>, passcodeSet: Bool
     else -> StoreProbe.Unavailable(Why.Other)
 }
 
-/** What a read's status means. [data] is the copy of the item's bytes, present only on success. */
-internal fun readOutcome(status: Int, data: ByteArray?): ReadResult = when (status) {
-    errSecSuccess -> data?.let { ReadResult.Bytes(it) } ?: ReadResult.NotFound
+/** What a read's status means. [data] is the copy of the item's bytes, present only on success, and [version] the copy it came from. */
+internal fun readOutcome(status: Int, data: ByteArray?, version: StoreVersion): ReadResult = when (status) {
+    errSecSuccess -> data?.let { ReadResult.Bytes(it, version) } ?: ReadResult.NotFound
     errSecItemNotFound -> ReadResult.NotFound
     errSecUserCanceled -> ReadResult.Cancelled
     errSecAuthFailed -> ReadResult.Denied
@@ -389,9 +399,9 @@ internal fun evaluateOutcome(laErrorCode: Long?): ReadResult? = when (laErrorCod
     else -> ReadResult.Unavailable(Why.Other)
 }
 
-/** What a write's status means. Only a Create can meet a wallet that is already there; a duplicate under Replace is a fault. */
-internal fun writeOutcome(status: Int, mode: WriteMode, passcodeSet: Boolean): WriteResult = when {
-    status == errSecSuccess -> WriteResult.Written
+/** What stops a write, from its add's status, or null when the add succeeded. Only a Create can meet a wallet that is already there; a duplicate under Replace is a fault. */
+internal fun writeRefusal(status: Int, mode: WriteMode, passcodeSet: Boolean): WriteResult? = when {
+    status == errSecSuccess -> null
     status == errSecDuplicateItem && mode == WriteMode.Create -> WriteResult.AlreadyExists
     !passcodeSet -> WriteResult.Unavailable(Why.NoScreenLock)
     else -> WriteResult.Unavailable(Why.Other)

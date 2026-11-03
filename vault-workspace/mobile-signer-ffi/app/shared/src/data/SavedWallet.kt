@@ -5,6 +5,7 @@ import com.mebit.app.Marker
 import com.mebit.app.ReadResult
 import com.mebit.app.SecureStore
 import com.mebit.app.StoreProbe
+import com.mebit.app.StoreVersion
 import com.mebit.app.Why
 import com.mebit.app.WriteMode
 import com.mebit.app.WriteResult
@@ -54,7 +55,7 @@ fun reinstallPolicy(marker: Marker, probe: StoreProbe): ReinstallAction = when (
 
 /** How an attempt to open the saved wallet ended. */
 sealed interface UnlockResult {
-    class Opened(val record: WalletRecord) : UnlockResult
+    class Opened(val record: WalletRecord, val version: StoreVersion) : UnlockResult
 
     /** The Enable step's read-back: the saved copy opened and its fingerprint matches this session. Carries no data. */
     data object Verified : UnlockResult
@@ -73,9 +74,12 @@ sealed interface UnlockResult {
 
 /** How a save ended. */
 sealed interface SaveResult {
-    data object Written : SaveResult
+    class Written(val version: StoreVersion) : SaveResult
 
     data object AlreadyExists : SaveResult
+
+    /** A Replace met another copy than the one the caller last read or wrote. Nothing written, no marker touched. */
+    data object Conflict : SaveResult
 
     class NotSaved(val why: Why) : SaveResult
 }
@@ -120,7 +124,7 @@ class SavedWallet internal constructor(private val store: SecureStore) {
                 is Decoded.Ok -> if (d.record.network in NETWORKS) {
                     // A wallet its owner has opened is theirs whatever the marker said, so a later launch must never take it for an orphan. Best effort.
                     store.writeMarker(Marker.Kept)
-                    UnlockResult.Opened(d.record)
+                    UnlockResult.Opened(d.record, r.version)
                 } else {
                     UnlockResult.Broken(Cause.UnsupportedNetwork)
                 }
@@ -152,9 +156,9 @@ class SavedWallet internal constructor(private val store: SecureStore) {
         }
         try {
             return when (val w = store.write(bytes, mode)) {
-                WriteResult.Written -> when {
-                    store.writeMarker(Marker.Kept) -> SaveResult.Written
-                    mode == WriteMode.Replace -> SaveResult.Written // the wallet was already there, under a marker that was not Absent
+                is WriteResult.Written -> when {
+                    store.writeMarker(Marker.Kept) -> SaveResult.Written(w.version)
+                    mode is WriteMode.Replace -> SaveResult.Written(w.version) // the wallet was already there, under a marker that was not Absent
                     else -> {
                         // A new wallet without its marker would be taken for an orphan and erased at the next launch, so it is not kept.
                         store.erase()
@@ -162,6 +166,7 @@ class SavedWallet internal constructor(private val store: SecureStore) {
                     }
                 }
                 WriteResult.AlreadyExists -> SaveResult.AlreadyExists
+                WriteResult.Conflict -> SaveResult.Conflict
                 is WriteResult.Unavailable -> SaveResult.NotSaved(w.why)
             }
         } finally {

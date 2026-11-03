@@ -2,6 +2,7 @@ package com.mebit.app
 
 import android.hardware.biometrics.BiometricPrompt
 import android.security.keystore.KeyPermanentlyInvalidatedException
+import com.mebit.app.data.ANY_VERSION
 import java.security.InvalidAlgorithmParameterException
 import java.security.InvalidKeyException
 import java.security.KeyPairGenerator
@@ -34,7 +35,7 @@ class KeystoreMappingTest {
             everyFact { fileExists, alias, secure ->
                 assertEquals("Unavailable(OsTooOld)", name(androidProbeOutcome(api, fileExists, alias, secure)), "probe api $api")
                 assertEquals("Unavailable(OsTooOld)", name(androidReadRefusal(api, fileExists, alias)), "read api $api")
-                WriteMode.entries.forEach { mode ->
+                MODES.forEach { mode ->
                     assertEquals("Unavailable(OsTooOld)", name(androidWriteRefusal(api, fileExists, secure, mode)), "write api $api $mode")
                 }
             }
@@ -157,15 +158,15 @@ class KeystoreMappingTest {
     fun aWriteWithoutAScreenLockIsNoScreenLock() {
         assertEquals("Unavailable(NoScreenLock)", name(androidWriteRefusal(30, fileExists = false, deviceSecure = false, mode = WriteMode.Create)))
         listOf(true, false).forEach { fileExists ->
-            assertEquals("Unavailable(NoScreenLock)", name(androidWriteRefusal(30, fileExists, deviceSecure = false, mode = WriteMode.Replace)), "file $fileExists")
+            assertEquals("Unavailable(NoScreenLock)", name(androidWriteRefusal(30, fileExists, deviceSecure = false, mode = WriteMode.Replace(ANY_VERSION))), "file $fileExists")
         }
     }
 
     @Test
     fun aWriteGoesOnWithAScreenLockUnlessACreateMeetsAFile() {
         assertNull(androidWriteRefusal(30, fileExists = false, deviceSecure = true, mode = WriteMode.Create))
-        assertNull(androidWriteRefusal(30, fileExists = false, deviceSecure = true, mode = WriteMode.Replace))
-        assertNull(androidWriteRefusal(36, fileExists = true, deviceSecure = true, mode = WriteMode.Replace))
+        assertNull(androidWriteRefusal(30, fileExists = false, deviceSecure = true, mode = WriteMode.Replace(ANY_VERSION)))
+        assertNull(androidWriteRefusal(36, fileExists = true, deviceSecure = true, mode = WriteMode.Replace(ANY_VERSION)))
     }
 
     @Test
@@ -184,10 +185,11 @@ class KeystoreMappingTest {
     }
 
     @Test
-    fun anEnvelopeOpensToItsPayload() {
+    fun anEnvelopeOpensToItsPayloadAndCarriesTheCopyItWasReadFrom() {
         listOf(ByteArray(173) { it.toByte() }, byteArrayOf(7), ByteArray(4096) { (it * 31).toByte() }).forEach { payload ->
-            val opened = openEnvelope(sealEnvelope(payload, pair.public), unwrapWith(pair), noCode)
-            assertContentEquals(payload, assertIs<ReadResult.Bytes>(opened).bytes, "payload of ${payload.size} bytes")
+            val opened = assertIs<ReadResult.Bytes>(openEnvelope(sealEnvelope(payload, pair.public), unwrapWith(pair), noCode, LATER_VERSION))
+            assertContentEquals(payload, opened.bytes, "payload of ${payload.size} bytes")
+            assertEquals(LATER_VERSION, opened.version, "the version of a payload of ${payload.size} bytes")
         }
     }
 
@@ -213,7 +215,7 @@ class KeystoreMappingTest {
         val positions = (0 until 3 + 4 + 256 + 12 + 8).toSet() + (0 until sealed.size step 7) + (sealed.size - 1)
         positions.forEach { at ->
             val damaged = sealed.copyOf().also { it[at] = (it[at].toInt() xor 0x01).toByte() }
-            assertEquals("Unreadable", name(openEnvelope(damaged, unwrapWith(pair), noCode)), "bit flipped at $at of ${sealed.size}")
+            assertEquals("Unreadable", name(openEnvelope(damaged, unwrapWith(pair), noCode, ANY_VERSION)), "bit flipped at $at of ${sealed.size}")
         }
     }
 
@@ -221,9 +223,9 @@ class KeystoreMappingTest {
     fun everyShortOrLongEnvelopeIsUnreadable() {
         val sealed = sealEnvelope(ByteArray(173) { it.toByte() }, pair.public)
         (0 until sealed.size).forEach { size ->
-            assertEquals("Unreadable", name(openEnvelope(sealed.copyOf(size), unwrapWith(pair), noCode)), "cut to $size of ${sealed.size}")
+            assertEquals("Unreadable", name(openEnvelope(sealed.copyOf(size), unwrapWith(pair), noCode, ANY_VERSION)), "cut to $size of ${sealed.size}")
         }
-        assertEquals("Unreadable", name(openEnvelope(sealed + 0, unwrapWith(pair), noCode)), "one byte added")
+        assertEquals("Unreadable", name(openEnvelope(sealed + 0, unwrapWith(pair), noCode, ANY_VERSION)), "one byte added")
     }
 
     @Test
@@ -237,21 +239,21 @@ class KeystoreMappingTest {
         val aes = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, SecretKeySpec(dataKey, "AES")) }
         aes.updateAAD(header)
         val later = header + wrapped + aes.iv + aes.doFinal(ByteArray(173))
-        assertEquals("Unreadable", name(openEnvelope(later, unwrapWith(pair), noCode)))
+        assertEquals("Unreadable", name(openEnvelope(later, unwrapWith(pair), noCode, ANY_VERSION)))
     }
 
     @Test
     fun anEnvelopeForAnotherKeyIsUnreadable() {
         val sealed = sealEnvelope(ByteArray(173) { it.toByte() }, pair.public)
-        assertEquals("Unreadable", name(openEnvelope(sealed, unwrapWith(otherPair), noCode)))
+        assertEquals("Unreadable", name(openEnvelope(sealed, unwrapWith(otherPair), noCode, ANY_VERSION)))
     }
 
     @Test
     fun anUnwrapThatNeedsTheOwnerAgainIsTryLaterNotUnreadable() {
         val sealed = sealEnvelope(ByteArray(173) { it.toByte() }, pair.public)
         val needsAuth: (ByteArray) -> ByteArray = { throw IllegalBlockSizeException() }
-        assertEquals("Unavailable(TryLater)", name(openEnvelope(sealed, needsAuth) { 2 }))
-        assertEquals("Unreadable", name(openEnvelope(sealed, needsAuth) { 10 }))
+        assertEquals("Unavailable(TryLater)", name(openEnvelope(sealed, needsAuth, { 2 }, ANY_VERSION)))
+        assertEquals("Unreadable", name(openEnvelope(sealed, needsAuth, { 10 }, ANY_VERSION)))
     }
 
     private companion object {
@@ -262,6 +264,12 @@ class KeystoreMappingTest {
         fun unwrapWith(keys: java.security.KeyPair): (ByteArray) -> ByteArray = { wrapped -> unwrapCipher(keys.private).doFinal(wrapped) }
     }
 }
+
+/** Both write kinds. A Replace names a version, so the sealed WriteMode has no entries list. */
+private val MODES = listOf(WriteMode.Create, WriteMode.Replace(ANY_VERSION))
+
+/** A version after one advance, distinct from [ANY_VERSION]. */
+private val LATER_VERSION = CopyCounter().advance()
 
 private fun everyFact(check: (fileExists: Boolean, aliasPresent: Boolean?, deviceSecure: Boolean) -> Unit) =
     listOf(true, false).forEach { file -> listOf(true, false, null).forEach { alias -> listOf(true, false).forEach { secure -> check(file, alias, secure) } } }

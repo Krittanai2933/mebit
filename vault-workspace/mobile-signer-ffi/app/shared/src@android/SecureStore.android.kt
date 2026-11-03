@@ -61,6 +61,12 @@ private val ENVELOPE_HEADER = byteArrayOf(0x4D, 0x57, 1)
  */
 private val storeLock = Any()
 
+/**
+ * Which copy the wallet file holds, as this process counts it. Guarded by [storeLock]. Top level, never a field of [KeystoreStore],
+ * which has one instance per Context: a counter per instance would let a stale Replace from another instance through.
+ */
+private val copies = CopyCounter()
+
 /** One background thread for key generation, which may take seconds in a TEE or StrongBox. */
 private val keyMaker = Executors.newSingleThreadExecutor { Thread(it, "mebit-wallet-key").apply { isDaemon = true } }
 
@@ -95,11 +101,12 @@ private class KeystoreStore(private val context: Context) : SecureStore {
         val error = askOwner(context, reason, BiometricPrompt.CryptoObject(start.cipher))
         if (error != null) return androidPromptOutcome(error).also { start.envelope.fill(0) }
         return withContext(Dispatchers.IO) {
-            synchronized(storeLock) { openEnvelope(start.envelope, start.cipher::doFinal, ::keystoreCode) }.also { start.envelope.fill(0) }
+            synchronized(storeLock) { openEnvelope(start.envelope, start.cipher::doFinal, ::keystoreCode, start.version) }.also { start.envelope.fill(0) }
         }
     }
 
     override fun write(bytes: ByteArray, mode: WriteMode): WriteResult = synchronized(storeLock) {
+        copies.refuse(mode)?.let { return it } // a stale Replace touches neither the key nor the file
         androidWriteRefusal(Build.VERSION.SDK_INT, walletFileExists(), deviceSecure(), mode)?.let { return it }
         val certificate = try {
             keyStore().getCertificate(ALIAS)
@@ -122,14 +129,15 @@ private class KeystoreStore(private val context: Context) : SecureStore {
         try {
             out.write(envelope)
             file.finishWrite(out)
-            WriteResult.Written
+            WriteResult.Written(copies.advance())
         } catch (e: IOException) {
-            file.failWrite(out)
+            file.failWrite(out) // the old file stays, so the copy does not advance
             WriteResult.Unavailable(Why.Other)
         }
     }
 
     override fun erase(): EraseResult = synchronized(storeLock) {
+        copies.advance()
         try {
             keyStore().deleteEntry(ALIAS)
         } catch (e: Exception) {
@@ -160,7 +168,7 @@ private class KeystoreStore(private val context: Context) : SecureStore {
         }
         return try {
             val key = keyStore().getKey(ALIAS, null) as? PrivateKey ?: return ReadStart.Done(ReadResult.KeyGone)
-            ReadStart.Ask(envelope, unwrapCipher(key))
+            ReadStart.Ask(envelope, unwrapCipher(key), copies.current) // taken with the envelope, so a write during the sheet makes both stale together
         } catch (e: Exception) {
             envelope.fill(0)
             ReadStart.Done(androidInitOutcome(e))
@@ -188,7 +196,7 @@ private class KeystoreStore(private val context: Context) : SecureStore {
 private sealed interface ReadStart {
     class Done(val result: ReadResult) : ReadStart
 
-    class Ask(val envelope: ByteArray, val cipher: Cipher) : ReadStart
+    class Ask(val envelope: ByteArray, val cipher: Cipher, val version: StoreVersion) : ReadStart
 }
 
 /** The Keystore store over this Context, which the read's sheet needs. Every instance shares [storeLock] and the file. */
@@ -332,8 +340,9 @@ internal fun sealEnvelope(payload: ByteArray, publicKey: PublicKey): ByteArray {
 /**
  * The payload of [envelope], unwrapping its key with [unwrap] (the authorised Keystore cipher). A layout that does not parse,
  * a key that does not unwrap and a tag that fails are Unreadable. [keystoreCode] reads the Keystore's code from a failure.
+ * [version] is the copy the envelope was read from, and rides on the Bytes.
  */
-internal fun openEnvelope(envelope: ByteArray, unwrap: (ByteArray) -> ByteArray, keystoreCode: (Throwable) -> Int?): ReadResult {
+internal fun openEnvelope(envelope: ByteArray, unwrap: (ByteArray) -> ByteArray, keystoreCode: (Throwable) -> Int?, version: StoreVersion): ReadResult {
     val headerSize = ENVELOPE_HEADER.size + 4
     if (envelope.size < headerSize || !envelope.copyOf(ENVELOPE_HEADER.size).contentEquals(ENVELOPE_HEADER)) return ReadResult.Unreadable
     val wrappedSize = ByteBuffer.wrap(envelope, ENVELOPE_HEADER.size, 4).int
@@ -346,7 +355,7 @@ internal fun openEnvelope(envelope: ByteArray, unwrap: (ByteArray) -> ByteArray,
             init(Cipher.DECRYPT_MODE, SecretKeySpec(dataKey, "AES"), GCMParameterSpec(TAG_SIZE * 8, envelope, ivAt, IV_SIZE))
             updateAAD(envelope, 0, headerSize)
         }
-        ReadResult.Bytes(aes.doFinal(envelope, ivAt + IV_SIZE, envelope.size - ivAt - IV_SIZE))
+        ReadResult.Bytes(aes.doFinal(envelope, ivAt + IV_SIZE, envelope.size - ivAt - IV_SIZE), version)
     } catch (e: Exception) {
         androidUnwrapOutcome(e, keystoreCode(e))
     } finally {
