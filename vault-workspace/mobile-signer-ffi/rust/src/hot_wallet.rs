@@ -43,6 +43,12 @@ const TESTNET4_GENESIS: &str = "00000000da84f2bafbbc53dee25a72ae507ff4914b867c56
 const HOST_TRUST: Duration = Duration::from_secs(10 * 60);
 const PROBE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const PROBE_READ_TIMEOUT: Duration = Duration::from_secs(8);
+/// The whole probe, DNS to the last body byte. The per-read limit alone let a host that sent one
+/// byte every 3 s hold the host lock for 30 s.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+/// How long a round in which no host passed is answered from memory, so callers that queued on the
+/// host lock during that round do not each probe every host again.
+const PROBE_FAILURE_TTL: Duration = Duration::from_secs(5);
 const ACCOUNT_PATH: &str = "m/84'/1'/0'";
 
 /// BIP-44 gap limit. A chain is scanned until this many consecutive unused indices follow the last
@@ -71,27 +77,37 @@ const WINDOW: usize = 10;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 // Per read and per write. ureq 2 has neither by default, so a server that went silent held the call for good.
 const IO_TIMEOUT: Duration = Duration::from_secs(20);
+// The whole request, DNS to the last body byte. The per-read limit alone lets a body that trickles
+// hold a call for as long as the host likes.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 
-static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
+/// `whole` is ureq's deadline over the request. A body read that runs past it fails with an io
+/// `TimedOut`, which `classify` reports as the host being unreachable.
+fn agent(connect: Duration, io: Duration, whole: Duration) -> ureq::Agent {
     ureq::AgentBuilder::new()
-        .timeout_connect(CONNECT_TIMEOUT)
-        .timeout_read(IO_TIMEOUT)
-        .timeout_write(IO_TIMEOUT)
+        .timeout_connect(connect)
+        .timeout_read(io)
+        .timeout_write(io)
+        .timeout(whole)
         .build()
-});
+}
 
-// Shorter limits for the genesis probe only: a host that cannot say its block 0 hash in 13 s is
+static AGENT: LazyLock<ureq::Agent> =
+    LazyLock::new(|| agent(CONNECT_TIMEOUT, IO_TIMEOUT, REQUEST_TIMEOUT));
+
+// Shorter limits for the genesis probe only: a host that cannot say its block 0 hash in 8 s is
 // skipped for the next one instead of holding the scan.
-static PROBE_AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
-    ureq::AgentBuilder::new()
-        .timeout_connect(PROBE_CONNECT_TIMEOUT)
-        .timeout_read(PROBE_READ_TIMEOUT)
-        .timeout_write(PROBE_READ_TIMEOUT)
-        .build()
-});
+static PROBE_AGENT: LazyLock<ureq::Agent> =
+    LazyLock::new(|| agent(PROBE_CONNECT_TIMEOUT, PROBE_READ_TIMEOUT, PROBE_TIMEOUT));
 
-/// The index into the host list of the host in use, and when it passed the genesis check.
-type HostChoice = Mutex<Option<(usize, Instant)>>;
+/// What the last probe round decided: the index into the host list of the host in use and when it
+/// passed the genesis check, or that no host passed, when, and the error that says so.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum HostVerdict {
+    Chosen(usize, Instant),
+    NoneReachable(Instant, String),
+}
+type HostChoice = Mutex<Option<HostVerdict>>;
 static CHOSEN_HOST: HostChoice = Mutex::new(None);
 
 // After an unclear broadcast: about 6 s of asking, for the explorer to index what its node took.
@@ -228,14 +244,24 @@ struct CachedScan {
     scanned_at: Instant,
 }
 
-type ScanCache = Mutex<HashMap<WalletId, CachedScan>>;
+/// Every cached scan, and how many times they were all forgotten. A scan that started before a
+/// forget (a broadcast went out while it ran) has a picture older than the chain, so `scan_wallet`
+/// compares the count it read first before it writes.
+#[derive(Default)]
+struct Scans {
+    epoch: u64,
+    entries: HashMap<WalletId, CachedScan>,
+}
+
+type ScanCache = Mutex<Scans>;
 static SCAN_CACHE: LazyLock<ScanCache> = LazyLock::new(ScanCache::default);
 
 fn forget_scans(scans: &ScanCache) {
-    scans
+    let mut scans = scans
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clear();
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    scans.entries.clear();
+    scans.epoch += 1;
 }
 
 // Retries are for a GET only. A retried broadcast could pay twice, so `broadcast_signed` has none.
@@ -250,6 +276,9 @@ enum GetError {
         retry_after: Option<Duration>,
         what: String,
     },
+    /// The host did not answer: no connection, TLS, or a timeout before or inside the body.
+    Unreachable(MobileSignerError),
+    /// The host answered and the answer is no use: another status, or a body that cannot be read.
     Fatal(MobileSignerError),
 }
 
@@ -264,7 +293,7 @@ fn get_with_retry(
     for n in 0.. {
         match attempt() {
             Ok(body) => return Ok(body),
-            Err(GetError::Fatal(e)) => return Err(e),
+            Err(GetError::Fatal(e) | GetError::Unreachable(e)) => return Err(e),
             Err(GetError::Retryable { retry_after, what }) => {
                 if n == RETRIES {
                     return Err(MobileSignerError::InvalidPsbtJson(format!(
@@ -288,13 +317,19 @@ fn get_with_retry(
 // A timeout is not retried: a host that stayed silent for the connect or read limit will not answer
 // after a one second pause, and a retry would multiply the stall of a scan that fails anyway.
 fn classify(answer: Result<ureq::Response, ureq::Error>) -> Result<String, GetError> {
-    let fatal = |what: &str, e: &dyn std::fmt::Display| {
-        GetError::Fatal(MobileSignerError::InvalidPsbtJson(format!("{what}: {e}")))
+    let error = |what: &str, e: &dyn std::fmt::Display| {
+        MobileSignerError::InvalidPsbtJson(format!("{what}: {e}"))
     };
+    let fatal = |what: &str, e: &dyn std::fmt::Display| GetError::Fatal(error(what, e));
     match answer {
-        Ok(response) => response
-            .into_string()
-            .map_err(|e| fatal("esplora body", &e)),
+        // ureq reports a body read that ran past the agent's deadline, or a read limit, as `TimedOut`.
+        Ok(response) => response.into_string().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::TimedOut {
+                GetError::Unreachable(error("esplora body", &e))
+            } else {
+                fatal("esplora body", &e)
+            }
+        }),
         Err(ureq::Error::Status(code @ (429 | 502 | 503 | 504), response)) => {
             let retry_after = response
                 .header("Retry-After")
@@ -305,6 +340,7 @@ fn classify(answer: Result<ureq::Response, ureq::Error>) -> Result<String, GetEr
                 what: format!("HTTP status {code}"),
             })
         }
+        Err(e @ ureq::Error::Transport(_)) => Err(GetError::Unreachable(error("esplora get", &e))),
         Err(e) => Err(fatal("esplora get", &e)),
     }
 }
@@ -312,26 +348,32 @@ fn classify(answer: Result<ureq::Response, ureq::Error>) -> Result<String, GetEr
 /// The index of the host to use: the cached one while it is under `HOST_TRUST` old, else the first
 /// in `hosts` whose `probe` returns the testnet4 genesis hash, which is then cached as of `now`. A
 /// host that answers another hash is skipped like one that does not answer. No host passing fails
-/// with `esplora get: no testnet4 host is reachable`, naming each host's failure.
+/// with `esplora get: no testnet4 host is reachable`, naming each host's failure, and that round is
+/// remembered for `PROBE_FAILURE_TTL`: a caller inside it gets the same error with no probe.
 fn pick_host(
     hosts: &[&str],
     probe: &dyn Fn(&str) -> Result<String, MobileSignerError>,
     now: Instant,
     cache: &HostChoice,
 ) -> Result<usize, MobileSignerError> {
-    let mut chosen = cache
+    let mut verdict = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some((index, verified)) = *chosen
-        && now.saturating_duration_since(verified) < HOST_TRUST
-    {
-        return Ok(index);
+    let age = |at: &Instant| now.saturating_duration_since(*at);
+    match &*verdict {
+        Some(HostVerdict::Chosen(index, verified)) if age(verified) < HOST_TRUST => {
+            return Ok(*index);
+        }
+        Some(HostVerdict::NoneReachable(at, error)) if age(at) < PROBE_FAILURE_TTL => {
+            return Err(MobileSignerError::InvalidPsbtJson(error.clone()));
+        }
+        _ => {}
     }
     let mut failures = Vec::with_capacity(hosts.len());
     for (index, host) in hosts.iter().enumerate() {
         match probe(host) {
             Ok(body) if body.trim() == TESTNET4_GENESIS => {
-                *chosen = Some((index, now));
+                *verdict = Some(HostVerdict::Chosen(index, now));
                 return Ok(index);
             }
             Ok(body) => {
@@ -341,18 +383,24 @@ fn pick_host(
             Err(e) => failures.push(format!("{host}: {e}")),
         }
     }
-    *chosen = None;
-    Err(MobileSignerError::InvalidPsbtJson(format!(
+    let error = format!(
         "esplora get: no testnet4 host is reachable ({})",
         failures.join("; ")
-    )))
+    );
+    *verdict = Some(HostVerdict::NoneReachable(now, error.clone()));
+    Err(MobileSignerError::InvalidPsbtJson(error))
 }
 
-/// Forgets the host in use after a connection-level failure (no connection, TLS, a timeout), so the
-/// next call probes again, and every cached scan with it, so the next call scans the whole gap limit.
-/// A status or an unreadable body is the host answering and changes nothing.
-fn forget_host_if_unreachable(answer: &Answer, cache: &HostChoice, scans: &ScanCache) {
-    if matches!(answer, Err(ureq::Error::Transport(_))) {
+/// Forgets the host in use after a connection-level failure (no connection, TLS, a timeout before
+/// or inside the body), so the next call probes again, and every cached scan with it, so the next
+/// call scans the whole gap limit. A status or an unreadable body is the host answering and changes
+/// nothing.
+fn forget_host_if_unreachable(
+    got: &Result<String, GetError>,
+    cache: &HostChoice,
+    scans: &ScanCache,
+) {
+    if matches!(got, Err(GetError::Unreachable(_))) {
         *cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
@@ -390,9 +438,9 @@ fn selected_base() -> Result<&'static str, MobileSignerError> {
 fn http_get(url: &str) -> Result<String, MobileSignerError> {
     let url = on_host(url, selected_base()?);
     let attempt = || {
-        let answer = AGENT.get(&url).call();
-        forget_host_if_unreachable(&answer, &CHOSEN_HOST, &SCAN_CACHE);
-        classify(answer)
+        let got = classify(AGENT.get(&url).call());
+        forget_host_if_unreachable(&got, &CHOSEN_HOST, &SCAN_CACHE);
+        got
     };
     get_with_retry(&attempt, &std::thread::sleep)
 }
@@ -523,11 +571,12 @@ fn scan_wallet(
     let account = Account::new(words, passphrase, network_of(network))?;
     let base = esplora_base(network)?;
     let id = account.id();
-    let known = cache
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .get(&id)
-        .cloned();
+    let (epoch, known) = {
+        let scans = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (scans.epoch, scans.entries.get(&id).cloned())
+    };
     let age = |at: Instant| now.saturating_duration_since(at);
     let seed = match &known {
         Some(c) if age(c.scanned_at) < SHARE_TTL => {
@@ -550,26 +599,28 @@ fn scan_wallet(
             chains: [external, scan(Chain::Internal)?],
         })
     });
-    let mut entries = cache
+    let mut scans = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match scanned {
-        Ok(wallet) => {
-            entries.insert(
-                id,
-                CachedScan {
-                    chains: wallet.seen(),
-                    full_at: seed.map_or(now, |c| c.full_at),
-                    scanned_at: now,
-                },
-            );
-            Ok(wallet)
-        }
-        Err(e) => {
-            entries.remove(&id);
-            Err(e)
+    // A forget while this scan ran means a payment went out that its picture does not show.
+    if scans.epoch == epoch {
+        match &scanned {
+            Ok(wallet) => {
+                scans.entries.insert(
+                    id,
+                    CachedScan {
+                        chains: wallet.seen(),
+                        full_at: seed.map_or(now, |c| c.full_at),
+                        scanned_at: now,
+                    },
+                );
+            }
+            Err(_) => {
+                scans.entries.remove(&id);
+            }
         }
     }
+    scanned
 }
 
 fn recall_chain(
@@ -3291,13 +3342,19 @@ mod tests {
         }
         let ok = classified("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
         assert!(matches!(ok, Ok(b) if b == "{}"));
-        // A timeout stays fatal: waiting a second does not make a silent host answer.
-        assert!(matches!(classify(no_answer()), Err(GetError::Fatal(_))));
+        // A timeout is not retried: waiting a second does not make a silent host answer.
+        assert!(matches!(
+            classify(no_answer()),
+            Err(GetError::Unreachable(_))
+        ));
         let refused = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "no");
         assert!(matches!(
             classify(Err(refused.into())),
-            Err(GetError::Fatal(_))
+            Err(GetError::Unreachable(_))
         ));
+        // A body cut short is the host answering. A body that times out is tested against a socket
+        // in `a_body_that_trickles_past_the_request_deadline_is_a_failure_that_forgets_the_host`.
+        assert!(matches!(classify(cut_short(200)), Err(GetError::Fatal(_))));
     }
 
     #[test]
@@ -3365,6 +3422,151 @@ mod tests {
         }
     }
 
+    fn chosen(cache: &HostChoice) -> Option<usize> {
+        match &*cache.lock().unwrap() {
+            Some(HostVerdict::Chosen(index, _)) => Some(*index),
+            _ => None,
+        }
+    }
+
+    /// `http://127.0.0.1:port` of a server that answers its first connection with a 200 whose body
+    /// is the testnet4 genesis hash, sent one byte every `gap` for the first `slow` bytes.
+    fn dripping_host(gap: Duration, slow: usize) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let _ = socket.read(&mut [0u8; 1024]);
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                TESTNET4_GENESIS.len()
+            );
+            if socket.write_all(head.as_bytes()).is_err() {
+                return;
+            }
+            for (i, byte) in TESTNET4_GENESIS.bytes().enumerate() {
+                if i < slow {
+                    std::thread::sleep(gap);
+                }
+                if socket
+                    .write_all(&[byte])
+                    .and_then(|()| socket.flush())
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    #[test]
+    fn a_probe_of_a_host_that_trickles_its_genesis_hash_fails_inside_the_probe_deadline() {
+        let host = dripping_host(Duration::from_secs(3), 10);
+        let cache = Mutex::new(None);
+        let start = Instant::now();
+        let result = pick_host(&[host.as_str()], &probe_genesis, start, &cache);
+        let took = start.elapsed();
+        let message = no_host_message(result);
+        assert!(message.contains("timed out"), "{message}");
+        assert!(
+            took < PROBE_TIMEOUT + Duration::from_secs(4),
+            "the probe held the host lock for {took:?}"
+        );
+    }
+
+    #[test]
+    fn a_body_that_trickles_past_the_request_deadline_is_a_failure_that_forgets_the_host() {
+        let whole = Duration::from_secs(2);
+        let agent = agent(CONNECT_TIMEOUT, IO_TIMEOUT, whole);
+        let host = dripping_host(Duration::from_secs(1), 10);
+        let cache = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
+        let fake = Fake::new();
+        fake.snapshot("").unwrap();
+        let start = Instant::now();
+        let got = classify(agent.get(&format!("{host}/block-height/0")).call());
+        let took = start.elapsed();
+        forget_host_if_unreachable(&got, &cache, &fake.cache);
+        assert!(matches!(got, Err(GetError::Unreachable(_))));
+        assert!(took < whole + Duration::from_secs(3), "{took:?}");
+        assert_eq!(chosen(&cache), None);
+        assert!(fake.cache.lock().unwrap().entries.is_empty());
+    }
+
+    #[test]
+    fn after_a_failed_round_ten_callers_inside_five_seconds_probe_nothing_and_the_next_round_probes_again()
+     {
+        let probe = Probe::new(&[(HOSTS[0], Err("timed out")), (HOSTS[1], Err("down"))]);
+        let cache = Mutex::new(None);
+        let t0 = Instant::now();
+        let first = no_host_message(probe.pick(t0, &cache));
+        assert_eq!(probe.asked().len(), 2);
+        for caller in 1..=10 {
+            let later = t0 + Duration::from_millis(400 * caller);
+            assert_eq!(no_host_message(probe.pick(later, &cache)), first);
+        }
+        assert_eq!(probe.asked().len(), 2, "no probe inside the failure window");
+        no_host_message(probe.pick(t0 + PROBE_FAILURE_TTL, &cache));
+        assert_eq!(probe.asked().len(), 4, "one round after the window");
+    }
+
+    #[test]
+    fn a_host_that_comes_back_after_the_failure_window_is_chosen_and_the_failure_is_forgotten() {
+        let down = Probe::new(&[(HOSTS[0], Err("down")), (HOSTS[1], Err("down"))]);
+        let cache = Mutex::new(None);
+        let t0 = Instant::now();
+        no_host_message(down.pick(t0, &cache));
+        let up = Probe::new(&[(HOSTS[0], Ok(TESTNET4_GENESIS))]);
+        let later = t0 + PROBE_FAILURE_TTL;
+        assert_eq!(up.pick(later, &cache).unwrap(), 0);
+        assert_eq!(*cache.lock().unwrap(), Some(HostVerdict::Chosen(0, later)));
+        assert_eq!(up.pick(later + Duration::from_secs(1), &cache).unwrap(), 0);
+        assert_eq!(up.asked().len(), 1, "the old failure plays no part");
+    }
+
+    #[test]
+    fn a_scan_overtaken_by_a_broadcast_leaves_the_cache_empty_so_the_next_call_sees_the_payment() {
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 50_000, 'a');
+        assert_eq!(fake.snapshot("").unwrap().balance_sats, 50_000);
+        assert_eq!(
+            fake.cache.lock().unwrap().entries.len(),
+            1,
+            "an undisturbed scan is cached"
+        );
+        fake.tick(SHARE_TTL);
+        let forgot = AtomicBool::new(false);
+        let get = |url: &str| {
+            if !forgot.swap(true, SeqCst) {
+                forget_scans(&fake.cache); // what `broadcast_via` does once the payment is out
+            }
+            fake.get(url)
+        };
+        let stale = snapshot_from(
+            &get,
+            &abandon_about(),
+            "",
+            KeyNetwork::Test,
+            fake.now(),
+            &fake.cache,
+        )
+        .unwrap();
+        assert_eq!(
+            stale.balance_sats, 50_000,
+            "the overtaken scan still answers its own caller"
+        );
+        assert!(fake.cache.lock().unwrap().entries.is_empty());
+        // The chain after the payment: the coin spent, 40,000 change at internal 0.
+        fake.touch(&addr(Chain::External, 0));
+        fake.utxos.insert(addr(Chain::External, 0), "[]".into());
+        fake.fund(&addr(Chain::Internal, 0), 40_000, 'b');
+        fake.tick(Duration::from_secs(3));
+        assert_eq!(fake.snapshot("").unwrap().balance_sats, 40_000);
+        fake.send(&addr(Chain::External, 7), 10_000, 300).unwrap();
+    }
+
     #[test]
     fn the_first_host_with_the_testnet4_genesis_is_chosen_and_the_second_is_not_probed() {
         let probe = Probe::new(&[
@@ -3375,7 +3577,7 @@ mod tests {
         let now = Instant::now();
         assert_eq!(probe.pick(now, &cache).unwrap(), 0);
         assert_eq!(probe.asked(), vec![HOSTS[0]]);
-        assert_eq!(*cache.lock().unwrap(), Some((0, now)));
+        assert_eq!(*cache.lock().unwrap(), Some(HostVerdict::Chosen(0, now)));
     }
 
     #[test]
@@ -3403,7 +3605,7 @@ mod tests {
             let probe = Probe::new(&[(HOSTS[0], Ok(body)), (HOSTS[1], Ok(TESTNET4_GENESIS))]);
             let cache = Mutex::new(None);
             assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1, "{body:?}");
-            assert_eq!(cache.lock().unwrap().map(|(i, _)| i), Some(1), "{body:?}");
+            assert_eq!(chosen(&cache), Some(1), "{body:?}");
         }
     }
 
@@ -3421,11 +3623,11 @@ mod tests {
             message.contains(HOSTS[0]) && message.contains("not testnet4"),
             "{message}"
         );
-        assert_eq!(*cache.lock().unwrap(), None);
+        assert_eq!(chosen(&cache), None);
     }
 
     #[test]
-    fn no_host_passing_names_every_failure_and_caches_nothing() {
+    fn no_host_passing_names_every_failure_and_chooses_no_host() {
         let probe = Probe::new(&[
             (HOSTS[0], Err("tls handshake hung")),
             (HOSTS[1], Ok(MAINNET_GENESIS)),
@@ -3438,7 +3640,7 @@ mod tests {
         );
         assert!(message.contains("tls handshake hung"), "{message}");
         assert!(message.contains(HOSTS[1]), "{message}");
-        assert_eq!(*cache.lock().unwrap(), None);
+        assert_eq!(chosen(&cache), None);
     }
 
     #[test]
@@ -3453,57 +3655,60 @@ mod tests {
         let over = t0 + HOST_TRUST;
         assert_eq!(probe.pick(over, &cache).unwrap(), 0);
         assert_eq!(probe.asked().len(), 2, "one probe after the window");
-        assert_eq!(*cache.lock().unwrap(), Some((0, over)));
+        assert_eq!(*cache.lock().unwrap(), Some(HostVerdict::Chosen(0, over)));
     }
 
     #[test]
     fn a_cached_host_is_reused_without_probing_even_when_it_would_now_fail() {
         let probe = Probe::new(&[(HOSTS[1], Err("down"))]);
-        let cache = Mutex::new(Some((1, Instant::now())));
+        let cache = Mutex::new(Some(HostVerdict::Chosen(1, Instant::now())));
         assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1);
         assert!(probe.asked().is_empty());
     }
 
     #[test]
     fn a_transport_failure_forgets_the_host_and_the_scans_but_a_status_or_a_bad_body_does_not() {
-        let cached = || Mutex::new(Some((0, Instant::now())));
-        let kept = |cache: &HostChoice| cache.lock().unwrap().map(|(i, _)| i);
+        let cached = || Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
         let scanned = || {
             let fake = Fake::new();
             fake.snapshot("").unwrap();
             fake
         };
-        let scans_kept = |fake: &Fake| fake.cache.lock().unwrap().len() == 1;
+        let scans_kept = |fake: &Fake| fake.cache.lock().unwrap().entries.len() == 1;
 
         let (cache, fake) = (cached(), scanned());
-        forget_host_if_unreachable(&no_answer(), &cache, &fake.cache);
-        assert_eq!(kept(&cache), None, "a timeout");
+        forget_host_if_unreachable(&classify(no_answer()), &cache, &fake.cache);
+        assert_eq!(chosen(&cache), None, "a timeout");
         assert!(!scans_kept(&fake), "a timeout");
 
         let (cache, fake) = (cached(), scanned());
         let refused = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "no");
-        forget_host_if_unreachable(&Err(refused.into()), &cache, &fake.cache);
-        assert_eq!(kept(&cache), None, "a refused connection");
+        forget_host_if_unreachable(&classify(Err(refused.into())), &cache, &fake.cache);
+        assert_eq!(chosen(&cache), None, "a refused connection");
         assert!(!scans_kept(&fake), "a refused connection");
 
         let (cache, fake) = (cached(), scanned());
-        forget_host_if_unreachable(&answer(500, ""), &cache, &fake.cache);
-        assert_eq!(kept(&cache), Some(0), "HTTP 500");
+        forget_host_if_unreachable(&classify(answer(500, "")), &cache, &fake.cache);
+        assert_eq!(chosen(&cache), Some(0), "HTTP 500");
         assert!(scans_kept(&fake), "HTTP 500");
 
         let (cache, fake) = (cached(), scanned());
-        forget_host_if_unreachable(&answer(404, ""), &cache, &fake.cache);
-        assert_eq!(kept(&cache), Some(0), "HTTP 404");
+        forget_host_if_unreachable(&classify(answer(404, "")), &cache, &fake.cache);
+        assert_eq!(chosen(&cache), Some(0), "HTTP 404");
         assert!(scans_kept(&fake), "HTTP 404");
 
         let (cache, fake) = (cached(), scanned());
-        forget_host_if_unreachable(&answer(200, "<html>Sign in</html>"), &cache, &fake.cache);
-        assert_eq!(kept(&cache), Some(0), "a 200 with a bad body");
+        forget_host_if_unreachable(
+            &classify(answer(200, "<html>Sign in</html>")),
+            &cache,
+            &fake.cache,
+        );
+        assert_eq!(chosen(&cache), Some(0), "a 200 with a bad body");
         assert!(scans_kept(&fake), "a 200 with a bad body");
 
         let (cache, fake) = (cached(), scanned());
-        forget_host_if_unreachable(&cut_short(200), &cache, &fake.cache);
-        assert_eq!(kept(&cache), Some(0), "a body cut short");
+        forget_host_if_unreachable(&classify(cut_short(200)), &cache, &fake.cache);
+        assert_eq!(chosen(&cache), Some(0), "a body cut short");
         assert!(scans_kept(&fake), "a body cut short");
     }
 
@@ -3513,8 +3718,8 @@ mod tests {
             (HOSTS[0], Err("timed out")),
             (HOSTS[1], Ok(TESTNET4_GENESIS)),
         ]);
-        let cache = Mutex::new(Some((0, Instant::now())));
-        forget_host_if_unreachable(&no_answer(), &cache, &ScanCache::default());
+        let cache = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
+        forget_host_if_unreachable(&classify(no_answer()), &cache, &ScanCache::default());
         assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1);
         assert_eq!(probe.asked(), HOSTS);
     }
