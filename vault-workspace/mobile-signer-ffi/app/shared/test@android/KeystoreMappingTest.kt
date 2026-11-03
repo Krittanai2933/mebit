@@ -180,8 +180,8 @@ class KeystoreMappingTest {
 
     @Test
     fun anEraseIsDoneOnlyWhenNoWalletFileIsLeft() {
-        assertEquals("Erased", name(androidEraseOutcome(fileLeft = false)))
-        assertEquals("Failed(Other)", name(androidEraseOutcome(fileLeft = true)))
+        assertEquals("Erased", name(androidEraseOutcome(fileLeft = false, ANY_VERSION)))
+        assertEquals("Failed(Other)", name(androidEraseOutcome(fileLeft = true, ANY_VERSION)))
     }
 
     @Test

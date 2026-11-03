@@ -48,6 +48,7 @@ import com.mebit.app.QrScanSheet
 import com.mebit.app.data.AmountEntry
 import com.mebit.app.data.AmountUnit
 import com.mebit.app.data.FeeTier
+import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.FiatQuote
 import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SendDraft
@@ -87,6 +88,7 @@ private val SelectedFee = Color(0xFFFFF8EF)
 @Composable
 fun S4SendScreen(
     wallet: SingleSigWallet,
+    session: OnboardingSession,
     draft: SendDraft,
     quotes: QuoteCache,
     onContinue: () -> Unit,
@@ -149,6 +151,7 @@ fun S4SendScreen(
             SendIssue.PaymentUnconfirmed -> {
                 Spacer(modifier = Modifier.height(20.dp))
                 IssuePanel("PAYMENT UNCONFIRMED", "การส่งครั้งก่อนยังยืนยันไม่ได้ รอสักครู่ แล้วเปิดหน้าแรกเพื่อตรวจยอดก่อนส่งอีกครั้ง")
+                UnconfirmedClearControl(wallet, session)
             }
             is SendIssue.Insufficient -> {
                 Spacer(modifier = Modifier.height(20.dp))

@@ -9,8 +9,10 @@ import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.MobileSignerException
+import com.mebit.ffi.signer.PreparedSend
+import com.mebit.ffi.signer.hotBroadcast
+import com.mebit.ffi.signer.hotPrepareSend
 import com.mebit.ffi.signer.hotReceiveAddress
-import com.mebit.ffi.signer.hotSend
 import com.mebit.ffi.signer.hotWalletHistory
 import com.mebit.ffi.signer.hotWalletSnapshot
 import kotlin.time.Clock
@@ -19,11 +21,12 @@ import kotlin.time.Clock
  * Single-sig hot wallet surface for Movie Page S*.
  * Live path uses BIP-84 + Esplora (hot_* UniFFI). Demo path keeps offline fixtures.
  *
- * [send], [snapshot], [fetchHistory] and [receiveAddressOf] are the hot_* calls. Tests pass fakes, so they need no native library or network.
+ * [prepare], [post], [snapshot], [fetchHistory] and [receiveAddressOf] are the hot_* calls. Tests pass fakes, so they need no native library or network.
  * [nowSeconds] is the phone clock in Unix seconds, which [lastSentAtSeconds] reads when a payment goes out.
  */
 class SingleSigWallet(
-    private val send: (words: List<String>, passphrase: String, network: KeyNetwork, destination: String, amountSats: ULong, feeSats: ULong) -> HotSendResult = ::hotSend,
+    private val prepare: (words: List<String>, passphrase: String, network: KeyNetwork, destination: String, amountSats: ULong, feeSats: ULong) -> PreparedSend = ::hotPrepareSend,
+    private val post: (network: KeyNetwork, hex: String, txid: String) -> HotSendResult = ::hotBroadcast,
     private val snapshot: (words: List<String>, passphrase: String, network: KeyNetwork) -> HotWalletSnapshot = ::hotWalletSnapshot,
     private val fetchHistory: (words: List<String>, passphrase: String, network: KeyNetwork) -> List<HotTx> = ::hotWalletHistory,
     private val nowSeconds: () -> Long = { Clock.System.now().epochSeconds },
@@ -41,7 +44,7 @@ class SingleSigWallet(
         Unavailable,
     }
 
-    /** A payment whose broadcast ended in [MobileSignerException.BroadcastUnknown], so it may be out. [txid] is the one the error named, empty when it named none. [sinceSeconds] is the phone clock when the broadcast ended. */
+    /** A signed payment that may be out: its post began and has not been answered with a refusal or an explorer that lists it. [txid] is the one hot_prepare_send computed. [sinceSeconds] is the phone clock when the post began. */
     data class UnconfirmedSend(val txid: String, val sinceSeconds: Long)
 
     /** The [WalletMode] the last [bindSession] left. [WalletMode.Demo] until the first bind. */
@@ -72,7 +75,7 @@ class SingleSigWallet(
         private set
 
     /**
-     * The payment that may be out, or null. While it is set [broadcast] refuses, because the same payment could go out twice. A [bindSession] that loads clears it once [history] holds its txid or two minutes have passed, and [useDemoFixture] clears it. [lastTxid] and [lastSentAtSeconds] stay for payments that went out.
+     * The payment that may be out, or null. [broadcast] sets it and saves it before the post, and while it is set [broadcast] refuses, because the same payment could go out twice. It clears when the post returns or the node refuses, when a [bindSession] loads a [history] that holds its txid, when the user clears it through [clearUnconfirmedSend] after checking the explorer, and in [useDemoFixture]. Never by the clock. [lastTxid] and [lastSentAtSeconds] stay for payments that went out.
      * The session saves it with the wallet ([OnboardingSession.unconfirmedSend]), so a wallet built after a restart takes it back at its first bind and clearing it here clears the saved copy too.
      */
     var unconfirmedSend: UnconfirmedSend? by mutableStateOf(null)
@@ -98,19 +101,12 @@ class SingleSigWallet(
                 null
             }
             history = loaded ?: emptyList()
-            // Only a list that loaded can settle it, because the empty one of a failed call says nothing about the payment.
-            if (loaded != null) {
-                unconfirmedSend?.let { pending ->
-                    if (loaded.any { it.txid == pending.txid } || nowSeconds() - pending.sinceSeconds >= UNCONFIRMED_SEND_SETTLE_SECONDS) {
-                        unconfirmedSend = null
-                        session.clearUnconfirmedSend()
-                    }
-                }
-            }
+            // Only a list that names the txid can settle it: the empty list of a failed call says nothing, and neither does the clock.
+            if (loaded != null && unconfirmedSend?.let { pending -> loaded.any { it.txid == pending.txid } } == true) clearUnconfirmedSend(session)
         } catch (e: Exception) {
             // Mode first, so no frame shows the cleared balance as a known one.
             mode = WalletMode.Unavailable
-            lastError = e.message
+            lastError = sendErrorThai(e.message)
             balanceSats = 0L
             history = emptyList()
             // The address needs only the key, so the wallet keeps its own address, never the demo's, while the chain is out of reach.
@@ -149,29 +145,40 @@ class SingleSigWallet(
             lastSentAtSeconds = nowSeconds()
             return true
         }
-        val result = try {
-            send(
-                session.words,
-                session.passphrase,
-                network,
-                destination,
-                amountSats.toULong(),
-                feeSats.toULong(),
-            )
-        } catch (e: MobileSignerException.BroadcastUnknown) {
-            val pending = UnconfirmedSend(Regex("""\b[0-9a-f]{64}\b""").find(e.message.orEmpty())?.value.orEmpty(), nowSeconds())
-            unconfirmedSend = pending
-            session.recordUnconfirmedSend(pending.txid, pending.sinceSeconds)
-            // Plain Thai, because Home prints lastError raw until its next bind clears it, and the Rust text is English.
-            lastError = "ยังไม่ทราบว่าการส่งออกไปแล้วหรือยัง อย่าส่งซ้ำ"
-            return false
+        val prepared = try {
+            prepare(session.words, session.passphrase, network, destination, amountSats.toULong(), feeSats.toULong())
         } catch (e: Exception) {
-            lastError = e.message
+            lastError = sendErrorThai(e.message)
             return false
         }
-        lastTxid = result.txid
+        // The guard reaches the phone before the post, so an app killed during the post still refuses this payment after the restart.
+        val pending = UnconfirmedSend(prepared.txid, nowSeconds())
+        unconfirmedSend = pending
+        if (!session.recordUnconfirmedSend(pending.txid, pending.sinceSeconds)) {
+            clearUnconfirmedSend(session)
+            lastError = "บันทึกสถานะการส่งไม่ได้ จึงยังไม่ส่ง ลองใหม่ภายหลัง"
+            return false
+        }
+        try {
+            post(network, prepared.hex, prepared.txid)
+        } catch (e: MobileSignerException.BroadcastUnknown) {
+            // The guard stays. Plain Thai, because Home prints lastError raw until its next bind clears it, and the Rust text is English.
+            lastError = "ยังไม่ทราบว่าการส่งออกไปแล้วหรือยัง อย่าส่งซ้ำ"
+            return false
+        } catch (e: MobileSignerException.InvalidPsbtJson) {
+            // The node refused the transaction, or hot_broadcast refused before it posted anything: nothing is out and the guard goes.
+            clearUnconfirmedSend(session)
+            lastError = sendErrorThai(e.message)
+            return false
+        } catch (e: Exception) {
+            // Any other failure could have come after the post, so the guard stays and the payment reads as unknown.
+            lastError = "ยังไม่ทราบว่าการส่งออกไปแล้วหรือยัง อย่าส่งซ้ำ"
+            return false
+        }
+        clearUnconfirmedSend(session)
+        lastTxid = prepared.txid
         lastSentAtSeconds = nowSeconds()
-        // Its own try: the payment is out once send returns, and reading it as failed invites a retry that pays twice.
+        // Its own try: the payment is out once the post returns, and reading it as failed invites a retry that pays twice.
         try {
             val snap = snapshot(session.words, session.passphrase, network)
             balanceSats = snap.balanceSats.toLong()
@@ -180,6 +187,15 @@ class SingleSigWallet(
         }
         return true
     }
+
+    /** The user checked the explorer and found no such transaction. Clears the guard here and the saved copy, so a new payment can start. */
+    fun clearUnconfirmedSend(session: OnboardingSession) {
+        unconfirmedSend = null
+        session.clearUnconfirmedSend()
+    }
+
+    /** Whether the screen may offer the clear control now, by [offersUnconfirmedClear]. False without a guard. */
+    fun unconfirmedClearOffered(): Boolean = unconfirmedSend?.let { offersUnconfirmedClear(it.sinceSeconds, nowSeconds()) } ?: false
 
     /** Offline fixture for catalog / no-seed CI. */
     fun useDemoFixture() {
@@ -193,8 +209,37 @@ class SingleSigWallet(
     }
 }
 
-/** An explorer that answers lists a transaction its node took within seconds, so one still missing two minutes after an unclear broadcast is treated as not sent. */
-private const val UNCONFIRMED_SEND_SETTLE_SECONDS = 120L
+/** How old a guard must be, by the phone clock, before the screen offers the control that clears it. */
+const val UNCONFIRMED_CLEAR_OFFER_SECONDS = 120L
+
+/**
+ * Whether to offer the clear control for a guard set at [sinceSeconds] when the clock reads [nowSeconds]. The clock decides only
+ * the offer, never a clear: a clock moved forward shows the control early, and one moved back would hide it for as long as it was
+ * moved, so a negative age shows it too.
+ */
+fun offersUnconfirmedClear(sinceSeconds: Long, nowSeconds: Long): Boolean = (nowSeconds - sinceSeconds).let { it >= UNCONFIRMED_CLEAR_OFFER_SECONDS || it < 0 }
+
+/**
+ * The Thai line for an error a hot_* call threw, matched on the Rust message's prefix or shape, so no English reaches a screen.
+ * Each row names the Rust text it answers. `esplora post:` is the node's refusal with its reason, not a network failure.
+ */
+fun sendErrorThai(message: String?): String {
+    val m = message.orEmpty()
+    return when {
+        m.startsWith("amount ") && m.endsWith("dust limit") -> "จำนวนน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)"
+        m.startsWith("fee ") && " is more than the amount " in m -> "ค่าธรรมเนียมสูงกว่าจำนวนที่ส่ง เลือกระดับที่ต่ำลง"
+        m.startsWith("insufficient funds") -> "ยอดที่ยืนยันแล้วไม่พอ รอให้เงินที่เพิ่งได้รับยืนยันก่อน"
+        m.startsWith("change below dust") -> "เงินทอนน้อยเกินไป ส่งทั้งหมดหรือเปลี่ยนจำนวน"
+        m.startsWith("fee ") && " is below " in m -> "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น"
+        m.startsWith("fee ") && " is above " in m -> "ค่าธรรมเนียมสูงผิดปกติ ตรวจจำนวนอีกครั้ง"
+        m.startsWith("esplora scan:") -> "ประวัติของกระเป๋านี้ผิดปกติ ตรวจกับ explorer ก่อนส่ง"
+        m.startsWith("esplora utxo:") || m.startsWith("esplora balance:") -> "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง"
+        m == "amount plus fee does not fit u64" -> "จำนวนผิดปกติ"
+        m.startsWith("broadcast:") || m.startsWith("esplora post:") -> "ส่งไม่สำเร็จ"
+        m.startsWith("esplora get") -> "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง"
+        else -> "ส่งไม่สำเร็จ ลองใหม่ภายหลัง"
+    }
+}
 
 /** A typical 1-input, 2-output P2WPKH payment. The fee tiers are rate times this until coin selection reports the real size. */
 const val TYPICAL_VSIZE = 141L
@@ -216,10 +261,15 @@ fun parseBtc(text: String): Long? {
     return (whole * 100_000_000 + fraction).takeIf { it > 0 }
 }
 
-/** 500_000 sats to "0.00500000". Cut to [decimals] places, never rounded, so an amount is never shown larger than it is. */
+/**
+ * 500_000 sats to "0.00500000". Cut to [decimals] places, never rounded, so an amount is never shown larger than it is. An amount
+ * under 1 BTC whose cut would read as zero keeps its digits up to the first one that is not, so 9_999 at 4 places is "0.00009", never "0.0000".
+ */
 fun formatBtc(sats: Long, decimals: Int = 8): String {
-    val fraction = (sats % 100_000_000).toString().padStart(8, '0').take(decimals)
-    return if (decimals == 0) "${sats / 100_000_000}" else "${sats / 100_000_000}.$fraction"
+    val whole = sats / 100_000_000
+    val digits = (sats % 100_000_000).toString().padStart(8, '0')
+    val shown = if (whole == 0L && sats != 0L && digits.take(decimals).all { it == '0' }) digits.indexOfFirst { it != '0' } + 1 else decimals
+    return if (shown == 0) "$whole" else "$whole.${digits.take(shown)}"
 }
 
 sealed interface SendIssue {

@@ -318,12 +318,43 @@ class OnboardingSessionSaveTest {
         assertEquals(SaveState.NotSaved, session.saved, "saved after forget")
         assertNull(session.notSavedBecause)
 
-        val stuck = FakeSecureStore(erase = EraseResult.Failed(Why.TryLater))
+        val stuck = FakeSecureStore(erase = failedErase(Why.TryLater))
         val kept = session(stuck)
         kept.generateThisDevice()
         assertFalse(kept.forgetSavedWallet(), "a failed erase reported success")
         assertTrue(kept.words == PUBLIC_WORDS_24, "a failed erase cleared memory")
         assertEquals(SaveState.Saved, kept.saved, "saved after a failed erase")
+    }
+
+    @Test
+    fun aFailedForgetLeavesTheSessionAbleToSaveItsPaymentGuard() {
+        val store = FakeSecureStore(erase = failedErase(Why.TryLater))
+        val session = session(store)
+        session.generateThisDevice()
+        assertFalse(session.forgetSavedWallet(), "the first forget")
+        assertFalse(session.forgetSavedWallet(), "the second forget")
+        session.markBackupConfirmed()
+        assertTrue(session.recordUnconfirmedSend(TEST_TXID, SENT_AT), "the guard reached the phone")
+        assertEquals(SaveState.Saved, session.saved, "saved after a failed erase and two saves")
+        assertNull(session.notSavedBecause, "a save after the failed erase was refused")
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), store.savedCopy().unconfirmedSend, "the copy after the guard")
+        assertEquals(listOf(true, false, false), store.savedCopy().flags(), "the copy after backup")
+    }
+
+    @Test
+    fun recordingAPaymentGuardReportsWhetherThePhoneHoldsIt() {
+        val store = FakeSecureStore()
+        val session = session(store)
+        session.generateThisDevice()
+        store.write = WriteResult.Unavailable(Why.TryLater)
+        assertFalse(session.recordUnconfirmedSend(TEST_TXID, SENT_AT), "a guard the phone could not keep")
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), session.unconfirmedSend, "kept in memory for the flush")
+        store.write = null
+        assertTrue(session.recordUnconfirmedSend(TEST_TXID, SENT_AT), "a guard the phone kept")
+        assertFalse(OnboardingSession().recordUnconfirmedSend(TEST_TXID, SENT_AT), "a session with no store")
+        val stale = session(store)
+        stale.generateThisDevice() // refused: a wallet is saved, so this session never holds a copy
+        assertFalse(stale.recordUnconfirmedSend(TEST_TXID, SENT_AT), "a session that holds no copy")
     }
 
     @Test

@@ -175,7 +175,7 @@ class SavedWallet internal constructor(private val store: SecureStore) {
     }
 
     /** After the user confirmed. The only call in the app that deletes the wallet. */
-    fun forget(): Boolean = (store.erase() is EraseResult.Erased).also { if (it) store.writeMarker(Marker.Empty) }
+    fun forget(): EraseResult = store.erase().also { if (it is EraseResult.Erased) store.writeMarker(Marker.Empty) }
 
     private companion object {
         val NETWORKS = setOf(KeyNetwork.TEST)

@@ -16,6 +16,9 @@ private const val OFFLINE_ADDRESS = "tb1qaddressderivedfromthekeyalone"
 private const val DEMO_ADDRESS = "tb1qmebitdemosinglesig0000000000000000recv"
 private val HISTORY = listOf(HotTx("txid-0", 1_000_000L, 3u, 1_760_000_000uL))
 
+// What Home would print raw for a snapshot that failed, so it is the Thai line for the Rust "esplora get" prefix, never the English text.
+private const val UNREACHABLE_SHOWN = "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง"
+
 /** Everything the screens read from a bound wallet. */
 private data class Shown(
     val mode: WalletMode,
@@ -39,7 +42,8 @@ private class FakeChain {
     var offlineResult: () -> String = { OFFLINE_ADDRESS }
     val derivations = mutableListOf<Derivation>()
     val wallet = SingleSigWallet(
-        send = { _, _, _, _, _, _ -> fail("send ran") },
+        prepare = { _, _, _, _, _, _ -> fail("prepare ran") },
+        post = { _, _, _ -> fail("post ran") },
         snapshot = { _, _, _ -> snapshotResult() },
         fetchHistory = { _, _, _ -> historyResult() },
         receiveAddressOf = { words, passphrase, network, index ->
@@ -79,10 +83,10 @@ class SingleSigWalletStateTest {
     @Test
     fun aFailedSnapshotIsUnavailableWithTheKeysOwnAddressAndNoBalance() {
         val chain = FakeChain()
-        chain.snapshotResult = { throw IllegalStateException("esplora unreachable") }
+        chain.snapshotResult = { throw IllegalStateException("esplora get: connection refused") }
         chain.bind()
         assertEquals(
-            Shown(WalletMode.Unavailable, 0L, OFFLINE_ADDRESS, emptyList(), "esplora unreachable", live = false, balanceKnown = false, addressIsReal = true),
+            Shown(WalletMode.Unavailable, 0L, OFFLINE_ADDRESS, emptyList(), UNREACHABLE_SHOWN, live = false, balanceKnown = false, addressIsReal = true),
             chain.wallet.shown(),
         )
         assertEquals(listOf(Derivation(KEY_WORDS, KEY_PASSPHRASE, KeyNetwork.TEST, 0u)), chain.derivations, "the key's first receive address, the one the snapshot watches")
@@ -91,11 +95,11 @@ class SingleSigWalletStateTest {
     @Test
     fun aFailedSnapshotAndAFailedDerivationLeaveNoAddress() {
         val chain = FakeChain()
-        chain.snapshotResult = { throw IllegalStateException("esplora unreachable") }
+        chain.snapshotResult = { throw IllegalStateException("esplora get: connection refused") }
         chain.offlineResult = { throw IllegalStateException("derivation failed") }
         chain.bind()
         assertEquals(
-            Shown(WalletMode.Unavailable, 0L, "", emptyList(), "esplora unreachable", live = false, balanceKnown = false, addressIsReal = false),
+            Shown(WalletMode.Unavailable, 0L, "", emptyList(), UNREACHABLE_SHOWN, live = false, balanceKnown = false, addressIsReal = false),
             chain.wallet.shown(),
         )
     }
@@ -104,10 +108,10 @@ class SingleSigWalletStateTest {
     fun aLiveWalletWhoseNextBindFailsIsUnavailableAndKeepsNoStaleBalance() {
         val chain = FakeChain()
         chain.bind()
-        chain.snapshotResult = { throw IllegalStateException("esplora unreachable") }
+        chain.snapshotResult = { throw IllegalStateException("esplora get: connection refused") }
         chain.bind()
         assertEquals(
-            Shown(WalletMode.Unavailable, 0L, OFFLINE_ADDRESS, emptyList(), "esplora unreachable", live = false, balanceKnown = false, addressIsReal = true),
+            Shown(WalletMode.Unavailable, 0L, OFFLINE_ADDRESS, emptyList(), UNREACHABLE_SHOWN, live = false, balanceKnown = false, addressIsReal = true),
             chain.wallet.shown(),
         )
         assertFalse(chain.wallet.broadcast(chain.session, 100_000, 1_128, "tb1qdestinationthatneverleaves"), "the old balance pays for no mock payment")
@@ -117,7 +121,7 @@ class SingleSigWalletStateTest {
     @Test
     fun anUnavailableWalletWhoseNextBindLoadsIsLive() {
         val chain = FakeChain()
-        chain.snapshotResult = { throw IllegalStateException("esplora unreachable") }
+        chain.snapshotResult = { throw IllegalStateException("esplora get: connection refused") }
         chain.bind()
         chain.snapshotResult = { HotWalletSnapshot(CHAIN_ADDRESS, 1_000_000uL, KeyNetwork.TEST) }
         chain.bind()

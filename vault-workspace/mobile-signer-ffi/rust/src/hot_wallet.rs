@@ -615,37 +615,10 @@ pub struct HotSendResult {
     pub txid: String,
 }
 
-/// True when `address` parses and belongs to `network`: the same test `hot_send` applies to its destination.
+/// True when `address` parses and belongs to `network`: the same test `hot_prepare_send` applies to its destination.
 #[uniffi::export]
 pub fn is_valid_address(address: String, network: KeyNetwork) -> bool {
     Address::from_str(&address).is_ok_and(|a| a.require_network(network_of(network)).is_ok())
-}
-
-/// Build, sign (BIP-84 index 0 key), and broadcast a payment. Fee is absolute sats.
-///
-/// The txid it returns is computed from the signed transaction, never read from the server. When the
-/// explorer's answer to the broadcast leaves it unclear whether the payment went out, it looks that
-/// txid up a few times and fails with `BroadcastUnknown` if it is still not found. The payment may be
-/// out then, so the app must not offer it as a failure to retry. A silent explorer can hold this call
-/// for about two minutes, so call it off the main thread.
-#[uniffi::export]
-pub fn hot_send(
-    mnemonic_words: Vec<String>,
-    passphrase: String,
-    network: KeyNetwork,
-    destination: String,
-    amount_sats: u64,
-    fee_sats: u64,
-) -> Result<HotSendResult, MobileSignerError> {
-    let prepared = hot_prepare_send(
-        mnemonic_words,
-        passphrase,
-        network,
-        destination,
-        amount_sats,
-        fee_sats,
-    )?;
-    hot_broadcast(network, prepared.hex, prepared.txid)
 }
 
 /// A signed payment that has not been posted anywhere.
@@ -1056,7 +1029,7 @@ mod tests {
     }
 
     #[test]
-    fn address_check_matches_what_hot_send_accepts() {
+    fn address_check_matches_what_hot_prepare_send_accepts() {
         let own = hot_receive_address(abandon_about(), String::new(), KeyNetwork::Test, 0).unwrap();
         assert!(is_valid_address(own.clone(), KeyNetwork::Test));
         assert!(
@@ -2402,7 +2375,7 @@ mod tests {
         assert_eq!(parsed, signed);
         assert_eq!(ready.txid, parsed.compute_txid().to_string());
         assert_eq!(ready.fee_sats, 500);
-        // The same words give the same transaction, so hot_send would broadcast this txid.
+        // The same words give the same transaction, so hot_broadcast would post this txid.
         assert_eq!(
             ready,
             prepared(&fake.send(SOMEONE, 5_000, 500).unwrap(), 500)

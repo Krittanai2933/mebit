@@ -334,14 +334,14 @@ class KeychainMappingTest {
 
     @Test
     fun eraseIsDoneWhenItDeletedOrFoundNothing() {
-        assertEquals("Erased", name(eraseOutcome(errSecSuccess)))
-        assertEquals("Erased", name(eraseOutcome(errSecItemNotFound)))
+        assertEquals("Erased", name(eraseOutcome(errSecSuccess, ANY_VERSION)))
+        assertEquals("Erased", name(eraseOutcome(errSecItemNotFound, ANY_VERSION)))
     }
 
     @Test
     fun anyOtherEraseStatusFails() {
-        assertEquals("Failed(Other)", name(eraseOutcome(errSecInteractionNotAllowed)))
-        assertEquals("Failed(Other)", name(eraseOutcome(errSecMissingEntitlement)))
+        assertEquals("Failed(Other)", name(eraseOutcome(errSecInteractionNotAllowed, ANY_VERSION)))
+        assertEquals("Failed(Other)", name(eraseOutcome(errSecMissingEntitlement, ANY_VERSION)))
     }
 
     @Test

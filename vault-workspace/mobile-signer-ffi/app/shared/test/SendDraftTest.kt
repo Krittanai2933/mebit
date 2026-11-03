@@ -28,6 +28,17 @@ class SendDraftTest {
     }
 
     @Test
+    fun aRealAmountNeverReadsAsZero() {
+        // The review headline, the slip and the Home balance cut to 4 places (interrogate finding 15: 9,999 sats read as 0.0000).
+        assertEquals("0.00009", formatBtc(9_999, 4))
+        assertEquals("0.00000001", formatBtc(1, 4))
+        assertEquals("0.00009", formatBtc(9_999, 0))
+        assertEquals("0.0000", formatBtc(0, 4), "nothing is nothing")
+        assertEquals("1.0000", formatBtc(100_009_999, 4), "a whole part already shows the amount")
+        assertEquals("0.0050", formatBtc(500_000, 4), "an amount that shows at 4 places keeps 4")
+    }
+
+    @Test
     fun feeTiersAreRateTimesTheTypicalSize() {
         assertEquals(listOf(564L, 1_128L, 2_115L), FeeTier.entries.map { it.sats })
     }

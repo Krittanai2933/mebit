@@ -203,8 +203,6 @@ RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_prepare_send(RustBuffer mnemonic
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_receive_address(RustBuffer mnemonicWords, RustBuffer passphrase, RustBuffer network, int32_t index, UniffiRustCallStatus *_Nonnull out_status
 );
-RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_send(RustBuffer mnemonicWords, RustBuffer passphrase, RustBuffer network, RustBuffer destination, int64_t amountSats, int64_t feeSats, UniffiRustCallStatus *_Nonnull out_status
-);
 RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_wallet_history(RustBuffer mnemonicWords, RustBuffer passphrase, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_wallet_snapshot(RustBuffer mnemonicWords, RustBuffer passphrase, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
@@ -363,9 +361,6 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_func_hot_receive_address(void
-    
-);
-int16_t uniffi_mobile_signer_ffi_checksum_func_hot_send(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_func_hot_wallet_history(void

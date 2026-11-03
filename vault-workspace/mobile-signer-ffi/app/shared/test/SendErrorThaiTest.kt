@@ -1,0 +1,45 @@
+package com.mebit.app.data
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+
+/** Every Rust refusal of hot_prepare_send, hot_broadcast, hot_wallet_snapshot and hot_wallet_history has a Thai line, and none shows its English text. */
+class SendErrorThaiTest {
+    private val rows = listOf(
+        "amount 100 is below the 546 sat dust limit" to "จำนวนน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)",
+        "fee 2115 is more than the amount 1000" to "ค่าธรรมเนียมสูงกว่าจำนวนที่ส่ง เลือกระดับที่ต่ำลง",
+        "insufficient funds: have 0 confirmed, need 1100" to "ยอดที่ยืนยันแล้วไม่พอ รอให้เงินที่เพิ่งได้รับยืนยันก่อน",
+        "change below dust, send the whole balance or change the amount" to "เงินทอนน้อยเกินไป ส่งทั้งหมดหรือเปลี่ยนจำนวน",
+        "fee 564 is below 1 sat/vB for 788 vB" to "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น",
+        "fee 400000 is above 2000 sat/vB for 141 vB" to "ค่าธรรมเนียมสูงผิดปกติ ตรวจจำนวนอีกครั้ง",
+        "esplora scan: more than 200 addresses on one chain, the history is abnormal" to "ประวัติของกระเป๋านี้ผิดปกติ ตรวจกับ explorer ก่อนส่ง",
+        "esplora utxo: 1111111111111111111111111111111111111111111111111111111111111111:0 is listed twice" to "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง",
+        "esplora utxo: the coins' values do not fit u64" to "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง",
+        "esplora balance: 18446744073709551616 sats does not fit u64" to "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง",
+        "amount plus fee does not fit u64" to "จำนวนผิดปกติ",
+        "broadcast: not a transaction: odd length" to "ส่งไม่สำเร็จ",
+        "broadcast: txid aa does not match the transaction bb" to "ส่งไม่สำเร็จ",
+        "esplora post: https://mempool.space/testnet/api/tx: status code 400: bad-txns-inputs-missingorspent" to "ส่งไม่สำเร็จ",
+        "esplora get: https://mempool.space/testnet/api/address/tb1q/utxo: Network Error: connection refused" to "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง",
+        "esplora get: lookup thread panicked" to "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง",
+        "missing witness slot" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
+        "" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
+    )
+
+    @Test
+    fun everyRustRefusalHasItsThaiLine() {
+        for ((rust, thai) in rows) assertEquals(thai, sendErrorThai(rust), rust)
+        assertEquals("ส่งไม่สำเร็จ ลองใหม่ภายหลัง", sendErrorThai(null), "a null message")
+    }
+
+    @Test
+    fun noEnglishWordOfTheRustTextReachesTheScreen() {
+        for ((rust, _) in rows) {
+            val shown = sendErrorThai(rust)
+            for (word in rust.split(' ').filter { it.length > 3 && it.all { c -> c.isLetter() } }) {
+                assertFalse(word in shown, "'$word' of '$rust' in '$shown'")
+            }
+        }
+    }
+}

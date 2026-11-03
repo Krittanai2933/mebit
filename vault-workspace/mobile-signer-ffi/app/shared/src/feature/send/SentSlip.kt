@@ -276,5 +276,5 @@ private fun SlipHairline(top: Dp) {
 }
 
 /** "tb1qw5…jzsx": first four, last four. Short strings stay whole. */
-private fun shorten(text: String, dots: String): String =
+internal fun shorten(text: String, dots: String): String =
     if (text.length <= 10) text else text.take(4) + " " + dots + " " + text.takeLast(4)

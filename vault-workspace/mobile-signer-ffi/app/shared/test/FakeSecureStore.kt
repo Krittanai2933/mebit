@@ -63,12 +63,12 @@ internal class FakeSecureStore(
 
     override fun erase(): EraseResult {
         erases++
-        copies.advance()
-        if (erase == EraseResult.Erased) {
-            held = null
-            probe = StoreProbe.Empty
-        }
-        return erase
+        val version = copies.advance()
+        val scripted = erase
+        if (scripted is EraseResult.Failed) return EraseResult.Failed(scripted.why, version)
+        held = null
+        probe = StoreProbe.Empty
+        return EraseResult.Erased
     }
 
     override fun marker(): Marker = marker
@@ -89,6 +89,9 @@ internal const val TEST_CHECK = "0a1b2c3d"
 
 /** A copy version for a test that scripts a read or installs a record by hand, where no store counted one. A fresh store's own. */
 internal val ANY_VERSION: StoreVersion = CopyCounter().current
+
+/** Scripts a [FakeSecureStore] erase that fails with [why]. The fake stamps the version it counted on the answer it returns. */
+internal fun failedErase(why: Why) = EraseResult.Failed(why, ANY_VERSION)
 
 /** Each write's kind, for a test that checks which writes a session made. */
 internal fun FakeSecureStore.modes(): List<String> = writes.map { if (it.mode is WriteMode.Replace) "Replace" else "Create" }

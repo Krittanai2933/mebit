@@ -89,7 +89,8 @@ sealed interface WriteResult {
 sealed interface EraseResult {
     data object Erased : EraseResult
 
-    class Failed(val why: Why) : EraseResult
+    /** The copy is still there, under [version]: the erase advanced the counter, so a session that keeps writing to that copy must expect this one. */
+    class Failed(val why: Why, val version: StoreVersion) : EraseResult
 }
 
 /**

@@ -10,6 +10,7 @@ import com.mebit.app.WriteMode
 import com.mebit.app.data.ANY_VERSION
 import com.mebit.app.data.Cause
 import com.mebit.app.data.FakeSecureStore
+import com.mebit.app.data.failedErase
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.PUBLIC_WORDS_12
 import com.mebit.app.data.PUBLIC_WORDS_24
@@ -215,7 +216,7 @@ class WalletGateStateTest {
 
     @Test
     fun forgetErasesThenOnboardingAndAFailedEraseStaysPut(): Unit = runBlocking {
-        val app = AppLaunch(savedPhone().apply { erase = EraseResult.Failed(Why.TryLater) })
+        val app = AppLaunch(savedPhone().apply { erase = failedErase(Why.TryLater) })
         app.gate.forget("test")
         assertEquals(Boot.Locked, app.gate.boot, "a failed erase from Locked")
         assertEquals("Unavailable(Other)", label(app.gate.lastAttempt), "a failed erase from Locked")
@@ -231,7 +232,7 @@ class WalletGateStateTest {
         assertEquals(SaveState.Saved, app.session.saved, "an import after forget")
         assertNull(app.session.lastError, "an import after forget was refused")
 
-        val broken = AppLaunch(FakeSecureStore(probe = StoreProbe.KeyGone, marker = Marker.Kept, erase = EraseResult.Failed(Why.Other)))
+        val broken = AppLaunch(FakeSecureStore(probe = StoreProbe.KeyGone, marker = Marker.Kept, erase = failedErase(Why.Other)))
         broken.gate.forget("test")
         assertEquals(Cause.KeyGone, assertIs<Boot.Broken>(broken.gate.boot, "a failed erase from Broken").cause, "a failed erase from Broken")
         assertEquals("Unavailable(Other)", label(broken.gate.lastAttempt), "a failed erase from Broken")
@@ -263,7 +264,7 @@ class WalletGateStateTest {
             Start("an orphan from a deleted install", Marker.Absent, StoreProbe.Present, Boot.Onboarding, StartNotice.OrphanWiped),
             Start("a wallet the OS removed", Marker.Kept, StoreProbe.Empty, Boot.Onboarding, StartNotice.WalletVanished),
             Start("a wallet kept from an earlier launch", Marker.Kept, StoreProbe.Present, Boot.Locked, null),
-            Start("an orphan whose wipe failed", Marker.Absent, StoreProbe.Present, Boot.Locked, null, EraseResult.Failed(Why.TryLater)),
+            Start("an orphan whose wipe failed", Marker.Absent, StoreProbe.Present, Boot.Locked, null, failedErase(Why.TryLater)),
         )
         for (s in starts) {
             val app = AppLaunch(FakeSecureStore(probe = s.probe, marker = s.marker, erase = s.erase))
@@ -290,7 +291,7 @@ class WalletGateStateTest {
                 app.keys.fingerprint = TEST_CHECK
                 setUp(app)
                 val eraseFails = random.nextInt(6) == 0
-                app.store.erase = if (eraseFails) EraseResult.Failed(Why.TryLater) else EraseResult.Erased
+                app.store.erase = if (eraseFails) failedErase(Why.TryLater) else EraseResult.Erased
                 if (forget) app.gate.forget("walk") else app.gate.unlock("walk")
                 trail += (if (forget) "forget: " else "unlock: ") + answer + (if (eraseFails) ", erase fails" else "")
                 val case = "walk $walk, ${trail.joinToString("; ")}"

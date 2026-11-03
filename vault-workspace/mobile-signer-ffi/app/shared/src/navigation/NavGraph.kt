@@ -373,6 +373,7 @@ fun MebitNavHost(
         )
         MovieRoute.S4Send -> S4SendScreen(
             wallet = singleSig,
+            session = session,
             draft = sendDraft,
             quotes = quotes,
             onContinue = { navigate(MovieRoute.S5ReviewSign) },

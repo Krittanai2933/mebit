@@ -135,6 +135,7 @@ fun S5ReviewSignScreen(
             Spacer(modifier = Modifier.height(20.dp))
             IssueBanner(it.title, it.message, it.tag)
         }
+        UnconfirmedClearControl(wallet, session)
         if (total > wallet.balanceSats) {
             Spacer(modifier = Modifier.height(12.dp))
             Text("ยอดไม่พอ", color = MaterialTheme.colorScheme.error)

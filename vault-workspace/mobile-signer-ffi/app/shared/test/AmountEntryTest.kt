@@ -246,7 +246,7 @@ class AmountEntryTest {
         assertEquals(0L, draft.amountSats)
         assertEquals("", draft.amountText)
         assertFalse(entry.isSendAll)
-        assertEquals("ใช้ได้ 0.0000 BTC", entry.caption(1_000, null))
+        assertEquals("ใช้ได้ 0.00001 BTC", entry.caption(1_000, null), "a real balance never reads as 0.0000")
         // A cheaper tier leaves something, and the amount follows it because send all is still marked.
         entry.chooseTier(FeeTier.Slow, 1_000)
         assertEquals(436L, draft.amountSats)

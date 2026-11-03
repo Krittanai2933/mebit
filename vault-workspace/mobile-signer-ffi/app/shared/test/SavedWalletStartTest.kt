@@ -95,7 +95,7 @@ class SavedWalletStartTest {
 
     @Test
     fun aFailedEraseKeepsTheWalletAndStopsTryingToWipeIt() {
-        val store = FakeSecureStore(probe = StoreProbe.Present, marker = Marker.Absent, erase = EraseResult.Failed(Why.TryLater))
+        val store = FakeSecureStore(probe = StoreProbe.Present, marker = Marker.Absent, erase = failedErase(Why.TryLater))
         val wallet = SavedWallet(store)
         val start = wallet.start()
         assertNull(start.notice)
@@ -111,10 +111,10 @@ class SavedWalletStartTest {
         val wallet = SavedWallet(store)
         wallet.save(testRecord(), WriteMode.Create)
         assertEquals(listOf(Marker.Kept), store.markerWrites, "after save")
-        assertTrue(wallet.forget(), "forget")
+        assertEquals(EraseResult.Erased, wallet.forget(), "forget")
         assertEquals(listOf(Marker.Kept, Marker.Empty), store.markerWrites, "after forget")
-        store.erase = EraseResult.Failed(Why.Other)
-        assertFalse(wallet.forget(), "a failed erase")
+        store.erase = failedErase(Why.Other)
+        assertIs<EraseResult.Failed>(wallet.forget(), "a failed erase")
         assertEquals(listOf(Marker.Kept, Marker.Empty), store.markerWrites, "after a failed erase")
     }
 

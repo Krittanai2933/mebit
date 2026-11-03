@@ -76,7 +76,7 @@ pub enum MobileSignerError {
     #[error("network error: {0}")]
     Network(String),
 
-    /// `hot_send` broadcast a payment but cannot tell whether the explorer took it: the answer was
+    /// `hot_broadcast` posted a payment but cannot tell whether the explorer took it: the answer was
     /// lost or unclear, and the transaction was still not found after the last lookup. The text
     /// carries the txid. The payment may be out, so repeating it may pay twice. Kotlin reads
     /// variants by position, so any new one goes below this.
@@ -846,10 +846,6 @@ mod tests {
             (
                 "func_hot_receive_address",
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_receive_address(),
-            ),
-            (
-                "func_hot_send",
-                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_send(),
             ),
             (
                 "func_hot_prepare_send",

@@ -137,14 +137,14 @@ private class KeystoreStore(private val context: Context) : SecureStore {
     }
 
     override fun erase(): EraseResult = synchronized(storeLock) {
-        copies.advance()
+        val version = copies.advance()
         try {
             keyStore().deleteEntry(ALIAS)
         } catch (e: Exception) {
             // A key left without its file reads as Empty and is reused by the next write, so the file decides.
         }
         file.delete()
-        androidEraseOutcome(walletFileExists()).also { if (it == EraseResult.Erased && deviceSecure()) startKey() }
+        androidEraseOutcome(walletFileExists(), version).also { if (it == EraseResult.Erased && deviceSecure()) startKey() }
     }
 
     override fun marker(): Marker = Marker.Unsupported
@@ -313,7 +313,7 @@ internal fun androidGenerationOutcome(t: Throwable): WriteResult =
     if (generateSequence(t) { it.cause }.any { it is IllegalStateException }) WriteResult.Unavailable(Why.NoScreenLock) else WriteResult.Unavailable(Why.Other)
 
 /** An erase is done when no wallet file is left. A key left behind is harmless. */
-internal fun androidEraseOutcome(fileLeft: Boolean): EraseResult = if (fileLeft) EraseResult.Failed(Why.Other) else EraseResult.Erased
+internal fun androidEraseOutcome(fileLeft: Boolean, version: StoreVersion): EraseResult = if (fileLeft) EraseResult.Failed(Why.Other, version) else EraseResult.Erased
 
 /** A cipher that unwraps an envelope's AES key with [privateKey]. */
 internal fun unwrapCipher(privateKey: PrivateKey): Cipher = Cipher.getInstance(RSA_OAEP).apply { init(Cipher.DECRYPT_MODE, privateKey, OAEP) }

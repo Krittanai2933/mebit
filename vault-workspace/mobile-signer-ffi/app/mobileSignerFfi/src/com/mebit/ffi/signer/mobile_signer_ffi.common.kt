@@ -762,7 +762,7 @@ public sealed class MobileSignerException(message: String): kotlin.Exception(mes
     public class Network(message: String) : MobileSignerException(message)
     
     /**
-     * `hot_send` broadcast a payment but cannot tell whether the explorer took it: the answer was
+     * `hot_broadcast` posted a payment but cannot tell whether the explorer took it: the answer was
      * lost or unclear, and the transaction was still not found after the last lookup. The text
      * carries the txid. The payment may be out, so repeating it may pay twice. Kotlin reads
      * variants by position, so any new one goes below this.
@@ -947,18 +947,6 @@ public expect fun `hotPrepareSend`(`mnemonicWords`: List<kotlin.String>, `passph
 public expect fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `index`: kotlin.UInt): kotlin.String
 
 /**
- * Build, sign (BIP-84 index 0 key), and broadcast a payment. Fee is absolute sats.
- *
- * The txid it returns is computed from the signed transaction, never read from the server. When the
- * explorer's answer to the broadcast leaves it unclear whether the payment went out, it looks that
- * txid up a few times and fails with `BroadcastUnknown` if it is still not found. The payment may be
- * out then, so the app must not offer it as a failure to retry. A silent explorer can hold this call
- * for about two minutes, so call it off the main thread.
- */
-@Throws(MobileSignerException::class)
-public expect fun `hotSend`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeSats`: kotlin.ULong): HotSendResult
-
-/**
  * The latest transactions of the wallet's address, each as the wallet saw it. The order is
  * Esplora's: the mempool first, then confirmed transactions newest first. Only the first page
  * comes back (about 25 confirmed transactions plus the mempool), so older history is not here.
@@ -976,7 +964,7 @@ public expect fun `hotWalletHistory`(`mnemonicWords`: List<kotlin.String>, `pass
 public expect fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork): HotWalletSnapshot
 
 /**
- * True when `address` parses and belongs to `network`: the same test `hot_send` applies to its destination.
+ * True when `address` parses and belongs to `network`: the same test `hot_prepare_send` applies to its destination.
  */
 public expect fun `isValidAddress`(`address`: kotlin.String, `network`: KeyNetwork): kotlin.Boolean
 

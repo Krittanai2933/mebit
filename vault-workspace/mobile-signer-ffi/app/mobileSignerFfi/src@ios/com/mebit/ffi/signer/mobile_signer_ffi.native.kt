@@ -1316,8 +1316,6 @@ internal val UniffiVTableCallbackInterfacePairingCodesUniffiByValue.`uniffiFree`
 
 
 
-
-
 internal object UniffiLib {
     init {
             uniffiCallbackInterfacePairingCodes.register(this)
@@ -1517,23 +1515,6 @@ internal object UniffiLib {
         `passphrase`,
         `network`,
         `index`,
-        uniffiCallStatus,
-    )
-    fun uniffi_mobile_signer_ffi_fn_func_hot_send(
-        `mnemonicWords`: RustBufferByValue,
-        `passphrase`: RustBufferByValue,
-        `network`: RustBufferByValue,
-        `destination`: RustBufferByValue,
-        `amountSats`: Long,
-        `feeSats`: Long,
-        uniffiCallStatus: UniffiRustCallStatus,
-    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_send(
-        `mnemonicWords`,
-        `passphrase`,
-        `network`,
-        `destination`,
-        `amountSats`,
-        `feeSats`,
         uniffiCallStatus,
     )
     fun uniffi_mobile_signer_ffi_fn_func_hot_wallet_history(
@@ -1999,9 +1980,6 @@ internal object UniffiLib {
     )
     fun uniffi_mobile_signer_ffi_checksum_func_hot_receive_address(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_receive_address(
-    )
-    fun uniffi_mobile_signer_ffi_checksum_func_hot_send(
-    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_send(
     )
     fun uniffi_mobile_signer_ffi_checksum_func_hot_wallet_history(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_wallet_history(
@@ -3785,30 +3763,6 @@ public actual fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `pas
 }
 
 /**
- * Build, sign (BIP-84 index 0 key), and broadcast a payment. Fee is absolute sats.
- *
- * The txid it returns is computed from the signed transaction, never read from the server. When the
- * explorer's answer to the broadcast leaves it unclear whether the payment went out, it looks that
- * txid up a few times and fails with `BroadcastUnknown` if it is still not found. The payment may be
- * out then, so the app must not offer it as a failure to retry. A silent explorer can hold this call
- * for about two minutes, so call it off the main thread.
- */
-@Throws(MobileSignerException::class)
-public actual fun `hotSend`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeSats`: kotlin.ULong): HotSendResult {
-    return FfiConverterTypeHotSendResult.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
-        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_send(
-            FfiConverterSequenceString.lower(`mnemonicWords`),
-            FfiConverterString.lower(`passphrase`),
-            FfiConverterTypeKeyNetwork.lower(`network`),
-            FfiConverterString.lower(`destination`),
-            FfiConverterULong.lower(`amountSats`),
-            FfiConverterULong.lower(`feeSats`),
-            uniffiRustCallStatus,
-        )
-    })
-}
-
-/**
  * The latest transactions of the wallet's address, each as the wallet saw it. The order is
  * Esplora's: the mempool first, then confirmed transactions newest first. Only the first page
  * comes back (about 25 confirmed transactions plus the mempool), so older history is not here.
@@ -3844,7 +3798,7 @@ public actual fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `pas
 }
 
 /**
- * True when `address` parses and belongs to `network`: the same test `hot_send` applies to its destination.
+ * True when `address` parses and belongs to `network`: the same test `hot_prepare_send` applies to its destination.
  */
 public actual fun `isValidAddress`(`address`: kotlin.String, `network`: KeyNetwork): kotlin.Boolean {
     return FfiConverterBoolean.lift(uniffiRustCall { uniffiRustCallStatus ->

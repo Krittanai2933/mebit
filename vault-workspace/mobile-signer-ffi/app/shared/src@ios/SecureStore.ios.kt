@@ -185,8 +185,8 @@ private object KeychainStore : SecureStore {
     }
 
     override fun erase(): EraseResult = locked {
-        copies.advance()
-        eraseOutcome(delete(null))
+        val version = copies.advance()
+        eraseOutcome(delete(null), version)
     }
 
     override fun marker(): Marker = locked {
@@ -408,8 +408,8 @@ internal fun writeRefusal(status: Int, mode: WriteMode, passcodeSet: Boolean): W
 }
 
 /** What an erase's status means. Nothing left to delete counts as erased, so erasing twice is safe. */
-internal fun eraseOutcome(status: Int): EraseResult =
-    if (status == errSecSuccess || status == errSecItemNotFound) EraseResult.Erased else EraseResult.Failed(Why.Other)
+internal fun eraseOutcome(status: Int, version: StoreVersion): EraseResult =
+    if (status == errSecSuccess || status == errSecItemNotFound) EraseResult.Erased else EraseResult.Failed(Why.Other, version)
 
 /**
  * The two accounts under [SERVICE] that can hold the wallet. A Replace adds to the free one and then deletes the other, so two

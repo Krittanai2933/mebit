@@ -3,6 +3,7 @@ package com.mebit.app.data
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.mebit.app.EraseResult
 import com.mebit.app.StoreVersion
 import com.mebit.app.Why
 import com.mebit.app.WriteMode
@@ -189,13 +190,16 @@ class OnboardingSession(
         persist()
     }
 
-    /** The wallet's broadcast ended in BroadcastUnknown. Saved like a flag, and a failed save keeps it here for the next write point or flush. */
-    fun recordUnconfirmedSend(txid: String, sinceSeconds: Long) {
+    /**
+     * The wallet is about to post a payment. Saved like a flag. True only when the copy on the phone now holds it, which is what
+     * lets the wallet post: a failed save keeps it here for the next write point or flush, and the wallet does not post.
+     */
+    fun recordUnconfirmedSend(txid: String, sinceSeconds: Long): Boolean {
         unconfirmedSend = SingleSigWallet.UnconfirmedSend(txid, sinceSeconds)
-        persist()
+        return persist()
     }
 
-    /** The wallet settled the payment. Writes nothing when none is held. */
+    /** The payment is out, refused, listed by the explorer, or cleared by the user. Writes nothing when none is held. */
     fun clearUnconfirmedSend() {
         if (unconfirmedSend == null) return
         unconfirmedSend = null
@@ -203,10 +207,16 @@ class OnboardingSession(
     }
 
     /** After the user confirmed. Erases the saved wallet, then clears memory. A failed erase keeps both and returns false. */
-    fun forgetSavedWallet(): Boolean {
-        val ok = wallet?.forget() ?: true
-        if (ok) clear()
-        return ok
+    fun forgetSavedWallet(): Boolean = when (val r = wallet?.forget() ?: EraseResult.Erased) {
+        EraseResult.Erased -> {
+            clear()
+            true
+        }
+        is EraseResult.Failed -> {
+            // The copy is still on the phone, but the erase advanced the store's counter, so the session's Replace must expect the new version or every later save is a Conflict.
+            if (held is Held.Copy) held = Held.Copy(r.version)
+            false
+        }
     }
 
     /**
@@ -233,12 +243,15 @@ class OnboardingSession(
     // The record is built inside the lock, so the call that writes last always writes the newest state.
     private val persistLock = SynchronizedObject()
 
-    /** The single write point. A hardware-only session has no words and writes nothing. [fresh]: this call saves a key the user has not relied on yet. */
-    private fun persist(fresh: Boolean = false): Unit = synchronized(persistLock) {
-        val w = wallet ?: return@synchronized
-        if (words.isEmpty()) return@synchronized
+    /**
+     * The single write point. A hardware-only session has no words and writes nothing. [fresh]: this call saves a key the user
+     * has not relied on yet. True when the copy on the phone now holds this record.
+     */
+    private fun persist(fresh: Boolean = false): Boolean = synchronized(persistLock) {
+        val w = wallet ?: return@synchronized false
+        if (words.isEmpty()) return@synchronized false
         val mode = when (val h = held) {
-            Held.Staged, Held.Stale -> return@synchronized
+            Held.Staged, Held.Stale -> return@synchronized false
             Held.Nothing -> WriteMode.Create
             is Held.Copy -> WriteMode.Replace(h.version)
         }
@@ -247,6 +260,7 @@ class OnboardingSession(
                 held = Held.Copy(r.version)
                 notSavedBecause = null
                 pendingSave = false
+                return@synchronized true
             }
             SaveResult.Conflict -> {
                 // The phone holds the result of the user's latest act in another instance (a newer copy, or a Forget). A Create here
@@ -276,6 +290,7 @@ class OnboardingSession(
                 pendingSave = r.why != Why.NotWired && r.why != Why.OsTooOld
             }
         }
+        false
     }
 
     /** Tries a save that failed again, for example when the app comes back to the foreground. Does nothing unless one is pending. */
