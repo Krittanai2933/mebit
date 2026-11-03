@@ -15,6 +15,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.FiatQuote
+import com.mebit.app.feature.onboarding.LockWords
+import com.mebit.app.getPlatform
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SendDraft
@@ -85,7 +87,7 @@ fun S5ReviewSignScreen(
             BottomActions(
                 primaryLabel = when {
                     attempt.running -> "กำลังส่ง…"
-                    session.appLockEnabled -> "เซ็นด้วย Face ID"
+                    session.appLockEnabled -> LockWords(getPlatform().biometricName).signCta
                     wallet.mode == WalletMode.Demo -> "เซ็นบนเครื่องนี้ (demo)"
                     else -> "เซ็นและส่ง"
                 },

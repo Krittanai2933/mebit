@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.Why
+import com.mebit.app.getPlatform
 import com.mebit.app.data.Cause
 import com.mebit.app.data.UnlockResult
 import com.mebit.app.navigation.Boot
@@ -149,14 +150,15 @@ internal fun UnlockScreen(gate: WalletGateState) {
         }
     } else {
         val failed = view == UnlockView.Failed || view == UnlockView.LockedOut
+        val words = LockWords(getPlatform().biometricName)
         MebitScreen(
             eyebrow = null,
-            title = if (failed) "Face ID ไม่ผ่าน" else "ปลดล็อก mebit",
+            title = if (failed) words.failedTitle else "ปลดล็อก mebit",
             // The overlay's counts after one failed result (iOS reports it after two misses) and after a lockout. The OS owns the real counter.
             subtitle = when (view) {
-                UnlockView.Failed -> "สแกนใบหน้าไม่ตรง 2 ครั้ง ลองอีกครั้ง หรือใช้รหัส 6 หลักแทน"
-                UnlockView.LockedOut -> "สแกนใบหน้าไม่ตรง 5 ครั้ง ลองอีกครั้ง หรือใช้รหัส 6 หลักแทน"
-                else -> "สแกนใบหน้าเพื่อเปิดแอปต่อ"
+                UnlockView.Failed -> words.failedSubtitle(2)
+                UnlockView.LockedOut -> words.failedSubtitle(5)
+                else -> words.unlockSubtitle
             },
             onBack = null,
             onOpenCatalog = {},
@@ -166,7 +168,7 @@ internal fun UnlockScreen(gate: WalletGateState) {
                     primaryLabel = when (view) {
                         UnlockView.Failed -> "ลองอีกครั้ง"
                         UnlockView.LockedOut -> "ใช้รหัส 6 หลัก"
-                        else -> "ปลดล็อกด้วย Face ID"
+                        else -> words.unlockCta
                     },
                     primaryTag = "cta_unlock",
                     onPrimary = { ask { gate.unlock(UNLOCK_REASON) } },
@@ -178,7 +180,7 @@ internal fun UnlockScreen(gate: WalletGateState) {
             },
         ) {
             Spacer(modifier = Modifier.height(65.dp))
-            FaceIdTile(failed = failed)
+            FaceIdTile(failed = failed, label = words.tileLabel)
             Spacer(modifier = Modifier.height(50.dp))
             when (view) {
                 UnlockView.Failed -> FailedBanner(attemptsLeft = 3)

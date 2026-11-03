@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.BiometricResult
 import com.mebit.app.Biometrics
+import com.mebit.app.getPlatform
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.SaveState
 import com.mebit.app.resources.Res
@@ -79,6 +80,7 @@ fun AppLockScreen(
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val enable = mode == LockMode.Enable
+    val words = LockWords(getPlatform().biometricName)
 
     fun scan(allowPasscode: Boolean) {
         if (busy) return
@@ -124,16 +126,16 @@ fun AppLockScreen(
     // Boards 1.3.1 and 1.6 count the create flow's steps and have no back chip. An import has neither.
     val creating = enable && !session.imported
     MebitScreen(
-        eyebrow = if (!creating) null else if (failed) "SECURITY · Face ID ไม่ผ่าน" else "SECURITY · ขั้น 3 / 3",
+        eyebrow = if (!creating) null else if (failed) words.failedEyebrow else "SECURITY · ขั้น 3 / 3",
         title = when {
-            failed -> "Face ID ไม่ผ่าน"
-            enable -> "ล็อกแอปด้วย Face ID"
+            failed -> words.failedTitle
+            enable -> words.enableTitle
             else -> "ปลดล็อก mebit"
         },
         subtitle = when {
-            failed -> "สแกนใบหน้าไม่ตรง ${ATTEMPTS - maxOf(attemptsLeft, 0)} ครั้ง ลองอีกครั้ง หรือใช้รหัส 6 หลักแทน"
+            failed -> words.failedSubtitle(ATTEMPTS - maxOf(attemptsLeft, 0))
             enable -> "กันคนอื่นหยิบเครื่องคุณไปเปิดแอปหรือส่งเงิน"
-            else -> "สแกนใบหน้าเพื่อเปิดแอปต่อ"
+            else -> words.unlockSubtitle
         },
         onBack = if (creating) null else onBack,
         onOpenCatalog = onOpenCatalog,
@@ -143,8 +145,8 @@ fun AppLockScreen(
                 primaryLabel = when {
                     passcodeOnly -> "ใช้รหัส 6 หลัก"
                     failed -> "ลองอีกครั้ง"
-                    enable -> "เปิดใช้ Face ID"
-                    else -> "ปลดล็อกด้วย Face ID"
+                    enable -> words.enableCta
+                    else -> words.unlockCta
                 },
                 primaryTag = if (enable) "cta_enable_lock" else "cta_unlock",
                 onPrimary = { scan(allowPasscode = passcodeOnly) },
@@ -156,16 +158,12 @@ fun AppLockScreen(
         },
     ) {
         Spacer(modifier = Modifier.height(65.dp))
-        FaceIdTile(failed = failed)
+        FaceIdTile(failed = failed, label = words.tileLabel)
         Spacer(modifier = Modifier.height(50.dp))
         when {
             failed -> FailedBanner(attemptsLeft = maxOf(attemptsLeft, 0))
             unavailable -> Text(
-                text = if (enable) {
-                    "เครื่องนี้ยังไม่ได้ตั้ง Face ID หรือรหัสผ่านเครื่อง · ใช้ปุ่มด้านล่างเพื่อไปต่อโดยไม่ล็อก"
-                } else {
-                    "ปลดล็อกไม่ได้ ตรวจการตั้งค่า Face ID และรหัสผ่านเครื่อง"
-                },
+                text = words.unavailable(enable),
                 color = MaterialTheme.colorScheme.error,
                 fontSize = 13.sp,
                 modifier = Modifier.testTag("lock_unavailable"),
@@ -176,7 +174,7 @@ fun AppLockScreen(
 }
 
 @Composable
-internal fun FaceIdTile(failed: Boolean) {
+internal fun FaceIdTile(failed: Boolean, label: String) {
     val shape = RoundedCornerShape(36.dp)
     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Box(
@@ -189,7 +187,7 @@ internal fun FaceIdTile(failed: Boolean) {
                 .testTag("face_id_tile"),
             contentAlignment = Alignment.Center,
         ) {
-            Image(painterResource(Res.drawable.face_id), contentDescription = "Face ID", modifier = Modifier.size(64.dp))
+            Image(painterResource(Res.drawable.face_id), contentDescription = label, modifier = Modifier.size(64.dp))
         }
     }
 }
