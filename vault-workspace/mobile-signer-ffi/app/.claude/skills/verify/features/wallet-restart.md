@@ -7,7 +7,7 @@ On iOS a software wallet that was created or imported is saved on the phone. A c
 - `wr-saved-copy` Key Created says that deleting the app loses the wallet when the store saved it.
 - `wr-enable-readback` App Lock Enable on a saved wallet reads the saved copy back with the one Face ID card.
 - `wr-cold-unlock` a cold start opens the unlock screen with the card, and a match opens Home with the same key.
-- `wr-unconfirmed-send` a payment of unknown outcome still blocks Send and Review after a kill, a relaunch and the unlock, until two minutes of a loaded history pass.
+- `wr-unconfirmed-send` a payment of unknown outcome still blocks Send and Review after a kill, a relaunch and the unlock, until a loaded history lists its txid or the user confirms the clear control (`unconfirmed_clear`, offered after two minutes by the phone clock, which only decides when to offer it). The guard is saved before the post, so a kill during the post still blocks.
 - `wr-miss-cancel` a miss shows iOS's own card, and Cancel leaves the screen waiting with its button.
 - `wr-reinstall-wipe` a reinstall erases the old wallet, and Welcome says so once.
 - `wr-forget` Forget from the unlock screen asks for a confirm and then the owner. From the recovery screen the confirm alone erases.
@@ -49,7 +49,7 @@ Preconditions:
 - In this shell `ls` is an alias that puts a space before each name, so a path taken from its output does not open. Write the keychain database path out.
 - `verify.sh doctor` reads `build/verify/ios.env`. When that file names the iPhone, `doctor` queries the phone and reports its app as not running.
 - On the iPhone, `ios-stop` uninstalls the app, so the next `ios-start` is a fresh install, and its first launch erases the wallet that the old install left. The recipes therefore still start at Welcome. That follows from the reinstall rule and has not run on the phone yet.
-- With the step 9 probe the history loads, so the first bind more than two minutes after the broadcast settles the payment, as the rule says. Reach S1 within two minutes of `id:send_unknown` (on 2026-11-02 first-run Home bound at 67 s and S1 at 79 s), or Send shows a payment that has already settled. Send and Review do not bind, so they can be checked later.
+- With the step 9 probe the history loads, so the history lists no txid of the probe, so no bind settles the payment any more (the clock no longer clears it) and only the clear control does. Send and Review do not bind, so they can be checked later.
 - A `simctl io` screenshot taken a second after `simctl launch` showed the launch animation, not the unlock card. Take another before `pearl.match`.
 - The emulator's Keystore is software (security level 0), it has no StrongBox, and it runs API 36 only. The POCO X3 NFC (Android 11, MIUI V125) ran it on 3 Nov 2026 (create, Enable, cold unlock with the same fingerprint, 60 s lock, two wrong scans and Cancel all pass; `adb install -r` works there). The prompt's "ใช้ PIN" button opens the wallet with the screen PIN and no fingerprint (counters unchanged). MIUI face unlock is not offered to the app. Not run on it yet: removed screen lock, Forget, a new fingerprint enrolled after the key exists.
 - A simulator enforces no Keychain access control and always has a passcode. The number of OS sheets on an iPhone, the no-passcode path, and the item's deletion when the passcode is removed cannot be checked here.
