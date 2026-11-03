@@ -24,8 +24,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.setValue
@@ -98,6 +100,7 @@ fun S1HomeSingleSigScreen(
 ) = SingleSigHome(wallet, session, quotes, onReceive, onSend, onVault, onOpenCatalog, tag = "screen_send/s1")
 
 /** The home itself, so the backup gate can show it dimmed behind its sheet under a tag of its own. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SingleSigHome(
     wallet: SingleSigWallet,
@@ -112,18 +115,27 @@ internal fun SingleSigHome(
     var retries by remember { mutableIntStateOf(0) }
     // One bind at a time, because each one blocks a thread until it ends and an older one could end last.
     var binding by remember { mutableStateOf(false) }
+    var pulled by remember { mutableStateOf(false) }
     // The snapshot is a blocking network call: keep it off the main thread.
     LaunchedEffect(session.words, session.fingerprint, session.passphrase, retries) {
         binding = true
         withContext(Dispatchers.Default) { wallet.bindSession(session) }
         binding = false
+        pulled = false
     }
     var keyDetails by remember { mutableStateOf(false) }
     val quote = rememberFiatQuote(quotes)
     // A key of 12 or more words is a real one, yet the wallet says Demo until its first bind ends. Read from the session, this holds on the first frame, before any bind has started.
     val loading = session.words.size >= 12 && wallet.mode == WalletMode.Demo
     val rows = if (wallet.mode == WalletMode.Live) homeRows(wallet.history) else emptyList()
-    Box(modifier = Modifier.fillMaxSize().background(MbPage).testTag(tag)) {
+    PullToRefreshBox(
+        isRefreshing = pulled,
+        onRefresh = {
+            pulled = true
+            retries = afterPull(retries, binding)
+        },
+        modifier = Modifier.fillMaxSize().background(MbPage).testTag(tag),
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -196,6 +208,9 @@ internal fun SingleSigHome(
         DebugLink(onClick = onOpenCatalog)
     }
 }
+
+/** The retry count after a pull. A pull during a bind joins that bind, because a second one would block another thread and could end first. */
+internal fun afterPull(retries: Int, binding: Boolean): Int = if (binding) retries else retries + 1
 
 /** The board's gold 13 sp line under the balance. */
 @Composable

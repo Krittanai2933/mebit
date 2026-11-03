@@ -61,8 +61,10 @@ import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.data.scanOutcome
 import com.mebit.app.data.sendIssue
 import com.mebit.app.rememberCameraAvailable
+import com.mebit.app.ui.components.KeyboardDismissBox
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
+import com.mebit.app.ui.components.keepsKeyboard
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbBtcOrange
@@ -113,51 +115,53 @@ fun S4SendScreen(
         )
         return
     }
-    MebitScreen(
-        eyebrow = "SEND · กระเป๋าใช้จ่าย",
-        title = null,
-        onBack = onBack,
-        onOpenCatalog = onOpenCatalog,
-        tag = "screen_send/s4",
-        bottom = {
-            Spacer(modifier = Modifier.height(12.dp))
-            PrimaryCta("ตรวจสอบ", "cta_s4_review", onContinue, enabled = addressOk == true && draft.amountSats > 0 && issue == null)
-            // The boards put a link under this button. Keep its room so the button sits where they put it.
-            Spacer(modifier = Modifier.height(38.dp))
-        },
-    ) {
-        ReceiveSendSwitch(sendSelected = true, onReceive = onReceive, onSend = {})
-        Spacer(modifier = Modifier.height(20.dp))
-        DestinationField(draft, invalid = issue == SendIssue.InvalidAddress, enter, onScan = if (cameraAvailable) ({ scanning = true }) else null)
-        Spacer(modifier = Modifier.height(14.dp))
-        AmountCard(wallet, entry, quote, short = issue is SendIssue.Insufficient)
-        Spacer(modifier = Modifier.height(20.dp))
-        Text("ค่าธรรมเนียมเครือข่าย", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp)
-        Spacer(modifier = Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FeeTier.entries.forEach { tier ->
-                FeeCard(tier, selected = tier == draft.tier, quote, modifier = Modifier.weight(1f)) { entry.chooseTier(tier, wallet.balanceSats) }
+    KeyboardDismissBox {
+        MebitScreen(
+            eyebrow = "SEND · กระเป๋าใช้จ่าย",
+            title = null,
+            onBack = onBack,
+            onOpenCatalog = onOpenCatalog,
+            tag = "screen_send/s4",
+            bottom = {
+                Spacer(modifier = Modifier.height(12.dp))
+                PrimaryCta("ตรวจสอบ", "cta_s4_review", onContinue, enabled = addressOk == true && draft.amountSats > 0 && issue == null)
+                // The boards put a link under this button. Keep its room so the button sits where they put it.
+                Spacer(modifier = Modifier.height(38.dp))
+            },
+        ) {
+            ReceiveSendSwitch(sendSelected = true, onReceive = onReceive, onSend = {})
+            Spacer(modifier = Modifier.height(20.dp))
+            DestinationField(draft, invalid = issue == SendIssue.InvalidAddress, enter, onScan = if (cameraAvailable) ({ scanning = true }) else null)
+            Spacer(modifier = Modifier.height(14.dp))
+            AmountCard(wallet, entry, quote, short = issue is SendIssue.Insufficient)
+            Spacer(modifier = Modifier.height(20.dp))
+            Text("ค่าธรรมเนียมเครือข่าย", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp)
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FeeTier.entries.forEach { tier ->
+                    FeeCard(tier, selected = tier == draft.tier, quote, modifier = Modifier.weight(1f)) { entry.chooseTier(tier, wallet.balanceSats) }
+                }
             }
-        }
-        when (issue) {
-            SendIssue.InvalidAddress -> {
-                Spacer(modifier = Modifier.height(20.dp))
-                IssuePanel("INVALID ADDRESS", "ที่อยู่ไม่ถูกต้อง — ตรวจตัวอักษรและเครือข่าย (รองรับ Bitcoin เท่านั้น) แล้ววางใหม่")
+            when (issue) {
+                SendIssue.InvalidAddress -> {
+                    Spacer(modifier = Modifier.height(20.dp))
+                    IssuePanel("INVALID ADDRESS", "ที่อยู่ไม่ถูกต้อง — ตรวจตัวอักษรและเครือข่าย (รองรับ Bitcoin เท่านั้น) แล้ววางใหม่")
+                }
+                SendIssue.BalanceUnavailable -> {
+                    Spacer(modifier = Modifier.height(20.dp))
+                    IssuePanel("BALANCE UNAVAILABLE", "ยังดึงยอดคงเหลือไม่ได้ จึงยังส่งไม่ได้ กลับไปหน้าแรกแล้วลองใหม่")
+                }
+                SendIssue.PaymentUnconfirmed -> {
+                    Spacer(modifier = Modifier.height(20.dp))
+                    IssuePanel("PAYMENT UNCONFIRMED", "การส่งครั้งก่อนยังยืนยันไม่ได้ รอสักครู่ แล้วเปิดหน้าแรกเพื่อตรวจยอดก่อนส่งอีกครั้ง")
+                    UnconfirmedClearControl(wallet, session)
+                }
+                is SendIssue.Insufficient -> {
+                    Spacer(modifier = Modifier.height(20.dp))
+                    IssuePanel("INSUFFICIENT FUNDS", "ยอดไม่พอ — ขาดอีก ${formatBtc(issue.missingSats, 4)} BTC (รวมค่าธรรมเนียม) ลดจำนวน หรือกดส่งทั้งหมด")
+                }
+                null -> Unit
             }
-            SendIssue.BalanceUnavailable -> {
-                Spacer(modifier = Modifier.height(20.dp))
-                IssuePanel("BALANCE UNAVAILABLE", "ยังดึงยอดคงเหลือไม่ได้ จึงยังส่งไม่ได้ กลับไปหน้าแรกแล้วลองใหม่")
-            }
-            SendIssue.PaymentUnconfirmed -> {
-                Spacer(modifier = Modifier.height(20.dp))
-                IssuePanel("PAYMENT UNCONFIRMED", "การส่งครั้งก่อนยังยืนยันไม่ได้ รอสักครู่ แล้วเปิดหน้าแรกเพื่อตรวจยอดก่อนส่งอีกครั้ง")
-                UnconfirmedClearControl(wallet, session)
-            }
-            is SendIssue.Insufficient -> {
-                Spacer(modifier = Modifier.height(20.dp))
-                IssuePanel("INSUFFICIENT FUNDS", "ยอดไม่พอ — ขาดอีก ${formatBtc(issue.missingSats, 4)} BTC (รวมค่าธรรมเนียม) ลดจำนวน หรือกดส่งทั้งหมด")
-            }
-            null -> Unit
         }
     }
 }
@@ -200,7 +204,7 @@ private fun DestinationField(draft: SendDraft, invalid: Boolean, enter: (String)
                         inner()
                     }
                 },
-                modifier = Modifier.fillMaxWidth().testTag("s4_address"),
+                modifier = Modifier.fillMaxWidth().keepsKeyboard().testTag("s4_address"),
             )
         }
         Spacer(modifier = Modifier.width(12.dp))
@@ -267,7 +271,7 @@ private fun AmountCard(wallet: SingleSigWallet, entry: AmountEntry, quote: FiatQ
                             inner()
                         }
                     },
-                    modifier = Modifier.width(IntrinsicSize.Min).widthIn(min = 40.dp).testTag("s4_amount"),
+                    modifier = Modifier.width(IntrinsicSize.Min).widthIn(min = 40.dp).keepsKeyboard().testTag("s4_amount"),
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(if (baht) "THB" else "BTC", color = MbSlate, fontSize = 16.sp, fontWeight = FontWeight.Bold, lineHeight = 22.sp, modifier = Modifier.padding(bottom = 12.dp))
