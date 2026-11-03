@@ -384,14 +384,15 @@ public data class HotSendResult (
 
 
 /**
- * One transaction of the hot wallet's address, seen from the wallet's side.
+ * One transaction of the hot wallet, seen from the wallet's side.
  */
 
 public data class HotTx (
     var `txid`: kotlin.String, 
     /**
-     * Sats the wallet gained (positive) or lost (negative), fee included: the outputs paying the
-     * address minus the inputs that spent from it. A payment to yourself reads as minus the fee.
+     * Sats the wallet gained (positive) or lost (negative), fee included: the outputs paying any
+     * of the wallet's addresses minus the inputs that spent from them. A payment to yourself, and
+     * change, read as minus the fee.
      */
     var `netSats`: kotlin.Long, 
     /**
