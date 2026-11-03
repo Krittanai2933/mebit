@@ -19,9 +19,11 @@ dependencies:
 
 dependencies@android:
   - $compose.uiTooling
-
-test-dependencies@android:
-  # Host-JVM tests only: in test-dependencies it would break the iOS test compilation.
+  - $libs.androidx.activity.compose
+  - $libs.androidx.camera.camera2
+  - $libs.androidx.camera.lifecycle
+  - $libs.androidx.camera.view
+  # Android only: in dependencies it would break the iOS compilation.
   - com.google.zxing:core:3.5.3
 
 settings:

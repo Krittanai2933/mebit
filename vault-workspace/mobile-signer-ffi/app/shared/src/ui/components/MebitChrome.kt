@@ -133,7 +133,7 @@ fun MebitScreen(
 }
 
 @Composable
-fun BackChip(onClick: () -> Unit, dark: Boolean = false) {
+fun BackChip(onClick: () -> Unit, dark: Boolean = false, tag: String = "back") {
     Box(
         modifier = Modifier
             .size(36.dp)
@@ -141,7 +141,7 @@ fun BackChip(onClick: () -> Unit, dark: Boolean = false) {
             .clip(CircleShape)
             .background(if (dark) MbWhite.copy(alpha = 0.12f) else MbWhite)
             .clickable(onClick = onClick)
-            .testTag("back"),
+            .testTag(tag),
         contentAlignment = Alignment.Center,
     ) {
         Text(

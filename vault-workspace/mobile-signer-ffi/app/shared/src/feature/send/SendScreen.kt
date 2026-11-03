@@ -23,7 +23,10 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,6 +44,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mebit.app.QrScanSheet
 import com.mebit.app.data.AmountEntry
 import com.mebit.app.data.AmountUnit
 import com.mebit.app.data.FeeTier
@@ -53,7 +57,9 @@ import com.mebit.app.data.bahtText
 import com.mebit.app.data.enterDestination
 import com.mebit.app.data.formatBtc
 import com.mebit.app.data.rememberFiatQuote
+import com.mebit.app.data.scanOutcome
 import com.mebit.app.data.sendIssue
+import com.mebit.app.rememberCameraAvailable
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.theme.MbBody
@@ -73,10 +79,10 @@ private val SelectedFee = Color(0xFFFFF8EF)
 
 /**
  * Penpot 4.4 Send, with 4.4.1 (address filled), 4.4.3 (amount in baht), 4.4.4 (send all), 4.4.5 (send all in baht),
- * 4.4.6 (insufficient funds) and 4.4.7 (invalid address) as states of it. Left out on purpose: the QR scan button (no
- * camera yet). The ฿ unit toggle, the baht lines and the fee prices in baht need a price from [quotes]. Without one
- * the screen is BTC and sats only. A balance that could not be fetched closes review with a panel of its own, which
- * has no board.
+ * 4.4.6 (insufficient funds) and 4.4.7 (invalid address) as states of it. The scan chip opens [QrScanSheet], which has
+ * no board (open item 59), and hides on a device without a camera. The ฿ unit toggle, the baht lines and the fee
+ * prices in baht need a price from [quotes]. Without one the screen is BTC and sats only. A balance that could not be
+ * fetched closes review with a panel of its own, which has no board.
  */
 @Composable
 fun S4SendScreen(
@@ -92,6 +98,19 @@ fun S4SendScreen(
     val entry = remember(draft) { AmountEntry(draft) }
     val addressOk = if (draft.destination.isEmpty()) null else isValidAddress(draft.destination, KeyNetwork.TEST)
     val issue = sendIssue(addressOk, draft.amountSats, draft.feeSats, wallet.balanceSats, wallet.balanceKnown, wallet.unconfirmedSend != null)
+    val enter = { text: String -> draft.enterDestination(text) { isValidAddress(it, KeyNetwork.TEST) } }
+    val cameraAvailable = rememberCameraAvailable()
+    var scanning by remember { mutableStateOf(false) }
+    if (scanning) {
+        QrScanSheet(
+            onText = { scanned ->
+                scanning = false
+                enter(scanOutcome(scanned) { isValidAddress(it, KeyNetwork.TEST) }.text)
+            },
+            onClose = { scanning = false },
+        )
+        return
+    }
     MebitScreen(
         eyebrow = "SEND · กระเป๋าใช้จ่าย",
         title = null,
@@ -107,7 +126,7 @@ fun S4SendScreen(
     ) {
         ReceiveSendSwitch(sendSelected = true, onReceive = onReceive, onSend = {})
         Spacer(modifier = Modifier.height(20.dp))
-        DestinationField(draft, invalid = issue == SendIssue.InvalidAddress)
+        DestinationField(draft, invalid = issue == SendIssue.InvalidAddress, enter, onScan = if (cameraAvailable) ({ scanning = true }) else null)
         Spacer(modifier = Modifier.height(14.dp))
         AmountCard(wallet, entry, quote, short = issue is SendIssue.Insufficient)
         Spacer(modifier = Modifier.height(20.dp))
@@ -140,10 +159,10 @@ fun S4SendScreen(
     }
 }
 
+/** The address field with its chips. The board puts the 32 x 30 scan chip left of วาง; a null [onScan] (no camera) leaves it out. */
 @Composable
-private fun DestinationField(draft: SendDraft, invalid: Boolean) {
+private fun DestinationField(draft: SendDraft, invalid: Boolean, enter: (String) -> Unit, onScan: (() -> Unit)?) {
     val clipboard = LocalClipboardManager.current
-    val enter = { text: String -> draft.enterDestination(text) { isValidAddress(it, KeyNetwork.TEST) } }
     val shape = RoundedCornerShape(18.dp)
     val ink = if (invalid) MbEyebrow else MbNavyInk
     Row(
@@ -182,6 +201,22 @@ private fun DestinationField(draft: SendDraft, invalid: Boolean) {
             )
         }
         Spacer(modifier = Modifier.width(12.dp))
+        if (onScan != null) {
+            Box(
+                modifier = Modifier
+                    .size(width = 32.dp, height = 30.dp)
+                    .clip(CircleShape)
+                    .background(MbChip)
+                    .clickable(role = Role.Button, onClick = onScan)
+                    .testTag("s4_scan"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(modifier = Modifier.size(14.dp).border(1.5.dp, MbNavy, RoundedCornerShape(3.dp)), contentAlignment = Alignment.Center) {
+                    Box(modifier = Modifier.size(5.dp).background(MbNavy))
+                }
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+        }
         Text(
             text = "วาง",
             color = MbNavy,

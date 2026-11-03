@@ -20,6 +20,8 @@
         <string>$(MARKETING_VERSION)</string>
         <key>CFBundleVersion</key>
         <string>$(CURRENT_PROJECT_VERSION)</string>
+        <key>NSCameraUsageDescription</key>
+        <string>ใช้กล้องสแกน QR ที่อยู่รับ Bitcoin</string>
         <key>NSBluetoothAlwaysUsageDescription</key>
         <string>mebit talks to your hardware wallet over Bluetooth.</string>
         <key>NSFaceIDUsageDescription</key>
