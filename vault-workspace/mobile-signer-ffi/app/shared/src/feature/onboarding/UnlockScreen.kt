@@ -180,7 +180,7 @@ internal fun UnlockScreen(gate: WalletGateState) {
             },
         ) {
             Spacer(modifier = Modifier.height(65.dp))
-            FaceIdTile(failed = failed, label = words.tileLabel)
+            FaceIdTile(failed = failed, words = words)
             Spacer(modifier = Modifier.height(50.dp))
             when (view) {
                 UnlockView.Failed -> FailedBanner(attemptsLeft = 3)

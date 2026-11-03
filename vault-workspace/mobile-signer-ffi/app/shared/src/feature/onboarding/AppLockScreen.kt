@@ -43,6 +43,7 @@ import com.mebit.app.data.SaveState
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.face_id
 import com.mebit.app.resources.ic_check
+import com.mebit.app.resources.ic_shield_check
 import com.mebit.app.ui.components.BottomActions
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.theme.MbBorder
@@ -158,7 +159,7 @@ fun AppLockScreen(
         },
     ) {
         Spacer(modifier = Modifier.height(65.dp))
-        FaceIdTile(failed = failed, label = words.tileLabel)
+        FaceIdTile(failed = failed, words = words)
         Spacer(modifier = Modifier.height(50.dp))
         when {
             failed -> FailedBanner(attemptsLeft = maxOf(attemptsLeft, 0))
@@ -174,7 +175,7 @@ fun AppLockScreen(
 }
 
 @Composable
-internal fun FaceIdTile(failed: Boolean, label: String) {
+internal fun FaceIdTile(failed: Boolean, words: LockWords) {
     val shape = RoundedCornerShape(36.dp)
     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Box(
@@ -187,7 +188,8 @@ internal fun FaceIdTile(failed: Boolean, label: String) {
                 .testTag("face_id_tile"),
             contentAlignment = Alignment.Center,
         ) {
-            Image(painterResource(Res.drawable.face_id), contentDescription = label, modifier = Modifier.size(64.dp))
+            val glyph = if (words.faceGlyph) Res.drawable.face_id else Res.drawable.ic_shield_check
+            Image(painterResource(glyph), contentDescription = words.tileLabel, modifier = Modifier.size(64.dp))
         }
     }
 }

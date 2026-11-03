@@ -16,6 +16,9 @@ internal class LockWords(private val biometric: String?) {
     val signCta = if (named) "เซ็นด้วย $biometric" else "ยืนยันตัวตนเพื่อเซ็น"
     val tileLabel = biometric ?: "ยืนยันตัวตน"
 
+    /** The tile shows the Face ID glyph only where the check is Face ID, and a neutral shield elsewhere. */
+    val faceGlyph = named
+
     fun failedSubtitle(misses: Int) =
         (if (named) "สแกนใบหน้าไม่ตรง $misses ครั้ง" else "ยืนยันตัวตนไม่ผ่าน $misses ครั้ง") + " ลองอีกครั้ง หรือใช้รหัส 6 หลักแทน"
 

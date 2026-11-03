@@ -3,6 +3,7 @@ package com.mebit.app.feature.onboarding
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class LockWordsTest {
     private val ios = LockWords("Face ID")
@@ -20,6 +21,12 @@ class LockWordsTest {
         assertEquals("สแกนใบหน้าไม่ตรง 2 ครั้ง ลองอีกครั้ง หรือใช้รหัส 6 หลักแทน", ios.failedSubtitle(2))
         assertEquals("เครื่องนี้ยังไม่ได้ตั้ง Face ID หรือรหัสผ่านเครื่อง · ใช้ปุ่มด้านล่างเพื่อไปต่อโดยไม่ล็อก", ios.unavailable(enable = true))
         assertEquals("ปลดล็อกไม่ได้ ตรวจการตั้งค่า Face ID และรหัสผ่านเครื่อง", ios.unavailable(enable = false))
+    }
+
+    @Test
+    fun onlyIosShowsTheFaceIdGlyph() {
+        assertTrue(ios.faceGlyph)
+        assertFalse(android.faceGlyph)
     }
 
     @Test

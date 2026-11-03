@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Neutral lock tile glyph for Android, where the system prompt chooses the biometric. Same box, strokes and orange accent as face_id. Drawn by hand, not exported from Penpot. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <path
+        android:pathData="M32,6L12,14L12,30C12,43 20,53 32,58C44,53 52,43 52,30L52,14Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+    <path
+        android:pathData="M22,32L29,39L43,25"
+        android:strokeColor="#F7931A"
+        android:strokeWidth="3.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+</vector>
