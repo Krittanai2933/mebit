@@ -156,13 +156,79 @@ impl Account {
     }
 }
 
+// Retries are for a GET only. A retried broadcast could pay twice, so `broadcast_signed` has none.
+const RETRIES: usize = 2;
+const BACKOFF: [Duration; RETRIES] = [Duration::from_secs(1), Duration::from_secs(2)];
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(5);
+const MAX_EXTRA_WAIT: Duration = Duration::from_secs(8);
+
+enum GetError {
+    /// Throttled or a brief server error, answered quickly: the same GET may be asked again.
+    Retryable {
+        retry_after: Option<Duration>,
+        what: String,
+    },
+    Fatal(MobileSignerError),
+}
+
+/// Asks up to `RETRIES + 1` times and returns only a body some attempt got as a 200. The waits add up
+/// to at most `MAX_EXTRA_WAIT`. shortcut: Retry-After in HTTP-date form is ignored, upgrade if the
+/// host is seen sending it.
+fn get_with_retry(
+    attempt: &dyn Fn() -> Result<String, GetError>,
+    sleep: &dyn Fn(Duration),
+) -> Result<String, MobileSignerError> {
+    let mut slept = Duration::ZERO;
+    for n in 0.. {
+        match attempt() {
+            Ok(body) => return Ok(body),
+            Err(GetError::Fatal(e)) => return Err(e),
+            Err(GetError::Retryable { retry_after, what }) => {
+                if n == RETRIES {
+                    return Err(MobileSignerError::InvalidPsbtJson(format!(
+                        "esplora get: {what}, gave up after {} attempts",
+                        n + 1
+                    )));
+                }
+                let wait = retry_after
+                    .map_or(BACKOFF.get(n).copied().unwrap_or_default(), |d| {
+                        d.min(MAX_RETRY_AFTER)
+                    })
+                    .min(MAX_EXTRA_WAIT - slept);
+                sleep(wait);
+                slept += wait;
+            }
+        }
+    }
+    unreachable!()
+}
+
+// A timeout is not retried: a host that stayed silent for the connect or read limit will not answer
+// after a one second pause, and a retry would multiply the stall of a scan that fails anyway.
+fn classify(answer: Result<ureq::Response, ureq::Error>) -> Result<String, GetError> {
+    let fatal = |what: &str, e: &dyn std::fmt::Display| {
+        GetError::Fatal(MobileSignerError::InvalidPsbtJson(format!("{what}: {e}")))
+    };
+    match answer {
+        Ok(response) => response
+            .into_string()
+            .map_err(|e| fatal("esplora body", &e)),
+        Err(ureq::Error::Status(code @ (429 | 502 | 503 | 504), response)) => {
+            let retry_after = response
+                .header("Retry-After")
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .map(Duration::from_secs);
+            Err(GetError::Retryable {
+                retry_after,
+                what: format!("HTTP status {code}"),
+            })
+        }
+        Err(e) => Err(fatal("esplora get", &e)),
+    }
+}
+
 fn http_get(url: &str) -> Result<String, MobileSignerError> {
-    AGENT
-        .get(url)
-        .call()
-        .map_err(|e| MobileSignerError::InvalidPsbtJson(format!("esplora get: {e}")))?
-        .into_string()
-        .map_err(|e| MobileSignerError::InvalidPsbtJson(format!("esplora body: {e}")))
+    get_with_retry(&|| classify(AGENT.get(url).call()), &std::thread::sleep)
 }
 
 /// Every URL's body, in the order given, `WINDOW` requests in flight at a time. One failure fails
@@ -2017,5 +2083,173 @@ mod tests {
         assert!(fake.send(mainnet, 1_000, 100).is_err());
         assert!(fake.send("tb1qnotanaddress", 1_000, 100).is_err());
         assert!(fake.calls.lock().unwrap().is_empty());
+    }
+
+    fn throttled() -> GetError {
+        GetError::Retryable {
+            retry_after: None,
+            what: "HTTP status 429".into(),
+        }
+    }
+
+    type Retried = (Result<String, MobileSignerError>, usize, Vec<Duration>);
+
+    // Runs `get_with_retry` over scripted attempts. Returns the result, the attempts made and the sleeps.
+    fn retried(script: Vec<Result<String, GetError>>) -> Retried {
+        let script = RefCell::new(VecDeque::from(script));
+        let attempts = Cell::new(0);
+        let sleeps = RefCell::new(Vec::new());
+        let result = get_with_retry(
+            &|| {
+                attempts.set(attempts.get() + 1);
+                script
+                    .borrow_mut()
+                    .pop_front()
+                    .expect("one attempt too many")
+            },
+            &|d| sleeps.borrow_mut().push(d),
+        );
+        (result, attempts.get(), sleeps.into_inner())
+    }
+
+    fn secs(n: &[u64]) -> Vec<Duration> {
+        n.iter().map(|s| Duration::from_secs(*s)).collect()
+    }
+
+    #[test]
+    fn a_throttled_answer_then_a_200_returns_that_body() {
+        let (result, attempts, sleeps) = retried(vec![Err(throttled()), Ok("body".into())]);
+        assert_eq!(result.unwrap(), "body");
+        assert_eq!((attempts, sleeps), (2, secs(&[1])));
+    }
+
+    #[test]
+    fn a_200_is_asked_once() {
+        let (result, attempts, sleeps) = retried(vec![Ok("body".into())]);
+        assert_eq!(result.unwrap(), "body");
+        assert_eq!((attempts, sleeps.len()), (1, 0));
+    }
+
+    #[test]
+    fn three_throttled_answers_fail_naming_the_status_and_the_attempts() {
+        let (result, attempts, sleeps) =
+            retried(vec![Err(throttled()), Err(throttled()), Err(throttled())]);
+        let MobileSignerError::InvalidPsbtJson(message) = result.unwrap_err() else {
+            panic!("wrong error kind");
+        };
+        assert!(
+            message.contains("429") && message.contains("3 attempts"),
+            "{message}"
+        );
+        assert_eq!((attempts, sleeps), (3, secs(&[1, 2])));
+    }
+
+    #[test]
+    fn a_fatal_answer_is_asked_once() {
+        let fatal = GetError::Fatal(MobileSignerError::InvalidPsbtJson("404".into()));
+        let (result, attempts, sleeps) = retried(vec![Err(fatal)]);
+        assert!(result.is_err());
+        assert_eq!((attempts, sleeps.len()), (1, 0));
+    }
+
+    fn after(seconds: Option<u64>) -> GetError {
+        GetError::Retryable {
+            retry_after: seconds.map(Duration::from_secs),
+            what: "HTTP status 503".into(),
+        }
+    }
+
+    #[test]
+    fn retry_after_sets_the_wait_and_is_capped() {
+        let (_, _, sleeps) = retried(vec![Err(after(Some(2))), Ok("b".into())]);
+        assert_eq!(sleeps, secs(&[2]));
+        let (_, _, sleeps) = retried(vec![Err(after(Some(99))), Ok("b".into())]);
+        assert_eq!(sleeps, secs(&[5]));
+    }
+
+    #[test]
+    fn the_waits_never_pass_eight_seconds() {
+        let (_, attempts, sleeps) = retried(vec![
+            Err(after(Some(99))),
+            Err(after(Some(99))),
+            Err(after(Some(99))),
+        ]);
+        assert_eq!(attempts, 3);
+        assert_eq!(sleeps, secs(&[5, 3]));
+        assert!(sleeps.iter().sum::<Duration>() <= Duration::from_secs(8));
+    }
+
+    fn classified(response: &str) -> Result<String, GetError> {
+        let response: ureq::Response = response.parse().unwrap();
+        let status = response.status();
+        classify(if status >= 400 {
+            Err(response.into())
+        } else {
+            Ok(response)
+        })
+    }
+
+    #[test]
+    fn classify_retries_only_429_502_503_504() {
+        for status in [429, 502, 503, 504] {
+            let got = classified(&format!("HTTP/1.1 {status} -\r\nContent-Length: 0\r\n\r\n"));
+            assert!(matches!(got, Err(GetError::Retryable { .. })), "{status}");
+        }
+        for status in [400, 404, 500, 501, 505] {
+            let got = classified(&format!("HTTP/1.1 {status} -\r\nContent-Length: 0\r\n\r\n"));
+            assert!(matches!(got, Err(GetError::Fatal(_))), "{status}");
+        }
+        let ok = classified("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+        assert!(matches!(ok, Ok(b) if b == "{}"));
+        // A timeout stays fatal: waiting a second does not make a silent host answer.
+        assert!(matches!(classify(no_answer()), Err(GetError::Fatal(_))));
+        let refused = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "no");
+        assert!(matches!(
+            classify(Err(refused.into())),
+            Err(GetError::Fatal(_))
+        ));
+    }
+
+    #[test]
+    fn classify_reads_retry_after_seconds_and_ignores_a_date() {
+        let wait = |value: &str| match classified(&format!(
+            "HTTP/1.1 429 -\r\nRetry-After: {value}\r\nContent-Length: 0\r\n\r\n"
+        )) {
+            Err(GetError::Retryable { retry_after, .. }) => retry_after,
+            _ => panic!("not retryable"),
+        };
+        assert_eq!(wait("2"), Some(Duration::from_secs(2)));
+        assert_eq!(wait("Wed, 21 Oct 2026 07:28:00 GMT"), None);
+        let (_, _, sleeps) = retried(vec![Err(after(None)), Err(after(None)), Ok("b".into())]);
+        assert_eq!(sleeps, secs(&[1, 2]));
+    }
+
+    #[test]
+    fn a_retried_200_still_goes_through_the_strict_parser() {
+        let (result, _, _) = retried(vec![Err(throttled()), Ok(r#"{"chain_stats":{}}"#.into())]);
+        assert!(parse_address_stats(&result.unwrap()).is_err());
+    }
+
+    #[test]
+    #[ignore = "needs the network and mempool.space/testnet4"]
+    fn real_scan_of_the_public_test_phrase() {
+        let requests = std::sync::atomic::AtomicUsize::new(0);
+        let counted = |url: &str| {
+            requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            http_get(url)
+        };
+        let start = std::time::Instant::now();
+        let wallet = scan_wallet(&counted, &abandon_about(), "", KeyNetwork::Test).unwrap();
+        println!(
+            "scan took {:?} for {} requests",
+            start.elapsed(),
+            requests.load(std::sync::atomic::Ordering::SeqCst)
+        );
+        if wallet.used().next().is_none() {
+            assert_eq!(
+                wallet.next_unused(Chain::External).address.to_string(),
+                WALLET
+            );
+        }
     }
 }
