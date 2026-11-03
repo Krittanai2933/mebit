@@ -85,6 +85,13 @@ class OnboardingSession(
         private set
 
     /**
+     * A Replace (a flag or the payment guard) failed and no write has succeeded since. The wallet stays Saved, because the earlier
+     * copy is on the phone, so [notSavedBecause] stays null and the notice reads this instead.
+     */
+    var lastSaveFailed: Boolean by mutableStateOf(false)
+        private set
+
+    /**
      * The wallet's payment of unknown outcome ([SingleSigWallet.unconfirmedSend]), saved with the wallet so a restart cannot
      * pay it twice. [install] restores it, and a wallet built after a restart takes it at its next bind. Null when there is none.
      */
@@ -94,7 +101,7 @@ class OnboardingSession(
     /** A save that failed and has not been repeated yet. [flushPendingSave] and the next write point repeat it. */
     private var pendingSave = false
 
-    /** Saved before it returns, so a crash can never lose a key whose words were shown. Refused while a wallet is saved. */
+    /** Saved before it returns, so a crash can never lose a key whose words were shown. Refused while the session holds a key, unless it is staged. */
     fun generateThisDevice(passphrase: String = "", network: KeyNetwork = KeyNetwork.TEST) {
         lastError = null
         if (refuseToReplace()) return
@@ -109,7 +116,7 @@ class OnboardingSession(
 
     /**
      * An imported key counts as backed up: the user typed the words from their own record. [accepted] is false for a
-     * passphrase import: the key is staged until the fingerprint matches ([acceptStagedKey]). Refused while a wallet is saved.
+     * passphrase import: the key is staged until the fingerprint matches ([acceptStagedKey]). Refused while the session holds a key, unless it is staged.
      */
     fun restoreFromWords(words: List<String>, passphrase: String = "", network: KeyNetwork = KeyNetwork.TEST, accepted: Boolean = passphrase.isEmpty()) {
         lastError = null
@@ -177,6 +184,7 @@ class OnboardingSession(
         unconfirmedSend = null
         held = Held.Nothing
         notSavedBecause = null
+        lastSaveFailed = false
         pendingSave = false
     }
 
@@ -259,6 +267,7 @@ class OnboardingSession(
             is SaveResult.Written -> {
                 held = Held.Copy(r.version)
                 notSavedBecause = null
+                lastSaveFailed = false
                 pendingSave = false
                 return@synchronized true
             }
@@ -285,6 +294,8 @@ class OnboardingSession(
                 if (mode == WriteMode.Create) {
                     held = Held.Nothing
                     notSavedBecause = r.why
+                } else {
+                    lastSaveFailed = true
                 }
                 // A store that can never keep it here has nothing to retry, and a foreground flush would only encode the record again.
                 pendingSave = r.why != Why.NotWired && r.why != Why.OsTooOld
@@ -298,9 +309,13 @@ class OnboardingSession(
         if (pendingSave) persist()
     }
 
+    /** Create and Import never drop a key the user may have written down. Only a Staged import, which nothing has shown as final yet, gives way. */
     private fun refuseToReplace(): Boolean {
-        if (held !is Held.Copy && held != Held.Stale) return false // a Stale session still holds a key the user may have written down
-        lastError = TAKEN // the debug catalog can still reach Create and Import, and this stops them
+        when {
+            held is Held.Copy || held == Held.Stale -> lastError = TAKEN // a Stale session still holds a key the user may have written down
+            words.isNotEmpty() && held != Held.Staged -> lastError = UNSAVED // a Create the phone refused: this process holds the only copy
+            else -> return false
+        }
         return true
     }
 
@@ -321,5 +336,8 @@ class OnboardingSession(
     private companion object {
         /** The refusal under Create or Import while a wallet is saved on this phone. */
         const val TAKEN = "เครื่องนี้มีกระเป๋าบันทึกไว้แล้ว · ถ้าจะใช้กระเป๋าอื่น ให้เริ่มใหม่จากหน้าปลดล็อก"
+
+        /** The refusal while the session holds a key the phone did not save. Only a restart drops it, on purpose. */
+        const val UNSAVED = "ยังมีกุญแจที่ยังไม่ได้บันทึกอยู่ในแอป สร้างหรือนำเข้าใหม่ทับไม่ได้ ปิดแอปแล้วเปิดใหม่ถ้าจะเริ่มใหม่"
     }
 }

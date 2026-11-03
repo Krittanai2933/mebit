@@ -411,10 +411,12 @@ class SingleSigWalletBroadcastTest {
         assertEquals(emptyList<PostCall>(), hot.posts, "a post without a saved guard")
         assertNull(hot.wallet.unconfirmedSend, "a guard for a payment that was never posted")
         assertNull(session.unconfirmedSend, "the session's guard for a payment that was never posted")
+        assertTrue(session.lastSaveFailed, "the failed Replace of the guard is what Home's notice reads")
         hot.store.write = null
         assertNull(restart(hot.store).unconfirmedSend, "what the next cold start restores")
         assertTrue(hot.wallet.broadcast(session, 100_000, 1_128, DESTINATION), "the retry once the phone can save")
         assertEquals(1, hot.posts.size)
+        assertFalse(session.lastSaveFailed, "the retry's write cleared it")
     }
 
     @Test

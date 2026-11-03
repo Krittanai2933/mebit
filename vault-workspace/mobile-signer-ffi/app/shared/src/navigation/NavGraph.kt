@@ -79,6 +79,7 @@ import com.mebit.app.feature.send.M2CollectSignaturesScreen
 import com.mebit.app.feature.send.M3SignOnJadeScreen
 import com.mebit.app.feature.send.M4ReadyToBroadcastScreen
 import com.mebit.app.rememberBiometrics
+import com.mebit.app.rememberIsDebugBuild
 import com.mebit.app.ui.theme.MbPage
 
 private val ImplementedRoutes = MovieRoute.entries.toSet()
@@ -133,7 +134,9 @@ fun MebitNavHost(
     fun afterBackup() = navigate(if (MovieRoute.HomeFirstRun in backStack) MovieRoute.HomeFirstRun else MovieRoute.AppLock)
 
     val onBack: (() -> Unit)? = if (backStack.size > 1) ({ goBack() }) else null
-    val openCatalog = { catalogOpen = true }
+    // The link is the only caller, and it is gone in a release build. This keeps the sheet shut even if another caller appears.
+    val debugBuild = rememberIsDebugBuild()
+    val openCatalog = { if (debugBuild) catalogOpen = true }
 
     when (current) {
         MovieRoute.Welcome -> WelcomeScreen(

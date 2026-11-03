@@ -158,6 +158,80 @@ class OnboardingSessionSaveTest {
     }
 
     @Test
+    fun aKeyThePhoneCouldNotSaveIsNotReplacedByCreateOrImport() {
+        val firsts = listOf<Pair<String, OnboardingSession.() -> Unit>>("create" to { generateThisDevice() }, "import" to { restoreFromWords(PUBLIC_WORDS_24) })
+        for ((how, first) in firsts) {
+            val store = FakeSecureStore(write = WriteResult.Unavailable(Why.NoScreenLock))
+            val keys = Keys()
+            val session = session(store, keys)
+            session.first()
+            assertEquals(SaveState.NotSaved, session.saved, "the first $how was saved")
+            val made = keys.made
+            val writes = store.writes.size
+            for ((case, replace) in listOf<Pair<String, () -> Unit>>("generate" to { session.generateThisDevice() }, "import" to { session.restoreFromWords(PUBLIC_WORDS_12) })) {
+                replace()
+                assertEquals(UNSAVED_REFUSAL, session.lastError, "the refusal, $case after an unsaved $how")
+                assertEquals(made, keys.made, "a key was made, $case after an unsaved $how")
+                assertEquals(writes, store.writes.size, "the store was written, $case after an unsaved $how")
+                assertTrue(session.words == PUBLIC_WORDS_24, "the unsaved key left memory, $case after an unsaved $how")
+                assertEquals(Why.NoScreenLock, session.notSavedBecause, "the notice lost its reason, $case after an unsaved $how")
+            }
+        }
+    }
+
+    @Test
+    fun aStagedImportMayBeReplacedByTheNextAttempt() {
+        val store = FakeSecureStore()
+        val session = session(store)
+        session.restoreFromWords(PUBLIC_WORDS_12, TEST_PASSPHRASE)
+        assertEquals(SaveState.Staged, session.saved)
+        session.restoreFromWords(PUBLIC_WORDS_24, TEST_PASSPHRASE)
+        assertNull(session.lastError, "a staged import refused the next import")
+        assertTrue(session.words == PUBLIC_WORDS_24, "the next import's words")
+        session.generateThisDevice()
+        assertNull(session.lastError, "a staged import refused a create")
+        assertEquals(SaveState.Saved, session.saved, "saved after the create")
+        assertEquals(listOf("Create"), store.modes())
+    }
+
+    @Test
+    fun aFailedReplaceIsReportedUntilAWriteSucceeds() {
+        val store = FakeSecureStore(failWrite = 2)
+        val session = session(store)
+        session.generateThisDevice()
+        assertFalse(session.lastSaveFailed, "before any Replace")
+        session.markBackupConfirmed()
+        assertEquals(SaveState.Saved, session.saved, "the earlier copy is still on the phone")
+        assertNull(session.notSavedBecause, "a failed Replace is not a wallet that was never saved")
+        assertTrue(session.lastSaveFailed, "a failed Replace went unreported")
+        session.flushPendingSave()
+        assertEquals(listOf("Create", "Replace", "Replace"), store.modes(), "the retry")
+        assertFalse(session.lastSaveFailed, "cleared by the write that succeeded")
+
+        val guardStore = FakeSecureStore()
+        val guarded = session(guardStore)
+        guarded.generateThisDevice()
+        guardStore.write = WriteResult.Unavailable(Why.TryLater)
+        assertFalse(guarded.recordUnconfirmedSend(TEST_TXID, SENT_AT), "the guard the phone could not keep")
+        assertTrue(guarded.lastSaveFailed, "a failed Replace of the guard went unreported")
+
+        val created = session(FakeSecureStore(write = WriteResult.Unavailable(Why.NoScreenLock)))
+        created.generateThisDevice()
+        assertFalse(created.lastSaveFailed, "a failed Create already has notSavedBecause")
+    }
+
+    @Test
+    fun neitherTheSessionNorTheRecordPrintsAWordOfThePhrase() {
+        val session = session(FakeSecureStore(), Keys(words = PUBLIC_WORDS_12))
+        session.restoreFromWords(PUBLIC_WORDS_12, TEST_PASSPHRASE)
+        session.acceptStagedKey()
+        assertEquals("WalletRecord(redacted)", testRecord(passphrase = TEST_PASSPHRASE).toString())
+        for (printed in listOf(session.toString(), "$session")) {
+            for (secret in PUBLIC_WORDS_12.toSet() + TEST_PASSPHRASE) assertFalse(secret in printed, "the session printed a secret")
+        }
+    }
+
+    @Test
     fun aFreshCreateThatLosesTheRaceDropsItsKey() {
         val creates = listOf<Pair<String, OnboardingSession.() -> Unit>>(
             "generate" to { generateThisDevice() },
@@ -684,6 +758,9 @@ class OnboardingSessionSaveTest {
 }
 
 private const val TEST_PASSPHRASE = "a test passphrase"
+
+/** The refusal under Create or Import while the session holds a key the phone did not save. */
+private const val UNSAVED_REFUSAL = "ยังมีกุญแจที่ยังไม่ได้บันทึกอยู่ในแอป สร้างหรือนำเข้าใหม่ทับไม่ได้ ปิดแอปแล้วเปิดใหม่ถ้าจะเริ่มใหม่"
 
 /** When a test broadcast ended, in Unix seconds. */
 private const val SENT_AT = 1_792_740_720L

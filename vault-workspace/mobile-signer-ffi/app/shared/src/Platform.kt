@@ -1,5 +1,7 @@
 package com.mebit.app
 
+import androidx.compose.runtime.Composable
+
 interface Platform {
     val name: String
 
@@ -8,3 +10,10 @@ interface Platform {
 }
 
 expect fun getPlatform(): Platform
+
+/**
+ * True only in a debug build. The route catalog and its link exist in no release build: the catalog reaches Backup Words and
+ * Receive past their gates. Composable because Android reads the app's own flags through the Context.
+ */
+@Composable
+expect fun rememberIsDebugBuild(): Boolean

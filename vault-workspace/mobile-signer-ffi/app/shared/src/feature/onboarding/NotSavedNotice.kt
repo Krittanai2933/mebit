@@ -11,19 +11,28 @@ import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.SaveState
 
 /**
- * One line, drawn like Home's error line, saying that this phone does not keep the session's key. It renders nothing, so
- * [modifier]'s padding takes no room either, unless the session holds a key its store did not save: a saved, staged or
- * hardware-only session shows nothing. No Penpot board has it (docs/04-open-items.md).
+ * One line, drawn like Home's error line, saying that this phone does not keep the session's key, or that its last flag or
+ * payment-guard write failed. It renders nothing, so [modifier]'s padding takes no room either, unless the session holds a
+ * key its store did not save or did not update: a staged or hardware-only session shows nothing. No Penpot board has it
+ * (docs/04-open-items.md).
  */
 @Composable
 internal fun NotSavedNotice(session: OnboardingSession, modifier: Modifier = Modifier) {
-    if (session.words.isEmpty() || session.saved != SaveState.NotSaved) return
+    if (session.words.isEmpty()) return
+    val text = saveNoticeText(session.saved, session.notSavedBecause, session.lastSaveFailed) ?: return
     Text(
-        text = notSavedText(session.notSavedBecause),
+        text = text,
         color = MaterialTheme.colorScheme.error,
         fontSize = 12.sp,
         modifier = modifier.testTag("not_saved_notice"),
     )
+}
+
+/** Pure. The notice for a session that holds a key, or null when the copy on the phone is current. */
+internal fun saveNoticeText(saved: SaveState, why: Why?, lastSaveFailed: Boolean): String? = when {
+    saved == SaveState.NotSaved -> notSavedText(why)
+    saved == SaveState.Saved && lastSaveFailed -> "บันทึกสถานะล่าสุดไม่สำเร็จ จะลองใหม่เมื่อเปิดแอปอีกครั้ง"
+    else -> null
 }
 
 /** Pure. What the notice says for [why] the key was not saved, null being a save that named no reason. */

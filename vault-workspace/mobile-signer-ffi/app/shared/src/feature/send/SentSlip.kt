@@ -86,7 +86,8 @@ fun SentSlip(wallet: SingleSigWallet, draft: SendDraft, quotes: QuoteCache, onHo
     Box(modifier = Modifier.fillMaxSize().background(SlipPage).testTag("screen_send/s6_slip")) {
         Column(
             // Scrolls so the share button and the link home cannot fall off a screen shorter than the card plus both buttons (open item 48).
-            modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(top = 54.dp, bottom = 16.dp),
+            // The bottom padding is the debug link's height (about 24 dp of Thai text at 11 sp) plus 8 dp, so the link home sits clear of it when the column ends at the screen bottom.
+            modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(top = 54.dp, bottom = 32.dp),
         ) {
             Slip(wallet, draft, quote, card)
             Spacer(modifier = Modifier.height(14.dp))
