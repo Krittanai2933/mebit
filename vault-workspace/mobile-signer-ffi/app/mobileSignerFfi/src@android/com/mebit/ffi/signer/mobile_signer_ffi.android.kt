@@ -1113,13 +1113,13 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key() != 291.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_broadcast() != 57407.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_broadcast() != 37288.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_fee_tiers() != 58197.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send() != 51531.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate() != 47965.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_receive_address() != 37856.toShort()) {
@@ -1131,7 +1131,7 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_hot_wallet_snapshot() != 48081.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_is_valid_address() != 5907.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_is_valid_address() != 44198.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_live_wallet_links() != 38905.toShort()) {
@@ -1204,7 +1204,7 @@ internal object IntegrityCheckingUniffiLib : Library {
     external fun uniffi_mobile_signer_ffi_checksum_func_hot_fee_tiers(
     ): Short
     @JvmStatic
-    external fun uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send(
+    external fun uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_hot_receive_address(
@@ -1394,13 +1394,14 @@ internal object UniffiLib : Library {
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     @JvmStatic
-    external fun uniffi_mobile_signer_ffi_fn_func_hot_prepare_send(
+    external fun uniffi_mobile_signer_ffi_fn_func_hot_prepare_send_at_rate(
         `mnemonicWords`: RustBufferByValue,
         `passphrase`: RustBufferByValue,
         `network`: RustBufferByValue,
         `destination`: RustBufferByValue,
         `amountSats`: Long,
-        `feeSats`: Long,
+        `feeRateSatVb`: Long,
+        `maxFeeSats`: Long,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     @JvmStatic
@@ -3421,7 +3422,7 @@ public actual fun `generateSoftwareMultisigKey`(`passphrase`: kotlin.String, `ne
 }
 
 /**
- * Post a transaction from `hot_prepare_send` once. `txid` must be the id of the transaction in
+ * Post a transaction from `hot_prepare_send_at_rate` once. `txid` must be the id of the transaction in
  * `hex`, else it refuses before posting, so nothing else can go out under a saved guard.
  *
  * When the explorer's answer leaves it unclear whether the payment went out, it looks `txid` up a
@@ -3456,26 +3457,29 @@ public actual fun `hotFeeTiers`(`network`: KeyNetwork): FeeTiers {
 }
 
 /**
- * Scan, select coins, check and sign a payment, and post nothing. The only network use is the
- * Esplora lookups of the scan. The app saves the `txid` as its payment guard before it calls
- * `hot_broadcast`, so a kill between the two can never lead to a second payment.
+ * Scan, select coins, check and sign a payment at `fee_rate_sat_vb`, and post nothing. The only
+ * network use is the Esplora lookups of the scan. The app saves the `txid` as its payment guard
+ * before it calls `hot_broadcast`, so a kill between the two can never lead to a second payment.
  *
- * Refuses, before signing, an amount below the 546 sat dust limit, a fee above the amount, change
- * that would be dust (above 0 and at most 546 sats), and a fee rate below 1 or above 2,000 sat/vB
- * for the transaction as built. Only confirmed coins of receive addresses are spent; the wallet's
- * own unconfirmed change is spent too. About 40 Esplora calls for a fresh wallet, so call it off
- * the main thread.
+ * The fee is the size of the transaction as built times the rate, so a payment that needs more
+ * coins pays more, never a fixed sum that falls under the rate. `max_fee_sats` is what the review
+ * screen showed: a fee above it is refused before signing, so the user is never charged more than
+ * they saw. Refuses, before signing, a rate outside 1 to 2,000 sat/vB, an amount below the 546 sat
+ * dust limit, a fee above the amount, and change that would be dust (above 0 and at most 546
+ * sats). Only confirmed coins of receive addresses are spent; the wallet's own unconfirmed change
+ * is spent too. About 40 Esplora calls for a fresh wallet, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
-public actual fun `hotPrepareSend`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeSats`: kotlin.ULong): PreparedSend {
+public actual fun `hotPrepareSendAtRate`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeRateSatVb`: kotlin.ULong, `maxFeeSats`: kotlin.ULong): PreparedSend {
     return FfiConverterTypePreparedSend.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
-        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_prepare_send(
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_prepare_send_at_rate(
             FfiConverterSequenceString.lower(`mnemonicWords`),
             FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
             FfiConverterString.lower(`destination`),
             FfiConverterULong.lower(`amountSats`),
-            FfiConverterULong.lower(`feeSats`),
+            FfiConverterULong.lower(`feeRateSatVb`),
+            FfiConverterULong.lower(`maxFeeSats`),
             uniffiRustCallStatus,
         )
     })
@@ -3535,7 +3539,7 @@ public actual fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `pas
 }
 
 /**
- * True when `address` parses and belongs to `network`: the same test `hot_prepare_send` applies to its destination.
+ * True when `address` parses and belongs to `network`: the same test `hot_prepare_send_at_rate` applies to its destination.
  */
 public actual fun `isValidAddress`(`address`: kotlin.String, `network`: KeyNetwork): kotlin.Boolean {
     return FfiConverterBoolean.lift(uniffiRustCall { uniffiRustCallStatus ->

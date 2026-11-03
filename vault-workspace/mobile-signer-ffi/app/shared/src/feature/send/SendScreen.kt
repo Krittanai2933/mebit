@@ -23,6 +23,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,7 +48,8 @@ import androidx.compose.ui.unit.sp
 import com.mebit.app.QrScanSheet
 import com.mebit.app.data.AmountEntry
 import com.mebit.app.data.AmountUnit
-import com.mebit.app.data.FeeTier
+import com.mebit.app.data.FeeTile
+import com.mebit.app.data.LiveFeeTiers
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.FiatQuote
 import com.mebit.app.data.QuoteCache
@@ -74,6 +76,8 @@ import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbWhite
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.isValidAddress
 
@@ -100,6 +104,8 @@ fun S4SendScreen(
 ) {
     val quote = rememberFiatQuote(quotes)
     val entry = remember(draft) { AmountEntry(draft) }
+    // Once per open of this screen. Rust answers from memory for five minutes, so a second open costs no network call.
+    LaunchedEffect(draft) { entry.applyTiers(withContext(Dispatchers.Default) { wallet.feeTiers() }, wallet.balanceSats) }
     val addressOk = if (draft.destination.isEmpty()) null else isValidAddress(draft.destination, KeyNetwork.TEST)
     val issue = sendIssue(addressOk, draft.amountSats, draft.feeSats, wallet.balanceSats, wallet.balanceKnown, wallet.unconfirmedSend != null)
     val enter = { text: String -> draft.enterDestination(text) { isValidAddress(it, KeyNetwork.TEST) } }
@@ -138,9 +144,20 @@ fun S4SendScreen(
             Text("ค่าธรรมเนียมเครือข่าย", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp)
             Spacer(modifier = Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FeeTier.entries.forEach { tier ->
-                    FeeCard(tier, selected = tier == draft.tier, quote, modifier = Modifier.weight(1f)) { entry.chooseTier(tier, wallet.balanceSats) }
+                (draft.tiers ?: LiveFeeTiers.DEFAULT).tiles().forEach { tile ->
+                    FeeCard(tile, selected = tile.tier == draft.tier, quote, modifier = Modifier.weight(1f)) { entry.chooseTier(tile.tier, wallet.balanceSats) }
                 }
+            }
+            if (draft.tiers?.live == false) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "ใช้ค่าธรรมเนียมโดยประมาณ เพราะดึงค่าจริงไม่ได้",
+                    color = MbSlate,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    lineHeight = 15.sp,
+                    modifier = Modifier.testTag("fee_fallback"),
+                )
             }
             when (issue) {
                 SendIssue.InvalidAddress -> {
@@ -371,7 +388,8 @@ internal fun caretInGrouped(grouped: String, digitsBefore: Int): Int {
 internal fun caretInDigits(grouped: String, offset: Int): Int = offset - grouped.take(offset).count { it == ',' }
 
 @Composable
-private fun FeeCard(tier: FeeTier, selected: Boolean, quote: FiatQuote?, modifier: Modifier, onClick: () -> Unit) {
+private fun FeeCard(tile: FeeTile, selected: Boolean, quote: FiatQuote?, modifier: Modifier, onClick: () -> Unit) {
+    val tier = tile.tier
     val shape = RoundedCornerShape(16.dp)
     Column(
         modifier = modifier
@@ -388,9 +406,9 @@ private fun FeeCard(tier: FeeTier, selected: Boolean, quote: FiatQuote?, modifie
         Spacer(modifier = Modifier.height(1.dp))
         Text(tier.eta, color = MbBody, fontSize = 11.5.sp, fontWeight = FontWeight.Medium, lineHeight = 15.sp)
         Spacer(modifier = Modifier.height(10.dp))
-        Text(bahtText(tier.sats, quote) ?: "${thousands(tier.sats)} sat", color = if (selected) MbEyebrow else MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.Bold, lineHeight = 20.sp)
+        Text(bahtText(tile.feeSats, quote) ?: "${thousands(tile.feeSats)} sat", color = if (selected) MbEyebrow else MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.Bold, lineHeight = 20.sp)
         Spacer(modifier = Modifier.height(1.dp))
-        Text("${tier.satPerVb} sat/vB", color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, lineHeight = 14.sp)
+        Text("${tile.satPerVb} sat/vB", color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, lineHeight = 14.sp)
     }
 }
 

@@ -41,6 +41,29 @@ class SendDraftTest {
     @Test
     fun feeTiersAreRateTimesTheTypicalSize() {
         assertEquals(listOf(564L, 1_128L, 2_115L), FeeTier.entries.map { it.sats })
+        assertEquals(LiveFeeTiers(4, 8, 15, live = false), LiveFeeTiers.DEFAULT, "the board's rates until the live ones arrive")
+        assertEquals(
+            listOf(FeeTile(FeeTier.Slow, 1, 141), FeeTile(FeeTier.Normal, 1, 141), FeeTile(FeeTier.Fast, 2, 282)),
+            LiveFeeTiers(1, 1, 2, live = true).tiles(),
+            "an empty testnet4 mempool, as the user's node reports it",
+        )
+    }
+
+    @Test
+    fun liveRatesChangeTheEstimateOfTheChosenTierAndSurviveAReset() {
+        val draft = SendDraft()
+        assertNull(draft.tiers, "nothing fetched yet")
+        assertEquals(8L, draft.rateSatVb)
+        draft.chooseTier(FeeTier.Fast)
+        draft.takeTiers(LiveFeeTiers(1, 1, 2, live = true))
+        assertEquals(2L, draft.rateSatVb)
+        assertEquals(282L, draft.feeSats, "the Fast estimate at 2 sat/vB")
+        draft.chooseTier(FeeTier.Slow)
+        assertEquals(141L, draft.feeSats)
+        draft.reset()
+        assertEquals(FeeTier.Normal, draft.tier)
+        assertEquals(141L, draft.feeSats, "Normal at the live 1 sat/vB, not the board's 1,128")
+        assertEquals(LiveFeeTiers(1, 1, 2, live = true), draft.tiers)
     }
 
     @Test

@@ -100,7 +100,7 @@ fun S5ReviewSignScreen(
                             refused = !confirm()
                             if (!refused) {
                                 failed = !withContext(Dispatchers.Default) {
-                                    wallet.broadcast(session, draft.amountSats, draft.feeSats, draft.destination)
+                                    wallet.broadcast(session, draft.amountSats, draft.rateSatVb, draft.destination)
                                 }
                                 if (!failed) onSigned()
                             }

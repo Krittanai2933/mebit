@@ -476,8 +476,8 @@ public data class PreparedSend (
      */
     var `hex`: kotlin.String, 
     /**
-     * The fee the transaction pays, in sats. Equal to `fee_sats` as asked, because a payment whose
-     * change would be dust is refused instead of being folded into the fee.
+     * The fee the transaction pays, in sats: its virtual size times the rate asked for, rounded up.
+     * A payment whose change would be dust is refused instead of folding the change into the fee.
      */
     var `feeSats`: kotlin.ULong
 ) {
@@ -931,7 +931,7 @@ public expect fun `fetchBtcThb`(): BtcPrice
 public expect fun `generateSoftwareMultisigKey`(`passphrase`: kotlin.String, `network`: KeyNetwork, `account`: kotlin.UInt): SoftwareAccountKey
 
 /**
- * Post a transaction from `hot_prepare_send` once. `txid` must be the id of the transaction in
+ * Post a transaction from `hot_prepare_send_at_rate` once. `txid` must be the id of the transaction in
  * `hex`, else it refuses before posting, so nothing else can go out under a saved guard.
  *
  * When the explorer's answer leaves it unclear whether the payment went out, it looks `txid` up a
@@ -950,18 +950,20 @@ public expect fun `hotBroadcast`(`network`: KeyNetwork, `hex`: kotlin.String, `t
 public expect fun `hotFeeTiers`(`network`: KeyNetwork): FeeTiers
 
 /**
- * Scan, select coins, check and sign a payment, and post nothing. The only network use is the
- * Esplora lookups of the scan. The app saves the `txid` as its payment guard before it calls
- * `hot_broadcast`, so a kill between the two can never lead to a second payment.
+ * Scan, select coins, check and sign a payment at `fee_rate_sat_vb`, and post nothing. The only
+ * network use is the Esplora lookups of the scan. The app saves the `txid` as its payment guard
+ * before it calls `hot_broadcast`, so a kill between the two can never lead to a second payment.
  *
- * Refuses, before signing, an amount below the 546 sat dust limit, a fee above the amount, change
- * that would be dust (above 0 and at most 546 sats), and a fee rate below 1 or above 2,000 sat/vB
- * for the transaction as built. Only confirmed coins of receive addresses are spent; the wallet's
- * own unconfirmed change is spent too. About 40 Esplora calls for a fresh wallet, so call it off
- * the main thread.
+ * The fee is the size of the transaction as built times the rate, so a payment that needs more
+ * coins pays more, never a fixed sum that falls under the rate. `max_fee_sats` is what the review
+ * screen showed: a fee above it is refused before signing, so the user is never charged more than
+ * they saw. Refuses, before signing, a rate outside 1 to 2,000 sat/vB, an amount below the 546 sat
+ * dust limit, a fee above the amount, and change that would be dust (above 0 and at most 546
+ * sats). Only confirmed coins of receive addresses are spent; the wallet's own unconfirmed change
+ * is spent too. About 40 Esplora calls for a fresh wallet, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
-public expect fun `hotPrepareSend`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeSats`: kotlin.ULong): PreparedSend
+public expect fun `hotPrepareSendAtRate`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeRateSatVb`: kotlin.ULong, `maxFeeSats`: kotlin.ULong): PreparedSend
 
 /**
  * First receive address at BIP-84 index `index` (usually 0). `passphrase` is the
@@ -989,7 +991,7 @@ public expect fun `hotWalletHistory`(`mnemonicWords`: List<kotlin.String>, `pass
 public expect fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork): HotWalletSnapshot
 
 /**
- * True when `address` parses and belongs to `network`: the same test `hot_prepare_send` applies to its destination.
+ * True when `address` parses and belongs to `network`: the same test `hot_prepare_send_at_rate` applies to its destination.
  */
 public expect fun `isValidAddress`(`address`: kotlin.String, `network`: KeyNetwork): kotlin.Boolean
 

@@ -42,7 +42,7 @@ private class FakeChain {
     var offlineResult: () -> String = { OFFLINE_ADDRESS }
     val derivations = mutableListOf<Derivation>()
     val wallet = SingleSigWallet(
-        prepare = { _, _, _, _, _, _ -> fail("prepare ran") },
+        prepare = { _, _, _, _, _, _, _ -> fail("prepare ran") },
         post = { _, _, _ -> fail("post ran") },
         snapshot = { _, _, _ -> snapshotResult() },
         fetchHistory = { _, _, _ -> historyResult() },
@@ -114,7 +114,7 @@ class SingleSigWalletStateTest {
             Shown(WalletMode.Unavailable, 0L, OFFLINE_ADDRESS, emptyList(), UNREACHABLE_SHOWN, live = false, balanceKnown = false, addressIsReal = true),
             chain.wallet.shown(),
         )
-        assertFalse(chain.wallet.broadcast(chain.session, 100_000, 1_128, "tb1qdestinationthatneverleaves"), "the old balance pays for no mock payment")
+        assertFalse(chain.wallet.broadcast(chain.session, 100_000, 8, "tb1qdestinationthatneverleaves"), "the old balance pays for no mock payment")
         assertEquals("", chain.wallet.lastTxid, "no mock txid")
     }
 

@@ -848,8 +848,8 @@ mod tests {
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_receive_address(),
             ),
             (
-                "func_hot_prepare_send",
-                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send(),
+                "func_hot_prepare_send_at_rate",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate(),
             ),
             (
                 "func_hot_broadcast",

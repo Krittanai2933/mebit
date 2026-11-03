@@ -96,6 +96,13 @@ class AmountEntry(private val draft: SendDraft) {
         if (keepAll) sendAll(balanceSats)
     }
 
+    /** Takes the fetched rates. While the amount is send all, it is worked out again for the new fee, as [chooseTier] does. */
+    fun applyTiers(tiers: LiveFeeTiers, balanceSats: Long) {
+        val keepAll = marked
+        draft.takeTiers(tiers)
+        if (keepAll) sendAll(balanceSats)
+    }
+
     /**
      * The amount field's text: the BTC text as typed, or in baht the digits of the sats, empty for zero.
      * Baht rounds half up, as the baht line does, so what was typed in baht reads back as typed. Send all cuts down.

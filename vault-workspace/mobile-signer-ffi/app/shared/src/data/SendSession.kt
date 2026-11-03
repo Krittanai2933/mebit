@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.mebit.ffi.signer.FeeTiers
 import com.mebit.ffi.signer.HotSendResult
 import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.HotWalletSnapshot
@@ -11,7 +12,8 @@ import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.MobileSignerException
 import com.mebit.ffi.signer.PreparedSend
 import com.mebit.ffi.signer.hotBroadcast
-import com.mebit.ffi.signer.hotPrepareSend
+import com.mebit.ffi.signer.hotFeeTiers
+import com.mebit.ffi.signer.hotPrepareSendAtRate
 import com.mebit.ffi.signer.hotReceiveAddress
 import com.mebit.ffi.signer.hotWalletHistory
 import com.mebit.ffi.signer.hotWalletSnapshot
@@ -21,16 +23,17 @@ import kotlin.time.Clock
  * Single-sig hot wallet surface for Movie Page S*.
  * Live path uses BIP-84 + Esplora (hot_* UniFFI). Demo path keeps offline fixtures.
  *
- * [prepare], [post], [snapshot], [fetchHistory] and [receiveAddressOf] are the hot_* calls. Tests pass fakes, so they need no native library or network.
+ * [prepare], [post], [snapshot], [fetchHistory], [receiveAddressOf] and [fetchFeeTiers] are the hot_* calls. Tests pass fakes, so they need no native library or network.
  * [nowSeconds] is the phone clock in Unix seconds, which [lastSentAtSeconds] reads when a payment goes out.
  */
 class SingleSigWallet(
-    private val prepare: (words: List<String>, passphrase: String, network: KeyNetwork, destination: String, amountSats: ULong, feeSats: ULong) -> PreparedSend = ::hotPrepareSend,
+    private val prepare: (words: List<String>, passphrase: String, network: KeyNetwork, destination: String, amountSats: ULong, feeRateSatVb: ULong, maxFeeSats: ULong) -> PreparedSend = ::hotPrepareSendAtRate,
     private val post: (network: KeyNetwork, hex: String, txid: String) -> HotSendResult = ::hotBroadcast,
     private val snapshot: (words: List<String>, passphrase: String, network: KeyNetwork) -> HotWalletSnapshot = ::hotWalletSnapshot,
     private val fetchHistory: (words: List<String>, passphrase: String, network: KeyNetwork) -> List<HotTx> = ::hotWalletHistory,
     private val nowSeconds: () -> Long = { Clock.System.now().epochSeconds },
     private val receiveAddressOf: (words: List<String>, passphrase: String, network: KeyNetwork, index: UInt) -> String = ::hotReceiveAddress,
+    private val fetchFeeTiers: (network: KeyNetwork) -> FeeTiers = ::hotFeeTiers,
 ) {
     /** What the wallet is. A real key is only ever [Live] or [Unavailable], so a real wallet never looks like the demo. */
     enum class WalletMode {
@@ -44,7 +47,7 @@ class SingleSigWallet(
         Unavailable,
     }
 
-    /** A signed payment that may be out: its post began and has not been answered with a refusal or an explorer that lists it. [txid] is the one hot_prepare_send computed. [sinceSeconds] is the phone clock when the post began. */
+    /** A signed payment that may be out: its post began and has not been answered with a refusal or an explorer that lists it. [txid] is the one hot_prepare_send_at_rate computed. [sinceSeconds] is the phone clock when the post began. */
     data class UnconfirmedSend(val txid: String, val sinceSeconds: Long)
 
     /** The [WalletMode] the last [bindSession] left. [WalletMode.Demo] until the first bind. */
@@ -55,6 +58,10 @@ class SingleSigWallet(
     var receiveAddress: String by mutableStateOf("")
         private set
     var lastTxid: String by mutableStateOf("")
+        private set
+
+    /** The fee the last payment that went out pays, in sats: the signed transaction's, not the Send screen's estimate. 0 until a payment goes out. */
+    var lastFeeSats: Long by mutableStateOf(0L)
         private set
 
     /** When the last payment went out, in Unix seconds on the phone clock. 0 until a payment goes out, and again after [useDemoFixture]. */
@@ -118,14 +125,28 @@ class SingleSigWallet(
         }
     }
 
+    /** The fee tiers for the Send screen. Blocks on the network for a few seconds at most, so call it off the main thread. The fixed tiers when the bridge fails, as when Rust cannot be reached. */
+    fun feeTiers(network: KeyNetwork = KeyNetwork.TEST): LiveFeeTiers =
+        try {
+            LiveFeeTiers.of(fetchFeeTiers(network))
+        } catch (e: Exception) {
+            LiveFeeTiers.DEFAULT
+        }
+
+    /**
+     * Signs and posts [amountSats] to [destination] at [feeRateSatVb]. The fee the transaction pays is its size times the rate, and the
+     * core refuses before signing when that is more than twice the estimate the screens showed (at least 300 sats), so a payment never
+     * costs more than the user could see. [lastFeeSats] holds the fee paid once the payment is out.
+     */
     fun broadcast(
         session: OnboardingSession,
         amountSats: Long,
-        feeSats: Long,
+        feeRateSatVb: Long,
         destination: String,
         network: KeyNetwork = KeyNetwork.TEST,
     ): Boolean {
         lastError = null
+        val feeSats = feeRateSatVb * TYPICAL_VSIZE
         if (unconfirmedSend != null) {
             lastError = "การส่งครั้งก่อนยังยืนยันไม่ได้ จึงยังส่งใหม่ไม่ได้"
             return false
@@ -142,11 +163,12 @@ class SingleSigWallet(
             }
             balanceSats -= amountSats + feeSats
             lastTxid = "mocktxid_" + balanceSats.toString(16) + "_" + amountSats.toString(16)
+            lastFeeSats = feeSats
             lastSentAtSeconds = nowSeconds()
             return true
         }
         val prepared = try {
-            prepare(session.words, session.passphrase, network, destination, amountSats.toULong(), feeSats.toULong())
+            prepare(session.words, session.passphrase, network, destination, amountSats.toULong(), feeRateSatVb.toULong(), maxFeeSats(feeSats).toULong())
         } catch (e: Exception) {
             lastError = sendErrorThai(e.message)
             return false
@@ -177,6 +199,7 @@ class SingleSigWallet(
         }
         clearUnconfirmedSend(session)
         lastTxid = prepared.txid
+        lastFeeSats = prepared.feeSats.toLong()
         lastSentAtSeconds = nowSeconds()
         // Its own try: the payment is out once the post returns, and reading it as failed invites a retry that pays twice.
         try {
@@ -203,6 +226,7 @@ class SingleSigWallet(
         balanceSats = 1_250_000L
         receiveAddress = "tb1qmebitdemosinglesig0000000000000000recv"
         lastTxid = ""
+        lastFeeSats = 0L
         lastSentAtSeconds = 0L
         history = emptyList()
         unconfirmedSend = null
@@ -229,6 +253,7 @@ fun sendErrorThai(message: String?): String {
     return when {
         m.startsWith("amount ") && m.endsWith("dust limit") -> "จำนวนน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)"
         m.startsWith("fee ") && " is more than the amount " in m -> "ค่าธรรมเนียมสูงกว่าจำนวนที่ส่ง เลือกระดับที่ต่ำลง"
+        m.startsWith("fee ") && " would be more than the " in m -> "ค่าธรรมเนียมจริงสูงกว่าที่แสดง ยังไม่ได้ส่ง ลองใหม่"
         m.startsWith("insufficient funds") -> "ยอดที่ยืนยันแล้วไม่พอ รอให้เงินที่เพิ่งได้รับยืนยันก่อน"
         m.startsWith("change below dust") -> "เงินทอนน้อยเกินไป ส่งทั้งหมดหรือเปลี่ยนจำนวน"
         m.startsWith("fee ") && " is below " in m -> "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น"
@@ -250,16 +275,46 @@ private const val SEND_FALLBACK = "ส่งไม่สำเร็จ ลอ�
 fun readErrorThai(message: String?): String =
     sendErrorThai(message).takeUnless { it == SEND_FALLBACK } ?: "ดึงข้อมูลกระเป๋าไม่สำเร็จ ลองใหม่ภายหลัง"
 
-/** A typical 1-input, 2-output P2WPKH payment. The fee tiers are rate times this until coin selection reports the real size. */
+/** A typical 1-input, 2-output P2WPKH payment. The screens show rate times this as the estimate; the core charges rate times the real size. */
 const val TYPICAL_VSIZE = 141L
 
+/** The most the core may charge for a payment whose estimate is [estimateSats]: twice it, and at least 300 sats so a 1 sat/vB estimate still leaves room for a second coin. */
+fun maxFeeSats(estimateSats: Long): Long = maxOf(estimateSats * 2, 300L)
+
+/** The three tiers of board 4.4. [satPerVb] is the board's fixed rate, which [LiveFeeTiers.DEFAULT] uses until the live rates arrive or when they cannot be fetched. */
 enum class FeeTier(val label: String, val eta: String, val satPerVb: Long) {
     Slow("ช้า", "~1 ชม.", 4),
     Normal("ปกติ", "~30 นาที", 8),
     Fast("เร็ว", "~10 นาที", 15);
 
+    /** The board's estimate: the fixed rate times the typical size. */
     val sats: Long get() = satPerVb * TYPICAL_VSIZE
 }
+
+/** The sat/vB of each tier. [live] is true when they came from the node's view of the mempool and false for the fixed board rates. */
+data class LiveFeeTiers(val slow: Long, val normal: Long, val fast: Long, val live: Boolean) {
+    fun rate(tier: FeeTier): Long = when (tier) {
+        FeeTier.Slow -> slow
+        FeeTier.Normal -> normal
+        FeeTier.Fast -> fast
+    }
+
+    /** The fee the screens show for [tier], in sats: the rate times the typical size. */
+    fun estimate(tier: FeeTier): Long = rate(tier) * TYPICAL_VSIZE
+
+    /** The three tiles of the Send screen, in board order. */
+    fun tiles(): List<FeeTile> = FeeTier.entries.map { FeeTile(it, rate(it), estimate(it)) }
+
+    companion object {
+        val DEFAULT = LiveFeeTiers(FeeTier.Slow.satPerVb, FeeTier.Normal.satPerVb, FeeTier.Fast.satPerVb, live = false)
+
+        /** The Rust answer as the screens use it. Rust already caps a rate at 2,000 and never answers 0. */
+        fun of(tiers: FeeTiers) = LiveFeeTiers(tiers.slowSatVb.toLong(), tiers.normalSatVb.toLong(), tiers.fastSatVb.toLong(), tiers.live)
+    }
+}
+
+/** One fee tile: the tier's board copy, its rate and the estimate in sats. */
+data class FeeTile(val tier: FeeTier, val satPerVb: Long, val feeSats: Long)
 
 /** "0.0050" to 500_000 sats. Null for anything that is not a positive amount of at most 21 million BTC with at most 8 decimals. */
 fun parseBtc(text: String): Long? {
@@ -304,10 +359,19 @@ fun sendIssue(addressOk: Boolean?, amountSats: Long, feeSats: Long, balanceSats:
 class SendDraft {
     var amountSats: Long by mutableStateOf(0L)
         private set
+
+    /** The estimate for [tier]: its rate times [TYPICAL_VSIZE]. What the Send and Review screens show and what the balance check uses. */
     var feeSats: Long by mutableStateOf(FeeTier.Normal.sats)
         private set
     var tier: FeeTier by mutableStateOf(FeeTier.Normal)
         private set
+
+    /** The rates the tiles show: null until the Send screen's fetch answers, and then what it answered. [reset] keeps them, so a payment after another opens with the last known rates while the fetch runs again. */
+    var tiers: LiveFeeTiers? by mutableStateOf(null)
+        private set
+
+    /** The rate of [tier] in sat/vB, which the broadcast pays. */
+    val rateSatVb: Long get() = (tiers ?: LiveFeeTiers.DEFAULT).rate(tier)
     var destination: String by mutableStateOf("")
     var amountText: String by mutableStateOf("")
         private set
@@ -337,7 +401,13 @@ class SendDraft {
 
     fun chooseTier(next: FeeTier) {
         tier = next
-        feeSats = next.sats
+        feeSats = (tiers ?: LiveFeeTiers.DEFAULT).estimate(next)
+    }
+
+    /** Takes the fetched rates and works the estimate for the chosen tier out again. Not `setTiers`: that is the private setter's name on the JVM. */
+    fun takeTiers(next: LiveFeeTiers) {
+        tiers = next
+        chooseTier(tier)
     }
 
     fun setAmount(text: String): Boolean {

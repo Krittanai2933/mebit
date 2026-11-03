@@ -1035,7 +1035,7 @@ pub struct HotSendResult {
     pub txid: String,
 }
 
-/// True when `address` parses and belongs to `network`: the same test `hot_prepare_send` applies to its destination.
+/// True when `address` parses and belongs to `network`: the same test `hot_prepare_send_at_rate` applies to its destination.
 #[uniffi::export]
 pub fn is_valid_address(address: String, network: KeyNetwork) -> bool {
     Address::from_str(&address).is_ok_and(|a| a.require_network(network_of(network)).is_ok())
@@ -1048,37 +1048,41 @@ pub struct PreparedSend {
     pub txid: String,
     /// The signed transaction, consensus-encoded, for `hot_broadcast`.
     pub hex: String,
-    /// The fee the transaction pays, in sats. Equal to `fee_sats` as asked, because a payment whose
-    /// change would be dust is refused instead of being folded into the fee.
+    /// The fee the transaction pays, in sats: its virtual size times the rate asked for, rounded up.
+    /// A payment whose change would be dust is refused instead of folding the change into the fee.
     pub fee_sats: u64,
 }
 
-/// Scan, select coins, check and sign a payment, and post nothing. The only network use is the
-/// Esplora lookups of the scan. The app saves the `txid` as its payment guard before it calls
-/// `hot_broadcast`, so a kill between the two can never lead to a second payment.
+/// Scan, select coins, check and sign a payment at `fee_rate_sat_vb`, and post nothing. The only
+/// network use is the Esplora lookups of the scan. The app saves the `txid` as its payment guard
+/// before it calls `hot_broadcast`, so a kill between the two can never lead to a second payment.
 ///
-/// Refuses, before signing, an amount below the 546 sat dust limit, a fee above the amount, change
-/// that would be dust (above 0 and at most 546 sats), and a fee rate below 1 or above 2,000 sat/vB
-/// for the transaction as built. Only confirmed coins of receive addresses are spent; the wallet's
-/// own unconfirmed change is spent too. About 40 Esplora calls for a fresh wallet, so call it off
-/// the main thread.
+/// The fee is the size of the transaction as built times the rate, so a payment that needs more
+/// coins pays more, never a fixed sum that falls under the rate. `max_fee_sats` is what the review
+/// screen showed: a fee above it is refused before signing, so the user is never charged more than
+/// they saw. Refuses, before signing, a rate outside 1 to 2,000 sat/vB, an amount below the 546 sat
+/// dust limit, a fee above the amount, and change that would be dust (above 0 and at most 546
+/// sats). Only confirmed coins of receive addresses are spent; the wallet's own unconfirmed change
+/// is spent too. About 40 Esplora calls for a fresh wallet, so call it off the main thread.
 #[uniffi::export]
-pub fn hot_prepare_send(
+pub fn hot_prepare_send_at_rate(
     mnemonic_words: Vec<String>,
     passphrase: String,
     network: KeyNetwork,
     destination: String,
     amount_sats: u64,
-    fee_sats: u64,
+    fee_rate_sat_vb: u64,
+    max_fee_sats: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
-    let signed = signed_payment(
+    let (signed, fee_sats) = signed_payment(
         &http_get,
         &mnemonic_words,
         &passphrase,
         network,
         &destination,
         amount_sats,
-        fee_sats,
+        fee_rate_sat_vb,
+        max_fee_sats,
         Instant::now(),
         &SCAN_CACHE,
     )?;
@@ -1093,7 +1097,7 @@ fn prepared(signed: &Transaction, fee_sats: u64) -> PreparedSend {
     }
 }
 
-/// Post a transaction from `hot_prepare_send` once. `txid` must be the id of the transaction in
+/// Post a transaction from `hot_prepare_send_at_rate` once. `txid` must be the id of the transaction in
 /// `hex`, else it refuses before posting, so nothing else can go out under a saved guard.
 ///
 /// When the explorer's answer leaves it unclear whether the payment went out, it looks `txid` up a
@@ -1185,11 +1189,16 @@ fn p2wpkh_vsize(inputs: usize, outputs: usize) -> u64 {
     twice.div_ceil(2)
 }
 
+/// How many times the coin selection is redone for a fee that grew with the inputs it chose.
+/// Each pass adds at least one input, so a payment over many small coins can run out of passes.
+const FEE_PASSES: usize = 4;
+
 /// A payment from the coins of every used address, each input signed with its own key, any change
-/// paid to the first unused internal (change) address, not yet broadcast. The amount, the fee and
-/// the destination are checked before any network call; the change and the fee rate after the coins
-/// are chosen. Every refusal is an error, never a changed payment. The used-address set may come
-/// from `scan_wallet`'s cache; the coin lists are asked for on every call, never cached.
+/// paid to the first unused internal (change) address, not yet broadcast, with the fee it pays.
+/// The amount, the rate, the destination and the fee of the smallest payment are checked before
+/// any network call; the change and the real fee after the coins are chosen. Every refusal is an
+/// error, never a changed payment. The used-address set may come from `scan_wallet`'s cache; the
+/// coin lists are asked for on every call, never cached.
 #[allow(clippy::too_many_arguments)]
 fn signed_payment(
     esplora: Esplora,
@@ -1198,24 +1207,44 @@ fn signed_payment(
     network: KeyNetwork,
     destination: &str,
     amount_sats: u64,
-    fee_sats: u64,
+    rate_sat_vb: u64,
+    max_fee_sats: u64,
     now: Instant,
     cache: &ScanCache,
-) -> Result<Transaction, MobileSignerError> {
+) -> Result<(Transaction, u64), MobileSignerError> {
     let refuse = |what: String| Err(MobileSignerError::InvalidPsbtJson(what));
     if amount_sats < DUST {
         return refuse(format!(
             "amount {amount_sats} is below the {DUST} sat dust limit"
         ));
     }
-    if fee_sats > amount_sats {
+    if rate_sat_vb < MIN_FEE_RATE {
         return refuse(format!(
-            "fee {fee_sats} is more than the amount {amount_sats}"
+            "fee rate {rate_sat_vb} is below {MIN_FEE_RATE} sat/vB"
         ));
     }
-    let need = amount_sats.checked_add(fee_sats).ok_or_else(|| {
-        MobileSignerError::InvalidPsbtJson("amount plus fee does not fit u64".into())
-    })?;
+    if rate_sat_vb > MAX_FEE_RATE {
+        return refuse(format!(
+            "fee rate {rate_sat_vb} is above {MAX_FEE_RATE} sat/vB"
+        ));
+    }
+    // The rate is at most 2,000 and the size a few thousand vB, so the product fits u64.
+    let fee_for = |inputs: usize, outputs: usize| rate_sat_vb * p2wpkh_vsize(inputs, outputs);
+    let fee_checked = |fee_sats: u64| -> Result<u64, MobileSignerError> {
+        let message = if fee_sats > amount_sats {
+            format!("fee {fee_sats} is more than the amount {amount_sats}")
+        } else if fee_sats > max_fee_sats {
+            format!("fee {fee_sats} would be more than the {max_fee_sats} shown")
+        } else {
+            return amount_sats.checked_add(fee_sats).ok_or_else(|| {
+                MobileSignerError::InvalidPsbtJson("amount plus fee does not fit u64".into())
+            });
+        };
+        Err(MobileSignerError::InvalidPsbtJson(message))
+    };
+    // The smallest payment is one input and change. A fee the rules refuse there is refused before any lookup.
+    let mut fee_sats = fee_for(1, 2);
+    fee_checked(fee_sats)?;
     let net = network_of(network);
     let dest = Address::from_str(destination)
         .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?
@@ -1254,35 +1283,41 @@ fn signed_payment(
         .iter()
         .try_fold(0u64, |sum, (u, _)| sum.checked_add(u.value))
         .ok_or_else(overflow)?;
-    if have < need {
-        return refuse(format!(
-            "insufficient funds: have {have} confirmed, need {need}"
-        ));
-    }
-    let mut selected = Vec::new();
-    let mut total = 0u64;
-    for (utxo, owner) in spendable {
-        total = total.checked_add(utxo.value).ok_or_else(overflow)?;
-        selected.push((utxo, owner));
-        if total >= need {
-            break;
+    // The fee depends on how many coins pay it, and the coins on the fee, so the selection is
+    // redone until the fee covers the coins it chose. A fee the coins over-cover (the change
+    // vanished and the transaction shrank) is kept: it is at least the rate and under the maximum.
+    let mut passes = 0;
+    let (selected, change) = loop {
+        let need = fee_checked(fee_sats)?;
+        if have < need {
+            return refuse(format!(
+                "insufficient funds: have {have} confirmed, need {need}"
+            ));
         }
-    }
-    let change = total - need;
+        let mut selected = Vec::new();
+        let mut total = 0u64;
+        for (utxo, owner) in &spendable {
+            total = total.checked_add(utxo.value).ok_or_else(overflow)?;
+            selected.push((utxo, *owner));
+            if total >= need {
+                break;
+            }
+        }
+        let change = total - need;
+        let real = fee_for(selected.len(), if change > 0 { 2 } else { 1 });
+        if real <= fee_sats {
+            break (selected, change);
+        }
+        passes += 1;
+        if passes == FEE_PASSES {
+            return refuse(format!(
+                "fee did not settle in {FEE_PASSES} passes, send a smaller amount"
+            ));
+        }
+        fee_sats = real;
+    };
     if change > 0 && change <= DUST {
         return refuse("change below dust, send the whole balance or change the amount".into());
-    }
-    let outputs = if change > 0 { 2 } else { 1 };
-    let vsize = p2wpkh_vsize(selected.len(), outputs);
-    if fee_sats < MIN_FEE_RATE * vsize {
-        return refuse(format!(
-            "fee {fee_sats} is below {MIN_FEE_RATE} sat/vB for {vsize} vB"
-        ));
-    }
-    if fee_sats > MAX_FEE_RATE * vsize {
-        return refuse(format!(
-            "fee {fee_sats} is above {MAX_FEE_RATE} sat/vB for {vsize} vB"
-        ));
     }
 
     let secp = Secp256k1::new();
@@ -1332,7 +1367,7 @@ fn signed_payment(
             .ok_or_else(|| MobileSignerError::InvalidPsbtJson("missing witness slot".into()))?;
         *witness = Witness::from_slice(&[der.as_slice(), &owner.pubkey.to_bytes()]);
     }
-    Ok(cache.into_transaction())
+    Ok((cache.into_transaction(), fee_sats))
 }
 
 type Answer = Result<ureq::Response, ureq::Error>;
@@ -1534,7 +1569,7 @@ fn esplora_estimates(json: &Value) -> Vec<(u32, &Value)> {
 }
 
 /// A rate as the Send screen can use it: a finite positive number rounded up to whole sat/vB and
-/// capped at `MAX_FEE_RATE`, above which `hot_prepare_send` refuses the payment. Anything else
+/// capped at `MAX_FEE_RATE`, above which `hot_prepare_send_at_rate` refuses the payment. Anything else
 /// (zero, negative, NaN, a string, a missing field) is no estimate.
 fn whole_sat_vb(rate: &Value) -> Option<u64> {
     let rate = rate.as_f64().filter(|r| r.is_finite() && *r > 0.0)?;
@@ -2590,7 +2625,14 @@ mod tests {
             )
         }
 
-        fn send(&self, to: &str, amount: u64, fee: u64) -> Result<Transaction, MobileSignerError> {
+        /// A payment at `rate` sat/vB with no ceiling on the fee, and the fee it pays.
+        fn send_at(
+            &self,
+            to: &str,
+            amount: u64,
+            rate: u64,
+            max_fee: u64,
+        ) -> Result<(Transaction, u64), MobileSignerError> {
             let words = abandon_about();
             signed_payment(
                 &|url| self.get(url),
@@ -2599,10 +2641,21 @@ mod tests {
                 KeyNetwork::Test,
                 to,
                 amount,
-                fee,
+                rate,
+                max_fee,
                 self.now(),
                 &self.cache,
             )
+        }
+
+        fn send(&self, to: &str, amount: u64, rate: u64) -> Result<Transaction, MobileSignerError> {
+            self.send_at(to, amount, rate, u64::MAX).map(|(tx, _)| tx)
+        }
+
+        /// `hot_prepare_send_at_rate` as the app would reach it, against this Fake.
+        fn ready(&self, to: &str, amount: u64, rate: u64) -> PreparedSend {
+            let (tx, fee) = self.send_at(to, amount, rate, u64::MAX).unwrap();
+            prepared(&tx, fee)
         }
 
         /// `hot_broadcast` as the app would reach it, against this Fake's scan cache.
@@ -2680,9 +2733,9 @@ mod tests {
         // The documented cost of a wallet nobody paid: GAP_LIMIT lookups per chain and no more.
         assert_eq!(fake.calls.lock().unwrap().len(), 40);
         assert!(fake.history().unwrap().is_empty());
-        match fake.send(SOMEONE, 1_000, 100) {
+        match fake.send(SOMEONE, 1_000, 1) {
             Err(MobileSignerError::InvalidPsbtJson(m)) => {
-                assert_eq!(m, "insufficient funds: have 0 confirmed, need 1100")
+                assert_eq!(m, "insufficient funds: have 0 confirmed, need 1141")
             }
             other => panic!("expected insufficient funds, got {other:?}"),
         }
@@ -2706,11 +2759,11 @@ mod tests {
             receive_and_balance(fake.snapshot("").unwrap()),
             (addr(Chain::External, 4), 7_000)
         );
-        let tx = fake.send(SOMEONE, 5_000, 500).unwrap();
+        let tx = fake.send(SOMEONE, 5_000, 2).unwrap();
         assert_eq!(tx.input.len(), 1);
         assert_eq!(tx.input[0].previous_output.txid.to_string(), id('3'));
         assert!(signed_by(&tx, 0, 7_000, &own(Chain::External, 3)));
-        assert_outputs(&tx, &[(SOMEONE, 5_000), (&addr(Chain::Internal, 0), 1_500)]);
+        assert_outputs(&tx, &[(SOMEONE, 5_000), (&addr(Chain::Internal, 0), 1_718)]);
     }
 
     #[test]
@@ -2721,9 +2774,9 @@ mod tests {
             receive_and_balance(fake.snapshot("").unwrap()),
             (addr(Chain::External, 0), 3_000)
         );
-        let tx = fake.send(SOMEONE, 2_000, 200).unwrap();
+        let tx = fake.send(SOMEONE, 2_000, 2).unwrap();
         assert!(signed_by(&tx, 0, 3_000, &own(Chain::Internal, 0)));
-        assert_outputs(&tx, &[(SOMEONE, 2_000), (&addr(Chain::Internal, 1), 800)]);
+        assert_outputs(&tx, &[(SOMEONE, 2_000), (&addr(Chain::Internal, 1), 718)]);
     }
 
     // The documented limit. Index 20 is the first past twenty unused ones and is never asked about.
@@ -2740,7 +2793,7 @@ mod tests {
             );
             assert!(!fake.asked_about(&far), "{index}");
             assert!(fake.history().unwrap().is_empty(), "{index}");
-            assert!(fake.send(SOMEONE, 1_000, 100).is_err(), "{index}");
+            assert!(fake.send(SOMEONE, 1_000, 1).is_err(), "{index}");
         }
     }
 
@@ -2766,8 +2819,8 @@ mod tests {
         assert_eq!(fake.snapshot("").unwrap(), fake.snapshot("").unwrap());
         assert_eq!(fake.history().unwrap(), fake.history().unwrap());
         let (a, b) = (
-            fake.send(SOMEONE, 6_000, 500).unwrap(),
-            fake.send(SOMEONE, 6_000, 500).unwrap(),
+            fake.send(SOMEONE, 6_000, 2).unwrap(),
+            fake.send(SOMEONE, 6_000, 2).unwrap(),
         );
         assert_eq!(serialize_hex(&a), serialize_hex(&b));
     }
@@ -2789,14 +2842,14 @@ mod tests {
         let (first, third) = (own(Chain::External, 0), own(Chain::External, 2));
         fake.fund(&first.address.to_string(), 4_000, '1');
         fake.fund(&third.address.to_string(), 4_000, '2');
-        let tx = fake.send(SOMEONE, 6_000, 500).unwrap();
+        let tx = fake.send(SOMEONE, 6_000, 2).unwrap();
         assert_eq!(tx.input.len(), 2);
         assert!(signed_by(&tx, 0, 4_000, &first));
         assert!(signed_by(&tx, 1, 4_000, &third));
         // The check can tell the keys apart.
         assert!(!signed_by(&tx, 0, 4_000, &third));
         assert!(!signed_by(&tx, 1, 4_000, &first));
-        assert_outputs(&tx, &[(SOMEONE, 6_000), (&addr(Chain::Internal, 0), 1_500)]);
+        assert_outputs(&tx, &[(SOMEONE, 6_000), (&addr(Chain::Internal, 0), 1_582)]);
     }
 
     #[test]
@@ -2805,18 +2858,34 @@ mod tests {
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
         fake.touch(&addr(Chain::Internal, 0));
         fake.touch(&addr(Chain::Internal, 1));
-        let tx = fake.send(SOMEONE, 1_000, 200).unwrap();
-        assert_outputs(&tx, &[(SOMEONE, 1_000), (&addr(Chain::Internal, 2), 8_800)]);
+        let tx = fake.send(SOMEONE, 1_000, 2).unwrap();
+        assert_outputs(&tx, &[(SOMEONE, 1_000), (&addr(Chain::Internal, 2), 8_718)]);
         let externals: Vec<String> = (0..40).map(|i| addr(Chain::External, i)).collect();
         assert!(!externals.contains(&pays(&tx.output[1])));
     }
 
     #[track_caller]
-    fn assert_refused(result: Result<Transaction, MobileSignerError>, message: &str) {
+    fn assert_refused<T: std::fmt::Debug>(result: Result<T, MobileSignerError>, message: &str) {
         match result {
             Err(MobileSignerError::InvalidPsbtJson(m)) => assert_eq!(m, message),
             other => panic!("expected {message:?}, got {other:?}"),
         }
+    }
+
+    /// What the transaction pays: its inputs' values (the Fake's coins) minus its outputs.
+    fn fee_paid(fake: &Fake, tx: &Transaction) -> u64 {
+        let coins: HashMap<(String, u32), u64> = fake
+            .utxos
+            .values()
+            .flat_map(|list| parse_utxos(list).unwrap())
+            .map(|u| ((u.txid.to_string(), u.vout), u.value))
+            .collect();
+        let spent: u64 = tx
+            .input
+            .iter()
+            .map(|i| coins[&(i.previous_output.txid.to_string(), i.previous_output.vout)])
+            .sum();
+        spent - tx.output.iter().map(|o| o.value.to_sat()).sum::<u64>()
     }
 
     // Finding 6. Before, change of 1 to 546 sats was quietly added to the fee.
@@ -2825,21 +2894,30 @@ mod tests {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
         let dust = "change below dust, send the whole balance or change the amount";
-        assert_refused(fake.send(SOMEONE, 9_000, 999), dust);
-        assert_refused(fake.send(SOMEONE, 9_000, 454), dust);
+        // 10,000 less 9,000 less 141 x 4 (436) or 141 x 7 (13) is dust; less 141 x 3 (577) is not.
+        assert_refused(fake.send(SOMEONE, 9_000, 4), dust);
+        assert_refused(fake.send(SOMEONE, 9_000, 7), dust);
         assert_outputs(
-            &fake.send(SOMEONE, 9_000, 453).unwrap(),
-            &[(SOMEONE, 9_000), (&addr(Chain::Internal, 0), 547)],
+            &fake.send(SOMEONE, 9_000, 3).unwrap(),
+            &[(SOMEONE, 9_000), (&addr(Chain::Internal, 0), 577)],
         );
-        // The whole balance: one output and the fee exactly as asked.
-        let all = fake.send(SOMEONE, 9_000, 1_000).unwrap();
-        assert_outputs(&all, &[(SOMEONE, 9_000)]);
-        assert_eq!(prepared(&all, 1_000).fee_sats, 1_000);
+        // At 1 sat/vB the fee is 141: 9,313 leaves exactly 546 and 9,312 leaves 547.
+        assert_refused(fake.send(SOMEONE, 9_313, 1), dust);
+        assert_outputs(
+            &fake.send(SOMEONE, 9_312, 1).unwrap(),
+            &[(SOMEONE, 9_312), (&addr(Chain::Internal, 0), 547)],
+        );
+        // Send all, as the app computes it: the balance less the 141 vB estimate. One output, and
+        // the estimate is kept as the fee rather than shrunk into dust change.
+        let (all, fee) = fake.send_at(SOMEONE, 10_000 - 141, 1, 141).unwrap();
+        assert_outputs(&all, &[(SOMEONE, 9_859)]);
+        assert_eq!(fee, 141);
+        assert_eq!(fee_paid(&fake, &all), 141);
     }
 
     // Finding 5. Each guard is a distinct error before any signing.
     #[test]
-    fn a_dust_amount_or_a_fee_above_the_amount_is_refused_before_any_lookup() {
+    fn a_dust_amount_a_rate_out_of_range_or_a_fee_above_the_amount_is_refused_before_any_lookup() {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
         assert_refused(
@@ -2847,42 +2925,91 @@ mod tests {
             "amount 0 is below the 546 sat dust limit",
         );
         assert_refused(
-            fake.send(SOMEONE, 545, 100),
+            fake.send(SOMEONE, 545, 1),
             "amount 545 is below the 546 sat dust limit",
         );
+        assert_refused(fake.send(SOMEONE, 1_000, 0), "fee rate 0 is below 1 sat/vB");
         assert_refused(
-            fake.send(SOMEONE, 1_000, 1_001),
-            "fee 1001 is more than the amount 1000",
+            fake.send(SOMEONE, 1_000, 2_001),
+            "fee rate 2001 is above 2000 sat/vB",
+        );
+        assert_refused(
+            fake.send(SOMEONE, 1_000, 8),
+            "fee 1128 is more than the amount 1000",
+        );
+        assert_refused(
+            fake.send_at(SOMEONE, 5_000, 2, 281),
+            "fee 282 would be more than the 281 shown",
         );
         assert!(fake.calls.lock().unwrap().is_empty());
         assert_outputs(
-            &fake.send(SOMEONE, 546, 546).unwrap(),
-            &[(SOMEONE, 546), (&addr(Chain::Internal, 0), 8_908)],
+            &fake.send(SOMEONE, 546, 3).unwrap(),
+            &[(SOMEONE, 546), (&addr(Chain::Internal, 0), 9_031)],
         );
     }
 
     // Findings 5 and 7. One P2WPKH input and two outputs is 141 vB; one output is 110 vB.
     #[test]
-    fn the_fee_rate_of_the_transaction_as_built_stays_between_1_and_2000_sat_per_vb() {
+    fn the_fee_is_the_size_of_the_transaction_as_built_times_the_rate() {
         assert_eq!(p2wpkh_vsize(1, 2), 141);
         assert_eq!(p2wpkh_vsize(1, 1), 110);
         assert_eq!(p2wpkh_vsize(11, 1), 790);
         let mut fake = Fake::new();
-        fake.fund(&addr(Chain::External, 0), 1_000_000, '1');
+        for i in 0..3u32 {
+            fake.fund(&addr(Chain::External, i), 4_000, char::from(b'1' + i as u8));
+        }
+        for (amount, inputs) in [(3_000, 1), (6_000, 2), (10_000, 3)] {
+            let (tx, fee) = fake.send_at(SOMEONE, amount, 2, u64::MAX).unwrap();
+            assert_eq!((tx.input.len(), tx.output.len()), (inputs, 2));
+            assert_eq!(fee, 2 * p2wpkh_vsize(inputs, 2), "{inputs} inputs");
+            assert_eq!(fee_paid(&fake, &tx), fee, "{inputs} inputs");
+        }
+        let mut big = Fake::new();
+        big.fund(&addr(Chain::External, 0), 1_000_000, '1');
+        assert_eq!(big.send_at(SOMEONE, 600_000, 2_000, u64::MAX).unwrap().1, 282_000);
+    }
+
+    // The stuck-payment bug: the node reports 1 sat/vB, the app asked for 1 x 141 sats, and any
+    // payment that needs two coins (209 vB) was refused at every tier.
+    #[test]
+    fn a_payment_that_needs_two_coins_at_the_live_rate_of_1_goes_through() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 5_000, '1');
+        fake.fund(&addr(Chain::External, 1), 5_000, '2');
+        let (tx, fee) = fake.send_at(SOMEONE, 6_000, 1, 2 * 141).unwrap();
+        assert_eq!(tx.input.len(), 2);
+        assert_eq!(fee, 209);
+        assert_eq!(fee_paid(&fake, &tx), 209);
+    }
+
+    // The review screen showed the fee for one input. Two inputs cost more, and when that is more
+    // than the user allowed, the refusal comes before signing.
+    #[test]
+    fn a_real_fee_above_the_maximum_shown_is_refused_and_one_at_it_passes() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 5_000, '1');
+        fake.fund(&addr(Chain::External, 1), 5_000, '2');
         assert_refused(
-            fake.send(SOMEONE, 5_000, 140),
-            "fee 140 is below 1 sat/vB for 141 vB",
+            fake.send_at(SOMEONE, 6_000, 1, 208),
+            "fee 209 would be more than the 208 shown",
         );
-        assert_eq!(fake.send(SOMEONE, 5_000, 141).unwrap().output.len(), 2);
-        assert_eq!(
-            fake.send(SOMEONE, 600_000, 282_000).unwrap().output.len(),
-            2
-        );
+        assert_eq!(fake.send_at(SOMEONE, 6_000, 1, 209).unwrap().1, 209);
+    }
+
+    // Each pass adds at least one input, so coins that barely cover their own cost run it out.
+    #[test]
+    fn a_fee_that_does_not_settle_in_four_passes_is_refused() {
+        let mut fake = Fake::new();
+        let coins: Vec<String> = (0..1_400u32).map(|i| coin('a', i, 137, true)).collect();
+        fake.stats
+            .insert(addr(Chain::External, 0), used_stats(137 * 1_400));
+        fake.utxos
+            .insert(addr(Chain::External, 0), format!("[{}]", coins.join(",")));
         assert_refused(
-            fake.send(SOMEONE, 600_000, 282_001),
-            "fee 282001 is above 2000 sat/vB for 141 vB",
+            fake.send(SOMEONE, 100_000, 1),
+            "fee did not settle in 4 passes, send a smaller amount",
         );
-        // The Slow tier's 564 sats over eleven 1,000-sat coins: 0.71 sat/vB.
+        // Over 1,000-sat coins the third pass settles: 12 inputs and change, 889 sats at 1 sat/vB.
         let mut many = Fake::new();
         for i in 0..12u32 {
             many.stats
@@ -2892,12 +3019,10 @@ mod tests {
                 format!("[{}]", coin('a', i, 1_000, true)),
             );
         }
-        assert_refused(
-            many.send(SOMEONE, 10_436, 564),
-            "fee 564 is below 1 sat/vB for 790 vB",
-        );
-        let tx = many.send(SOMEONE, 10_210, 790).unwrap();
-        assert_eq!((tx.input.len(), tx.output.len()), (11, 1));
+        let (tx, fee) = many.send_at(SOMEONE, 10_210, 1, u64::MAX).unwrap();
+        assert_eq!((tx.input.len(), tx.output.len()), (12, 2));
+        assert_eq!(fee, p2wpkh_vsize(12, 2));
+        assert_eq!(fee_paid(&many, &tx), 889);
     }
 
     // Finding 8. Before, the total wrapped in release and panicked in debug.
@@ -2908,7 +3033,7 @@ mod tests {
         fake.fund(&addr(Chain::External, 1), u64::MAX, '2');
         fake.fund(&addr(Chain::External, 2), 5_000, '3');
         assert_refused(
-            fake.send(SOMEONE, 5_000, 600),
+            fake.send(SOMEONE, 5_000, 1),
             "esplora utxo: the coins' values do not fit u64",
         );
         assert!(fake.snapshot("").is_err(), "the balance overflows too");
@@ -2922,11 +3047,11 @@ mod tests {
         fake.fund(&addr(Chain::External, 0), 5_000, '1');
         fake.utxos.insert(addr(Chain::External, 0), twice);
         let listed_twice = format!("esplora utxo: {}:0 is listed twice", id('1'));
-        assert_refused(fake.send(SOMEONE, 8_000, 200), &listed_twice);
+        assert_refused(fake.send(SOMEONE, 8_000, 1), &listed_twice);
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 5_000, '1');
         fake.fund(&addr(Chain::External, 1), 5_000, '1');
-        assert_refused(fake.send(SOMEONE, 8_000, 200), &listed_twice);
+        assert_refused(fake.send(SOMEONE, 8_000, 1), &listed_twice);
     }
 
     // Finding 10. A used index 179 closes its gap at exactly 200 indices; index 180 needs 201.
@@ -2992,7 +3117,7 @@ mod tests {
                 format!("[{}]", coin('1', 0, 5_000, true)),
             );
             assert!(fake.snapshot("").is_err(), "{body}");
-            assert!(fake.send(SOMEONE, 1_000, 200).is_err(), "{body}");
+            assert!(fake.send(SOMEONE, 1_000, 1).is_err(), "{body}");
         }
     }
 
@@ -3003,13 +3128,13 @@ mod tests {
         fake.fund_unconfirmed(&addr(Chain::External, 0), 5_000, '1');
         fake.fund_unconfirmed(&addr(Chain::Internal, 0), 3_000, '2');
         assert_eq!(fake.snapshot("").unwrap().balance_sats, 8_000);
-        let tx = fake.send(SOMEONE, 2_000, 200).unwrap();
+        let tx = fake.send(SOMEONE, 2_000, 2).unwrap();
         assert_eq!(tx.input.len(), 1);
         assert_eq!(tx.input[0].previous_output.txid.to_string(), id('2'));
         assert!(signed_by(&tx, 0, 3_000, &own(Chain::Internal, 0)));
         assert_refused(
-            fake.send(SOMEONE, 4_000, 200),
-            "insufficient funds: have 3000 confirmed, need 4200",
+            fake.send(SOMEONE, 4_000, 2),
+            "insufficient funds: have 3000 confirmed, need 4282",
         );
     }
 
@@ -3018,8 +3143,8 @@ mod tests {
     fn a_prepared_send_posts_nothing_and_its_txid_is_the_transaction_in_its_hex() {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
-        let signed = fake.send(SOMEONE, 5_000, 500).unwrap();
-        let ready = prepared(&signed, 500);
+        let (signed, fee) = fake.send_at(SOMEONE, 5_000, 2, u64::MAX).unwrap();
+        let ready = prepared(&signed, fee);
         // The fake panics on any path that is not a lookup, so a POST could not have gone through it.
         assert!(
             fake.calls
@@ -3031,19 +3156,17 @@ mod tests {
         let parsed: Transaction = bitcoin::consensus::encode::deserialize_hex(&ready.hex).unwrap();
         assert_eq!(parsed, signed);
         assert_eq!(ready.txid, parsed.compute_txid().to_string());
-        assert_eq!(ready.fee_sats, 500);
+        assert_eq!(ready.fee_sats, 282);
+        assert_eq!(fee_paid(&fake, &parsed), 282);
         // The same words give the same transaction, so hot_broadcast would post this txid.
-        assert_eq!(
-            ready,
-            prepared(&fake.send(SOMEONE, 5_000, 500).unwrap(), 500)
-        );
+        assert_eq!(ready, fake.ready(SOMEONE, 5_000, 2));
     }
 
     #[test]
     fn a_broadcast_whose_txid_is_not_the_transaction_is_refused_before_any_post() {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
-        let good = prepared(&fake.send(SOMEONE, 5_000, 500).unwrap(), 500);
+        let good = fake.ready(SOMEONE, 5_000, 2);
         let posts = Cell::new(0);
         let run = |hex: &str, txid: &str| {
             broadcast_matching(
@@ -3089,7 +3212,7 @@ mod tests {
             for result in [
                 fake.snapshot("").map(|_| ()),
                 fake.history().map(|_| ()),
-                fake.send(SOMEONE, 1_000, 200).map(|_| ()),
+                fake.send(SOMEONE, 1_000, 1).map(|_| ()),
             ] {
                 match result {
                     Err(MobileSignerError::InvalidPsbtJson(m)) => {
@@ -3238,15 +3361,15 @@ mod tests {
         let mut fake = three_used();
         fake.snapshot("").unwrap();
         let before = fake.requests();
-        fake.send(SOMEONE, 2_000, 300).unwrap();
+        fake.send(SOMEONE, 2_000, 1).unwrap();
         let asked = fake.calls.lock().unwrap()[before..].to_vec();
         assert_eq!(asked.len(), 4);
         assert!(asked.iter().all(|url| url.ends_with("/utxo")), "{asked:?}");
         // Coins spent elsewhere since the refresh are not spent again from a cached list.
         fake.utxos.clear();
         assert_refused(
-            fake.send(SOMEONE, 2_000, 300),
-            "insufficient funds: have 0 confirmed, need 2300",
+            fake.send(SOMEONE, 2_000, 1),
+            "insufficient funds: have 0 confirmed, need 2141",
         );
         assert_eq!(fake.requests(), before + 8);
     }
@@ -3255,7 +3378,7 @@ mod tests {
     fn a_broadcast_that_went_out_or_is_unclear_forgets_the_scan_and_a_refusal_keeps_it() {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
-        let ready = prepared(&fake.send(SOMEONE, 5_000, 500).unwrap(), 500);
+        let ready = fake.ready(SOMEONE, 5_000, 2);
         let full = 41;
         assert_eq!(fake.requests(), full + 1);
 
@@ -3386,8 +3509,8 @@ mod tests {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
         let mainnet = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
-        assert!(fake.send(mainnet, 1_000, 100).is_err());
-        assert!(fake.send("tb1qnotanaddress", 1_000, 100).is_err());
+        assert!(fake.send(mainnet, 1_000, 1).is_err());
+        assert!(fake.send("tb1qnotanaddress", 1_000, 1).is_err());
         assert!(fake.calls.lock().unwrap().is_empty());
     }
 
@@ -3778,7 +3901,7 @@ mod tests {
         fake.fund(&addr(Chain::Internal, 0), 40_000, 'b');
         fake.tick(Duration::from_secs(3));
         assert_eq!(fake.snapshot("").unwrap().balance_sats, 40_000);
-        fake.send(&addr(Chain::External, 7), 10_000, 300).unwrap();
+        fake.send(&addr(Chain::External, 7), 10_000, 1).unwrap();
     }
 
     #[test]
@@ -3998,7 +4121,7 @@ mod tests {
     fn a_broadcast_posts_nothing_when_no_host_passes_and_posts_to_the_chosen_one_otherwise() {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
-        let good = prepared(&fake.send(SOMEONE, 5_000, 500).unwrap(), 500);
+        let good = fake.ready(SOMEONE, 5_000, 2);
         let posted_to = Mutex::new(Vec::new());
         let post = |base: &str, _: &str| {
             posted_to.lock().unwrap().push(base.to_string());

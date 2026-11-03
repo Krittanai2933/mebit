@@ -175,6 +175,20 @@ class AmountEntryTest {
     }
 
     @Test
+    fun liveRatesThatArriveAfterSendAllWorkItOutAgain() {
+        val (draft, entry) = fresh()
+        entry.sendAll(3_120_000)
+        assertEquals(3_118_872L, draft.amountSats, "the balance less 8 x 141")
+        entry.applyTiers(LiveFeeTiers(1, 1, 2, live = true), 3_120_000)
+        assertEquals(3_119_859L, draft.amountSats, "the balance less 1 x 141")
+        assertTrue(entry.isSendAll)
+        entry.typeBtc("0.01")
+        entry.applyTiers(LiveFeeTiers(3, 5, 9, live = true), 3_120_000)
+        assertEquals(1_000_000L, draft.amountSats, "a typed amount stays")
+        assertEquals(705L, draft.feeSats)
+    }
+
+    @Test
     fun aFeeTierChangeLeavesATypedAmountAlone() {
         val (draft, entry) = fresh()
         entry.typeBtc("0.01")

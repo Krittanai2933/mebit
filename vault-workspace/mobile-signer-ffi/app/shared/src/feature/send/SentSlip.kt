@@ -227,7 +227,8 @@ private fun Slip(wallet: SingleSigWallet, draft: SendDraft, quote: FiatQuote?, l
         SlipHairline(354.dp)
         SlipRow("ถึง", shorten(draft.destination, "…"), top = 360.dp, tag = "slip_to")
         SlipHairline(394.dp)
-        SlipRow("ค่าธรรมเนียม", slipFeeText(draft.feeSats, draft.tier.satPerVb, quote), top = 400.dp)
+        // The fee the signed transaction pays, at the rate the user chose. PreparedSend carries no size, so the rate is the chosen one, not fee over size.
+        SlipRow("ค่าธรรมเนียม", slipFeeText(wallet.lastFeeSats, draft.rateSatVb, quote), top = 400.dp)
         SlipHairline(434.dp)
         Text("สถานะ", color = SlipMuted, fontSize = 13.5.sp, lineHeight = 19.sp, modifier = Modifier.offset(x = 24.dp, y = 440.dp))
         Row(
