@@ -852,6 +852,14 @@ mod tests {
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_send(),
             ),
             (
+                "func_hot_prepare_send",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send(),
+            ),
+            (
+                "func_hot_broadcast",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_broadcast(),
+            ),
+            (
                 "func_hot_wallet_history",
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_wallet_history(),
             ),

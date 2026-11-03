@@ -1314,6 +1314,10 @@ internal val UniffiVTableCallbackInterfacePairingCodesUniffiByValue.`uniffiFree`
 
 
 
+
+
+
+
 internal object UniffiLib {
     init {
             uniffiCallbackInterfacePairingCodes.register(this)
@@ -1472,6 +1476,34 @@ internal object UniffiLib {
         `passphrase`,
         `network`,
         `account`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_func_hot_broadcast(
+        `network`: RustBufferByValue,
+        `hex`: RustBufferByValue,
+        `txid`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_broadcast(
+        `network`,
+        `hex`,
+        `txid`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_func_hot_prepare_send(
+        `mnemonicWords`: RustBufferByValue,
+        `passphrase`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        `destination`: RustBufferByValue,
+        `amountSats`: Long,
+        `feeSats`: Long,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_prepare_send(
+        `mnemonicWords`,
+        `passphrase`,
+        `network`,
+        `destination`,
+        `amountSats`,
+        `feeSats`,
         uniffiCallStatus,
     )
     fun uniffi_mobile_signer_ffi_fn_func_hot_receive_address(
@@ -1958,6 +1990,12 @@ internal object UniffiLib {
     )
     fun uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key(
+    )
+    fun uniffi_mobile_signer_ffi_checksum_func_hot_broadcast(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_broadcast(
+    )
+    fun uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send(
     )
     fun uniffi_mobile_signer_ffi_checksum_func_hot_receive_address(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_receive_address(
@@ -2979,6 +3017,31 @@ public object FfiConverterTypeHwAccountKey: FfiConverterRustBuffer<HwAccountKey>
 
 
 
+public object FfiConverterTypePreparedSend: FfiConverterRustBuffer<PreparedSend> {
+    override fun read(buf: ByteBuffer): PreparedSend {
+        return PreparedSend(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: PreparedSend): ULong = (
+            FfiConverterString.allocationSize(value.`txid`) +
+            FfiConverterString.allocationSize(value.`hex`) +
+            FfiConverterULong.allocationSize(value.`feeSats`)
+    )
+
+    override fun write(value: PreparedSend, buf: ByteBuffer) {
+        FfiConverterString.write(value.`txid`, buf)
+        FfiConverterString.write(value.`hex`, buf)
+        FfiConverterULong.write(value.`feeSats`, buf)
+    }
+}
+
+
+
+
 public object FfiConverterTypeSoftwareAccountKey: FfiConverterRustBuffer<SoftwareAccountKey> {
     override fun read(buf: ByteBuffer): SoftwareAccountKey {
         return SoftwareAccountKey(
@@ -3651,6 +3714,53 @@ public actual fun `generateSoftwareMultisigKey`(`passphrase`: kotlin.String, `ne
             FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
             FfiConverterUInt.lower(`account`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * Post a transaction from `hot_prepare_send` once. `txid` must be the id of the transaction in
+ * `hex`, else it refuses before posting, so nothing else can go out under a saved guard.
+ *
+ * When the explorer's answer leaves it unclear whether the payment went out, it looks `txid` up a
+ * few times and fails with `BroadcastUnknown` if it is still not found. The payment may be out
+ * then, so the app must not offer it as a failure to retry. A silent explorer can hold this call
+ * for about two minutes, so call it off the main thread.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `hotBroadcast`(`network`: KeyNetwork, `hex`: kotlin.String, `txid`: kotlin.String): HotSendResult {
+    return FfiConverterTypeHotSendResult.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_broadcast(
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterString.lower(`hex`),
+            FfiConverterString.lower(`txid`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * Scan, select coins, check and sign a payment, and post nothing. The only network use is the
+ * Esplora lookups of the scan. The app saves the `txid` as its payment guard before it calls
+ * `hot_broadcast`, so a kill between the two can never lead to a second payment.
+ *
+ * Refuses, before signing, an amount below the 546 sat dust limit, a fee above the amount, change
+ * that would be dust (above 0 and at most 546 sats), and a fee rate below 1 or above 2,000 sat/vB
+ * for the transaction as built. Only confirmed coins of receive addresses are spent; the wallet's
+ * own unconfirmed change is spent too. About 40 Esplora calls for a fresh wallet, so call it off
+ * the main thread.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `hotPrepareSend`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeSats`: kotlin.ULong): PreparedSend {
+    return FfiConverterTypePreparedSend.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_prepare_send(
+            FfiConverterSequenceString.lower(`mnemonicWords`),
+            FfiConverterString.lower(`passphrase`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterString.lower(`destination`),
+            FfiConverterULong.lower(`amountSats`),
+            FfiConverterULong.lower(`feeSats`),
             uniffiRustCallStatus,
         )
     })

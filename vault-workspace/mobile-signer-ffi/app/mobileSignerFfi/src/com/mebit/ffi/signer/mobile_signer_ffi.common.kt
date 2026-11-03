@@ -445,6 +445,30 @@ public data class HwAccountKey (
 
 
 /**
+ * A signed payment that has not been posted anywhere.
+ */
+
+public data class PreparedSend (
+    /**
+     * Computed from the signed transaction here, never read from a server.
+     */
+    var `txid`: kotlin.String, 
+    /**
+     * The signed transaction, consensus-encoded, for `hot_broadcast`.
+     */
+    var `hex`: kotlin.String, 
+    /**
+     * The fee the transaction pays, in sats. Equal to `fee_sats` as asked, because a payment whose
+     * change would be dust is refused instead of being folded into the fee.
+     */
+    var `feeSats`: kotlin.ULong
+) {
+    public companion object
+}
+
+
+
+/**
  * A 24-word BIP-39 mnemonic and the BIP-48 P2WSH account key derived from it.
  *
  * `mnemonic_words` is the one copy of the secret that crosses into Kotlin.
@@ -887,6 +911,32 @@ public expect fun `fetchBtcThb`(): BtcPrice
  */
 @Throws(MobileSignerException::class)
 public expect fun `generateSoftwareMultisigKey`(`passphrase`: kotlin.String, `network`: KeyNetwork, `account`: kotlin.UInt): SoftwareAccountKey
+
+/**
+ * Post a transaction from `hot_prepare_send` once. `txid` must be the id of the transaction in
+ * `hex`, else it refuses before posting, so nothing else can go out under a saved guard.
+ *
+ * When the explorer's answer leaves it unclear whether the payment went out, it looks `txid` up a
+ * few times and fails with `BroadcastUnknown` if it is still not found. The payment may be out
+ * then, so the app must not offer it as a failure to retry. A silent explorer can hold this call
+ * for about two minutes, so call it off the main thread.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `hotBroadcast`(`network`: KeyNetwork, `hex`: kotlin.String, `txid`: kotlin.String): HotSendResult
+
+/**
+ * Scan, select coins, check and sign a payment, and post nothing. The only network use is the
+ * Esplora lookups of the scan. The app saves the `txid` as its payment guard before it calls
+ * `hot_broadcast`, so a kill between the two can never lead to a second payment.
+ *
+ * Refuses, before signing, an amount below the 546 sat dust limit, a fee above the amount, change
+ * that would be dust (above 0 and at most 546 sats), and a fee rate below 1 or above 2,000 sat/vB
+ * for the transaction as built. Only confirmed coins of receive addresses are spent; the wallet's
+ * own unconfirmed change is spent too. About 40 Esplora calls for a fresh wallet, so call it off
+ * the main thread.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `hotPrepareSend`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeSats`: kotlin.ULong): PreparedSend
 
 /**
  * First receive address at BIP-84 index `index` (usually 0). `passphrase` is the

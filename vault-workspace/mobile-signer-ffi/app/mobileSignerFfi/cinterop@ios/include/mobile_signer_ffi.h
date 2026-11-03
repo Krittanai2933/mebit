@@ -197,6 +197,10 @@ RustBuffer uniffi_mobile_signer_ffi_fn_func_fetch_btc_thb(UniffiRustCallStatus *
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_generate_software_multisig_key(RustBuffer passphrase, RustBuffer network, int32_t account, UniffiRustCallStatus *_Nonnull out_status
 );
+RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_broadcast(RustBuffer network, RustBuffer hex, RustBuffer txid, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_prepare_send(RustBuffer mnemonicWords, RustBuffer passphrase, RustBuffer network, RustBuffer destination, int64_t amountSats, int64_t feeSats, UniffiRustCallStatus *_Nonnull out_status
+);
 RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_receive_address(RustBuffer mnemonicWords, RustBuffer passphrase, RustBuffer network, int32_t index, UniffiRustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_send(RustBuffer mnemonicWords, RustBuffer passphrase, RustBuffer network, RustBuffer destination, int64_t amountSats, int64_t feeSats, UniffiRustCallStatus *_Nonnull out_status
@@ -350,6 +354,12 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_fetch_btc_thb(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_hot_broadcast(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_func_hot_receive_address(void
