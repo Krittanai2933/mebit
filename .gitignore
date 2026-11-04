@@ -3,6 +3,8 @@
 Cargo.lock
 
 # mobile
+# The developer's own Esplora host, read at build time by scripts/ffi.sh. Never committed.
+/vault-workspace/mobile-signer-ffi/esplora-host.local
 /vault-workspace/mobile-signer-ffi/app/node_modules/
 /vault-workspace/mobile-signer-ffi/app/build/
 

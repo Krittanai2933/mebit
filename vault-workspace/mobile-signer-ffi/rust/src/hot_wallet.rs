@@ -35,19 +35,17 @@ struct HostSpec {
     probe_timeout: Duration,
 }
 
-/// Testnet4 Esplora hosts in the order they are tried. The user's own mempool instance is first: it
-/// has no request limit, where blockstream.info allows 700 an hour per IP. It is reachable only over
-/// Tailscale, which encrypts the tunnel, so cleartext `http://` is acceptable for this host and no
-/// other. Passing the genesis check does not make a host honest about balances; that residual trust
-/// is the same for every host here, see `MAX_SCAN_PER_CHAIN`. mempool.space is last because its TLS
-/// handshake hung from a phone on 5G and from the user's networks on 2026-11-03.
-const ESPLORA_TESTNET4_HOSTS: [HostSpec; 3] = [
+/// A private Esplora or mempool instance tried before the public hosts, read at build time from
+/// `MEBIT_ESPLORA_HOST`. `scripts/ffi.sh` passes the one line of `esplora-host.local`, which git
+/// ignores: a tailnet address is the developer's own network, not this repository's. A build without
+/// it tries only the public hosts.
+const OWN_NODE: Option<&str> = option_env!("MEBIT_ESPLORA_HOST");
+/// The public testnet4 Esplora hosts in the order they are tried. blockstream.info allows 700
+/// requests an hour per IP. mempool.space is last because its TLS handshake hung from a phone on 5G
+/// and from the user's networks on 2026-11-03.
+const PUBLIC_TESTNET4_HOSTS: [HostSpec; 2] = [
     HostSpec {
-        base: "http://node.internal:8889/api",
-        probe_timeout: OWN_NODE_PROBE_TIMEOUT,
-    },
-    HostSpec {
-        base: "https://blockstream.info/testnet4/api",
+        base: ESPLORA_TESTNET4,
         probe_timeout: PROBE_TIMEOUT,
     },
     HostSpec {
@@ -55,8 +53,25 @@ const ESPLORA_TESTNET4_HOSTS: [HostSpec; 3] = [
         probe_timeout: PROBE_TIMEOUT,
     },
 ];
-/// The base every URL is built on. `http_get` rewrites it to the host in use.
-const ESPLORA_TESTNET4: &str = ESPLORA_TESTNET4_HOSTS[0].base;
+/// Testnet4 hosts in the order they are tried: this build's private node first, because it has no
+/// request limit, then the public hosts. Passing the genesis check does not make a host honest about
+/// balances; that residual trust is the same for every host here, see `MAX_SCAN_PER_CHAIN`.
+static ESPLORA_TESTNET4_HOSTS: LazyLock<Vec<HostSpec>> = LazyLock::new(|| hosts_with(OWN_NODE));
+
+/// The hosts of a build whose private node is `own`. Cleartext `http://` is acceptable for a private
+/// host, which Tailscale already encrypts, and for no other.
+fn hosts_with(own: Option<&'static str>) -> Vec<HostSpec> {
+    own.map(|base| HostSpec {
+        base,
+        probe_timeout: OWN_NODE_PROBE_TIMEOUT,
+    })
+    .into_iter()
+    .chain(PUBLIC_TESTNET4_HOSTS)
+    .collect()
+}
+/// The base every URL is built on, and the first public host. `http_get` rewrites it to the host in
+/// use.
+const ESPLORA_TESTNET4: &str = "https://blockstream.info/testnet4/api";
 /// Hash of testnet4 block 0. A host whose `/block-height/0` says anything else serves another
 /// chain, and a balance or a broadcast there would be wrong, so it is never used.
 const TESTNET4_GENESIS: &str = "00000000da84f2bafbbc53dee25a72ae507ff4914b867c565be350b0da8bf043";
@@ -446,13 +461,9 @@ fn probe_genesis(host: &HostSpec) -> Result<String, MobileSignerError> {
 
 /// The base of the testnet4 host in use, probing the list when none is cached.
 fn selected_base() -> Result<&'static str, MobileSignerError> {
-    let index = pick_host(
-        &ESPLORA_TESTNET4_HOSTS,
-        &probe_genesis,
-        Instant::now(),
-        &CHOSEN_HOST,
-    )?;
-    Ok(ESPLORA_TESTNET4_HOSTS[index].base)
+    let hosts = &*ESPLORA_TESTNET4_HOSTS;
+    let index = pick_host(hosts, &probe_genesis, Instant::now(), &CHOSEN_HOST)?;
+    Ok(hosts[index].base)
 }
 
 fn http_get(url: &str) -> Result<String, MobileSignerError> {
@@ -2476,6 +2487,8 @@ mod tests {
 
     // A real testnet address that is not the wallet's: the coinbase payee of the recording.
     const SOMEONE: &str = REAL_COINBASE_PAYEE;
+    /// Stands in for the private node of a build, so the tests read the same with or without one.
+    const OWN_NODE_FIXTURE: &str = "http://node.internal:8889/api";
 
     fn used_stats(balance: u64) -> String {
         format!(
@@ -2966,7 +2979,10 @@ mod tests {
         }
         let mut big = Fake::new();
         big.fund(&addr(Chain::External, 0), 1_000_000, '1');
-        assert_eq!(big.send_at(SOMEONE, 600_000, 2_000, u64::MAX).unwrap().1, 282_000);
+        assert_eq!(
+            big.send_at(SOMEONE, 600_000, 2_000, u64::MAX).unwrap().1,
+            282_000
+        );
     }
 
     // The stuck-payment bug: the node reports 1 sat/vB, the app asked for 1 x 141 sats, and any
@@ -3795,15 +3811,13 @@ mod tests {
             }
         };
         let cache = Mutex::new(None);
-        let picked = pick_host(&ESPLORA_TESTNET4_HOSTS, &probe, Instant::now(), &cache).unwrap();
-        assert_eq!(
-            ESPLORA_TESTNET4_HOSTS[picked].base,
-            "https://blockstream.info/testnet4/api"
-        );
+        let hosts = hosts_with(Some(OWN_NODE_FIXTURE));
+        let picked = pick_host(&hosts, &probe, Instant::now(), &cache).unwrap();
+        assert_eq!(hosts[picked].base, "https://blockstream.info/testnet4/api");
         assert_eq!(
             *asked.lock().unwrap(),
             vec![
-                ("http://node.internal:8889/api", Duration::from_secs(3)),
+                (OWN_NODE_FIXTURE, Duration::from_secs(3)),
                 (
                     "https://blockstream.info/testnet4/api",
                     Duration::from_secs(8)
@@ -4086,34 +4100,32 @@ mod tests {
         );
     }
 
-    // The own node (no request limit, Tailscale only) is first and blockstream.info second since
-    // 2026-11-04; blockstream.info was first before.
+    // A private node, when the build has one, goes before blockstream.info since 2026-11-04;
+    // blockstream.info was the only first host before.
     #[test]
-    fn the_canonical_base_is_the_own_node_then_blockstream_then_mempool_each_distinct_and_unslashed()
-     {
-        assert_eq!(ESPLORA_TESTNET4, ESPLORA_TESTNET4_HOSTS[0].base);
+    fn a_private_node_goes_before_the_public_hosts_which_are_blockstream_then_mempool_over_tls() {
+        assert_eq!(ESPLORA_TESTNET4, "https://blockstream.info/testnet4/api");
+        assert_eq!(*ESPLORA_TESTNET4_HOSTS, hosts_with(OWN_NODE));
+        let public: Vec<&str> = hosts_with(None).iter().map(|h| h.base).collect();
         assert_eq!(
-            ESPLORA_TESTNET4_HOSTS.map(|h| h.base),
+            public,
             [
-                "http://node.internal:8889/api",
                 "https://blockstream.info/testnet4/api",
                 "https://mempool.space/testnet4/api",
             ]
         );
-        assert_eq!(
-            ESPLORA_TESTNET4_HOSTS.map(|h| h.probe_timeout.as_secs()),
-            [3, 8, 8]
-        );
-        let distinct: HashSet<_> = ESPLORA_TESTNET4_HOSTS.iter().map(|h| h.base).collect();
-        assert_eq!(distinct.len(), ESPLORA_TESTNET4_HOSTS.len());
-        for host in ESPLORA_TESTNET4_HOSTS {
+        let hosts = hosts_with(Some(OWN_NODE_FIXTURE));
+        assert_eq!(hosts[0].base, OWN_NODE_FIXTURE);
+        let seconds: Vec<u64> = hosts.iter().map(|h| h.probe_timeout.as_secs()).collect();
+        assert_eq!(seconds, [3, 8, 8]);
+        let distinct: HashSet<_> = hosts.iter().map(|h| h.base).collect();
+        assert_eq!(distinct.len(), hosts.len());
+        for host in &hosts {
             assert!(host.base.ends_with("/api"), "{}", host.base);
-            // Cleartext is acceptable only inside the Tailscale tunnel.
-            assert!(
-                host.base.starts_with("https://") || host.base.starts_with("http://node."),
-                "{}",
-                host.base
-            );
+        }
+        // Cleartext is acceptable only for the private host, which Tailscale already encrypts.
+        for host in &hosts[1..] {
+            assert!(host.base.starts_with("https://"), "{}", host.base);
         }
     }
 

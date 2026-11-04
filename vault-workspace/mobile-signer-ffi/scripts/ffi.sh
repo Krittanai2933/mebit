@@ -31,7 +31,8 @@
 # Exit: 0 ok, 1 failure (reason on stderr), 2 usage or a missing tool (the message has the install command).
 #
 # Inputs: ANDROID_HOME, else ANDROID_SDK_ROOT (default ~/Library/Android/sdk). NDK_HOME, ANDROID_NDK_ROOT and ANDROID_NDK_HOME
-# are overridden for the NDK build, and CARGO_TARGET_DIR for every cargo call that builds the crate.
+# are overridden for the NDK build, and CARGO_TARGET_DIR for every cargo call that builds the crate. MEBIT_ESPLORA_HOST is
+# exported from mobile-signer-ffi/esplora-host.local when that file exists, and the wallet then tries that host first.
 # Host: build, test and apk need macOS (the iOS libraries need Xcode). check and bindings need cargo and python3.
 # cargo-ndk 4.1.2 is what was verified; the alignment assert is the guard for any other version.
 #
@@ -74,6 +75,14 @@ JNILIBS=$WS/target/jniLibs
 TOOLS=$WS/target/tools
 BINDGEN=$TOOLS/bin/gobley-uniffi-bindgen
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+
+# A private Esplora or mempool host for this build: one line in esplora-host.local, which git ignores because a tailnet
+# address is the developer's own network. The wallet tries it before the public hosts. cargo rebuilds when the value
+# changes, because the crate reads it with option_env!.
+if [ -f "$FFI/esplora-host.local" ]; then
+  MEBIT_ESPLORA_HOST=$(tr -d '[:space:]' < "$FFI/esplora-host.local")
+  export MEBIT_ESPLORA_HOST
+fi
 
 die() { echo "ffi.sh: $*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || { echo "ffi.sh: $1 not found: $2" >&2; exit 2; }; }
