@@ -49,7 +49,8 @@ Keep implementation details out of the map. Name only user paths, stable handles
 - [Wallet restart](./wallet-restart.md) covers the saved wallet: cold-start unlock, a payment of unknown outcome across a restart, the reinstall wipe, Forget, the App Lock read-back, and the not-saved notice.
 - [Movie Page keys](./movie-page-keys.md) covers AddKey three sources, T13, T14.
 - [Movie Page vault](./movie-page-vault.md) covers policy → BSMS file → list/detail/T20.
-- [Movie Page send](./movie-page-send.md) covers S* and M* (mocked chain/PSBT).
+- [Movie Page send](./movie-page-send.md) covers S1 to S6, live on testnet4 for a real key and mocked for the demo wallet, and M* (mocked).
+- [Movie Page history](./movie-page-history.md) covers S7, the full transaction list behind Home's ดูทั้งหมด link, and its empty state.
 
 ## Not mapped yet
 

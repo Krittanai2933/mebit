@@ -2,7 +2,7 @@
 
 **Owner**: person 4 — `docs/00-capstone-brief.md` §3.6.
 
-**Depends on**: `vault-core` for the vault-signer half. The generalized multisig API has landed and the Kotlin bindings expose it. The three-party functions still sit on `vault-core` mocks, and UI/UX work does not wait for either. Recommended to depend on `bdk` (Bitcoin Dev Kit, Rust core) for the hot-wallet half — see below.
+**Depends on**: `vault-core` for the vault-signer half. The generalized multisig API has landed and the Kotlin bindings expose it. The three-party functions still sit on `vault-core` mocks, and UI/UX work does not wait for either. The hot-wallet half is hand-written on the `bitcoin` and `bip39` crates and talks to Esplora over `ureq`. The docs recommend `bdk` (Bitcoin Dev Kit, Rust core) for it, and that choice is still open, see below.
 
 ## This is two wallets in one app
 
@@ -13,14 +13,14 @@ The borrower's BTC is always either **free** (not pledged to any loan) or **pled
 
 Both need to read as one balance on Home/Portfolio in the UI, but the key/signing logic stays clearly separated underneath — see `../../docs/01-architecture.md`'s "mobile-signer-ffi is two wallets in one app" section and `../../docs/04-open-items.md` (items 2 and 9) for the open questions here.
 
-**Current status: the vault-signer half and Bluetooth for two hardware wallets have code.** Both are callable from Kotlin through UniFFI, see [Kotlin bindings](#kotlin-bindings-uniffi-and-gobley) and [Bluetooth](#bluetooth-jade-and-trezor-safe-7). The hot-wallet half hasn't been started — see `../../docs/05-progress-and-next-steps.md`.
+**Current status.** The vault-signer half, the hot-wallet half and Bluetooth for two hardware wallets have code. All three are callable from Kotlin through UniFFI, see [Kotlin bindings](#kotlin-bindings-uniffi-and-gobley) and [Bluetooth](#bluetooth-jade-and-trezor-safe-7). The hot-wallet half is `rust/src/hot_wallet.rs`, a hand-written BIP-84 wallet over testnet4 Esplora, not `bdk`. Whether to move it to `bdk` is still item 2 of `../../docs/04-open-items.md`. `../../docs/05-progress-and-next-steps.md` says what it does and what is left.
 
 ## Layout
 
 ```
 mobile-signer-ffi/
 ├── rust/      # UniFFI exports over vault-core (vault signer) -> Kotlin.
-│              # Hot-wallet / bdk code belongs here too once started.
+│              # Also the hand-written hot wallet (src/hot_wallet.rs) and Bluetooth (src/ble.rs).
 ├── scripts/   # ffi.sh builds the Rust libraries, generates the Kotlin bindings and checks they are current
 └── app/       # Kotlin Multiplatform project (Kotlin Toolchain 0.13.0): androidApp, iosApp, shared,
                # and mobileSignerFfi, the generated Kotlin bindings
@@ -44,7 +44,7 @@ mobile-signer-ffi/
 cargo test -p mobile-signer-ffi
 ```
 
-The crate exports four synchronous functions through UniFFI: `derive_borrower_pubkey`, `compute_vault_address`, `sign_psbt` and `compute_vault_address_multisig`, plus the Bluetooth exports described in [Bluetooth](#bluetooth-jade-and-trezor-safe-7). Its golden addresses are re-derived by `scripts/address_oracle.py`. The four functions are the **vault-signer half only**. The **hot-wallet half** (`bdk`-based) hasn't been started, and that is the single biggest gap in this module right now.
+The crate's UniFFI exports include the vault-signer functions `derive_borrower_pubkey`, `compute_vault_address`, `sign_psbt` and `compute_vault_address_multisig`, plus the Bluetooth exports described in [Bluetooth](#bluetooth-jade-and-trezor-safe-7). Its golden addresses are re-derived by `scripts/address_oracle.py`. The **hot-wallet half** is `rust/src/hot_wallet.rs`, which exports `hot_wallet_snapshot`, `hot_wallet_history`, `hot_receive_address`, `hot_fee_tiers`, `hot_prepare_send_at_rate`, `hot_prepare_send_all`, `hot_broadcast` and `is_valid_address`. It signs a payment and posts it in two calls, so the app can save its pay-twice guard in between.
 
 ### Kotlin bindings (UniFFI and Gobley)
 

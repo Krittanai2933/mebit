@@ -10,14 +10,15 @@ the [Kotlin Toolchain](https://kotlin-toolchain.org/latest/).
   sibling `src@<platform>` folders (for example `src@android`) hold code compiled only for the platform named in the
   folder.
 - [/mobileSignerFfi](./mobileSignerFfi) holds the Kotlin bindings to the Rust library in [`../rust`](../rust). A script
-  generates its sources. No other module depends on it yet. See
+  generates its sources. `shared` depends on it, so `androidApp` and `iosApp` reach Rust through `shared`. See
   [`../README.md`](../README.md#kotlin-bindings-uniffi-and-gobley).
 
 The `kotlin` (macOS/Linux) and `kotlin.bat` (Windows) scripts in the project root are self-bootstrapping wrappers for
 the Kotlin Toolchain: they download the pinned toolchain version on first use, so no separate installation is required.
 Build the whole project with `./kotlin build`, after you run `../scripts/ffi.sh build` once. The `mobileSignerFfi` module
-links the Rust libraries, and without them `./kotlin build` and `./kotlin test` fail. The commands scoped to one of the
-other modules (`-m shared`, `-m androidApp`, `-m iosApp`) do not need the script.
+links the Rust libraries, and without them `./kotlin build` and `./kotlin test` fail. `./kotlin build -m androidApp`
+does not need the script. `./kotlin test -m shared -p android` does, because `VaultBsmsTest` calls Rust through the host
+library that the script copies into `shared`. Every iOS build of the app needs it too, because it links the Rust libraries.
 
 ### Running
 
