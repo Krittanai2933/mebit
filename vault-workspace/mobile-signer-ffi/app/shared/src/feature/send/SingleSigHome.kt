@@ -95,8 +95,9 @@ fun S1HomeSingleSigScreen(
     onReceive: () -> Unit,
     onSend: () -> Unit,
     onVault: () -> Unit,
+    onHistory: () -> Unit,
     onOpenCatalog: () -> Unit,
-) = SingleSigHome(wallet, session, quotes, onReceive, onSend, onVault, onOpenCatalog, tag = "screen_send/s1")
+) = SingleSigHome(wallet, session, quotes, onReceive, onSend, onVault, onHistory, onOpenCatalog, tag = "screen_send/s1")
 
 /** The home itself, so the backup gate can show it dimmed behind its sheet under a tag of its own. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -108,6 +109,7 @@ internal fun SingleSigHome(
     onReceive: () -> Unit,
     onSend: () -> Unit,
     onVault: () -> Unit,
+    onHistory: () -> Unit,
     onOpenCatalog: () -> Unit,
     tag: String,
 ) {
@@ -197,7 +199,19 @@ internal fun SingleSigHome(
             }
             if (rows.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(24.dp))
-                Text("ธุรกรรมล่าสุด", color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 14.sp, modifier = Modifier.testTag("home_tx_label"))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("ธุรกรรมล่าสุด", color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 14.sp, modifier = Modifier.weight(1f).testTag("home_tx_label"))
+                    if (homeHasMoreHistory(wallet.history)) {
+                        Text(
+                            "ดูทั้งหมด",
+                            color = MbNavy,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            lineHeight = 14.sp,
+                            modifier = Modifier.clickable(role = Role.Button, onClick = onHistory).padding(vertical = 8.dp).testTag("cta_s1_history"),
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.height(16.dp))
                 rows.forEachIndexed { index, row -> HomeTxRowItem(row, Modifier.testTag("home_tx_$index")) }
             }
@@ -223,7 +237,7 @@ private fun GoldLine(text: String, modifier: Modifier = Modifier) {
  * arrow on the warm wash. Board S1 Home draws them the other way round, and the user chose 3.6. See open item 69.
  */
 @Composable
-private fun HomeTxRowItem(row: HomeTxRow, modifier: Modifier = Modifier) {
+internal fun HomeTxRowItem(row: HomeTxRow, modifier: Modifier = Modifier) {
     Row(modifier = modifier.fillMaxWidth().heightIn(min = 67.dp)) {
         Box(
             modifier = Modifier.padding(top = 5.dp).size(32.dp).background(if (row.received) MbChip else MbIconWash, CircleShape),

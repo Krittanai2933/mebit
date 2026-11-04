@@ -246,6 +246,12 @@ enum class MovieRoute(
         "ใบเสร็จแบบโปสเตอร์",
         "รูปแบบแชร์ D",
     ),
+    S7History(
+        "send/s7",
+        "HISTORY",
+        "ประวัติธุรกรรม",
+        "ธุรกรรมทั้งหมดของกระเป๋านี้",
+    ),
     M1SendVault(
         "send/m1",
         "SEND · VAULT",

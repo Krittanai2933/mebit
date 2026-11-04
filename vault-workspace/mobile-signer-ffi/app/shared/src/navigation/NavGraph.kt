@@ -74,6 +74,7 @@ import com.mebit.app.feature.send.S3ReceiveScreen
 import com.mebit.app.feature.send.S4SendScreen
 import com.mebit.app.feature.send.S5ReviewSignScreen
 import com.mebit.app.feature.send.S6SentScreen
+import com.mebit.app.feature.send.S7HistoryScreen
 import com.mebit.app.feature.send.M1SendVaultScreen
 import com.mebit.app.feature.send.M2CollectSignaturesScreen
 import com.mebit.app.feature.send.M3SignOnJadeScreen
@@ -353,6 +354,12 @@ fun MebitNavHost(
                 navigate(MovieRoute.S4Send)
             },
             onVault = { navigate(MovieRoute.KeyringFirstVault) },
+            onHistory = { navigate(MovieRoute.S7History) },
+            onOpenCatalog = openCatalog,
+        )
+        MovieRoute.S7History -> S7HistoryScreen(
+            wallet = singleSig,
+            onBack = onBack,
             onOpenCatalog = openCatalog,
         )
         MovieRoute.S2ReceiveBackupGate -> S2ReceiveBackupGateScreen(
