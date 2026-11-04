@@ -20,4 +20,4 @@ See `../../docs/design-notes.md` for a worked example and the correction it docu
 cargo run -p monitor-service
 ```
 
-Runs 5 ticks against 3 mock loans (same fixture numbers as `mobile-signer-ffi/app/src/mockVault.ts`, so both sides of the product agree), printing LTV and liquidation price per loan each tick and flagging margin-call/liquidation-worthy loans — `price_feed::MockPriceFeed` random-walks the price so the numbers actually move between ticks. Swap `MockPriceFeed` for a real Esplora client behind the same `PriceFeed` trait when that's ready.
+Runs 5 ticks against 3 mock loans (the fixture contracts in the "Numbers used throughout" table of `docs/design-notes.md`, so every part of the product uses the same numbers), printing LTV and liquidation price per loan each tick and flagging margin-call/liquidation-worthy loans — `price_feed::MockPriceFeed` random-walks the price so the numbers actually move between ticks. Swap `MockPriceFeed` for a real Esplora client behind the same `PriceFeed` trait when that's ready.

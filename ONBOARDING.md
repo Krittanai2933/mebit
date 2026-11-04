@@ -21,7 +21,7 @@ mebit/
 ├── vault-workspace/      # โค้ดจริงทั้งหมด — Rust workspace, cargo build/test จากโฟลเดอร์นี้
 │   ├── vault-core/           # descriptor, key derivation, PSBT, policy engine — จุดวิกฤตของระบบ
 │   ├── custody-service/      # REST service ฝั่งแพลตฟอร์ม (axum, รันได้จริงที่ :8080)
-│   ├── mobile-signer-ffi/    # UniFFI bindings + แอป React Native (รันได้จริง)
+│   ├── mobile-signer-ffi/    # UniFFI bindings + แอป Kotlin Multiplatform สำหรับ Android และ iOS (รันได้จริง)
 │   ├── lender-signer-cli/    # CLI เซ็น PSBT แบบ offline (clap, รันได้จริง)
 │   └── monitor-service/      # ตรวจ LTV / trigger liquidation (รันได้จริง)
 ├── .claude/
@@ -62,12 +62,16 @@ cargo test
 
 ไม่ใส่ `--workspace` โดยตั้งใจ: default build ครอบทุก crate ยกเว้น `jade-ble` (ไดรเวอร์ Jade ผ่าน Bluetooth) เพราะ `btleplug` ต้องใช้ `libdbus-1-dev` + `pkg-config` บน Linux — ถ้าจะ build/test ตัวนี้ใช้ `cargo test -p jade-ble` (ดู `vault-workspace/jade-ble/README.md`)
 
-**Mobile app** (Expo/React Native, รันได้จริงแล้ว มี mock data ครบ 12 หน้าจอ):
+**Mobile app** เป็น Kotlin Multiplatform กับ Compose Multiplatform โมดูล `shared` มีโค้ด UI และ logic ของทั้ง Android และ iOS และแอปเรียก Rust ผ่าน UniFFI bindings ที่ `scripts/ffi.sh` สร้าง รันบน macOS ด้วยคำสั่งนี้:
 ```
-cd vault-workspace/mobile-signer-ffi/app
-npm install
-npm start        # กด w สำหรับเว็บ, i สำหรับ iOS simulator, a สำหรับ Android
+cd vault-workspace/mobile-signer-ffi
+scripts/ffi.sh build          # ครั้งแรกหลัง clone และทุกครั้งที่แก้โค้ด Rust
+scripts/ffi.sh apk            # ครั้งเดียว เพื่อให้ APK ของ Android มีไลบรารี Rust
+cd app
+./kotlin run -m androidApp    # หรือ ./kotlin run -m iosApp
 ```
+
+คำสั่งอื่นของ `./kotlin` อยู่ใน `vault-workspace/mobile-signer-ffi/app/README.md`
 
 ## ทำงานกับ coding agent
 

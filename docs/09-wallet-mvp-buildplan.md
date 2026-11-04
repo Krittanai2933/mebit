@@ -10,6 +10,8 @@
 
 ## 2. Stack ที่ตัดสินใจแล้ว
 
+**อัปเดต 2026-11-05** แถว Production mobile ด้านล่าง และคำว่า React Native หรือ RN ทุกที่ในเอกสารนี้ เป็นการตัดสินใจเดิมที่ถูกแทนแล้ว ตั้งแต่ commit `346aeb2` (2026-10-13) แอปมือถือจริงเป็น Kotlin Multiplatform กับ Compose Multiplatform โมดูล `shared` มีโค้ด UI และ logic ของทั้ง Android และ iOS แอปเรียก vault-core และ BLE ของ Jade กับ Trezor Safe 7 ผ่าน UniFFI bindings ที่ `vault-workspace/mobile-signer-ffi/scripts/ffi.sh` สร้าง และ build ด้วย `./kotlin` การตัดสินใจให้ Rust เป็นเจ้าของ BLE ยังใช้ได้เหมือนเดิม ข้อความเดิมเก็บไว้เป็นประวัติ (ดู `04-open-items.md` ข้อ 27)
+
 | ชั้น | เครื่องมือ | บทบาท |
 |---|---|---|
 | **Phase 0 — engine validation** | Rust CLI + automated test suite (ไม่มี GUI, ไม่มี desktop app) | vault-core ล้วนๆ พิสูจน์ตัวเองบน testnet ผ่าน `cargo run`/`cargo test` เท่านั้น — ไม่ต้องมี glue code, ไม่ต้องมี UI framework ใดๆ |
@@ -51,6 +53,8 @@ Ledger, Coldcard, BitBox02, การรองรับ USB ทั้งหม�
 **เกณฑ์ผ่านเฟสนี้**: เห็นธุรกรรม multisig ที่เซ็นจาก Jade + Trezor Safe 7 จริง ยืนยันบน testnet ทั้งหมดรันจาก Rust CLI/test suite ตัวเดียว ไม่มีแอป desktop หรือ GUI ใดๆ เกี่ยวข้อง
 
 ### Phase 1 — thin slice ขึ้นมือถือ (React Native + UniFFI)
+
+**อัปเดต 2026-11-05** เฟสนี้ทำจริงบนแอป Kotlin Multiplatform ไม่ใช่ React Native ดูหมายเหตุใน §2
 
 1. ห่อ vault-core และ `jade-ble` ด้วย UniFFI — ฝั่ง Jade แอป RN แค่เรียก `unlock` / `xpub` / `signPsbt` แบบ async ไม่ต้องเขียน BLE เอง (บน Android ต้องตั้งค่า `btleplug` แบบ Rust+Java ก่อน — ดู `04-open-items.md` ข้อ 14)
 2. ห่อ `trezor-ble` ด้วย UniFFI เช่นเดียวกัน (Trezor ใช้แนวทางเดียวกับ Jade — ตัดสินใจ 2026-10-01; `jade-ble` ย้ายไป btleplug 0.13 แล้วเพื่อให้ Android ใช้ชุดเดียวกัน และผ่าน hardware checklist ของ Jade ซ้ำแล้ว — `04-open-items.md` ข้อ 18) — ไม่มีกล้อง/QR ใน MVP

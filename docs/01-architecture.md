@@ -16,7 +16,7 @@ vault-workspace/
 ├── custody-service/      Rust service (gRPC/REST via tonic/axum) + Postgres.
 │                         State machine for signing requests; the integration point for
 │                         the existing NestJS Loan Service.
-├── mobile-signer-ffi/    UniFFI bindings (Kotlin/Swift) + a demo app (RN or Flutter) — the
+├── mobile-signer-ffi/    UniFFI bindings + a Kotlin Multiplatform (Compose) app, the
 │                         borrower-facing "mebit" wallet. Two layers: a real single-sig hot
 │                         wallet for unpledged BTC (built on `bdk`), and a multisig vault
 │                         signer wrapping vault-core for BTC pledged to a loan. See below.

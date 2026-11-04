@@ -79,6 +79,8 @@ vault-workspace/
 
 เทคโนโลยี: UniFFI, Kotlin/Swift, React Native หรือ Flutter, `bdk` (Bitcoin Dev Kit) Rust core สำหรับเลเยอร์ wallet ทั่วไป
 
+**อัปเดต 2026-11-05** แอปมือถือที่ทำจริงใช้ Kotlin Multiplatform กับ Compose Multiplatform ตั้งแต่ commit `346aeb2` (2026-10-13) ไม่ใช่ React Native หรือ Flutter ข้อความข้างบนเก็บไว้ตามโจทย์เดิม (ดู `04-open-items.md` ข้อ 27)
+
 **หมายเหตุขอบเขต**: 12 หน้าจอเต็มรูปแบบถือว่าใหญ่กว่าที่คนเดียว (คนที่ 4) จะทำไหวคนเดียวใน 2 เทอม แนะนำให้กำหนด "MVP screens" ที่ต้องทำให้จบก่อน (onboarding, home, receive, borrow, loan dashboard, repay, success — ตรงกับ demo กลางเทอม/ท้ายเทอม) ส่วน activity, portfolio, settings เป็น stretch goal ที่ทำได้ถ้าเวลาเหลือ หรือขอความช่วยเหลือจากคนที่ 3/5 ในเทอม 2 ตอนโมดูลหลักของแต่ละคนนิ่งแล้ว (ดู 3.6)
 
 ### 3.4 lender-signer-cli — เครื่องมือฝั่งผู้ให้กู้

@@ -30,6 +30,8 @@ The supplemental case is `multisig-p2wsh-3of3-independent-a0-h1j1t1-s07-r1-74-c1
 
 These are not all end-to-end tests of the shipped application. Rust unit tests call library functions directly; harness tests exercise CLI/coordinator code; offline E2E uses software signers. The locally saved Jade live cases exercised the hardware BLE client, while the Hot Wallet live cases exercised software signing; both used the testnet workflow. The four Trezor results below were supplied from a friend's E2E report and operator-provided explorer output. They count in the documented historical total, but have not been imported into this workspace's private checkpoints. The supplemental independent-signing case used the local Jade and hot signer plus a remote Trezor response. The React Native UI remains mock-backed.
 
+> Update 2026-11-05. Commit `346aeb2` (2026-10-13) replaced the Expo app and its React Native UI with a Kotlin Multiplatform app that uses Compose Multiplatform, and `mockVault.ts` went with them. That app calls this Rust crate through the UniFFI bindings that `vault-workspace/mobile-signer-ffi/scripts/ffi.sh` generates, which Kotlin can call since 2026-10-20. The rest of this report keeps its 2026-10-18 results.
+
 The 181 workspace tests include six non-wallet service tests (two in `custody-service`, four in `monitor-service`); `lender-signer-cli` has no tests. The wallet-specific rows account for the other 175 tests.
 
 ## Recorded Jade single-sig testnet4 cases

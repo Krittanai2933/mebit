@@ -14,7 +14,7 @@
 5. `05-capstone-proposal.md` — โจทย์ capstone project สำหรับทีมนักศึกษา 5 คน 2 เทอม (ขอบเขตเดิม = ขา lending)
 6. `06-mobile-app-design-mebit.md` — current Penpot Organize flows and visual summary, with the older 12-screen lending prototype retained as historical context
 7. `08-multisig-wallet-spec.md` — สเปคเชิงเทคนิคของ multisig wallet: key-first data model, script types, miniscript policy (timelock fallback, decaying multisig), hardware wallet support (Jade + Trezor Safe 7, QR+BLE เท่านั้น), roadmap MVP → phase 2
-8. `09-wallet-mvp-buildplan.md` — **แผนเริ่ม build จริง**: Rust CLI (พิสูจน์ engine) → React Native + UniFFI (production mobile), ลำดับ phase 0-3
+8. `09-wallet-mvp-buildplan.md` — **แผนเริ่ม build จริง**: Rust CLI (พิสูจน์ engine) → Kotlin Multiplatform กับ Compose Multiplatform + UniFFI (production mobile), ลำดับ phase 0-3
 9. `10-wallet-storage-d1.md` (ภาษาอังกฤษ) สรุปการออกแบบ D1 การเก็บกระเป๋าซอฟต์แวร์ไว้ในเครื่องนี้เท่านั้น การปลดล็อกตอนเปิดแอป สิ่งที่ป้องกันและไม่ป้องกัน สิ่งที่พิสูจน์แล้ว และสิ่งที่ยังค้าง
 
 ## สถานะเอกสาร

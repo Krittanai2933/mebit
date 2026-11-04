@@ -175,8 +175,8 @@
 - **ขอบเขตขยายใหญ่ขึ้นจากเดิม**: ตามดีไซน์ล่าสุด (ดู `01-architecture.md`'s "mobile-signer-ffi is two wallets in one app" และ `04-open-items.md` ข้อ 2/9) โมดูลนี้ต้องเป็นทั้ง (ก) hot wallet single-sig จริงสำหรับ BTC ที่ยัง free — แนะนำใช้ `bdk` Rust core และ (ข) vault signer multisig ที่ห่อ vault-core (ของเดิม) **ตอนนี้มีแค่ (ข) เท่านั้น (ก) ยังไม่เริ่มเลยแม้แต่บรรทัดเดียว**
 - `rust/` มีโค้ดฝั่ง vault signer เท่านั้น และ **ตั้งแต่ 2026-10-20 เปิดให้ Kotlin เรียกผ่าน UniFFI แล้ว** (`#[uniffi::export]`, uniffi `=0.29.4`): `derive_borrower_pubkey`, `compute_vault_address` และ `sign_psbt` ซึ่งทั้งสามตัวยังต่อกับ mock ของ `vault-core` (`sign_psbt` ยังเป็น mock signature) กับฟังก์ชันใหม่ `compute_vault_address_multisig(xpubs, threshold)` ที่เรียก `build_multisig_descriptor` และ `derive_address_at` ของ `vault-core` จริงและได้ address จริง (index 0, network ดูจาก prefix ของ xpub) มี 17 test ผ่าน (เดิม 5) Kotlin binding อยู่ในโมดูลใหม่ `app/mobileSignerFfi` ที่สร้างด้วย Gobley 0.3.7 ผ่าน `scripts/ffi.sh` `shared` ขึ้นกับโมดูลนี้ และมีแค่โพรบฮาร์ดแวร์ชั่วคราวใน `shared` ที่เรียกใช้ ส่วน UI ยังไม่เรียก **ยังไม่มี `bdk` dependency หรือ hot-wallet code ใดๆ**
 - **ตั้งแต่ 2026-10-21 `rust/` มี export Bluetooth แบบ async สำหรับ Jade และ Trezor Safe 7 ด้วย** (`scan_wallets`, `WalletLink` ที่มี `connect`, `info`, `disconnect`) ใช้ `jade-ble` และ `trezor-ble` ตรงๆ บน btleplug 0.13.3 ผลทดสอบบนเครื่องจริงอยู่ในหัวข้อ "บันทึกการทดสอบ Bluetooth บน KMP app" ด้านล่าง
-- `app/` เป็น Expo React Native app ที่ **รันได้จริง** (เว็บ/iOS/Android ผ่าน simulator) ครบ 12 หน้าจอตาม design ล่าสุด รองรับโมเดลหลายสัญญาเงินกู้พร้อมกัน (multi-loan) แล้ว
-- ข้อมูลทั้งหมดใน `app/` ยังเป็น **mock ล้วน** (`mockVault.ts`, TypeScript) — ยังไม่ได้เชื่อมกับ `rust/` เลย (คนละภาษา ยังไม่มี native module bridge) — รวมถึงยังไม่มี concept ของ UTXO/fee/node connectivity จริงใน mock เลย เพราะตอนสร้าง mock ยังไม่รู้ว่าต้องมี hot-wallet layer
+- `app/` เป็นโปรเจกต์ Kotlin Multiplatform กับ Compose Multiplatform ตั้งแต่ commit `346aeb2` (2026-10-13) ซึ่งแทนแอป Expo React Native เดิม โมดูล `shared` มีโค้ด UI และ logic ของทั้ง Android และ iOS ส่วน `androidApp` กับ `iosApp` เป็นแค่ตัวเปิดแอป build และรันด้วย `./kotlin` (ดูหัวข้อ The mobile app ใน `mobile-signer-ffi/README.md`)
+- mock ของแอป Expo (`mockVault.ts`, TypeScript) ถูกลบไปพร้อมแอปนั้น แอป KMP เรียก `rust/` ผ่าน UniFFI bindings ในโมดูล `app/mobileSignerFfi` ที่ `scripts/ffi.sh` สร้าง
 
 **สิ่งที่ต้องทำทั้งหมด**
 - [ ] **ตัดสินใจ**: ใช้ `bdk` Rust core สำหรับเลเยอร์ hot wallet ตามที่เอกสารแนะนำ หรือ implement เอง (ดู `04-open-items.md` ข้อ 2) — ยังไม่ได้ตัดสินใจเป็นมติ
@@ -186,11 +186,10 @@
 - [x] ทดสอบ Trezor Safe 7 บน iPhone และ Android (สแกน, จับคู่ด้วยรหัส 6 หลัก, `info`, `cancel-connect:trezor`, MTU) — ผ่านบน iPhone 15 และ POCO X3 NFC (Android 11) เมื่อ 2026-10-23 (MTU 247 ทั้งสองเครื่อง) ดูหัวข้อ "บันทึกการทดสอบรอบสาม" ด้านล่าง ส่วน Galaxy S25 FE ยังไม่ได้ทดสอบกับ Safe 7
 - [ ] ลบโพรบฮาร์ดแวร์กับ hook ทั้งสอง (`04-open-items.md` ข้อ 34): เงื่อนไขของผู้ใช้ ("เก็บไว้จนกว่า Safe 7 ผ่าน") ผ่านแล้ว รอผู้ใช้ตัดสินใจ
 - [ ] เมื่อ `vault-core` เปลี่ยน mock เป็นของจริง (`build_descriptor`, `derive_child_pubkey`, การเซ็น PSBT): ให้ฟังก์ชัน 3 ตัวเดิมของ wrapper (`compute_vault_address`, `derive_borrower_pubkey`, `sign_psbt`) ใช้ของจริง — ตอนนี้ทั้งสามเปิดให้ Kotlin เรียกได้แล้วแต่ยังเป็น mock และ `vault-core` ยังเป็น "simplified skeleton" ตามหัวไฟล์ของมัน
-- [ ] เชื่อม UI เข้ากับ native binding จริงแทน `mockVault.ts` ทีละฟังก์ชัน (ทั้งฝั่ง hot wallet และ vault signer)
+- [ ] เชื่อม UI เข้ากับ native binding จริงทีละฟังก์ชัน (ทั้งฝั่ง hot wallet และ vault signer)
 - [ ] ทำ verification/challenge-response flow ตอนเปิด loan (ตรวจจับ pubkey derive ผิด) — **ยังไม่มีเลยตอนนี้**
 - [ ] เชื่อม UI margin-call/liquidation กับข้อมูลจริงจาก `monitor-service`/`custody-service` แทน mock
 - [ ] เชื่อม Receive/Borrow/Send flow กับ testnet จริงผ่าน node connectivity ของแอปเอง (ไม่ผ่าน backend) — ตรงกับ Definition of Done ข้อ 6 ใน `00-capstone-brief.md`
-- [ ] (ถ้าจำเป็น) เปลี่ยนจาก state-switch ง่ายๆ ใน `App.tsx` เป็น react-navigation เมื่อโครงสร้างซับซ้อนขึ้น
 - [ ] ถ้าเวลาไม่พอ: ใช้แนวทาง MVP-screens-ก่อน ตาม `00-capstone-brief.md` §3.3 (onboarding→success ก่อน, activity/portfolio/settings เป็น stretch goal)
 
 ### บันทึกการทดสอบ Bluetooth บน KMP app (2026-10-21)
