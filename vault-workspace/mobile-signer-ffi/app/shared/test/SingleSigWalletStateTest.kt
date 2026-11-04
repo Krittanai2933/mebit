@@ -37,7 +37,7 @@ private data class Derivation(val words: List<String>, val passphrase: String, v
 
 /** Fakes for the hot_* calls a bind makes. A test swaps a result to change what the next bind gets. Nothing here may send. */
 private class FakeChain {
-    var snapshotResult: () -> HotWalletSnapshot = { HotWalletSnapshot(CHAIN_ADDRESS, 1_000_000uL, KeyNetwork.TEST) }
+    var snapshotResult: () -> HotWalletSnapshot = { HotWalletSnapshot(CHAIN_ADDRESS, 1_000_000uL, 1_000_000uL, KeyNetwork.TEST) }
     var historyResult: () -> List<HotTx> = { HISTORY }
     var offlineResult: () -> String = { OFFLINE_ADDRESS }
     val derivations = mutableListOf<Derivation>()
@@ -123,7 +123,7 @@ class SingleSigWalletStateTest {
         val chain = FakeChain()
         chain.snapshotResult = { throw IllegalStateException("esplora get: connection refused") }
         chain.bind()
-        chain.snapshotResult = { HotWalletSnapshot(CHAIN_ADDRESS, 1_000_000uL, KeyNetwork.TEST) }
+        chain.snapshotResult = { HotWalletSnapshot(CHAIN_ADDRESS, 1_000_000uL, 1_000_000uL, KeyNetwork.TEST) }
         chain.bind()
         assertEquals(
             Shown(WalletMode.Live, 1_000_000L, CHAIN_ADDRESS, HISTORY, null, live = true, balanceKnown = true, addressIsReal = true),

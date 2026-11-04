@@ -105,9 +105,10 @@ fun S4SendScreen(
     val quote = rememberFiatQuote(quotes)
     val entry = remember(draft) { AmountEntry(draft) }
     // Once per open of this screen. Rust answers from memory for five minutes, so a second open costs no network call.
-    LaunchedEffect(draft) { entry.applyTiers(withContext(Dispatchers.Default) { wallet.feeTiers() }, wallet.balanceSats) }
+    LaunchedEffect(draft) { entry.applyTiers(withContext(Dispatchers.Default) { wallet.feeTiers() }, wallet.spendableSats) }
     val addressOk = if (draft.destination.isEmpty()) null else isValidAddress(draft.destination, KeyNetwork.TEST)
-    val issue = sendIssue(addressOk, draft.amountSats, draft.feeSats, wallet.balanceSats, wallet.balanceKnown, wallet.unconfirmedSend != null)
+    // The spendable balance, not the whole one: a receive still in the mempool cannot pay, and send all pays the spendable figure less the fee.
+    val issue = sendIssue(addressOk, draft.amountSats, draft.feeSats, wallet.spendableSats, wallet.balanceKnown, wallet.unconfirmedSend != null)
     val enter = { text: String -> draft.enterDestination(text) { isValidAddress(it, KeyNetwork.TEST) } }
     val cameraAvailable = rememberCameraAvailable()
     var scanning by remember { mutableStateOf(false) }
@@ -145,7 +146,7 @@ fun S4SendScreen(
             Spacer(modifier = Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 (draft.tiers ?: LiveFeeTiers.DEFAULT).tiles().forEach { tile ->
-                    FeeCard(tile, selected = tile.tier == draft.tier, quote, modifier = Modifier.weight(1f)) { entry.chooseTier(tile.tier, wallet.balanceSats) }
+                    FeeCard(tile, selected = tile.tier == draft.tier, quote, modifier = Modifier.weight(1f)) { entry.chooseTier(tile.tier, wallet.spendableSats) }
                 }
             }
             if (draft.tiers?.live == false) {
@@ -303,7 +304,7 @@ private fun AmountCard(wallet: SingleSigWallet, entry: AmountEntry, quote: FiatQ
             Spacer(modifier = Modifier.height(11.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(
-                    text = (if (wallet.balanceKnown) entry.caption(wallet.balanceSats, quote) else "ใช้ได้ —") + if (short) " · ไม่พอ" else "",
+                    text = (if (wallet.balanceKnown) entry.caption(wallet.spendableSats, quote) else "ใช้ได้ —") + if (short) " · ไม่พอ" else "",
                     color = if (short) MbEyebrow else MbBody,
                     fontSize = 12.5.sp,
                     fontWeight = FontWeight.Medium,
@@ -316,7 +317,7 @@ private fun AmountCard(wallet: SingleSigWallet, entry: AmountEntry, quote: FiatQ
                     fontSize = 12.5.sp,
                     fontWeight = FontWeight.Bold,
                     lineHeight = 17.sp,
-                    modifier = Modifier.clickable(role = Role.Button) { entry.sendAll(wallet.balanceSats) }.testTag("s4_send_all"),
+                    modifier = Modifier.clickable(role = Role.Button) { entry.sendAll(wallet.spendableSats) }.testTag("s4_send_all"),
                 )
             }
         }

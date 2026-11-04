@@ -58,7 +58,12 @@ class SingleSigWallet(
     /** The [WalletMode] the last [bindSession] left. [WalletMode.Demo] until the first bind. */
     var mode: WalletMode by mutableStateOf(WalletMode.Demo)
         private set
+    /** What the wallet holds, confirmed and mempool: Home's figure. */
     var balanceSats: Long by mutableStateOf(0L)
+        private set
+
+    /** What a payment could spend now, from the same coin lists the core spends: the Send screen's figure. At most [balanceSats]. */
+    var spendableSats: Long by mutableStateOf(0L)
         private set
     var receiveAddress: String by mutableStateOf("")
         private set
@@ -105,6 +110,9 @@ class SingleSigWallet(
     var heldSend: HeldSend? by mutableStateOf(null)
         private set
 
+    /** Counts the drops of a held payment, so a [prepare] that returns after [dropHeldSend] ran holds nothing. */
+    private var heldEpoch: Int by mutableStateOf(0)
+
     fun bindSession(session: OnboardingSession, network: KeyNetwork = KeyNetwork.TEST) {
         lastError = null
         if (session.words.size < 12) {
@@ -117,6 +125,7 @@ class SingleSigWallet(
             val snap = snapshot(session.words, session.passphrase, network)
             receiveAddress = snap.receiveAddress
             balanceSats = snap.balanceSats.toLong()
+            spendableSats = snap.spendableSats.toLong()
             mode = WalletMode.Live
             // A history failure is not the wallet's, so its own try keeps it from changing the mode or reaching lastError.
             val loaded = try {
@@ -132,6 +141,7 @@ class SingleSigWallet(
             mode = WalletMode.Unavailable
             lastError = readErrorThai(e.message)
             balanceSats = 0L
+            spendableSats = 0L
             history = emptyList()
             // The address needs only the key, so the wallet keeps its own address, never the demo's, while the chain is out of reach.
             receiveAddress = try {
@@ -157,6 +167,7 @@ class SingleSigWallet(
      * With [sendAll] the core spends every coin and pays the destination the balance less the real fee, so [amountSats] is only the
      * estimate the screens showed and [PreparedSend.amountSats] is what leaves.
      * A payment already held is replaced, because nothing of it was posted or guarded. The demo mock pays at once and holds nothing.
+     * False, with no error, when [dropHeldSend] ran while the core was signing: the user left, so the payment is let go, not held.
      */
     fun prepare(
         session: OnboardingSession,
@@ -168,9 +179,10 @@ class SingleSigWallet(
     ): Boolean {
         lastError = null
         heldSend = null
+        val epoch = heldEpoch
         val feeSats = feeRateSatVb * TYPICAL_VSIZE
         if (unconfirmedSend != null) {
-            lastError = "การส่งครั้งก่อนยังยืนยันไม่ได้ จึงยังส่งใหม่ไม่ได้"
+            lastError = EARLIER_UNSETTLED
             return false
         }
         // A real key never takes the mock below, which would show a made-up payment as sent.
@@ -184,6 +196,7 @@ class SingleSigWallet(
                 return false
             }
             balanceSats -= amountSats + feeSats
+            spendableSats -= amountSats + feeSats
             lastTxid = "mocktxid_" + balanceSats.toString(16) + "_" + amountSats.toString(16)
             lastFeeSats = feeSats
             lastAmountSats = amountSats
@@ -200,22 +213,29 @@ class SingleSigWallet(
             lastError = sendErrorThai(e.message)
             return false
         }
+        if (epoch != heldEpoch) return false
         heldSend = HeldSend(prepared, network)
         return true
     }
 
-    /** Lets the held payment go without posting it. Nothing of it was posted or guarded, so the draft stays as it is and the user can change the tier or the amount and [prepare] again. */
+    /** Lets the held payment go without posting it, a [prepare] still running included. Nothing of it was posted or guarded, so the draft stays as it is and the user can change the tier or the amount and [prepare] again. */
     fun dropHeldSend() {
+        heldEpoch++
         heldSend = null
     }
 
     /**
      * Posts the payment [prepare] holds, once the user confirmed it. The guard goes to the phone first, then the post, so an app killed
      * during the post still refuses this payment after the restart. [lastFeeSats] and [lastAmountSats] hold what the transaction pays
-     * once it is out. False with nothing held.
+     * once it is out. False with nothing held, and false with nothing posted while another payment's guard is set, which it keeps.
      */
     fun post(session: OnboardingSession): Boolean {
         lastError = null
+        // Another payment may be out: this one must not go, and that payment's guard must not be overwritten.
+        if (unconfirmedSend != null) {
+            lastError = EARLIER_UNSETTLED
+            return false
+        }
         val (prepared, network) = heldSend ?: return false
         heldSend = null
         // The guard reaches the phone before the post, so an app killed during the post still refuses this payment after the restart.
@@ -251,6 +271,7 @@ class SingleSigWallet(
         try {
             val snap = snapshot(session.words, session.passphrase, network)
             balanceSats = snap.balanceSats.toLong()
+            spendableSats = snap.spendableSats.toLong()
             receiveAddress = snap.receiveAddress
         } catch (e: Exception) {
         }
@@ -270,6 +291,7 @@ class SingleSigWallet(
     fun useDemoFixture() {
         mode = WalletMode.Demo
         balanceSats = 1_250_000L
+        spendableSats = 1_250_000L
         receiveAddress = "tb1qmebitdemosinglesig0000000000000000recv"
         lastTxid = ""
         lastFeeSats = 0L
@@ -277,6 +299,7 @@ class SingleSigWallet(
         lastSentAtSeconds = 0L
         history = emptyList()
         unconfirmedSend = null
+        heldEpoch++
         heldSend = null
     }
 }
@@ -320,6 +343,9 @@ fun sendErrorThai(message: String?): String {
 
 private const val SEND_FALLBACK = "ส่งไม่สำเร็จ ลองใหม่ภายหลัง"
 
+/** [SingleSigWallet.prepare] and [SingleSigWallet.post] while an earlier payment may be out. */
+private const val EARLIER_UNSETTLED = "การส่งครั้งก่อนยังยืนยันไม่ได้ จึงยังส่งใหม่ไม่ได้"
+
 /** [sendErrorThai] for a failed read of the wallet: its generic fallback would say a send failed when only a fetch did. */
 fun readErrorThai(message: String?): String =
     sendErrorThai(message).takeUnless { it == SEND_FALLBACK } ?: "ดึงข้อมูลกระเป๋าไม่สำเร็จ ลองใหม่ภายหลัง"
@@ -328,14 +354,30 @@ fun readErrorThai(message: String?): String =
 const val TYPICAL_VSIZE = 141L
 
 /**
+ * An absolute surprise worth one tap: a fee this many sats over the estimate is questioned however large the payment, about 30 baht
+ * at today's price. Below it, a fee over twice the estimate is questioned only when it also eats a tenth of the amount.
+ */
+const val FEE_SURPRISE_SATS = 1_000L
+
+/**
  * Whether the Review screen asks before posting a payment whose real fee is [feeSats] when it showed [shownFeeSats] (the rate times
- * [TYPICAL_VSIZE]) and [amountSats] is what the destination gets. Both must hold: the fee is more than twice what was shown, and it is
- * more than a tenth of the amount. The first alone would stop for an ordinary four-coin payment (345 sat on 10,000 sat at 1 sat/vB,
- * 3.45%), which is not worth a tap. The second alone would ask about every small payment, whose fee is a large share by nature even
- * when it is exactly what was shown. Together they speak up only when the fee both surprised the user and really eats the money.
+ * [TYPICAL_VSIZE]) and [amountSats] is what the destination gets. The fee must be more than twice what was shown, and either more
+ * than a tenth of the amount or at least [FEE_SURPRISE_SATS] over the estimate. Twice alone would stop for an ordinary four-coin
+ * payment (345 sat on 10,000 sat at 1 sat/vB, 204 sat over), which is not worth a tap. A tenth alone would ask about every small
+ * payment, whose fee is a large share by nature even when it is exactly what was shown, and would let a fee hundreds of times the
+ * estimate through on a large payment, which the absolute threshold catches.
  */
 fun feeNeedsConfirmation(feeSats: Long, shownFeeSats: Long, amountSats: Long): Boolean =
-    feeSats > 2 * shownFeeSats && feeSats * 10 > amountSats
+    feeSats > 2 * shownFeeSats && (feeSats * 10 > amountSats || feeSats - shownFeeSats >= FEE_SURPRISE_SATS)
+
+/**
+ * Whether the Review screen asks before posting [held], the payment the core signed for [draft]: [feeNeedsConfirmation] against the
+ * estimate it showed, and for send all also when what leaves is [FEE_SURPRISE_SATS] or more under the amount it showed, because the
+ * amount absorbs the fee and the spendable balance can have moved since the snapshot.
+ */
+fun needsConfirmation(held: PreparedSend, draft: SendDraft): Boolean =
+    feeNeedsConfirmation(held.feeSats.toLong(), draft.feeSats, held.amountSats.toLong()) ||
+        (draft.isSendAll && draft.amountSats - held.amountSats.toLong() >= FEE_SURPRISE_SATS)
 
 /** The three tiers of board 4.4. [satPerVb] is the board's fixed rate, which [LiveFeeTiers.DEFAULT] uses until the live rates arrive or when they cannot be fetched. */
 enum class FeeTier(val label: String, val eta: String, val satPerVb: Long) {

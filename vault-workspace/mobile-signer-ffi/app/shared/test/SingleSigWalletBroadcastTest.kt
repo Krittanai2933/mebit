@@ -67,7 +67,7 @@ private class FakeHot {
     var prepareResult: (feeRateSatVb: ULong) -> PreparedSend = { rate -> PreparedSend(TXID, "hex-1", rate * 141uL, 100_000uL) }
     var prepareAllResult: (feeRateSatVb: ULong) -> PreparedSend = { rate -> PreparedSend(TXID, "hex-all", rate * 178uL, 1_000_000uL - rate * 178uL) }
     var postResult: () -> HotSendResult = { HotSendResult(TXID) }
-    var snapshotResult: () -> HotWalletSnapshot = { HotWalletSnapshot("tb1qbefore", 1_000_000uL, KeyNetwork.TEST) }
+    var snapshotResult: () -> HotWalletSnapshot = { HotWalletSnapshot("tb1qbefore", 1_000_000uL, 1_000_000uL, KeyNetwork.TEST) }
     var clock = SENT_AT
     val prepares = mutableListOf<PrepareCall>()
     val prepareAlls = mutableListOf<PrepareAllCall>()
@@ -156,6 +156,7 @@ private fun assertMockPayments(wallet: SingleSigWallet, session: OnboardingSessi
     assertTrue(wallet.broadcast(session, 100_000, 8, DESTINATION))
     assertNull(wallet.lastError)
     assertEquals(1_148_872L, wallet.balanceSats)
+    assertEquals(1_148_872L, wallet.spendableSats)
     assertTrue(wallet.lastTxid.startsWith("mocktxid_"), wallet.lastTxid)
 }
 
@@ -185,9 +186,10 @@ class SingleSigWalletBroadcastTest {
         val hot = FakeHot()
         val session = hot.goLive()
         val snapshots = hot.snapshots
-        hot.snapshotResult = { HotWalletSnapshot("tb1qafter", 898_872uL, KeyNetwork.TEST) }
+        hot.snapshotResult = { HotWalletSnapshot("tb1qafter", 898_872uL, 800_000uL, KeyNetwork.TEST) }
         val returned = hot.wallet.broadcast(session, 100_000, 8, DESTINATION)
         assertEquals(Seen(true, TXID, null, 898_872L, "tb1qafter"), hot.wallet.seen(returned))
+        assertEquals(800_000L, hot.wallet.spendableSats, "the spendable figure from the refresh")
         assertEquals(snapshots + 1, hot.snapshots, "one refresh after the send")
     }
 
@@ -232,7 +234,7 @@ class SingleSigWalletBroadcastTest {
         }
         hot.snapshotResult = {
             hot.clock += 5
-            HotWalletSnapshot("tb1qafter", 898_872uL, KeyNetwork.TEST)
+            HotWalletSnapshot("tb1qafter", 898_872uL, 898_872uL, KeyNetwork.TEST)
         }
         assertEquals(0L, hot.wallet.lastSentAtSeconds, "nothing sent yet")
         assertTrue(hot.wallet.broadcast(session, 100_000, 8, DESTINATION))
@@ -777,9 +779,9 @@ class SingleSigWalletBroadcastTest {
         assertEquals(listOf(PostCall(KeyNetwork.MAIN, "hex-1", TXID)), hot.posts)
     }
 
-    // Both must hold: more than twice what was shown, and more than a tenth of what the destination gets.
+    // More than twice what was shown, and then either more than a tenth of what the destination gets or a thousand sats over.
     @Test
-    fun theFeeQuestionComesOnlyWhenTheFeeIsOverTwiceTheEstimateAndOverATenthOfTheAmount() {
+    fun theFeeQuestionNeedsOverTwiceTheEstimateAndThenATenthOfTheAmountOrAThousandSatsOver() {
         // 1 sat/vB shows 141. Four coins and change are 345 sat: over twice, but 3.45% of 10,000, so no question.
         assertFalse(feeNeedsConfirmation(345, 141, 10_000), "the ordinary four-coin payment")
         assertFalse(feeNeedsConfirmation(1_000, 141, 10_000), "exactly a tenth")
@@ -787,7 +789,7 @@ class SingleSigWalletBroadcastTest {
         assertFalse(feeNeedsConfirmation(282, 141, 1_000), "exactly twice, and a large share of a small payment")
         assertTrue(feeNeedsConfirmation(283, 141, 1_000), "just over twice, and a large share")
         // 8 sat/vB shows 1,128. 2,760 is four coins and change.
-        assertFalse(feeNeedsConfirmation(2_760, 1_128, 100_000), "2.76% of the amount")
+        assertTrue(feeNeedsConfirmation(2_760, 1_128, 100_000), "2.76% of the amount, but 1,632 sat over the estimate")
         assertTrue(feeNeedsConfirmation(2_760, 1_128, 10_000), "27.6% of the amount")
         assertFalse(feeNeedsConfirmation(2_256, 1_128, 1_000), "exactly twice")
         assertFalse(feeNeedsConfirmation(1_128, 1_128, 546), "what was shown, on a dust-limit amount")
@@ -811,5 +813,109 @@ class SingleSigWalletBroadcastTest {
         assertEquals(LiveFeeTiers(4, 8, 15, live = false), wallet.feeTiers())
         answer = { throw IllegalStateException("the bridge failed") }
         assertEquals(LiveFeeTiers.DEFAULT, wallet.feeTiers())
+    }
+
+    // V1 of the 2026-11-05 interrogate. The card asked only when the fee was also over a tenth of the amount, so a fee hundreds of
+    // times the estimate on a large payment was posted with no question. Fast shows 15 x 141 = 2,115; the core charged these for
+    // 1,000 dust coins, or 300 coins of 10,000, listed before 1 BTC.
+    @Test
+    fun aFeeAThousandSatsOrMoreAboveTheEstimateIsQuestionedHoweverLargeThePayment() {
+        assertTrue(feeNeedsConfirmation(1_022_115, 2_115, 50_000_000), "483x the estimate on 0.5 BTC")
+        assertTrue(feeNeedsConfirmation(1_021_650, 2_115, 99_524_350), "send all, 483x")
+        assertTrue(feeNeedsConfirmation(308_115, 2_115, 50_000_000), "145x")
+        assertTrue(feeNeedsConfirmation(307_650, 2_115, 102_692_350), "send all, 145x")
+        assertTrue(feeNeedsConfirmation(164_328, 1_128, 4_835_672), "145x at 8 sat/vB")
+        assertTrue(feeNeedsConfirmation(2_082, 141, 117_918), "send all over 30 coins at 1 sat/vB")
+        assertTrue(feeNeedsConfirmation(5_377, 141, 150_000), "100 dust coins listed first at 1 sat/vB")
+        assertTrue(feeNeedsConfirmation(1_141, 141, 50_000_000), "exactly 1,000 sat over")
+        assertFalse(feeNeedsConfirmation(1_140, 141, 50_000_000), "999 sat over, a small share")
+        assertFalse(feeNeedsConfirmation(345, 141, 10_000), "the ordinary four-coin payment, 204 sat over")
+        assertFalse(feeNeedsConfirmation(4_230, 2_115, 50_000_000), "2,115 sat over but exactly twice")
+        assertTrue(feeNeedsConfirmation(4_231, 2_115, 50_000_000), "just over twice")
+    }
+
+    // V6. A post while another payment's guard was set posted anyway and erased that guard. A bind after a restart brings in a guard
+    // while a payment is held.
+    @Test
+    fun aPostWhileAnotherPaymentsGuardIsSetRefusesPostsNothingAndKeepsThatGuard() {
+        val hot = FakeHot()
+        val session = hot.goLive()
+        hot.prepareResult = { PreparedSend(TXID, "hex-held", 2_760uL, 10_000uL) }
+        assertTrue(hot.wallet.prepare(session, 10_000, 8, DESTINATION))
+        val other = UnconfirmedSend("f".repeat(64), SENT_AT)
+        assertTrue(session.recordUnconfirmedSend(other.txid, other.sinceSeconds))
+        hot.wallet.bindSession(session)
+        assertEquals(other, hot.wallet.unconfirmedSend, "the guard the bind brought in")
+        assertFalse(hot.wallet.post(session), "a post while a guard is set")
+        assertEquals(EARLIER_UNSETTLED, hot.wallet.lastError)
+        assertEquals(emptyList<PostCall>(), hot.posts, "a post reached the node")
+        assertEquals(other, hot.wallet.unconfirmedSend, "the other payment's guard on the wallet")
+        assertEquals(other, restart(hot.store).unconfirmedSend, "the other payment's guard on the phone")
+    }
+
+    // V7. A prepare that finished after dropHeldSend had run held its payment for the next Review. The screen is left while the
+    // core signs, so the drop runs before prepare returns.
+    @Test
+    fun aPaymentDroppedWhileTheCoreWasStillSigningItStaysDropped() {
+        val hot = FakeHot()
+        val session = hot.goLive()
+        hot.prepareResult = { rate ->
+            hot.wallet.dropHeldSend()
+            PreparedSend(TXID, "hex-late", rate * 345uL, 10_000uL)
+        }
+        assertFalse(hot.wallet.prepare(session, 10_000, 1, DESTINATION), "a prepare whose payment was let go reads as out")
+        assertNull(hot.wallet.heldSend, "a payment held after leaving the screen")
+        assertNull(hot.wallet.lastError, "a drop is not a failure")
+        assertFalse(hot.wallet.post(session))
+        assertEquals(emptyList<PostCall>(), hot.posts)
+        hot.prepareResult = { rate ->
+            hot.wallet.useDemoFixture()
+            PreparedSend(TXID, "hex-late", rate * 345uL, 10_000uL)
+        }
+        assertFalse(hot.wallet.prepare(session, 10_000, 1, DESTINATION), "a prepare the demo fixture overtook")
+        assertNull(hot.wallet.heldSend, "a payment held after the demo fixture")
+        hot.wallet.bindSession(session)
+        assertTrue(hot.wallet.live)
+        hot.prepareResult = { PreparedSend(TXID, "hex-next", 2_760uL, 10_000uL) }
+        assertTrue(hot.wallet.prepare(session, 10_000, 8, DESTINATION), "a prepare nobody dropped")
+        assertEquals("hex-next", hot.wallet.heldSend?.prepared?.hex)
+    }
+
+    // V1. The whole Review decision for send all: the fee rule, and the amount that leaves against the one Review showed, because
+    // the amount absorbs the fee and the spendable balance can have moved since the snapshot.
+    @Test
+    fun reviewAsksWhenSendAllWouldLeaveAThousandSatsLessThanItShowed() {
+        val draft = SendDraft()
+        AmountEntry(draft).sendAll(1_000_000)
+        assertEquals(998_872L, draft.amountSats, "what Review shows at the normal tier")
+        assertFalse(needsConfirmation(PreparedSend(TXID, "h", 1_128uL, 998_872uL), draft), "exactly what was shown")
+        assertFalse(needsConfirmation(PreparedSend(TXID, "h", 1_128uL, 997_873uL), draft), "999 sat under")
+        assertTrue(needsConfirmation(PreparedSend(TXID, "h", 1_128uL, 997_872uL), draft), "1,000 sat under")
+        assertTrue(needsConfirmation(PreparedSend(TXID, "h", 1_021_650uL, 99_524_350uL), draft), "the fee rule through the same door")
+        // A fixed amount is paid as asked, so only the fee rule speaks.
+        val fixed = SendDraft()
+        fixed.setAmountInSats(100_000)
+        assertFalse(needsConfirmation(PreparedSend(TXID, "h", 1_128uL, 99_000uL), fixed))
+        assertTrue(needsConfirmation(PreparedSend(TXID, "h", 2_760uL, 100_000uL), fixed))
+    }
+
+    // V4. The Send screen quoted send all and the available line from the balance with the mempool in it, so a send all posted a
+    // tenth of what Review showed. The wallet now carries the spendable figure beside the balance.
+    @Test
+    fun theSpendableBalanceComesFromTheSnapshotBesideTheBalanceThatKeepsTheMempool() {
+        val hot = FakeHot()
+        hot.snapshotResult = { HotWalletSnapshot("tb1qbefore", 10_000_000uL, 1_000_000uL, KeyNetwork.TEST) }
+        val session = hot.goLive()
+        assertEquals(10_000_000L, hot.wallet.balanceSats, "Home's figure")
+        assertEquals(1_000_000L, hot.wallet.spendableSats, "the Send screen's figure")
+        val draft = SendDraft()
+        AmountEntry(draft).sendAll(hot.wallet.spendableSats)
+        assertEquals(1_000_000L - draft.feeSats, draft.amountSats, "send all from the spendable figure")
+        assertEquals(SendIssue.Insufficient(1_128), sendIssue(true, 1_000_000, 1_128, hot.wallet.spendableSats), "the whole spendable figure plus the fee")
+        hot.snapshotResult = { throw IllegalStateException("esplora unreachable") }
+        hot.wallet.bindSession(session)
+        assertEquals(0L, hot.wallet.spendableSats, "unknown, like the balance")
+        hot.wallet.useDemoFixture()
+        assertEquals(1_250_000L, hot.wallet.spendableSats, "the demo's")
     }
 }

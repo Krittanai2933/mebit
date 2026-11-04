@@ -431,7 +431,16 @@ public data class HotTx (
 
 public data class HotWalletSnapshot (
     var `receiveAddress`: kotlin.String, 
+    /**
+     * Confirmed plus mempool, over every address of both chains: what the wallet holds.
+     */
     var `balanceSats`: kotlin.ULong, 
+    /**
+     * What a payment could spend now: the confirmed coins of receive addresses and the wallet's
+     * own change, confirmed or not. The same coins `hot_prepare_send_all` spends, so a receive
+     * still in the mempool counts in `balance_sats` and not here.
+     */
+    var `spendableSats`: kotlin.ULong, 
     var `network`: KeyNetwork
 ) {
     public companion object

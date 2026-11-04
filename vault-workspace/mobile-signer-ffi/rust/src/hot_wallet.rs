@@ -164,7 +164,12 @@ type Esplora<'a> = &'a (dyn Fn(&str) -> Result<String, MobileSignerError> + Sync
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct HotWalletSnapshot {
     pub receive_address: String,
+    /// Confirmed plus mempool, over every address of both chains: what the wallet holds.
     pub balance_sats: u64,
+    /// What a payment could spend now: the confirmed coins of receive addresses and the wallet's
+    /// own change, confirmed or not. The same coins `hot_prepare_send_all` spends, so a receive
+    /// still in the mempool counts in `balance_sats` and not here.
+    pub spendable_sats: u64,
     pub network: KeyNetwork,
 }
 
@@ -546,6 +551,21 @@ impl Wallet {
             })
     }
 
+    /// The used addresses whose balance is above zero: the only ones whose coin lists are worth a
+    /// request. A host whose list for an emptied address still holds a coin contradicts its own
+    /// stats, and the coin is left alone.
+    fn funded(&self) -> impl Iterator<Item = (Chain, &OwnKey)> {
+        [Chain::External, Chain::Internal]
+            .into_iter()
+            .zip(&self.chains)
+            .flat_map(|(chain, scanned)| {
+                scanned
+                    .iter()
+                    .filter(|s| s.used && s.balance > 0)
+                    .map(move |s| (chain, &s.key))
+            })
+    }
+
     fn addresses(&self) -> Vec<String> {
         self.chains
             .iter()
@@ -814,9 +834,10 @@ pub fn hot_wallet_snapshot(
     )
 }
 
-/// The first unused receive address and the confirmed + mempool balance over every address of both
-/// chains. About 40 Esplora calls for a fresh wallet, fewer after `scan_wallet` cached one, so call
-/// it off the main thread.
+/// The first unused receive address, the confirmed + mempool balance over every address of both
+/// chains, and the spendable balance from the same coin lists a payment would spend. About 40
+/// Esplora calls for a fresh wallet, fewer after `scan_wallet` cached one, plus one coin list per
+/// funded address, so call it off the main thread.
 fn snapshot_from(
     esplora: Esplora,
     words: &[String],
@@ -826,9 +847,11 @@ fn snapshot_from(
     cache: &ScanCache,
 ) -> Result<HotWalletSnapshot, MobileSignerError> {
     let wallet = scan_wallet(esplora, words, passphrase, network, now, cache)?;
+    let (_, spendable_sats) = spendable_coins(esplora, esplora_base(network)?, &wallet)?;
     Ok(HotWalletSnapshot {
         receive_address: wallet.next_unused(Chain::External).address.to_string(),
         balance_sats: wallet.balance()?,
+        spendable_sats,
         network,
     })
 }
@@ -1224,12 +1247,19 @@ const DUST: u64 = 546;
 const MIN_FEE_RATE: u64 = 1;
 const MAX_FEE_RATE: u64 = 2_000;
 
-/// Virtual size of a P2WPKH transaction with `inputs` and `outputs`, rounded up: 10.5 vB overhead
-/// (version, locktime, counts, segwit marker and flag) plus 68 vB per input and 31 vB per output.
-fn p2wpkh_vsize(inputs: usize, outputs: usize) -> u64 {
-    let twice = 21 + 136 * inputs as u64 + 62 * outputs as u64;
+/// Virtual size, rounded up, of a transaction spending `inputs` P2WPKH coins to outputs whose
+/// scripts are `output_scripts` bytes long: 10.5 vB overhead (version, locktime, counts, segwit
+/// marker and flag), 68 vB per input, and 8 + 1 + the script per output (value, length, script).
+/// A taproot or P2WSH output is 43 vB and a P2WPKH one 31, so sizing every output as P2WPKH paid
+/// under the rate.
+fn vsize(inputs: usize, output_scripts: &[usize]) -> u64 {
+    let outputs: u64 = output_scripts.iter().map(|len| 9 + *len as u64).sum();
+    let twice = 21 + 136 * inputs as u64 + 2 * outputs;
     twice.div_ceil(2)
 }
+
+/// The change output's script: P2WPKH, 22 bytes.
+const P2WPKH_SCRIPT: usize = 22;
 
 /// How many times the coin selection is redone for a fee that grew with the inputs it chose.
 /// Each pass adds at least one input, so a payment over many small coins can run out of passes.
@@ -1261,10 +1291,14 @@ fn coins_overflow() -> MobileSignerError {
 }
 
 /// The coins a payment may spend, each with its key, and their sum: every confirmed coin of a
-/// used address, and the wallet's own change unconfirmed too, because it is this wallet's own
-/// transaction and waiting for it would lock the balance after every payment. The coin lists are
-/// asked for on every call, never cached. An outpoint listed twice or a sum past u64 fails the
-/// whole call.
+/// funded address, and the wallet's own change unconfirmed too, because it is this wallet's own
+/// transaction and waiting for it would lock the balance after every payment. Own change is an
+/// unconfirmed coin on an internal address whose transaction spends one of the wallet's own coins,
+/// which nobody else can: a change address is public once its first payment confirms, and a
+/// stranger's coin there could be replaced from under the payment. The coin lists are asked for on
+/// every call, never cached, plus one `/tx` lookup per transaction with unconfirmed change. An
+/// outpoint listed twice, a sum past u64 or a lookup that is not that transaction fails the whole
+/// call.
 type Coins<'w> = Vec<(Utxo, &'w OwnKey)>;
 
 fn spendable_coins<'w>(
@@ -1272,14 +1306,14 @@ fn spendable_coins<'w>(
     base: &str,
     wallet: &'w Wallet,
 ) -> Result<(Coins<'w>, u64), MobileSignerError> {
-    let owners: Vec<(Chain, &OwnKey)> = wallet.used().collect();
+    let owners: Vec<(Chain, &OwnKey)> = wallet.funded().collect();
     let urls: Vec<String> = owners
         .iter()
         .map(|(_, k)| format!("{base}/address/{}/utxo", k.address))
         .collect();
     let lists = get_all(esplora, &urls)?;
     let mut seen = HashSet::new();
-    let mut spendable: Vec<(Utxo, &OwnKey)> = Vec::new();
+    let mut listed: Vec<(Utxo, &OwnKey, Chain)> = Vec::new();
     for ((chain, owner), list) in owners.iter().zip(&lists) {
         for utxo in parse_utxos(list)? {
             if !seen.insert((utxo.txid, utxo.vout)) {
@@ -1288,16 +1322,74 @@ fn spendable_coins<'w>(
                     utxo.txid, utxo.vout
                 )));
             }
-            if utxo.confirmed || matches!(chain, Chain::Internal) {
-                spendable.push((utxo, owner));
-            }
+            listed.push((utxo, owner, *chain));
         }
     }
+    let own_change = own_change_transactions(esplora, base, wallet, &listed)?;
+    let spendable: Coins = listed
+        .into_iter()
+        .filter(|(utxo, _, chain)| {
+            utxo.confirmed || (matches!(chain, Chain::Internal) && own_change.contains(&utxo.txid))
+        })
+        .map(|(utxo, owner, _)| (utxo, owner))
+        .collect();
     let have = spendable
         .iter()
         .try_fold(0u64, |sum, (u, _)| sum.checked_add(u.value))
         .ok_or_else(coins_overflow)?;
     Ok((spendable, have))
+}
+
+/// Among the transactions of the unconfirmed coins on internal addresses in `listed`, the ones this
+/// wallet signed: each spends a coin of one of the wallet's own addresses. One lookup per
+/// transaction, none when there is no such coin.
+fn own_change_transactions(
+    esplora: Esplora,
+    base: &str,
+    wallet: &Wallet,
+    listed: &[(Utxo, &OwnKey, Chain)],
+) -> Result<HashSet<Txid>, MobileSignerError> {
+    let mut pending: Vec<Txid> = Vec::new();
+    for (utxo, _, chain) in listed {
+        if !utxo.confirmed && matches!(chain, Chain::Internal) && !pending.contains(&utxo.txid) {
+            pending.push(utxo.txid);
+        }
+    }
+    if pending.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let urls: Vec<String> = pending.iter().map(|t| format!("{base}/tx/{t}")).collect();
+    let answers = get_all(esplora, &urls)?;
+    let own = wallet.addresses();
+    let own: Vec<&str> = own.iter().map(String::as_str).collect();
+    let mut signed = HashSet::new();
+    for (txid, body) in pending.iter().zip(&answers) {
+        if spends_own(body, txid, &own)? {
+            signed.insert(*txid);
+        }
+    }
+    Ok(signed)
+}
+
+/// Whether the `/tx/{txid}` answer `json` spends an output of one of `own`. An answer that is not
+/// that transaction, or whose inputs cannot be read, is an error: a guess either way would spend
+/// a stranger's coin or hide the wallet's own.
+fn spends_own(json: &str, txid: &Txid, own: &[&str]) -> Result<bool, MobileSignerError> {
+    let bad = |what: &str| {
+        MobileSignerError::InvalidPsbtJson(format!("esplora utxo: transaction {txid}: {what}"))
+    };
+    let tx: Value = serde_json::from_str(json).map_err(|e| bad(&format!("not JSON: {e}")))?;
+    if tx["txid"] != txid.to_string().as_str() {
+        return Err(bad("the answer is another transaction"));
+    }
+    let vin = tx["vin"]
+        .as_array()
+        .ok_or_else(|| bad("vin is not an array"))?;
+    Ok(vin.iter().any(|input| {
+        input["prevout"]["scriptpubkey_address"]
+            .as_str()
+            .is_some_and(|a| own.contains(&a))
+    }))
 }
 
 /// `selected` spent to `outputs`, each input signed with its coin's own key.
@@ -1369,8 +1461,13 @@ fn signed_payment(
         ));
     }
     check_rate(rate_sat_vb)?;
+    let dest = destination_on(destination, network)?;
+    // The destination first, then change; the slice to one output drops the change.
+    let outputs = [dest.script_pubkey().len(), P2WPKH_SCRIPT];
     // The rate is at most 2,000 and the size a few thousand vB, so the product fits u64.
-    let fee_for = |inputs: usize, outputs: usize| rate_sat_vb * p2wpkh_vsize(inputs, outputs);
+    let fee_for = |inputs: usize, change: bool| {
+        rate_sat_vb * vsize(inputs, &outputs[..if change { 2 } else { 1 }])
+    };
     let fee_checked = |fee_sats: u64| -> Result<u64, MobileSignerError> {
         if fee_sats > amount_sats {
             return Err(MobileSignerError::InvalidPsbtJson(format!(
@@ -1382,13 +1479,20 @@ fn signed_payment(
         })
     };
     // The smallest payment is one input and change. A fee the rules refuse there is refused before any lookup.
-    let mut fee_sats = fee_for(1, 2);
+    let mut fee_sats = fee_for(1, true);
     fee_checked(fee_sats)?;
-    let dest = destination_on(destination, network)?;
 
     let base = esplora_base(network)?;
     let wallet = scan_wallet(esplora, words, passphrase, network, now, cache)?;
-    let (spendable, have) = spendable_coins(esplora, base, &wallet)?;
+    let (mut spendable, have) = spendable_coins(esplora, base, &wallet)?;
+    // Largest first, ties by outpoint: which coins pay never depends on the host's listing order,
+    // and dust is touched only once the big coins fall short.
+    spendable.sort_by(|(a, _), (b, _)| {
+        b.value
+            .cmp(&a.value)
+            .then(a.txid.cmp(&b.txid))
+            .then(a.vout.cmp(&b.vout))
+    });
     // The fee depends on how many coins pay it, and the coins on the fee, so the selection is
     // redone until the fee covers the coins it chose. A fee the coins over-cover (the change
     // vanished and the transaction shrank) is kept: it is at least the rate and under the amount.
@@ -1410,7 +1514,7 @@ fn signed_payment(
             }
         }
         let change = total - need;
-        let real = fee_for(selected.len(), if change > 0 { 2 } else { 1 });
+        let real = fee_for(selected.len(), change > 0);
         if real <= fee_sats {
             break (selected, change);
         }
@@ -1462,7 +1566,7 @@ fn signed_send_all(
     let (spendable, have) = spendable_coins(esplora, base, &wallet)?;
     // One input and one output is the smallest this transaction can be, so a wallet with nothing
     // to spend is short by that fee and the dust limit.
-    let fee_sats = rate_sat_vb * p2wpkh_vsize(spendable.len().max(1), 1);
+    let fee_sats = rate_sat_vb * vsize(spendable.len().max(1), &[dest.script_pubkey().len()]);
     if spendable.is_empty() {
         return refuse(format!(
             "insufficient funds: have {have} confirmed, need {}",
@@ -2618,6 +2722,8 @@ mod tests {
         stats: HashMap<String, String>,
         txs: HashMap<String, String>,
         utxos: HashMap<String, String>,
+        /// What `/tx/{txid}` answers. A transaction not set up is a stranger's: it spends none of the wallet's coins.
+        parents: HashMap<String, String>,
         failing: HashSet<String>,
         tip: String,
         calls: Mutex<Vec<String>>,
@@ -2631,6 +2737,7 @@ mod tests {
                 stats: HashMap::new(),
                 txs: HashMap::new(),
                 utxos: HashMap::new(),
+                parents: HashMap::new(),
                 failing: HashSet::new(),
                 tip: TIP.into(),
                 calls: Mutex::new(Vec::new()),
@@ -2672,6 +2779,21 @@ mod tests {
             );
         }
 
+        /// `address` holds one coin of `value` sats still in the mempool that is this wallet's own change:
+        /// the transaction that paid it spends a coin of the wallet's first receive address.
+        fn fund_change(&mut self, address: &str, value: u64, digit: char) {
+            self.fund_unconfirmed(address, value, digit);
+            self.parents.insert(
+                id(digit),
+                tx_json(
+                    digit,
+                    &[spent(&addr(Chain::External, 0), value + 1_000)],
+                    &[txo(address, value)],
+                    MEMPOOL,
+                ),
+            );
+        }
+
         /// `address` was paid once and emptied again: used, with nothing to spend.
         fn touch(&mut self, address: &str) {
             self.stats.insert(address.into(), used_stats(0));
@@ -2684,6 +2806,14 @@ mod tests {
                 .expect("a testnet4 Esplora URL");
             if path == "/blocks/tip/height" {
                 return Ok(self.tip.clone());
+            }
+            if let Some(txid) = path.strip_prefix("/tx/") {
+                return Ok(self.parents.get(txid).cloned().unwrap_or_else(|| {
+                    format!(
+                        r#"{{"txid":"{txid}","vin":[{}],"vout":[],"status":{MEMPOOL}}}"#,
+                        spent(SOMEONE, 1_000_000)
+                    )
+                }));
             }
             let rest = path.strip_prefix("/address/").expect("an address URL");
             let (address, what) = rest.split_once('/').unwrap_or((rest, ""));
@@ -3081,9 +3211,9 @@ mod tests {
     // Findings 5 and 7. One P2WPKH input and two outputs is 141 vB; one output is 110 vB.
     #[test]
     fn the_fee_is_the_size_of_the_transaction_as_built_times_the_rate() {
-        assert_eq!(p2wpkh_vsize(1, 2), 141);
-        assert_eq!(p2wpkh_vsize(1, 1), 110);
-        assert_eq!(p2wpkh_vsize(11, 1), 790);
+        assert_eq!(vsize(1, &[P2WPKH_SCRIPT; 2]), 141);
+        assert_eq!(vsize(1, &[P2WPKH_SCRIPT]), 110);
+        assert_eq!(vsize(11, &[P2WPKH_SCRIPT]), 790);
         let mut fake = Fake::new();
         for i in 0..3u32 {
             fake.fund(&addr(Chain::External, i), 4_000, char::from(b'1' + i as u8));
@@ -3091,7 +3221,11 @@ mod tests {
         for (amount, inputs) in [(3_000, 1), (6_000, 2), (10_000, 3)] {
             let (tx, fee) = fake.send_at(SOMEONE, amount, 2).unwrap();
             assert_eq!((tx.input.len(), tx.output.len()), (inputs, 2));
-            assert_eq!(fee, 2 * p2wpkh_vsize(inputs, 2), "{inputs} inputs");
+            assert_eq!(
+                fee,
+                2 * vsize(inputs, &[P2WPKH_SCRIPT; 2]),
+                "{inputs} inputs"
+            );
             assert_eq!(fee_paid(&fake, &tx), fee, "{inputs} inputs");
         }
         // Up to eight coins, each payment short of its coins by 2,000 sats so the change stays above dust.
@@ -3112,7 +3246,7 @@ mod tests {
                 (coins, 2),
                 "{coins} coins"
             );
-            assert_eq!(fee, 2 * p2wpkh_vsize(coins, 2), "{coins} coins");
+            assert_eq!(fee, 2 * vsize(coins, &[P2WPKH_SCRIPT; 2]), "{coins} coins");
             assert_eq!(fee_paid(&fake, &tx), fee, "{coins} coins");
         }
         let mut big = Fake::new();
@@ -3192,7 +3326,7 @@ mod tests {
                 (coins, 1),
                 "{coins} coins"
             );
-            assert_eq!(fee, 2 * p2wpkh_vsize(coins, 1), "{coins} coins");
+            assert_eq!(fee, 2 * vsize(coins, &[P2WPKH_SCRIPT]), "{coins} coins");
             assert_eq!(fee_paid(&fake, &tx), fee, "{coins} coins");
             assert_outputs(&tx, &[(SOMEONE, 4_000 * coins as u64 - fee)]);
             for i in 0..coins {
@@ -3211,7 +3345,7 @@ mod tests {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 5_000, '1');
         fake.fund_unconfirmed(&addr(Chain::External, 1), 3_000, '2');
-        fake.fund_unconfirmed(&addr(Chain::Internal, 0), 2_000, '3');
+        fake.fund_change(&addr(Chain::Internal, 0), 2_000, '3');
         let (tx, fee) = fake.send_all_at(SOMEONE, 1).unwrap();
         assert_eq!(tx.input.len(), 2);
         assert_eq!(fee, 178);
@@ -3294,7 +3428,7 @@ mod tests {
         }
         let (tx, fee) = many.send_at(SOMEONE, 10_210, 1).unwrap();
         assert_eq!((tx.input.len(), tx.output.len()), (12, 2));
-        assert_eq!(fee, p2wpkh_vsize(12, 2));
+        assert_eq!(fee, vsize(12, &[P2WPKH_SCRIPT; 2]));
         assert_eq!(fee_paid(&many, &tx), 889);
     }
 
@@ -3403,7 +3537,7 @@ mod tests {
     fn an_unconfirmed_receive_is_counted_but_not_spent_while_own_unconfirmed_change_is() {
         let mut fake = Fake::new();
         fake.fund_unconfirmed(&addr(Chain::External, 0), 5_000, '1');
-        fake.fund_unconfirmed(&addr(Chain::Internal, 0), 3_000, '2');
+        fake.fund_change(&addr(Chain::Internal, 0), 3_000, '2');
         assert_eq!(fake.snapshot("").unwrap().balance_sats, 8_000);
         let tx = fake.send(SOMEONE, 2_000, 2).unwrap();
         assert_eq!(tx.input.len(), 1);
@@ -3557,27 +3691,38 @@ mod tests {
         );
     }
 
+    // Every snapshot also asks the coin list of each funded address (four here), shared scan or not,
+    // because the spendable figure comes from the lists a payment would spend.
     #[test]
     fn a_warm_wallet_asks_its_used_addresses_and_the_lookahead_and_history_adds_the_pages_and_the_tip()
      {
         let fake = three_used();
+        let coins = 4;
         assert_eq!(fake.snapshot("").unwrap().balance_sats, 4_000);
-        assert_eq!(fake.requests(), 44);
+        assert_eq!(fake.requests(), 44 + coins);
         fake.tick(just_under(SHARE_TTL));
         assert_eq!(fake.snapshot("").unwrap().balance_sats, 4_000);
         fake.history().unwrap();
-        assert_eq!(fake.requests(), 44 + 5, "shared: four pages and the tip");
+        assert_eq!(
+            fake.requests(),
+            48 + coins + 5,
+            "shared: the coin lists, four pages and the tip"
+        );
         fake.tick(Duration::from_millis(1));
         assert_eq!(
             receive_and_balance(fake.snapshot("").unwrap()),
             (addr(Chain::External, 3), 4_000)
         );
-        assert_eq!(fake.requests(), 49 + 14, "incremental");
+        assert_eq!(fake.requests(), 57 + 14 + coins, "incremental");
         fake.history().unwrap();
-        assert_eq!(fake.requests(), 63 + 5, "shared with the incremental scan");
+        assert_eq!(fake.requests(), 75 + 5, "shared with the incremental scan");
         fake.tick(FULL_RESCAN);
         assert_eq!(fake.snapshot("").unwrap().balance_sats, 4_000);
-        assert_eq!(fake.requests(), 68 + 44, "full again after FULL_RESCAN");
+        assert_eq!(
+            fake.requests(),
+            80 + 44 + coins,
+            "full again after FULL_RESCAN"
+        );
     }
 
     #[test]
@@ -3605,7 +3750,8 @@ mod tests {
         // Twenty unused past index 3, as a full scan would: through 23 and not 24.
         assert!(fake.asked_about(&addr(Chain::External, 23)));
         assert!(!fake.asked_about(&addr(Chain::External, 24)));
-        assert_eq!(fake.requests(), 44 + 30);
+        // Plus the coin lists of the four, then five, funded addresses.
+        assert_eq!(fake.requests(), 44 + 4 + 30 + 5);
     }
 
     // The documented trade-off of the incremental scan.
@@ -3656,12 +3802,17 @@ mod tests {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
         let ready = fake.ready(SOMEONE, 5_000, 2);
-        let full = 41;
-        assert_eq!(fake.requests(), full + 1);
+        // A full scan, and the one funded address's coin list that every snapshot and payment asks.
+        let (full, coins) = (41, 1);
+        assert_eq!(fake.requests(), full + coins);
 
         assert!(fake.broadcast(&ready, answer(400, NODE_REFUSES)).is_err());
         fake.snapshot("").unwrap();
-        assert_eq!(fake.requests(), full + 1, "a refusal posted nothing");
+        assert_eq!(
+            fake.requests(),
+            full + 2 * coins,
+            "a refusal posted nothing: the scan is shared, only the coin list is asked"
+        );
 
         assert_eq!(
             fake.broadcast(&ready, answer(200, &ready.txid))
@@ -3672,7 +3823,7 @@ mod tests {
         fake.snapshot("").unwrap();
         assert_eq!(
             fake.requests(),
-            2 * full + 1,
+            2 * full + 3 * coins,
             "sent: the next refresh is a full scan"
         );
 
@@ -3683,7 +3834,7 @@ mod tests {
         fake.snapshot("").unwrap();
         assert_eq!(
             fake.requests(),
-            3 * full + 1,
+            3 * full + 4 * coins,
             "unclear: the next refresh is a full scan"
         );
     }
@@ -3699,7 +3850,11 @@ mod tests {
         fake.failing.clear();
         let before = fake.requests();
         assert_eq!(fake.snapshot("").unwrap().balance_sats, 1_000);
-        assert_eq!(fake.requests(), before + 41);
+        assert_eq!(
+            fake.requests(),
+            before + 41 + 1,
+            "a full scan and the one coin list"
+        );
     }
 
     #[test]
@@ -4688,6 +4843,269 @@ mod tests {
                 wallet.next_unused(Chain::External).address.to_string(),
                 WALLET
             );
+        }
+    }
+
+    // V2 of the 2026-11-05 interrogate. Coins were taken in the host's listing order, so dust listed
+    // first inflated the fee and the host decided which coins paid.
+    #[test]
+    fn the_same_payment_spends_the_same_coins_and_pays_the_same_fee_whatever_order_the_host_lists_them_in()
+     {
+        let big = coin('9', 0, 1_000_000, true);
+        let dust: Vec<String> = (0..100).map(|v| coin('1', v, 2_000, true)).collect();
+        let mut seen = Vec::new();
+        for big_first in [true, false] {
+            let mut fake = Fake::new();
+            fake.stats
+                .insert(addr(Chain::External, 0), used_stats(1_200_000));
+            let mut list = dust.clone();
+            if big_first {
+                list.insert(0, big.clone());
+            } else {
+                list.push(big.clone());
+            }
+            fake.utxos
+                .insert(addr(Chain::External, 0), format!("[{}]", list.join(",")));
+            let (tx, fee) = fake.send_at(SOMEONE, 150_000, 1).unwrap();
+            assert_eq!(
+                (tx.input.len(), fee),
+                (1, 141),
+                "big_first {big_first}: the one coin that covers the payment pays it"
+            );
+            assert_eq!(
+                tx.input[0].previous_output.txid.to_string(),
+                id('9'),
+                "big_first {big_first}"
+            );
+            seen.push(serialize_hex(&tx));
+        }
+        assert_eq!(seen[0], seen[1], "the same transaction either way");
+        // Equal values: the outpoint breaks the tie, so two listings of the same coins sign the same transaction.
+        let mut tied = Vec::new();
+        for reversed in [false, true] {
+            let mut fake = Fake::new();
+            fake.stats
+                .insert(addr(Chain::External, 0), used_stats(10_000));
+            let mut list = [
+                coin('a', 1, 5_000, true),
+                coin('a', 0, 5_000, true),
+                coin('b', 0, 5_000, true),
+            ];
+            if reversed {
+                list.reverse();
+            }
+            fake.utxos
+                .insert(addr(Chain::External, 0), format!("[{}]", list.join(",")));
+            tied.push(serialize_hex(&fake.send(SOMEONE, 6_000, 1).unwrap()));
+        }
+        assert_eq!(tied[0], tied[1], "the same transaction either way");
+        // A thousand dust coins on the first address and 1 BTC on the second: the dust waits behind the big coin.
+        let mut dusted = Fake::new();
+        dusted
+            .stats
+            .insert(addr(Chain::External, 0), used_stats(546_000));
+        let coins: Vec<String> = (0..1_000).map(|v| coin('d', v, 546, true)).collect();
+        dusted
+            .utxos
+            .insert(addr(Chain::External, 0), format!("[{}]", coins.join(",")));
+        dusted.fund(&addr(Chain::External, 1), 100_000_000, 'b');
+        let (tx, fee) = dusted.send_at(SOMEONE, 50_000_000, 15).unwrap();
+        assert_eq!((tx.input.len(), fee), (1, 15 * 141));
+        assert_eq!(fee_paid(&dusted, &tx), fee);
+    }
+
+    // V3. Every unconfirmed coin on a change address was spent as own change, with no look at the
+    // transaction that paid it. A change address is public once its first payment confirms.
+    #[test]
+    fn an_unconfirmed_coin_a_stranger_paid_to_a_change_address_is_neither_spent_nor_spendable() {
+        let mut fake = Fake::new();
+        fake.touch(&addr(Chain::External, 0));
+        let change = addr(Chain::Internal, 0);
+        fake.stats.insert(
+            change.clone(),
+            r#"{"chain_stats":{"funded_txo_sum":50000,"spent_txo_sum":0,"tx_count":1},"mempool_stats":{"funded_txo_sum":1000,"spent_txo_sum":0,"tx_count":1}}"#.into(),
+        );
+        fake.utxos.insert(
+            change,
+            format!(
+                "[{},{}]",
+                coin('c', 1, 50_000, true),
+                coin('e', 0, 1_000, false)
+            ),
+        );
+        fake.fund(&addr(Chain::External, 1), 100_000, 'a');
+        let snapshot = fake.snapshot("").unwrap();
+        assert_eq!(
+            (snapshot.balance_sats, snapshot.spendable_sats),
+            (151_000, 150_000),
+            "the balance counts the stranger's coin, the spendable figure does not"
+        );
+        let (tx, fee) = fake.send_all_at(SOMEONE, 1).unwrap();
+        let inputs: Vec<String> = tx
+            .input
+            .iter()
+            .map(|i| i.previous_output.txid.to_string())
+            .collect();
+        assert!(
+            !inputs.contains(&id('e')),
+            "send all spent the stranger's coin: {inputs:?}"
+        );
+        assert_eq!(tx.input.len(), 2);
+        assert_outputs(&tx, &[(SOMEONE, 150_000 - fee)]);
+        // The ordinary path with nothing else: the stranger's coin is not funds.
+        let mut only = Fake::new();
+        only.fund_unconfirmed(&addr(Chain::Internal, 0), 5_000, 'e');
+        assert_refused(
+            only.send(SOMEONE, 1_000, 1),
+            "insufficient funds: have 0 confirmed, need 1141",
+        );
+        assert_eq!(only.snapshot("").unwrap().spendable_sats, 0);
+    }
+
+    // V3. Own change is a coin whose transaction spends one of this wallet's coins. It is spent
+    // unconfirmed as before, after one lookup of that transaction per call, however many of its
+    // outputs are change.
+    #[test]
+    fn own_unconfirmed_change_is_spent_after_one_lookup_of_its_transaction_per_call() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 5_000, '1');
+        fake.fund_change(&addr(Chain::Internal, 0), 3_000, '2');
+        fake.utxos.insert(
+            addr(Chain::Internal, 0),
+            format!(
+                "[{},{}]",
+                coin('2', 0, 3_000, false),
+                coin('2', 1, 2_000, false)
+            ),
+        );
+        let before = fake.requests();
+        let (tx, _) = fake.send_all_at(SOMEONE, 1).unwrap();
+        assert_eq!(tx.input.len(), 3, "both change coins and the receive");
+        let looked_up: Vec<String> = fake.calls.lock().unwrap()[before..]
+            .iter()
+            .filter(|url| url.contains("/tx/"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            looked_up,
+            vec![format!("{ESPLORA_TESTNET4}/tx/{}", id('2'))],
+            "one lookup for the one transaction"
+        );
+        assert_eq!(fake.snapshot("").unwrap().spendable_sats, 10_000);
+    }
+
+    // V3. A lookup the explorer answers with something that is not that transaction fails the call,
+    // as every other Esplora answer does. Defaulting would spend or hide a coin on a guess.
+    #[test]
+    fn a_change_transaction_the_explorer_cannot_show_fails_the_whole_call() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 5_000, '1');
+        fake.fund_change(&addr(Chain::Internal, 0), 3_000, '2');
+        let wrong_id = format!(r#"{{"txid":"{}","vin":[]}}"#, id('3'));
+        let no_vin = format!(r#"{{"txid":"{}","vin":"none"}}"#, id('2'));
+        for body in ["not json", wrong_id.as_str(), no_vin.as_str()] {
+            fake.parents.insert(id('2'), body.into());
+            for (what, result) in [
+                ("send all", fake.send_all_at(SOMEONE, 1).map(|_| ())),
+                ("payment", fake.send(SOMEONE, 1_000, 1).map(|_| ())),
+                ("snapshot", fake.snapshot("").map(|_| ())),
+            ] {
+                match result {
+                    Err(MobileSignerError::InvalidPsbtJson(m)) => {
+                        assert!(m.starts_with("esplora utxo:"), "{what} with {body}: {m}")
+                    }
+                    other => panic!("{what} with {body}: expected a refusal, got {other:?}"),
+                }
+            }
+        }
+    }
+
+    // V4. The snapshot's spendable figure is what a payment could spend: confirmed receives and own
+    // change, not a receive still in the mempool. Send all pays exactly it less the fee.
+    #[test]
+    fn the_snapshot_spendable_balance_is_exactly_what_send_all_pays_plus_its_fee() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 1_000_000, '1');
+        fake.fund_unconfirmed(&addr(Chain::External, 1), 9_000_000, '2');
+        fake.fund_change(&addr(Chain::Internal, 0), 20_000, '3');
+        let snapshot = fake.snapshot("").unwrap();
+        assert_eq!(snapshot.balance_sats, 10_020_000);
+        assert_eq!(snapshot.spendable_sats, 1_020_000);
+        let (tx, fee) = fake.send_all_at(SOMEONE, 8).unwrap();
+        assert_eq!(tx.output[0].value.to_sat() + fee, snapshot.spendable_sats);
+        assert_eq!(fee_paid(&fake, &tx), fee);
+    }
+
+    // V4, open item 75. The coin lists cost one request per address, so only the used addresses that
+    // hold something are asked, never the emptied ones an old wallet has by the dozen.
+    #[test]
+    fn a_snapshot_asks_for_the_coins_of_the_funded_addresses_only() {
+        let mut fake = three_used();
+        for i in 3..50 {
+            fake.touch(&addr(Chain::External, i));
+        }
+        assert_eq!(fake.snapshot("").unwrap().spendable_sats, 4_000);
+        let coin_lists = fake
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|url| url.ends_with("/utxo"))
+            .count();
+        assert_eq!(
+            coin_lists, 4,
+            "one per funded address, none for the 47 emptied ones"
+        );
+    }
+
+    // V5. Every output was sized as P2WPKH (31 vB). A taproot or P2WSH output is 43 vB, P2SH 32 and
+    // P2PKH 34, so those payments paid under the rate asked for, below the relay floor at 1 sat/vB.
+    #[test]
+    fn the_fee_is_never_under_the_rate_asked_for_whatever_the_destination_script_on_both_paths() {
+        let key = own(Chain::External, 0);
+        let secp = Secp256k1::new();
+        let redeem = key.address.script_pubkey();
+        let destinations = [
+            ("P2WPKH", SOMEONE.to_string()),
+            (
+                "P2TR",
+                Address::p2tr(&secp, key.pubkey.0.into(), None, Network::Testnet4).to_string(),
+            ),
+            (
+                "P2WSH",
+                Address::p2wsh(&redeem, Network::Testnet4).to_string(),
+            ),
+            (
+                "P2SH",
+                Address::p2sh(&redeem, Network::Testnet4)
+                    .unwrap()
+                    .to_string(),
+            ),
+            (
+                "P2PKH",
+                Address::p2pkh(key.pubkey.pubkey_hash(), Network::Testnet4).to_string(),
+            ),
+        ];
+        for (kind, to) in &destinations {
+            for rate in [1u64, 7] {
+                let mut fake = Fake::new();
+                fake.fund(&addr(Chain::External, 0), 100_000, '1');
+                fake.fund(&addr(Chain::External, 1), 100_000, '2');
+                let (all, fee) = fake.send_all_at(to, rate).unwrap();
+                assert!(
+                    fee >= rate * all.vsize() as u64,
+                    "{kind} send all at {rate} sat/vB: fee {fee} for {} vB",
+                    all.vsize()
+                );
+                assert_eq!(fee_paid(&fake, &all), fee, "{kind} send all at {rate}");
+                let (tx, fee) = fake.send_at(to, 150_000, rate).unwrap();
+                assert!(
+                    fee >= rate * tx.vsize() as u64,
+                    "{kind} payment at {rate} sat/vB: fee {fee} for {} vB",
+                    tx.vsize()
+                );
+                assert_eq!(fee_paid(&fake, &tx), fee, "{kind} payment at {rate}");
+            }
         }
     }
 }

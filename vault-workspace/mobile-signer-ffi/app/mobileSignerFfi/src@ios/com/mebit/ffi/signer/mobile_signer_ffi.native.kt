@@ -3010,6 +3010,7 @@ public object FfiConverterTypeHotWalletSnapshot: FfiConverterRustBuffer<HotWalle
         return HotWalletSnapshot(
             FfiConverterString.read(buf),
             FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
             FfiConverterTypeKeyNetwork.read(buf),
         )
     }
@@ -3017,12 +3018,14 @@ public object FfiConverterTypeHotWalletSnapshot: FfiConverterRustBuffer<HotWalle
     override fun allocationSize(value: HotWalletSnapshot): ULong = (
             FfiConverterString.allocationSize(value.`receiveAddress`) +
             FfiConverterULong.allocationSize(value.`balanceSats`) +
+            FfiConverterULong.allocationSize(value.`spendableSats`) +
             FfiConverterTypeKeyNetwork.allocationSize(value.`network`)
     )
 
     override fun write(value: HotWalletSnapshot, buf: ByteBuffer) {
         FfiConverterString.write(value.`receiveAddress`, buf)
         FfiConverterULong.write(value.`balanceSats`, buf)
+        FfiConverterULong.write(value.`spendableSats`, buf)
         FfiConverterTypeKeyNetwork.write(value.`network`, buf)
     }
 }

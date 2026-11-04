@@ -23,7 +23,7 @@ import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
-import com.mebit.app.data.feeNeedsConfirmation
+import com.mebit.app.data.needsConfirmation
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.ffi.signer.PreparedSend
 import com.mebit.app.ui.components.MebitScreen
@@ -165,7 +165,7 @@ fun S5ReviewSignScreen(
             IssueBanner(it.title, it.message, it.tag)
         }
         UnconfirmedClearControl(wallet, session)
-        if (total > wallet.balanceSats) {
+        if (total > wallet.spendableSats) {
             Spacer(modifier = Modifier.height(12.dp))
             Text("ยอดไม่พอ", color = MaterialTheme.colorScheme.error)
         }
@@ -200,9 +200,9 @@ internal class SignAttempt {
     }
 }
 
-/** The held payment when its fee needs the user's word before the post ([feeNeedsConfirmation] against what the screen showed), else null. */
+/** The held payment when it needs the user's word before the post ([needsConfirmation] against what the screen showed), else null. */
 private fun SingleSigWallet.feeQuestion(draft: SendDraft): PreparedSend? =
-    heldSend?.prepared?.takeIf { feeNeedsConfirmation(it.feeSats.toLong(), draft.feeSats, it.amountSats.toLong()) }
+    heldSend?.prepared?.takeIf { needsConfirmation(it, draft) }
 
 /**
  * The question the Review screen asks when the signed payment's fee is far above the estimate it showed: the real fee, what leaves and
