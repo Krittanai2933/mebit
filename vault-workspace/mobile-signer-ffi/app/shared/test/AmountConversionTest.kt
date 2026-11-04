@@ -1,6 +1,7 @@
 package com.mebit.app.data
 
 import com.mebit.app.feature.send.thousands
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -93,4 +94,27 @@ class AmountConversionTest {
         assertEquals("0.03118872", formatBtcCompact(3_118_872))
         assertEquals("1.99999999", formatBtcCompact(199_999_999))
     }
+
+    // Every BTC amount a screen shows, typed back into the amount field, must be the same sats. Cutting to four places broke this
+    // for 99.99% of amounts and hid 9,999 sats of 0.03129999 BTC (open item 74).
+    @Test
+    fun everyAmountShownReadsBackAsTheSameSats() {
+        val format: (Long) -> String = ::formatBtcCompact
+        fun lost(sats: Long): String? {
+            val shown = format(sats)
+            val back = parseBtc(shown)
+            return if (back == sats) null else "$sats sats shown as $shown read back as $back"
+        }
+        // Every pattern of the last five digits, where the cut hid sats.
+        val firstLoss = (1L..100_000L).firstNotNullOfOrNull(::lost)
+            // Seeded, so a failure reproduces, across the whole 21 million BTC supply.
+            ?: Random(74).let { r -> (1..20_000).firstNotNullOfOrNull { lost(r.nextLong(1L, MAX_SUPPLY_SATS + 1)) } }
+            ?: listOf(9_999L, 19_436L, 3_129_999L, 99_999_999L, 100_000_000L, 100_000_001L, 199_999_999L, MAX_SUPPLY_SATS)
+                .firstNotNullOfOrNull(::lost)
+        assertNull(firstLoss)
+        assertEquals("0.0000", formatBtcCompact(0), "nothing reads as nothing")
+    }
 }
+
+/** 21 million BTC, the most that can ever exist, in sats. */
+private const val MAX_SUPPLY_SATS = 2_100_000_000_000_000L
