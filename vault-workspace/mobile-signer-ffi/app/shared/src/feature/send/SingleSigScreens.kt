@@ -50,7 +50,6 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.sp
-import com.mebit.app.data.formatBtc
 import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.ui.components.BottomActions
 import com.mebit.app.ui.components.IssueBanner
@@ -143,9 +142,9 @@ fun S5ReviewSignScreen(
             ReviewDivider()
             ReviewRow("ค่าธรรมเนียม", reviewFeeText(draft.feeSats, quote))
             ReviewDivider()
-            ReviewRow("หักจากกระเป๋ารวม", "${formatBtc(total)} BTC", bold = true)
+            ReviewRow("หักจากกระเป๋ารวม", "${formatBtcCompact(total)} BTC", bold = true)
             ReviewDivider()
-            ReviewRow("คงเหลือ", "${formatBtc((wallet.balanceSats - total).coerceAtLeast(0))} BTC")
+            ReviewRow("คงเหลือ", "${formatBtcCompact((wallet.balanceSats - total).coerceAtLeast(0))} BTC")
         }
         if (question != null) {
             HighFeeConfirm(
@@ -228,9 +227,9 @@ private fun HighFeeConfirm(held: PreparedSend, sendAll: Boolean, quote: FiatQuot
         Spacer(modifier = Modifier.height(6.dp))
         ReviewRow("ค่าธรรมเนียมจริง", realFeeText(feeSats, quote), tag = "high_fee_fee")
         ReviewDivider()
-        ReviewRow(if (sendAll) "ส่งจริง" else "ส่ง", "${formatBtc(amountSats)} BTC", tag = "high_fee_amount")
+        ReviewRow(if (sendAll) "ส่งจริง" else "ส่ง", "${formatBtcCompact(amountSats)} BTC", tag = "high_fee_amount")
         ReviewDivider()
-        ReviewRow("หักจากกระเป๋ารวม", "${formatBtc(amountSats + feeSats)} BTC", bold = true, tag = "high_fee_total")
+        ReviewRow("หักจากกระเป๋ารวม", "${formatBtcCompact(amountSats + feeSats)} BTC", bold = true, tag = "high_fee_total")
         Spacer(modifier = Modifier.height(12.dp))
         PrimaryCta("ส่งด้วยค่าธรรมเนียมนี้", "high_fee_confirm", onConfirm, height = 44.dp)
         Spacer(modifier = Modifier.height(4.dp))
