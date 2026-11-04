@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -22,7 +23,9 @@ import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
+import com.mebit.app.data.feeNeedsConfirmation
 import com.mebit.app.data.rememberFiatQuote
+import com.mebit.ffi.signer.PreparedSend
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import kotlinx.coroutines.Dispatchers
@@ -75,7 +78,21 @@ fun S5ReviewSignScreen(
     val attempt = remember { SignAttempt() }
     // Back and cancel wait while a payment is in flight, because leaving would hide one that still goes out. The back chip stays so the header does not shift.
     val leave = onBack?.let { back -> { if (!attempt.running) back() } }
+    // A payment held for the fee question is signed and nothing more, so leaving the screen lets it go and none waits here stale.
+    DisposableEffect(wallet) { onDispose { wallet.dropHeldSend() } }
     val total = draft.amountSats + draft.feeSats
+    val question = wallet.feeQuestion(draft)
+
+    /** One attempt: [step] signs or posts and answers whether the payment is out. A payment held for the fee question is neither out nor failed. */
+    fun attemptTo(step: suspend () -> Boolean) {
+        if (!attempt.begin()) return
+        scope.launch {
+            failed = false
+            val out = step()
+            if (out) onSigned()
+            attempt.end(paid = out)
+        }
+    }
     MebitScreen(
         eyebrow = "SEND · ตรวจสอบ",
         title = "ตรวจก่อนส่ง",
@@ -93,25 +110,23 @@ fun S5ReviewSignScreen(
                 },
                 primaryTag = "cta_s5_sign",
                 onPrimary = {
-                    if (attempt.begin()) {
-                        scope.launch {
-                            failed = false
-                            // Face ID first when the app lock is on; nothing is signed on a refusal.
-                            refused = !confirm()
-                            if (!refused) {
-                                failed = !withContext(Dispatchers.Default) {
-                                    wallet.broadcast(session, draft.amountSats, draft.rateSatVb, draft.destination, sendAll = draft.isSendAll)
-                                }
-                                if (!failed) onSigned()
-                            }
-                            attempt.end(paid = !refused && !failed)
-                        }
+                    attemptTo {
+                        // Face ID first when the app lock is on; nothing is signed on a refusal.
+                        refused = !confirm()
+                        if (refused) return@attemptTo false
+                        failed = !withContext(Dispatchers.Default) { wallet.prepare(session, draft.amountSats, draft.rateSatVb, draft.destination, sendAll = draft.isSendAll) }
+                        if (failed) return@attemptTo false
+                        // A fee far above the estimate waits for the card below, which posts or lets the payment go. The demo mock held nothing and is out.
+                        if (wallet.feeQuestion(draft) != null) return@attemptTo false
+                        if (wallet.heldSend == null) return@attemptTo true
+                        failed = !withContext(Dispatchers.Default) { wallet.post(session) }
+                        !failed
                     }
                 },
                 linkLabel = "ยกเลิก",
                 linkTag = "cta_s5_cancel",
                 onLink = leave,
-                enabled = !attempt.running && wallet.balanceKnown && wallet.unconfirmedSend == null,
+                enabled = !attempt.running && wallet.balanceKnown && wallet.unconfirmedSend == null && wallet.heldSend == null,
                 linkColor = MbBody,
             )
         },
@@ -130,6 +145,20 @@ fun S5ReviewSignScreen(
             ReviewRow("หักจากกระเป๋ารวม", "${formatBtc(total)} BTC", bold = true)
             ReviewDivider()
             ReviewRow("คงเหลือ", "${formatBtc((wallet.balanceSats - total).coerceAtLeast(0))} BTC")
+        }
+        if (question != null) {
+            HighFeeConfirm(
+                question,
+                sendAll = draft.isSendAll,
+                quote = quote,
+                onConfirm = {
+                    attemptTo {
+                        failed = !withContext(Dispatchers.Default) { wallet.post(session) }
+                        !failed
+                    }
+                },
+                onCancel = { wallet.dropHeldSend() },
+            )
         }
         reviewIssue(refused, failed, wallet.unconfirmedSend != null)?.let {
             Spacer(modifier = Modifier.height(20.dp))
@@ -168,6 +197,43 @@ internal class SignAttempt {
     /** [paid] keeps the button locked: the screen is left a moment later and a queued tap must not pay again. */
     fun end(paid: Boolean) {
         running = paid
+    }
+}
+
+/** The held payment when its fee needs the user's word before the post ([feeNeedsConfirmation] against what the screen showed), else null. */
+private fun SingleSigWallet.feeQuestion(draft: SendDraft): PreparedSend? =
+    heldSend?.prepared?.takeIf { feeNeedsConfirmation(it.feeSats.toLong(), draft.feeSats, it.amountSats.toLong()) }
+
+/**
+ * The question the Review screen asks when the signed payment's fee is far above the estimate it showed: the real fee, what leaves and
+ * the total, a confirm that posts and a cancel that lets the payment go, nothing posted and no guard written until the confirm. The
+ * shape of the clear control in UnconfirmedClear.kt. There is no board; the copy is a default awaiting design review (docs/04-open-items.md item 77).
+ */
+@Composable
+private fun HighFeeConfirm(held: PreparedSend, sendAll: Boolean, quote: FiatQuote?, onConfirm: () -> Unit, onCancel: () -> Unit) {
+    val feeSats = held.feeSats.toLong()
+    val amountSats = held.amountSats.toLong()
+    Spacer(modifier = Modifier.height(12.dp))
+    val shape = RoundedCornerShape(16.dp)
+    Column(modifier = Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(16.dp).testTag("high_fee")) {
+        Text("ค่าธรรมเนียมจริงสูงกว่าที่แสดง", color = MbNavyInk, fontSize = 13.5.sp, fontWeight = FontWeight.Bold, lineHeight = 18.sp)
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            if (sendAll) "กระเป๋านี้ต้องรวมหลายเหรียญ ธุรกรรมจึงใหญ่กว่าปกติ จำนวนที่ส่งลดลงจากที่แสดงเพราะหักค่าธรรมเนียมจริงแล้ว" else "กระเป๋านี้ต้องรวมหลายเหรียญ ธุรกรรมจึงใหญ่กว่าปกติ ตรวจค่าธรรมเนียมก่อนส่ง",
+            color = MbNavyInk,
+            fontSize = 14.sp,
+            lineHeight = 20.sp,
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        ReviewRow("ค่าธรรมเนียมจริง", realFeeText(feeSats, quote), tag = "high_fee_fee")
+        ReviewDivider()
+        ReviewRow(if (sendAll) "ส่งจริง" else "ส่ง", "${formatBtc(amountSats)} BTC", tag = "high_fee_amount")
+        ReviewDivider()
+        ReviewRow("หักจากกระเป๋ารวม", "${formatBtc(amountSats + feeSats)} BTC", bold = true, tag = "high_fee_total")
+        Spacer(modifier = Modifier.height(12.dp))
+        PrimaryCta("ส่งด้วยค่าธรรมเนียมนี้", "high_fee_confirm", onConfirm, height = 44.dp)
+        Spacer(modifier = Modifier.height(4.dp))
+        LinkRow("ยกเลิก", "high_fee_cancel", color = MbBody, onClick = onCancel)
     }
 }
 
@@ -235,14 +301,14 @@ internal fun groupedAddress(address: String): AnnotatedString = buildAnnotatedSt
 }
 
 @Composable
-private fun ReviewRow(label: String, value: String, bold: Boolean = false) {
+private fun ReviewRow(label: String, value: String, bold: Boolean = false, tag: String? = null) {
     Row(
         modifier = Modifier.fillMaxWidth().height(45.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, color = MbBody, fontSize = 13.5.sp, lineHeight = 19.sp)
-        Text(value, color = MbNavyInk, fontSize = 14.sp, fontWeight = if (bold) FontWeight.Bold else FontWeight.SemiBold, lineHeight = 19.sp)
+        Text(value, color = MbNavyInk, fontSize = 14.sp, fontWeight = if (bold) FontWeight.Bold else FontWeight.SemiBold, lineHeight = 19.sp, modifier = tag?.let { Modifier.testTag(it) } ?: Modifier)
     }
 }
 

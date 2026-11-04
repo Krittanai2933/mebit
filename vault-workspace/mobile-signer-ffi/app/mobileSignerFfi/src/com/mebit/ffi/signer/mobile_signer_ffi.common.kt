@@ -959,12 +959,12 @@ public expect fun `hotFeeTiers`(`network`: KeyNetwork): FeeTiers
  * `destination` the whole balance less the fee, with no change, and post nothing. The fee is the
  * size of that transaction times `fee_rate_sat_vb`, so it and the amount are only known once the
  * coins are: the answer's `amount_sats` is what leaves. Refuses, before signing, a rate outside
- * 1 to 2,000 sat/vB, a wallet with nothing confirmed to spend, a fee above `max_fee_sats`, and a
+ * 1 to 2,000 sat/vB, a wallet with nothing confirmed to spend, and a
  * balance that would leave less than the 546 sat dust limit after the fee. The same scan as
  * `hot_prepare_send_at_rate`, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
-public expect fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `feeRateSatVb`: kotlin.ULong, `maxFeeSats`: kotlin.ULong): PreparedSend
+public expect fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `feeRateSatVb`: kotlin.ULong): PreparedSend
 
 /**
  * Scan, select coins, check and sign a payment at `fee_rate_sat_vb`, and post nothing. The only
@@ -972,15 +972,15 @@ public expect fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `pas
  * before it calls `hot_broadcast`, so a kill between the two can never lead to a second payment.
  *
  * The fee is the size of the transaction as built times the rate, so a payment that needs more
- * coins pays more, never a fixed sum that falls under the rate. `max_fee_sats` is what the review
- * screen showed: a fee above it is refused before signing, so the user is never charged more than
- * they saw. Refuses, before signing, a rate outside 1 to 2,000 sat/vB, an amount below the 546 sat
- * dust limit, a fee above the amount, and change that would be dust (above 0 and at most 546
+ * coins pays more, never a fixed sum that falls under the rate. The answer's `fee_sats` is that
+ * fee, and the app compares it with the estimate its screens showed and asks the user when it is
+ * much higher. Refuses, before signing, a rate outside 1 to 2,000 sat/vB, an amount below the 546
+ * sat dust limit, a fee above the amount, and change that would be dust (above 0 and at most 546
  * sats). Only confirmed coins of receive addresses are spent; the wallet's own unconfirmed change
  * is spent too. About 40 Esplora calls for a fresh wallet, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
-public expect fun `hotPrepareSendAtRate`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeRateSatVb`: kotlin.ULong, `maxFeeSats`: kotlin.ULong): PreparedSend
+public expect fun `hotPrepareSendAtRate`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeRateSatVb`: kotlin.ULong): PreparedSend
 
 /**
  * First receive address at BIP-84 index `index` (usually 0). `passphrase` is the

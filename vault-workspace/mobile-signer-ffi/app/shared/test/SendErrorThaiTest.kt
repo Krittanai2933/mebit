@@ -14,7 +14,6 @@ class SendErrorThaiTest {
         "the whole balance 655 less the fee 110 is below the 546 sat dust limit" to "ยอดทั้งหมดหลังหักค่าธรรมเนียมน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)",
         "fee rate 0 is below 1 sat/vB" to "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น",
         "fee rate 2001 is above 2000 sat/vB" to "ค่าธรรมเนียมสูงผิดปกติ ตรวจจำนวนอีกครั้ง",
-        "fee 418 would be more than the 300 shown" to "ค่าธรรมเนียมจริงสูงกว่าที่แสดง ยังไม่ได้ส่ง ลองใหม่",
         "fee did not settle in 4 passes, send a smaller amount" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
         "esplora scan: more than 200 addresses on one chain, the history is abnormal" to "ประวัติของกระเป๋านี้ผิดปกติ ตรวจกับ explorer ก่อนส่ง",
         "esplora utxo: 1111111111111111111111111111111111111111111111111111111111111111:0 is listed twice" to "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง",

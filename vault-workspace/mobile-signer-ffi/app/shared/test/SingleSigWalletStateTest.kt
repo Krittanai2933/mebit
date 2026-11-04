@@ -42,8 +42,8 @@ private class FakeChain {
     var offlineResult: () -> String = { OFFLINE_ADDRESS }
     val derivations = mutableListOf<Derivation>()
     val wallet = SingleSigWallet(
-        prepare = { _, _, _, _, _, _, _ -> fail("prepare ran") },
-        post = { _, _, _ -> fail("post ran") },
+        prepareAtRate = { _, _, _, _, _, _ -> fail("prepare ran") },
+        postHex = { _, _, _ -> fail("post ran") },
         snapshot = { _, _, _ -> snapshotResult() },
         fetchHistory = { _, _, _ -> historyResult() },
         receiveAddressOf = { words, passphrase, network, index ->

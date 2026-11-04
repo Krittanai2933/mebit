@@ -1072,10 +1072,10 @@ pub struct PreparedSend {
 /// before it calls `hot_broadcast`, so a kill between the two can never lead to a second payment.
 ///
 /// The fee is the size of the transaction as built times the rate, so a payment that needs more
-/// coins pays more, never a fixed sum that falls under the rate. `max_fee_sats` is what the review
-/// screen showed: a fee above it is refused before signing, so the user is never charged more than
-/// they saw. Refuses, before signing, a rate outside 1 to 2,000 sat/vB, an amount below the 546 sat
-/// dust limit, a fee above the amount, and change that would be dust (above 0 and at most 546
+/// coins pays more, never a fixed sum that falls under the rate. The answer's `fee_sats` is that
+/// fee, and the app compares it with the estimate its screens showed and asks the user when it is
+/// much higher. Refuses, before signing, a rate outside 1 to 2,000 sat/vB, an amount below the 546
+/// sat dust limit, a fee above the amount, and change that would be dust (above 0 and at most 546
 /// sats). Only confirmed coins of receive addresses are spent; the wallet's own unconfirmed change
 /// is spent too. About 40 Esplora calls for a fresh wallet, so call it off the main thread.
 #[uniffi::export]
@@ -1086,7 +1086,6 @@ pub fn hot_prepare_send_at_rate(
     destination: String,
     amount_sats: u64,
     fee_rate_sat_vb: u64,
-    max_fee_sats: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
     let (signed, fee_sats) = signed_payment(
         &http_get,
@@ -1096,7 +1095,6 @@ pub fn hot_prepare_send_at_rate(
         &destination,
         amount_sats,
         fee_rate_sat_vb,
-        max_fee_sats,
         Instant::now(),
         &SCAN_CACHE,
     )?;
@@ -1117,7 +1115,7 @@ fn prepared(signed: &Transaction, fee_sats: u64) -> PreparedSend {
 /// `destination` the whole balance less the fee, with no change, and post nothing. The fee is the
 /// size of that transaction times `fee_rate_sat_vb`, so it and the amount are only known once the
 /// coins are: the answer's `amount_sats` is what leaves. Refuses, before signing, a rate outside
-/// 1 to 2,000 sat/vB, a wallet with nothing confirmed to spend, a fee above `max_fee_sats`, and a
+/// 1 to 2,000 sat/vB, a wallet with nothing confirmed to spend, and a
 /// balance that would leave less than the 546 sat dust limit after the fee. The same scan as
 /// `hot_prepare_send_at_rate`, so call it off the main thread.
 #[uniffi::export]
@@ -1127,7 +1125,6 @@ pub fn hot_prepare_send_all(
     network: KeyNetwork,
     destination: String,
     fee_rate_sat_vb: u64,
-    max_fee_sats: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
     let (signed, fee_sats) = signed_send_all(
         &http_get,
@@ -1136,7 +1133,6 @@ pub fn hot_prepare_send_all(
         network,
         &destination,
         fee_rate_sat_vb,
-        max_fee_sats,
         Instant::now(),
         &SCAN_CACHE,
     )?;
@@ -1363,7 +1359,6 @@ fn signed_payment(
     destination: &str,
     amount_sats: u64,
     rate_sat_vb: u64,
-    max_fee_sats: u64,
     now: Instant,
     cache: &ScanCache,
 ) -> Result<(Transaction, u64), MobileSignerError> {
@@ -1377,16 +1372,14 @@ fn signed_payment(
     // The rate is at most 2,000 and the size a few thousand vB, so the product fits u64.
     let fee_for = |inputs: usize, outputs: usize| rate_sat_vb * p2wpkh_vsize(inputs, outputs);
     let fee_checked = |fee_sats: u64| -> Result<u64, MobileSignerError> {
-        let message = if fee_sats > amount_sats {
-            format!("fee {fee_sats} is more than the amount {amount_sats}")
-        } else if fee_sats > max_fee_sats {
-            format!("fee {fee_sats} would be more than the {max_fee_sats} shown")
-        } else {
-            return amount_sats.checked_add(fee_sats).ok_or_else(|| {
-                MobileSignerError::InvalidPsbtJson("amount plus fee does not fit u64".into())
-            });
-        };
-        Err(MobileSignerError::InvalidPsbtJson(message))
+        if fee_sats > amount_sats {
+            return Err(MobileSignerError::InvalidPsbtJson(format!(
+                "fee {fee_sats} is more than the amount {amount_sats}"
+            )));
+        }
+        amount_sats.checked_add(fee_sats).ok_or_else(|| {
+            MobileSignerError::InvalidPsbtJson("amount plus fee does not fit u64".into())
+        })
     };
     // The smallest payment is one input and change. A fee the rules refuse there is refused before any lookup.
     let mut fee_sats = fee_for(1, 2);
@@ -1398,7 +1391,7 @@ fn signed_payment(
     let (spendable, have) = spendable_coins(esplora, base, &wallet)?;
     // The fee depends on how many coins pay it, and the coins on the fee, so the selection is
     // redone until the fee covers the coins it chose. A fee the coins over-cover (the change
-    // vanished and the transaction shrank) is kept: it is at least the rate and under the maximum.
+    // vanished and the transaction shrank) is kept: it is at least the rate and under the amount.
     let mut passes = 0;
     let (selected, change) = loop {
         let need = fee_checked(fee_sats)?;
@@ -1458,7 +1451,6 @@ fn signed_send_all(
     network: KeyNetwork,
     destination: &str,
     rate_sat_vb: u64,
-    max_fee_sats: u64,
     now: Instant,
     cache: &ScanCache,
 ) -> Result<(Transaction, u64), MobileSignerError> {
@@ -1475,11 +1467,6 @@ fn signed_send_all(
         return refuse(format!(
             "insufficient funds: have {have} confirmed, need {}",
             fee_sats + DUST
-        ));
-    }
-    if fee_sats > max_fee_sats {
-        return refuse(format!(
-            "fee {fee_sats} would be more than the {max_fee_sats} shown"
         ));
     }
     let amount_sats = match have.checked_sub(fee_sats) {
@@ -2755,13 +2742,12 @@ mod tests {
             )
         }
 
-        /// A payment at `rate` sat/vB with no ceiling on the fee, and the fee it pays.
+        /// A payment at `rate` sat/vB, and the fee it pays.
         fn send_at(
             &self,
             to: &str,
             amount: u64,
             rate: u64,
-            max_fee: u64,
         ) -> Result<(Transaction, u64), MobileSignerError> {
             let words = abandon_about();
             signed_payment(
@@ -2772,14 +2758,13 @@ mod tests {
                 to,
                 amount,
                 rate,
-                max_fee,
                 self.now(),
                 &self.cache,
             )
         }
 
         fn send(&self, to: &str, amount: u64, rate: u64) -> Result<Transaction, MobileSignerError> {
-            self.send_at(to, amount, rate, u64::MAX).map(|(tx, _)| tx)
+            self.send_at(to, amount, rate).map(|(tx, _)| tx)
         }
 
         /// The whole balance at `rate` sat/vB, as `hot_prepare_send_all` reaches it, and the fee it pays.
@@ -2787,7 +2772,6 @@ mod tests {
             &self,
             to: &str,
             rate: u64,
-            max_fee: u64,
         ) -> Result<(Transaction, u64), MobileSignerError> {
             let words = abandon_about();
             signed_send_all(
@@ -2797,7 +2781,6 @@ mod tests {
                 KeyNetwork::Test,
                 to,
                 rate,
-                max_fee,
                 self.now(),
                 &self.cache,
             )
@@ -2805,7 +2788,7 @@ mod tests {
 
         /// `hot_prepare_send_at_rate` as the app would reach it, against this Fake.
         fn ready(&self, to: &str, amount: u64, rate: u64) -> PreparedSend {
-            let (tx, fee) = self.send_at(to, amount, rate, u64::MAX).unwrap();
+            let (tx, fee) = self.send_at(to, amount, rate).unwrap();
             prepared(&tx, fee)
         }
 
@@ -3060,7 +3043,7 @@ mod tests {
         );
         // Send all, as the app computes it: the balance less the 141 vB estimate. One output, and
         // the estimate is kept as the fee rather than shrunk into dust change.
-        let (all, fee) = fake.send_at(SOMEONE, 10_000 - 141, 1, 141).unwrap();
+        let (all, fee) = fake.send_at(SOMEONE, 10_000 - 141, 1).unwrap();
         assert_outputs(&all, &[(SOMEONE, 9_859)]);
         assert_eq!(fee, 141);
         assert_eq!(fee_paid(&fake, &all), 141);
@@ -3088,10 +3071,6 @@ mod tests {
             fake.send(SOMEONE, 1_000, 8),
             "fee 1128 is more than the amount 1000",
         );
-        assert_refused(
-            fake.send_at(SOMEONE, 5_000, 2, 281),
-            "fee 282 would be more than the 281 shown",
-        );
         assert!(fake.calls.lock().unwrap().is_empty());
         assert_outputs(
             &fake.send(SOMEONE, 546, 3).unwrap(),
@@ -3110,17 +3089,35 @@ mod tests {
             fake.fund(&addr(Chain::External, i), 4_000, char::from(b'1' + i as u8));
         }
         for (amount, inputs) in [(3_000, 1), (6_000, 2), (10_000, 3)] {
-            let (tx, fee) = fake.send_at(SOMEONE, amount, 2, u64::MAX).unwrap();
+            let (tx, fee) = fake.send_at(SOMEONE, amount, 2).unwrap();
             assert_eq!((tx.input.len(), tx.output.len()), (inputs, 2));
             assert_eq!(fee, 2 * p2wpkh_vsize(inputs, 2), "{inputs} inputs");
             assert_eq!(fee_paid(&fake, &tx), fee, "{inputs} inputs");
         }
+        // Up to eight coins, each payment short of its coins by 2,000 sats so the change stays above dust.
+        for coins in 4..=8usize {
+            let mut fake = Fake::new();
+            for i in 0..coins {
+                fake.fund(
+                    &addr(Chain::External, i as u32),
+                    4_000,
+                    char::from(b'1' + i as u8),
+                );
+            }
+            let (tx, fee) = fake
+                .send_at(SOMEONE, 4_000 * coins as u64 - 2_000, 2)
+                .unwrap();
+            assert_eq!(
+                (tx.input.len(), tx.output.len()),
+                (coins, 2),
+                "{coins} coins"
+            );
+            assert_eq!(fee, 2 * p2wpkh_vsize(coins, 2), "{coins} coins");
+            assert_eq!(fee_paid(&fake, &tx), fee, "{coins} coins");
+        }
         let mut big = Fake::new();
         big.fund(&addr(Chain::External, 0), 1_000_000, '1');
-        assert_eq!(
-            big.send_at(SOMEONE, 600_000, 2_000, u64::MAX).unwrap().1,
-            282_000
-        );
+        assert_eq!(big.send_at(SOMEONE, 600_000, 2_000).unwrap().1, 282_000);
     }
 
     // The stuck-payment bug: the node reports 1 sat/vB, the app asked for 1 x 141 sats, and any
@@ -3130,7 +3127,7 @@ mod tests {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 5_000, '1');
         fake.fund(&addr(Chain::External, 1), 5_000, '2');
-        let (tx, fee) = fake.send_at(SOMEONE, 6_000, 1, 2 * 141).unwrap();
+        let (tx, fee) = fake.send_at(SOMEONE, 6_000, 1).unwrap();
         assert_eq!(tx.input.len(), 2);
         assert_eq!(fee, 209);
         assert_eq!(fee_paid(&fake, &tx), 209);
@@ -3146,10 +3143,10 @@ mod tests {
         fake.fund(&addr(Chain::External, 0), 5_000, '1');
         fake.fund(&addr(Chain::External, 1), 5_000, '2');
         assert_refused(
-            fake.send_at(SOMEONE, 10_000 - 141, 1, 300),
+            fake.send_at(SOMEONE, 10_000 - 141, 1),
             "insufficient funds: have 10000 confirmed, need 10037",
         );
-        let (tx, fee) = fake.send_all_at(SOMEONE, 1, 300).unwrap();
+        let (tx, fee) = fake.send_all_at(SOMEONE, 1).unwrap();
         assert_eq!(tx.input.len(), 2);
         assert_eq!(fee, 178);
         assert_outputs(&tx, &[(SOMEONE, 10_000 - 178)]);
@@ -3159,9 +3156,28 @@ mod tests {
         assert_eq!(fake.ready(SOMEONE, 6_000, 1).amount_sats, 6_000);
     }
 
+    // Open item 77, seen on an iPhone on 2026-11-04. The app's ceiling was twice the one-coin estimate
+    // and at least 300 sats. At 1 sat/vB four coins and change are 345 vB, four coins and one output
+    // 314 vB, so both paths were refused with a message no retry could clear. The fee is the real
+    // size times the rate, whatever the screen estimated; the app asks the user when it is high.
     #[test]
-    fn send_all_pays_the_real_size_times_the_rate_over_one_two_and_three_coins_with_no_change() {
-        for coins in 1..=3usize {
+    fn a_payment_that_needs_four_coins_pays_the_real_fee_on_both_paths() {
+        let mut fake = Fake::new();
+        for i in 0..4u32 {
+            fake.fund(&addr(Chain::External, i), 2_500, char::from(b'1' + i as u8));
+        }
+        let (tx, fee) = fake.send_at(SOMEONE, 9_000, 1).unwrap();
+        assert_eq!((tx.input.len(), fee), (4, 345));
+        assert_eq!(fee_paid(&fake, &tx), 345);
+        let (all, fee) = fake.send_all_at(SOMEONE, 1).unwrap();
+        assert_eq!((all.input.len(), fee), (4, 314));
+        assert_outputs(&all, &[(SOMEONE, 10_000 - 314)]);
+        assert_eq!(fee_paid(&fake, &all), 314);
+    }
+
+    #[test]
+    fn send_all_pays_the_real_size_times_the_rate_over_one_to_eight_coins_with_no_change() {
+        for coins in 1..=8usize {
             let mut fake = Fake::new();
             for i in 0..coins {
                 fake.fund(
@@ -3170,7 +3186,7 @@ mod tests {
                     char::from(b'1' + i as u8),
                 );
             }
-            let (tx, fee) = fake.send_all_at(SOMEONE, 2, u64::MAX).unwrap();
+            let (tx, fee) = fake.send_all_at(SOMEONE, 2).unwrap();
             assert_eq!(
                 (tx.input.len(), tx.output.len()),
                 (coins, 1),
@@ -3196,7 +3212,7 @@ mod tests {
         fake.fund(&addr(Chain::External, 0), 5_000, '1');
         fake.fund_unconfirmed(&addr(Chain::External, 1), 3_000, '2');
         fake.fund_unconfirmed(&addr(Chain::Internal, 0), 2_000, '3');
-        let (tx, fee) = fake.send_all_at(SOMEONE, 1, u64::MAX).unwrap();
+        let (tx, fee) = fake.send_all_at(SOMEONE, 1).unwrap();
         assert_eq!(tx.input.len(), 2);
         assert_eq!(fee, 178);
         assert_outputs(&tx, &[(SOMEONE, 7_000 - 178)]);
@@ -3207,47 +3223,32 @@ mod tests {
     fn send_all_that_would_leave_less_than_dust_after_the_fee_is_refused() {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 656, '1');
-        assert_outputs(
-            &fake.send_all_at(SOMEONE, 1, u64::MAX).unwrap().0,
-            &[(SOMEONE, 546)],
-        );
+        assert_outputs(&fake.send_all_at(SOMEONE, 1).unwrap().0, &[(SOMEONE, 546)]);
         let mut short = Fake::new();
         short.fund(&addr(Chain::External, 0), 655, '1');
         assert_refused(
-            short.send_all_at(SOMEONE, 1, u64::MAX),
+            short.send_all_at(SOMEONE, 1),
             "the whole balance 655 less the fee 110 is below the 546 sat dust limit",
         );
         let mut tiny = Fake::new();
         tiny.fund(&addr(Chain::External, 0), 100, '1');
         assert_refused(
-            tiny.send_all_at(SOMEONE, 1, u64::MAX),
+            tiny.send_all_at(SOMEONE, 1),
             "the whole balance 100 less the fee 110 is below the 546 sat dust limit",
         );
-    }
-
-    #[test]
-    fn send_all_above_the_maximum_shown_is_refused_before_signing_and_at_it_passes() {
-        let mut fake = Fake::new();
-        fake.fund(&addr(Chain::External, 0), 5_000, '1');
-        fake.fund(&addr(Chain::External, 1), 5_000, '2');
-        assert_refused(
-            fake.send_all_at(SOMEONE, 1, 177),
-            "fee 178 would be more than the 177 shown",
-        );
-        assert_eq!(fake.send_all_at(SOMEONE, 1, 178).unwrap().1, 178);
     }
 
     #[test]
     fn send_all_of_an_empty_wallet_or_one_whose_only_coin_is_unconfirmed_is_refused() {
         let fake = Fake::new();
         assert_refused(
-            fake.send_all_at(SOMEONE, 1, u64::MAX),
+            fake.send_all_at(SOMEONE, 1),
             "insufficient funds: have 0 confirmed, need 656",
         );
         let mut pending = Fake::new();
         pending.fund_unconfirmed(&addr(Chain::External, 0), 5_000, '1');
         assert_refused(
-            pending.send_all_at(SOMEONE, 2, u64::MAX),
+            pending.send_all_at(SOMEONE, 2),
             "insufficient funds: have 0 confirmed, need 766",
         );
     }
@@ -3256,33 +3257,16 @@ mod tests {
     fn send_all_at_a_rate_out_of_range_or_to_the_wrong_network_is_refused_before_any_lookup() {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        assert_refused(fake.send_all_at(SOMEONE, 0), "fee rate 0 is below 1 sat/vB");
         assert_refused(
-            fake.send_all_at(SOMEONE, 0, u64::MAX),
-            "fee rate 0 is below 1 sat/vB",
-        );
-        assert_refused(
-            fake.send_all_at(SOMEONE, 2_001, u64::MAX),
+            fake.send_all_at(SOMEONE, 2_001),
             "fee rate 2001 is above 2000 sat/vB",
         );
         assert!(
-            fake.send_all_at("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", 1, u64::MAX)
+            fake.send_all_at("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", 1)
                 .is_err()
         );
         assert_eq!(fake.requests(), 0);
-    }
-
-    // The review screen showed the fee for one input. Two inputs cost more, and when that is more
-    // than the user allowed, the refusal comes before signing.
-    #[test]
-    fn a_real_fee_above_the_maximum_shown_is_refused_and_one_at_it_passes() {
-        let mut fake = Fake::new();
-        fake.fund(&addr(Chain::External, 0), 5_000, '1');
-        fake.fund(&addr(Chain::External, 1), 5_000, '2');
-        assert_refused(
-            fake.send_at(SOMEONE, 6_000, 1, 208),
-            "fee 209 would be more than the 208 shown",
-        );
-        assert_eq!(fake.send_at(SOMEONE, 6_000, 1, 209).unwrap().1, 209);
     }
 
     // Each pass adds at least one input, so coins that barely cover their own cost run it out.
@@ -3308,7 +3292,7 @@ mod tests {
                 format!("[{}]", coin('a', i, 1_000, true)),
             );
         }
-        let (tx, fee) = many.send_at(SOMEONE, 10_210, 1, u64::MAX).unwrap();
+        let (tx, fee) = many.send_at(SOMEONE, 10_210, 1).unwrap();
         assert_eq!((tx.input.len(), tx.output.len()), (12, 2));
         assert_eq!(fee, p2wpkh_vsize(12, 2));
         assert_eq!(fee_paid(&many, &tx), 889);
@@ -3327,7 +3311,7 @@ mod tests {
         );
         assert!(fake.snapshot("").is_err(), "the balance overflows too");
         assert_refused(
-            fake.send_all_at(SOMEONE, 1, u64::MAX),
+            fake.send_all_at(SOMEONE, 1),
             "esplora utxo: the coins' values do not fit u64",
         );
     }
@@ -3436,7 +3420,7 @@ mod tests {
     fn a_prepared_send_posts_nothing_and_its_txid_is_the_transaction_in_its_hex() {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
-        let (signed, fee) = fake.send_at(SOMEONE, 5_000, 2, u64::MAX).unwrap();
+        let (signed, fee) = fake.send_at(SOMEONE, 5_000, 2).unwrap();
         let ready = prepared(&signed, fee);
         // The fake panics on any path that is not a lookup, so a POST could not have gone through it.
         assert!(

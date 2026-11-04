@@ -73,7 +73,7 @@ internal fun UnconfirmedClearControl(wallet: SingleSigWallet, session: Onboardin
 
 /** The text link of BottomActions, on its own. */
 @Composable
-private fun LinkRow(label: String, tag: String, color: androidx.compose.ui.graphics.Color = MbNavy, onClick: () -> Unit) {
+internal fun LinkRow(label: String, tag: String, color: androidx.compose.ui.graphics.Color = MbNavy, onClick: () -> Unit) {
     Box(
         modifier = Modifier.fillMaxWidth().height(29.dp).clickable(role = Role.Button, onClick = onClick).testTag(tag),
         contentAlignment = Alignment.Center,

@@ -24,13 +24,13 @@ import kotlin.time.Clock
  * Single-sig hot wallet surface for Movie Page S*.
  * Live path uses BIP-84 + Esplora (hot_* UniFFI). Demo path keeps offline fixtures.
  *
- * [prepare], [post], [snapshot], [fetchHistory], [receiveAddressOf] and [fetchFeeTiers] are the hot_* calls. Tests pass fakes, so they need no native library or network.
+ * [prepareAtRate], [prepareAll], [postHex], [snapshot], [fetchHistory], [receiveAddressOf] and [fetchFeeTiers] are the hot_* calls. Tests pass fakes, so they need no native library or network.
  * [nowSeconds] is the phone clock in Unix seconds, which [lastSentAtSeconds] reads when a payment goes out.
  */
 class SingleSigWallet(
-    private val prepare: (words: List<String>, passphrase: String, network: KeyNetwork, destination: String, amountSats: ULong, feeRateSatVb: ULong, maxFeeSats: ULong) -> PreparedSend = ::hotPrepareSendAtRate,
-    private val prepareAll: (words: List<String>, passphrase: String, network: KeyNetwork, destination: String, feeRateSatVb: ULong, maxFeeSats: ULong) -> PreparedSend = ::hotPrepareSendAll,
-    private val post: (network: KeyNetwork, hex: String, txid: String) -> HotSendResult = ::hotBroadcast,
+    private val prepareAtRate: (words: List<String>, passphrase: String, network: KeyNetwork, destination: String, amountSats: ULong, feeRateSatVb: ULong) -> PreparedSend = ::hotPrepareSendAtRate,
+    private val prepareAll: (words: List<String>, passphrase: String, network: KeyNetwork, destination: String, feeRateSatVb: ULong) -> PreparedSend = ::hotPrepareSendAll,
+    private val postHex: (network: KeyNetwork, hex: String, txid: String) -> HotSendResult = ::hotBroadcast,
     private val snapshot: (words: List<String>, passphrase: String, network: KeyNetwork) -> HotWalletSnapshot = ::hotWalletSnapshot,
     private val fetchHistory: (words: List<String>, passphrase: String, network: KeyNetwork) -> List<HotTx> = ::hotWalletHistory,
     private val nowSeconds: () -> Long = { Clock.System.now().epochSeconds },
@@ -51,6 +51,9 @@ class SingleSigWallet(
 
     /** A signed payment that may be out: its post began and has not been answered with a refusal or an explorer that lists it. [txid] is the one hot_prepare_send_at_rate computed. [sinceSeconds] is the phone clock when the post began. */
     data class UnconfirmedSend(val txid: String, val sinceSeconds: Long)
+
+    /** A payment the core signed that nothing has posted: what [prepare] holds until [post] sends it or [dropHeldSend] lets it go. [network] is the one it was signed for, so [post] cannot send it anywhere else. */
+    data class HeldSend(val prepared: PreparedSend, val network: KeyNetwork)
 
     /** The [WalletMode] the last [bindSession] left. [WalletMode.Demo] until the first bind. */
     var mode: WalletMode by mutableStateOf(WalletMode.Demo)
@@ -88,10 +91,18 @@ class SingleSigWallet(
         private set
 
     /**
-     * The payment that may be out, or null. [broadcast] sets it and saves it before the post, and while it is set [broadcast] refuses, because the same payment could go out twice. It clears when the post returns or the node refuses, when a [bindSession] loads a [history] that holds its txid, when the user clears it through [clearUnconfirmedSend] after checking the explorer, and in [useDemoFixture]. Never by the clock. [lastTxid] and [lastSentAtSeconds] stay for payments that went out.
+     * The payment that may be out, or null. [post] sets it and saves it before the post, and while it is set [prepare] refuses, because the same payment could go out twice. It clears when the post returns or the node refuses, when a [bindSession] loads a [history] that holds its txid, when the user clears it through [clearUnconfirmedSend] after checking the explorer, and in [useDemoFixture]. Never by the clock. [lastTxid] and [lastSentAtSeconds] stay for payments that went out.
      * The session saves it with the wallet ([OnboardingSession.unconfirmedSend]), so a wallet built after a restart takes it back at its first bind and clearing it here clears the saved copy too.
      */
     var unconfirmedSend: UnconfirmedSend? by mutableStateOf(null)
+        private set
+
+    /**
+     * The payment [prepare] signed and holds for the Review screen, or null. It has no guard and nothing of it is out.
+     * Invariant: the pay-twice guard is written only in [post], after the user confirmed, and [post] posts only once that write succeeded.
+     * So no guard ever names a payment the user did not confirm, and no payment is ever posted without its guard on the phone first.
+     */
+    var heldSend: HeldSend? by mutableStateOf(null)
         private set
 
     fun bindSession(session: OnboardingSession, network: KeyNetwork = KeyNetwork.TEST) {
@@ -140,13 +151,14 @@ class SingleSigWallet(
         }
 
     /**
-     * Signs and posts [amountSats] to [destination] at [feeRateSatVb]. The fee the transaction pays is its size times the rate, and the
-     * core refuses before signing when that is more than twice the estimate the screens showed (at least 300 sats), so a payment never
-     * costs more than the user could see. [lastFeeSats] holds the fee paid once the payment is out.
+     * Signs [amountSats] to [destination] at [feeRateSatVb] and holds the result in [heldSend], with no guard written and nothing posted,
+     * so the Review screen can read the real fee and ask before [post]. The fee the transaction pays is its size times the rate, so a
+     * payment that needs many coins pays more than the estimate the screens showed, and [PreparedSend.feeSats] is what it pays.
      * With [sendAll] the core spends every coin and pays the destination the balance less the real fee, so [amountSats] is only the
-     * estimate the screens showed and [lastAmountSats] holds what left.
+     * estimate the screens showed and [PreparedSend.amountSats] is what leaves.
+     * A payment already held is replaced, because nothing of it was posted or guarded. The demo mock pays at once and holds nothing.
      */
-    fun broadcast(
+    fun prepare(
         session: OnboardingSession,
         amountSats: Long,
         feeRateSatVb: Long,
@@ -155,6 +167,7 @@ class SingleSigWallet(
         sendAll: Boolean = false,
     ): Boolean {
         lastError = null
+        heldSend = null
         val feeSats = feeRateSatVb * TYPICAL_VSIZE
         if (unconfirmedSend != null) {
             lastError = "การส่งครั้งก่อนยังยืนยันไม่ได้ จึงยังส่งใหม่ไม่ได้"
@@ -179,14 +192,32 @@ class SingleSigWallet(
         }
         val prepared = try {
             if (sendAll) {
-                prepareAll(session.words, session.passphrase, network, destination, feeRateSatVb.toULong(), maxFeeSats(feeSats).toULong())
+                prepareAll(session.words, session.passphrase, network, destination, feeRateSatVb.toULong())
             } else {
-                prepare(session.words, session.passphrase, network, destination, amountSats.toULong(), feeRateSatVb.toULong(), maxFeeSats(feeSats).toULong())
+                prepareAtRate(session.words, session.passphrase, network, destination, amountSats.toULong(), feeRateSatVb.toULong())
             }
         } catch (e: Exception) {
             lastError = sendErrorThai(e.message)
             return false
         }
+        heldSend = HeldSend(prepared, network)
+        return true
+    }
+
+    /** Lets the held payment go without posting it. Nothing of it was posted or guarded, so the draft stays as it is and the user can change the tier or the amount and [prepare] again. */
+    fun dropHeldSend() {
+        heldSend = null
+    }
+
+    /**
+     * Posts the payment [prepare] holds, once the user confirmed it. The guard goes to the phone first, then the post, so an app killed
+     * during the post still refuses this payment after the restart. [lastFeeSats] and [lastAmountSats] hold what the transaction pays
+     * once it is out. False with nothing held.
+     */
+    fun post(session: OnboardingSession): Boolean {
+        lastError = null
+        val (prepared, network) = heldSend ?: return false
+        heldSend = null
         // The guard reaches the phone before the post, so an app killed during the post still refuses this payment after the restart.
         val pending = UnconfirmedSend(prepared.txid, nowSeconds())
         unconfirmedSend = pending
@@ -196,7 +227,7 @@ class SingleSigWallet(
             return false
         }
         try {
-            post(network, prepared.hex, prepared.txid)
+            postHex(network, prepared.hex, prepared.txid)
         } catch (e: MobileSignerException.BroadcastUnknown) {
             // The guard stays. Plain Thai, because Home prints lastError raw until its next bind clears it, and the Rust text is English.
             lastError = "ยังไม่ทราบว่าการส่งออกไปแล้วหรือยัง อย่าส่งซ้ำ"
@@ -246,6 +277,7 @@ class SingleSigWallet(
         lastSentAtSeconds = 0L
         history = emptyList()
         unconfirmedSend = null
+        heldSend = null
     }
 }
 
@@ -269,7 +301,6 @@ fun sendErrorThai(message: String?): String {
     return when {
         m.startsWith("amount ") && m.endsWith("dust limit") -> "จำนวนน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)"
         m.startsWith("fee ") && " is more than the amount " in m -> "ค่าธรรมเนียมสูงกว่าจำนวนที่ส่ง เลือกระดับที่ต่ำลง"
-        m.startsWith("fee ") && " would be more than the " in m -> "ค่าธรรมเนียมจริงสูงกว่าที่แสดง ยังไม่ได้ส่ง ลองใหม่"
         m.startsWith("insufficient funds") -> "ยอดที่ยืนยันแล้วไม่พอ รอให้เงินที่เพิ่งได้รับยืนยันก่อน"
         m.startsWith("change below dust") -> "เงินทอนน้อยเกินไป ส่งทั้งหมดหรือเปลี่ยนจำนวน"
         // hot_prepare_send_all: the balance less the real fee would be dust.
@@ -296,8 +327,15 @@ fun readErrorThai(message: String?): String =
 /** A typical 1-input, 2-output P2WPKH payment. The screens show rate times this as the estimate; the core charges rate times the real size. */
 const val TYPICAL_VSIZE = 141L
 
-/** The most the core may charge for a payment whose estimate is [estimateSats]: twice it, and at least 300 sats so a 1 sat/vB estimate still leaves room for a second coin. */
-fun maxFeeSats(estimateSats: Long): Long = maxOf(estimateSats * 2, 300L)
+/**
+ * Whether the Review screen asks before posting a payment whose real fee is [feeSats] when it showed [shownFeeSats] (the rate times
+ * [TYPICAL_VSIZE]) and [amountSats] is what the destination gets. Both must hold: the fee is more than twice what was shown, and it is
+ * more than a tenth of the amount. The first alone would stop for an ordinary four-coin payment (345 sat on 10,000 sat at 1 sat/vB,
+ * 3.45%), which is not worth a tap. The second alone would ask about every small payment, whose fee is a large share by nature even
+ * when it is exactly what was shown. Together they speak up only when the fee both surprised the user and really eats the money.
+ */
+fun feeNeedsConfirmation(feeSats: Long, shownFeeSats: Long, amountSats: Long): Boolean =
+    feeSats > 2 * shownFeeSats && feeSats * 10 > amountSats
 
 /** The three tiers of board 4.4. [satPerVb] is the board's fixed rate, which [LiveFeeTiers.DEFAULT] uses until the live rates arrive or when they cannot be fetched. */
 enum class FeeTier(val label: String, val eta: String, val satPerVb: Long) {
