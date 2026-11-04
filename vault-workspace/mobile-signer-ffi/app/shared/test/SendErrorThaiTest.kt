@@ -15,7 +15,7 @@ class SendErrorThaiTest {
         "fee rate 0 is below 1 sat/vB" to "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น",
         "fee rate 2001 is above 2000 sat/vB" to "ค่าธรรมเนียมสูงผิดปกติ ตรวจจำนวนอีกครั้ง",
         "fee did not settle in 4 passes, send a smaller amount" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
-        "esplora scan: more than 200 addresses on one chain, the history is abnormal" to "ประวัติของกระเป๋านี้ผิดปกติ ตรวจกับ explorer ก่อนส่ง",
+        "esplora scan: more than 1000 addresses on one chain, the history is abnormal" to "ประวัติของกระเป๋านี้ผิดปกติ ตรวจกับ explorer ก่อนส่ง",
         "esplora utxo: 1111111111111111111111111111111111111111111111111111111111111111:0 is listed twice" to "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง",
         "esplora utxo: the coins' values do not fit u64" to "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง",
         "esplora balance: 18446744073709551616 sats does not fit u64" to "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง",

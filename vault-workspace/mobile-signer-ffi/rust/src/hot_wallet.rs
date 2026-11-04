@@ -91,11 +91,18 @@ const ACCOUNT_PATH: &str = "m/84'/1'/0'";
 /// BIP-44 gap limit. A chain is scanned until this many consecutive unused indices follow the last
 /// used one, so funds paid to an address further out than that are not seen or spent.
 const GAP_LIMIT: u32 = 20;
-/// Most indices scanned per chain. The Esplora host is a trusted dependency: a host that lies about
-/// which addresses are used can still place change at any internal index below this cap, where an
-/// honest rescan would not find it. The cap bounds that damage and the call count (a lying host got
-/// 5,010 calls before). shortcut: 200 per chain, raise it when a real wallet's chain nears it.
-const MAX_SCAN_PER_CHAIN: usize = 200;
+/// Most indices scanned per chain. The 24-word public test phrase the phone imported (`abandon` 23
+/// times, then `art`) uses receive index 250 and none of the indices sampled from 300 to 10,000
+/// (2026-11-05), so its scan needs about 271 to 320 indices, and a cap of 200 refused it. The
+/// Esplora host is a trusted dependency. A scan succeeds only when the last used index plus
+/// `GAP_LIMIT` is below the cap, so a host that lies about which addresses are used can make the
+/// wallet hand out a receive or change address at any index up to 980, where an honest gap-20
+/// rescan would not find it, and a recovery that must find every coin scans the first 981
+/// addresses of each chain. The cap also holds a scan to 1,000 lookups per chain, and a host that
+/// calls every address used is refused after 990. A snapshot then asks one coin list per funded
+/// address, at most 980 per chain. shortcut: 1,000 per chain, raise it when a real wallet's chain
+/// nears it.
+const MAX_SCAN_PER_CHAIN: usize = 1_000;
 /// How long a finished scan answers the next call of the same wallet with no request, so the app's
 /// snapshot followed by history costs one scan. A used address's balance is never older than this.
 const SHARE_TTL: Duration = Duration::from_secs(10);
@@ -3508,22 +3515,33 @@ mod tests {
         assert_refused(fake.send(SOMEONE, 8_000, 1), &listed_twice);
     }
 
-    // Finding 10. A used index 179 closes its gap at exactly 200 indices; index 180 needs 201.
+    // Finding 10. Every index below `first_refused` used closes the gap at exactly the cap, and
+    // `first_refused` used too needs one index past it.
     #[test]
-    fn the_scan_stops_at_200_indices_per_chain() {
-        let abnormal =
-            "esplora scan: more than 200 addresses on one chain, the history is abnormal";
+    fn the_scan_stops_at_the_cap_per_chain() {
+        let abnormal = format!(
+            "esplora scan: more than {MAX_SCAN_PER_CHAIN} addresses on one chain, the history is abnormal"
+        );
+        let account = Account::new(&abandon_about(), "", Network::Testnet4).unwrap();
+        let at = |index: usize| {
+            account
+                .key(Chain::External, index as u32)
+                .unwrap()
+                .address
+                .to_string()
+        };
+        let first_refused = MAX_SCAN_PER_CHAIN - GAP_LIMIT as usize;
         let mut fake = Fake::new();
-        for i in 0..180 {
-            fake.touch(&addr(Chain::External, i));
+        for i in 0..first_refused {
+            fake.touch(&at(i));
         }
         assert_eq!(
             fake.snapshot("").unwrap().receive_address,
-            addr(Chain::External, 180)
+            at(first_refused)
         );
-        assert_eq!(fake.calls.lock().unwrap().len(), 220);
-        fake.touch(&addr(Chain::External, 180));
-        // Past the share window: the incremental scan finds index 180 used and hits the cap too.
+        assert_eq!(fake.requests(), MAX_SCAN_PER_CHAIN + GAP_LIMIT as usize);
+        fake.touch(&at(first_refused));
+        // Past the share window: the incremental scan finds that index used and hits the cap too.
         fake.tick(SHARE_TTL);
         match fake.snapshot("") {
             Err(MobileSignerError::InvalidPsbtJson(m)) => assert_eq!(m, abnormal),
@@ -3544,7 +3562,36 @@ mod tests {
             &ScanCache::default(),
         );
         assert!(result.is_err());
-        assert!(calls.load(std::sync::atomic::Ordering::SeqCst) <= 200);
+        assert!(calls.load(std::sync::atomic::Ordering::SeqCst) <= MAX_SCAN_PER_CHAIN);
+    }
+
+    // Open item 75. The 24-word public test phrase the phone imported uses receive index 250, and a
+    // cap of 200 refused it on every call.
+    #[test]
+    fn a_wallet_used_through_receive_index_300_loads_with_its_balance_and_next_receive_address() {
+        let account = Account::new(&abandon_about(), "", Network::Testnet4).unwrap();
+        let at = |chain, index| account.key(chain, index).unwrap().address.to_string();
+        let mut fake = Fake::new();
+        for i in 0..=300 {
+            fake.touch(&at(Chain::External, i));
+        }
+        for i in 0..10 {
+            fake.touch(&at(Chain::Internal, i));
+        }
+        fake.fund(&at(Chain::External, 250), 60_000, 'a');
+        fake.fund(&at(Chain::External, 300), 25_000, 'b');
+        fake.fund(&at(Chain::Internal, 9), 15_000, 'c');
+        let snapshot = fake.snapshot("").unwrap();
+        assert_eq!(
+            (
+                snapshot.receive_address,
+                snapshot.balance_sats,
+                snapshot.spendable_sats
+            ),
+            (at(Chain::External, 301), 100_000, 100_000)
+        );
+        // 301 used receive indices and their gap, 10 used change indices and theirs, 3 coin lists.
+        assert_eq!(fake.requests(), 321 + 30 + 3);
     }
 
     // Finding 11. Funded 5,000 with tx_count 0 showed a balance that could not be spent.
@@ -5091,6 +5138,40 @@ mod tests {
                 WALLET
             );
         }
+    }
+
+    // Open item 75. The test above scans the 12-word phrase, not the phone's wallet, so it passed on a
+    // Mac while this phrase failed on the phone and on the Mac.
+    #[test]
+    #[ignore = "needs the network and a testnet4 host, the own node over Tailscale first"]
+    fn real_snapshot_of_the_24_word_public_test_phrase_the_phone_imported() {
+        let mut words = vec!["abandon".to_string(); 23];
+        words.push("art".into());
+        // Receive index 0, derived outside this crate (stdlib PBKDF2 + BIP-32 + bech32).
+        assert_eq!(
+            hot_receive_address(words.clone(), String::new(), KeyNetwork::Test, 0).unwrap(),
+            "tb1qtk89me2ae95dmlp3yfl4q9ynpux8mxjujuf2fr"
+        );
+        let requests = std::sync::atomic::AtomicUsize::new(0);
+        let counted = |url: &str| {
+            requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            http_get(url)
+        };
+        let start = std::time::Instant::now();
+        let snapshot = snapshot_from(
+            &counted,
+            &words,
+            "",
+            KeyNetwork::Test,
+            Instant::now(),
+            &ScanCache::default(),
+        )
+        .unwrap();
+        println!(
+            "snapshot took {:?} for {} requests: {snapshot:?}",
+            start.elapsed(),
+            requests.load(std::sync::atomic::Ordering::SeqCst)
+        );
     }
 
     // V2 of the 2026-11-05 interrogate. Coins were taken in the host's listing order, so dust listed
