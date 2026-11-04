@@ -429,6 +429,57 @@ public data class HotTx (
 
 
 
+public data class HotTxDetail (
+    /**
+     * The row read again from this answer by `hot_wallet_history`'s rule, so the confirmations are as of now.
+     */
+    var `tx`: HotTx, 
+    /**
+     * None while unconfirmed.
+     */
+    var `blockHeight`: kotlin.ULong?, 
+    /**
+     * In the transaction's order.
+     */
+    var `inputs`: List<HotTxo>, 
+    /**
+     * In the transaction's order.
+     */
+    var `outputs`: List<HotTxo>, 
+    /**
+     * Inputs minus outputs, from the values above. 0 for a coinbase, which pays none.
+     */
+    var `feeSats`: kotlin.ULong, 
+    var `sizeBytes`: kotlin.ULong, 
+    /**
+     * Weight / 4, rounded up.
+     */
+    var `vsize`: kotlin.ULong, 
+    /**
+     * True when an input's sequence is below 0xfffffffe (BIP-125). Says nothing about full-RBF nodes.
+     */
+    var `signalsRbf`: kotlin.Boolean
+) {
+    public companion object
+}
+
+
+
+
+public data class HotTxo (
+    /**
+     * None for a script with no address (OP_RETURN) and for a coinbase input.
+     */
+    var `address`: kotlin.String?, 
+    var `valueSats`: kotlin.ULong, 
+    var `owner`: TxoOwner
+) {
+    public companion object
+}
+
+
+
+
 public data class HotWalletSnapshot (
     var `receiveAddress`: kotlin.String, 
     /**
@@ -807,6 +858,33 @@ public sealed class MobileSignerException(message: String): kotlin.Exception(mes
 
 
 /**
+ * Who owns an output, whether the transaction creates it or an input spends it.
+ */
+
+
+public enum class TxoOwner {
+    
+    /**
+     * The wallet's receive chain, `0/i`.
+     */
+    RECEIVE,
+    /**
+     * The wallet's change chain, `1/i`.
+     */
+    CHANGE,
+    /**
+     * Anyone else's, or a script with no address.
+     */
+    OTHER;
+    public companion object
+}
+
+
+
+
+
+
+/**
  * What only one vendor reports. The variant is the vendor.
  */
 
@@ -860,6 +938,10 @@ public enum class WalletKind {
     TREZOR_SAFE7;
     public companion object
 }
+
+
+
+
 
 
 
@@ -998,6 +1080,12 @@ public expect fun `hotPrepareSendAtRate`(`mnemonicWords`: List<kotlin.String>, `
  */
 @Throws(MobileSignerException::class)
 public expect fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `index`: kotlin.UInt): kotlin.String
+
+/**
+ * One transaction of the wallet in full, or None when the explorer does not know `txid`.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `hotTxDetail`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `txid`: kotlin.String): HotTxDetail?
 
 /**
  * The latest transactions of the wallet's address, each as the wallet saw it. The order is

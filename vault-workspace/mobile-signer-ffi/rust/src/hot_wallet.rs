@@ -1041,10 +1041,7 @@ fn history_from(
     own: &[&str],
 ) -> Result<Vec<HotTx>, MobileSignerError> {
     let bad = |what: String| MobileSignerError::InvalidPsbtJson(format!("esplora history: {what}"));
-    let tip: u64 = tip_text
-        .trim()
-        .parse()
-        .map_err(|e| bad(format!("tip height is not an integer: {e}")))?;
+    let tip = tip_height(tip_text).map_err(bad)?;
     let body: Value = serde_json::from_str(txs_json).map_err(|e| bad(format!("not JSON: {e}")))?;
     let txs = body.as_array().ok_or_else(|| bad("not an array".into()))?;
     // A bad transaction fails the list. Skipping it would show a history that is quietly wrong.
@@ -1112,6 +1109,208 @@ fn hot_tx(tx: &Value, tip: u64, own: &[&str]) -> Result<HotTx, String> {
 // i64 because a net is signed, and a value above i64::MAX is no real amount.
 fn sats(value: &Value) -> Option<i64> {
     value.as_u64().and_then(|n| i64::try_from(n).ok())
+}
+
+/// Who owns an output, whether the transaction creates it or an input spends it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum TxoOwner {
+    /// The wallet's receive chain, `0/i`.
+    Receive,
+    /// The wallet's change chain, `1/i`.
+    Change,
+    /// Anyone else's, or a script with no address.
+    Other,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct HotTxo {
+    /// None for a script with no address (OP_RETURN) and for a coinbase input.
+    pub address: Option<String>,
+    pub value_sats: u64,
+    pub owner: TxoOwner,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct HotTxDetail {
+    /// The row read again from this answer by `hot_wallet_history`'s rule, so the confirmations are as of now.
+    pub tx: HotTx,
+    /// None while unconfirmed.
+    pub block_height: Option<u64>,
+    /// In the transaction's order.
+    pub inputs: Vec<HotTxo>,
+    /// In the transaction's order.
+    pub outputs: Vec<HotTxo>,
+    /// Inputs minus outputs, from the values above. 0 for a coinbase, which pays none.
+    pub fee_sats: u64,
+    pub size_bytes: u64,
+    /// Weight / 4, rounded up.
+    pub vsize: u64,
+    /// True when an input's sequence is below 0xfffffffe (BIP-125). Says nothing about full-RBF nodes.
+    pub signals_rbf: bool,
+}
+
+// UniFFI hashes the doc below into the checksum, so it stays short and final and the behaviour is on `detail_of`.
+/// One transaction of the wallet in full, or None when the explorer does not know `txid`.
+#[uniffi::export]
+pub fn hot_tx_detail(
+    mnemonic_words: Vec<String>,
+    passphrase: String,
+    network: KeyNetwork,
+    txid: String,
+) -> Result<Option<HotTxDetail>, MobileSignerError> {
+    detail_of(&http_get, &mnemonic_words, &passphrase, network, &txid)
+}
+
+/// Refuses a txid that is not 64 hex before any request. Then `/tx/{txid}` and, second so a block landing between the
+/// two only adds a confirmation, the tip. A 404 is None and asks nothing more. There is no scan, because the wallet's own
+/// addresses are derived offline.
+fn detail_of(
+    esplora: Esplora,
+    words: &[String],
+    passphrase: &str,
+    network: KeyNetwork,
+    txid: &str,
+) -> Result<Option<HotTxDetail>, MobileSignerError> {
+    let txid = Txid::from_str(txid)
+        .map_err(|e| tx_error(format!("txid is not 64 hex characters: {e}")))?;
+    let base = esplora_base(network)?;
+    let account = Account::new(words, passphrase, network_of(network))?;
+    let body = match esplora(&format!("{base}/tx/{txid}")) {
+        Err(e) if is_not_found(&e) => return Ok(None),
+        answer => answer?,
+    };
+    let tip = esplora(&format!("{base}/blocks/tip/height"))?;
+    detail_from(&body, &tip, &txid, &own_addresses(&account)?).map(Some)
+}
+
+/// Every address a scan of this wallet can reach, with its chain, which is every index below `MAX_SCAN_PER_CHAIN` on
+/// both chains.
+/// shortcut: 2 x MAX_SCAN_PER_CHAIN `Account::key` calls per open, 73 ms in a release build on an M3 Mac at the cap of
+/// 1,000 (2026-11-05); bound them by the cached scan when that is felt.
+fn own_addresses(account: &Account) -> Result<HashMap<String, Chain>, MobileSignerError> {
+    let mut own = HashMap::with_capacity(2 * MAX_SCAN_PER_CHAIN);
+    for chain in [Chain::External, Chain::Internal] {
+        for index in 0..MAX_SCAN_PER_CHAIN as u32 {
+            own.insert(account.key(chain, index)?.address.to_string(), chain);
+        }
+    }
+    Ok(own)
+}
+
+/// `tx_json` is the `/tx/{txid}` answer. The row comes from `hot_tx`, so its net and confirmations follow the history's
+/// rule exactly. Strict like every parser here, so another transaction, a part it cannot read, or outputs above the
+/// inputs fail the whole detail.
+fn detail_from(
+    tx_json: &str,
+    tip_text: &str,
+    txid: &Txid,
+    own: &HashMap<String, Chain>,
+) -> Result<HotTxDetail, MobileSignerError> {
+    let bad = |what: String| tx_error(format!("transaction {txid}: {what}"));
+    let tip = tip_height(tip_text).map_err(bad)?;
+    let tx: Value = serde_json::from_str(tx_json).map_err(|e| bad(format!("not JSON: {e}")))?;
+    if tx["txid"] != txid.to_string().as_str() {
+        return Err(bad("the answer is another transaction".into()));
+    }
+    let own_keys: Vec<&str> = own.keys().map(String::as_str).collect();
+    let row = hot_tx(&tx, tip, &own_keys).map_err(bad)?;
+    let part = |txo: &Value, value_sats: u64| {
+        let address = txo["scriptpubkey_address"].as_str();
+        HotTxo {
+            address: address.map(str::to_string),
+            value_sats,
+            owner: match address.and_then(|a| own.get(a)) {
+                Some(Chain::External) => TxoOwner::Receive,
+                Some(Chain::Internal) => TxoOwner::Change,
+                None => TxoOwner::Other,
+            },
+        }
+    };
+    let vin = tx["vin"]
+        .as_array()
+        .ok_or_else(|| bad("vin is not an array".into()))?;
+    let vout = tx["vout"]
+        .as_array()
+        .ok_or_else(|| bad("vout is not an array".into()))?;
+
+    let mut inputs = Vec::with_capacity(vin.len());
+    let mut coinbase = false;
+    let mut signals_rbf = false;
+    for (j, input) in vin.iter().enumerate() {
+        let sequence = input["sequence"]
+            .as_u64()
+            .and_then(|s| u32::try_from(s).ok())
+            .ok_or_else(|| bad(format!("input {j} has no u32 sequence")))?;
+        signals_rbf |= sequence < 0xffff_fffe;
+        let prevout = &input["prevout"];
+        if prevout.is_null() && input["is_coinbase"] == true {
+            coinbase = true;
+            inputs.push(part(prevout, 0));
+            continue;
+        }
+        let value = prevout["value"]
+            .as_u64()
+            .ok_or_else(|| bad(format!("input {j} has no prevout value")))?;
+        inputs.push(part(prevout, value));
+    }
+    let outputs = vout
+        .iter()
+        .enumerate()
+        .map(|(j, output)| {
+            let value = output["value"]
+                .as_u64()
+                .ok_or_else(|| bad(format!("output {j} has no value")))?;
+            Ok(part(output, value))
+        })
+        .collect::<Result<Vec<_>, MobileSignerError>>()?;
+
+    let sum = |txos: &[HotTxo], side: &str| {
+        txos.iter()
+            .try_fold(0u64, |total, t| total.checked_add(t.value_sats))
+            .ok_or_else(|| bad(format!("the {side} do not fit u64")))
+    };
+    let fee_sats = if coinbase {
+        0
+    } else {
+        let (paid_in, paid_out) = (sum(&inputs, "inputs")?, sum(&outputs, "outputs")?);
+        paid_in
+            .checked_sub(paid_out)
+            .ok_or_else(|| bad(format!("outputs {paid_out} are more than inputs {paid_in}")))?
+    };
+    let positive = |field: &str| {
+        tx[field]
+            .as_u64()
+            .filter(|n| *n > 0)
+            .ok_or_else(|| bad(format!("no positive integer {field}")))
+    };
+    Ok(HotTxDetail {
+        block_height: tx["status"]["block_height"]
+            .as_u64()
+            .filter(|_| row.confirmations > 0),
+        tx: row,
+        inputs,
+        outputs,
+        fee_sats,
+        size_bytes: positive("size")?,
+        vsize: positive("weight")?.div_ceil(4),
+        signals_rbf,
+    })
+}
+
+/// `classify`'s text for an HTTP 404 (ureq 2.12.1 prints "{url}: status code 404", error.rs:214, then maybe
+/// " (redirected from ...)"). The status is gone past the `Esplora` boundary, so a test pins this to `classify`.
+fn is_not_found(error: &MobileSignerError) -> bool {
+    matches!(error, MobileSignerError::InvalidPsbtJson(t) if t.contains(": status code 404"))
+}
+
+fn tip_height(text: &str) -> Result<u64, String> {
+    text.trim()
+        .parse()
+        .map_err(|e| format!("tip height is not an integer: {e}"))
+}
+
+fn tx_error(what: String) -> MobileSignerError {
+    MobileSignerError::InvalidPsbtJson(format!("esplora tx: {what}"))
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -5434,6 +5633,355 @@ mod tests {
                 );
                 assert_eq!(fee_paid(&fake, &tx), fee, "{kind} payment at {rate}");
             }
+        }
+    }
+
+    /// `tx_json` plus what only the detail reads, a sequence on each input, the size and the weight.
+    fn full_tx(digit: char, vin: &[String], vout: &[String], status: &str) -> String {
+        let mut tx: Value = serde_json::from_str(&tx_json(digit, vin, vout, status)).unwrap();
+        for input in tx["vin"].as_array_mut().unwrap() {
+            input["sequence"] = 0xffff_fffd_u32.into();
+        }
+        // A 1-in 2-out P2WPKH payment is 222 bytes and 561 weight units, so 141 vB.
+        tx["size"] = 222.into();
+        tx["weight"] = 561.into();
+        tx.to_string()
+    }
+
+    fn detail(fake: &Fake, txid: &str) -> Result<Option<HotTxDetail>, MobileSignerError> {
+        detail_of(
+            &|url| fake.get(url),
+            &abandon_about(),
+            "",
+            KeyNetwork::Test,
+            txid,
+        )
+    }
+
+    fn part(address: Option<&str>, value_sats: u64, owner: TxoOwner) -> HotTxo {
+        HotTxo {
+            address: address.map(str::to_string),
+            value_sats,
+            owner,
+        }
+    }
+
+    #[test]
+    fn a_detail_asks_for_the_transaction_then_the_tip_and_never_scans() {
+        let ext0 = addr(Chain::External, 0);
+        let mut fake = Fake::new();
+        fake.parents.insert(
+            id('1'),
+            full_tx(
+                '1',
+                &[spent(&ext0, 10_000)],
+                &[txo(SOMEONE, 9_000)],
+                &at(100),
+            ),
+        );
+        assert!(detail(&fake, &id('1')).unwrap().is_some());
+        assert_eq!(
+            *fake.calls.lock().unwrap(),
+            [
+                format!("{ESPLORA_TESTNET4}/tx/{}", id('1')),
+                format!("{ESPLORA_TESTNET4}/blocks/tip/height"),
+            ]
+        );
+    }
+
+    // 10000 at 0/0 is spent, 6000 to someone, 3000 back as change to 1/0 and 1000 in fee.
+    #[test]
+    fn a_send_tags_its_outputs_as_destination_and_change_and_pays_inputs_minus_outputs() {
+        let (ext0, int0) = (addr(Chain::External, 0), addr(Chain::Internal, 0));
+        let mut fake = Fake::new();
+        fake.parents.insert(
+            id('1'),
+            full_tx(
+                '1',
+                &[spent(&ext0, 10_000)],
+                &[txo(SOMEONE, 6_000), txo(&int0, 3_000)],
+                &at(100),
+            ),
+        );
+        assert_eq!(
+            detail(&fake, &id('1')).unwrap(),
+            Some(HotTxDetail {
+                tx: hot(&id('1'), -7_000, 6, Some(1_790_000_000)),
+                block_height: Some(100),
+                inputs: vec![part(Some(&ext0), 10_000, TxoOwner::Receive)],
+                outputs: vec![
+                    part(Some(SOMEONE), 6_000, TxoOwner::Other),
+                    part(Some(&int0), 3_000, TxoOwner::Change),
+                ],
+                fee_sats: 1_000,
+                size_bytes: 222,
+                vsize: 141,
+                signals_rbf: true,
+            })
+        );
+    }
+
+    // Someone pays 10000 to 0/0 out of 20000 and keeps 9000 as their own change. Still in the mempool.
+    #[test]
+    fn a_receive_tags_the_wallets_output_and_leaves_the_payers_untagged() {
+        let ext0 = addr(Chain::External, 0);
+        let mut fake = Fake::new();
+        fake.parents.insert(
+            id('2'),
+            full_tx(
+                '2',
+                &[spent(SOMEONE, 20_000)],
+                &[txo(&ext0, 10_000), txo(SOMEONE, 9_000)],
+                MEMPOOL,
+            ),
+        );
+        let found = detail(&fake, &id('2')).unwrap().unwrap();
+        assert_eq!(found.tx, hot(&id('2'), 10_000, 0, None));
+        assert_eq!(found.block_height, None);
+        assert_eq!(found.inputs, [part(Some(SOMEONE), 20_000, TxoOwner::Other)]);
+        assert_eq!(
+            found.outputs,
+            [
+                part(Some(&ext0), 10_000, TxoOwner::Receive),
+                part(Some(SOMEONE), 9_000, TxoOwner::Other),
+            ]
+        );
+        assert_eq!(found.fee_sats, 1_000);
+    }
+
+    // Written against the constant, so a new cap keeps it true. The gap limit plays no part.
+    #[test]
+    fn an_address_below_the_scan_cap_is_the_wallets_even_past_the_gap() {
+        let last = MAX_SCAN_PER_CHAIN as u32 - 1;
+        let outputs = [
+            txo(&addr(Chain::External, last), 1_000),
+            txo(&addr(Chain::Internal, last), 2_000),
+            txo(&addr(Chain::External, last + 1), 3_000),
+        ];
+        let mut fake = Fake::new();
+        fake.parents.insert(
+            id('3'),
+            full_tx('3', &[spent(SOMEONE, 7_000)], &outputs, MEMPOOL),
+        );
+        let owners: Vec<TxoOwner> = detail(&fake, &id('3'))
+            .unwrap()
+            .unwrap()
+            .outputs
+            .iter()
+            .map(|o| o.owner)
+            .collect();
+        assert_eq!(
+            owners,
+            [TxoOwner::Receive, TxoOwner::Change, TxoOwner::Other]
+        );
+    }
+
+    #[test]
+    fn an_unknown_txid_is_none_after_one_request() {
+        let calls = Mutex::new(0);
+        // The real GET path past the socket, with classify, the retry and the forget.
+        let esplora = |_: &str| {
+            *calls.lock().unwrap() += 1;
+            get_forgetting(
+                &|| classify(not_found()),
+                &|_| {},
+                &Mutex::new(None),
+                &ScanCache::default(),
+            )
+        };
+        let found = detail_of(&esplora, &abandon_about(), "", KeyNetwork::Test, &id('1'));
+        assert!(matches!(found, Ok(None)), "{found:?}");
+        assert_eq!(*calls.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn a_404_is_told_apart_from_every_other_failure() {
+        let failed = |answer: Answer| MobileSignerError::from(classify(answer).unwrap_err());
+        assert!(is_not_found(&failed(not_found())));
+        for status in [400, 410, 429, 500, 502] {
+            assert!(!is_not_found(&failed(answer(status, ""))), "{status}");
+        }
+        assert!(!is_not_found(&failed(no_answer())));
+        assert!(!is_not_found(&failed(cut_short(200))));
+        assert!(!is_not_found(&failed(Err(refused()))));
+        // ureq 2.12.1 names the first URL after a redirect (error.rs:214).
+        assert!(is_not_found(&MobileSignerError::InvalidPsbtJson(
+            "esplora get: https://h/tx/1: status code 404 (redirected from https://g/tx/1)".into()
+        )));
+    }
+
+    #[test]
+    fn a_txid_that_is_not_64_hex_or_a_network_with_no_host_is_refused_before_any_request() {
+        let fake = Fake::new();
+        let one = id('1');
+        let bad = [
+            String::new(),
+            "abc".into(),
+            one[1..].into(),
+            format!("{one}0"),
+            "g".repeat(64),
+            format!("{}/../x", &one[..58]),
+        ];
+        for txid in &bad {
+            match detail(&fake, txid) {
+                Err(MobileSignerError::InvalidPsbtJson(m)) => assert!(
+                    m.starts_with("esplora tx: txid is not 64 hex characters"),
+                    "{txid}: {m}"
+                ),
+                other => panic!("{txid}: {other:?}"),
+            }
+        }
+        let main = detail_of(
+            &|url| fake.get(url),
+            &abandon_about(),
+            "",
+            KeyNetwork::Main,
+            &one,
+        );
+        assert!(
+            matches!(&main, Err(MobileSignerError::InvalidPsbtJson(m)) if m.contains("mainnet")),
+            "{main:?}"
+        );
+        assert_eq!(fake.requests(), 0);
+    }
+
+    fn assert_detail_rejected(json: &str, tip: &str, rule: &str) {
+        match detail_from(
+            json,
+            tip,
+            &Txid::from_str(&id('1')).unwrap(),
+            &HashMap::new(),
+        ) {
+            Err(MobileSignerError::InvalidPsbtJson(m)) => {
+                assert!(m.starts_with("esplora tx:"), "{rule}: {m}");
+                assert!(m.contains(rule), "{rule}: {m}");
+            }
+            other => panic!("{rule}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_answer_for_another_transaction_is_an_error() {
+        let ext0 = addr(Chain::External, 0);
+        let other = full_tx('2', &[spent(SOMEONE, 2_000)], &[txo(&ext0, 1_000)], MEMPOOL);
+        assert_detail_rejected(&other, TIP, "the answer is another transaction");
+    }
+
+    #[test]
+    fn outputs_above_inputs_are_an_error_not_a_negative_fee() {
+        let tx = full_tx(
+            '1',
+            &[spent(SOMEONE, 1_000)],
+            &[txo(SOMEONE, 1_001)],
+            MEMPOOL,
+        );
+        assert_detail_rejected(&tx, TIP, "outputs 1001 are more than inputs 1000");
+    }
+
+    #[test]
+    fn an_answer_without_sequence_weight_or_size_is_an_error() {
+        let good: Value = serde_json::from_str(&full_tx(
+            '1',
+            &[spent(SOMEONE, 2_000)],
+            &[txo(SOMEONE, 1_000)],
+            MEMPOOL,
+        ))
+        .unwrap();
+        let sequence = "input 0 has no u32 sequence";
+        let cases = [
+            ("/vin/0/sequence", Value::Null, sequence),
+            ("/vin/0/sequence", "4294967293".into(), sequence),
+            ("/vin/0/sequence", 4_294_967_296u64.into(), sequence),
+            ("/weight", Value::Null, "weight"),
+            ("/weight", 0.into(), "weight"),
+            ("/size", Value::Null, "size"),
+            ("/size", 0.into(), "size"),
+        ];
+        for (field, value, rule) in cases {
+            let mut tx = good.clone();
+            *tx.pointer_mut(field).unwrap() = value;
+            assert_detail_rejected(&tx.to_string(), TIP, rule);
+        }
+        assert_detail_rejected("<html>", TIP, "not JSON");
+        assert_detail_rejected(&good.to_string(), "abc", "tip height");
+    }
+
+    // Under BIP-125 an input below 0xfffffffe signals, while 0xfffffffe (a locktime without replacement) and 0xffffffff do not.
+    #[test]
+    fn one_input_below_0xfffffffe_signals_replacement_and_none_at_or_above_it_does() {
+        let signals = |sequences: &[u32]| {
+            let vin: Vec<String> = sequences.iter().map(|_| spent(SOMEONE, 1_000)).collect();
+            let mut tx: Value =
+                serde_json::from_str(&full_tx('1', &vin, &[txo(SOMEONE, 500)], MEMPOOL)).unwrap();
+            for (input, sequence) in tx["vin"].as_array_mut().unwrap().iter_mut().zip(sequences) {
+                input["sequence"] = (*sequence).into();
+            }
+            let txid = Txid::from_str(&id('1')).unwrap();
+            detail_from(&tx.to_string(), TIP, &txid, &HashMap::new())
+                .unwrap()
+                .signals_rbf
+        };
+        assert!(signals(&[0xffff_fffd]));
+        assert!(signals(&[0xffff_ffff, 0, 0xffff_fffe]));
+        assert!(!signals(&[0xffff_fffe]));
+        assert!(!signals(&[0xffff_ffff, 0xffff_fffe]));
+    }
+
+    // Every expected figure is Esplora's own, from its fee field, its size, and its weight / 4 rounded up.
+    #[test]
+    fn the_real_recording_reads_back_with_esplora_s_own_figures() {
+        let txs: Vec<Value> = serde_json::from_str(REAL_TXS).unwrap();
+        let read = |i: usize| {
+            let txid = Txid::from_str(REAL_TXIDS[i]).unwrap();
+            detail_from(&txs[i].to_string(), REAL_TIP, &txid, &HashMap::new()).unwrap()
+        };
+        let expected = [
+            (0, 225, 198, false),
+            (176, 392, 201, true),
+            (206, 814, 412, true),
+            (104, 371, 209, true),
+        ];
+        for (i, (fee, size, vsize, rbf)) in expected.into_iter().enumerate() {
+            let found = read(i);
+            assert_eq!(
+                (
+                    found.fee_sats,
+                    found.size_bytes,
+                    found.vsize,
+                    found.signals_rbf
+                ),
+                (fee, size, vsize, rbf),
+                "{}",
+                REAL_TXIDS[i]
+            );
+            assert_eq!(txs[i]["fee"], fee, "the recording's own fee");
+            assert_eq!(found.block_height, Some(5_259_564));
+            assert_eq!(found.tx, hot(REAL_TXIDS[i], 0, 2, Some(1_793_560_954)));
+        }
+        let coinbase = read(0);
+        assert_eq!(coinbase.inputs, [part(None, 0, TxoOwner::Other)]);
+        assert_eq!(coinbase.outputs.len(), 3);
+        assert_eq!(
+            coinbase.outputs[2],
+            part(None, 0, TxoOwner::Other),
+            "OP_RETURN"
+        );
+    }
+
+    // Prints what own_addresses costs at the cap and asserts no time. The phone runs a release build, so measure with
+    // cargo test --release -p mobile-signer-ffi own_addresses_cost -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn own_addresses_cost_at_the_cap() {
+        let account = Account::new(&abandon_about(), "", Network::Testnet4).unwrap();
+        for _ in 0..7 {
+            let start = Instant::now();
+            let own = own_addresses(&account).unwrap();
+            println!(
+                "own_addresses: {} addresses in {:?}",
+                own.len(),
+                start.elapsed()
+            );
         }
     }
 }

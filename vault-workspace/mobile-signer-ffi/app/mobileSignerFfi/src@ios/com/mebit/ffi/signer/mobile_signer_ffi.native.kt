@@ -1320,6 +1320,8 @@ internal val UniffiVTableCallbackInterfacePairingCodesUniffiByValue.`uniffiFree`
 
 
 
+
+
 internal object UniffiLib {
     init {
             uniffiCallbackInterfacePairingCodes.register(this)
@@ -1541,6 +1543,19 @@ internal object UniffiLib {
         `passphrase`,
         `network`,
         `index`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_func_hot_tx_detail(
+        `mnemonicWords`: RustBufferByValue,
+        `passphrase`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        `txid`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_tx_detail(
+        `mnemonicWords`,
+        `passphrase`,
+        `network`,
+        `txid`,
         uniffiCallStatus,
     )
     fun uniffi_mobile_signer_ffi_fn_func_hot_wallet_history(
@@ -2012,6 +2027,9 @@ internal object UniffiLib {
     )
     fun uniffi_mobile_signer_ffi_checksum_func_hot_receive_address(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_receive_address(
+    )
+    fun uniffi_mobile_signer_ffi_checksum_func_hot_tx_detail(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_tx_detail(
     )
     fun uniffi_mobile_signer_ffi_checksum_func_hot_wallet_history(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_wallet_history(
@@ -3005,6 +3023,71 @@ public object FfiConverterTypeHotTx: FfiConverterRustBuffer<HotTx> {
 
 
 
+public object FfiConverterTypeHotTxDetail: FfiConverterRustBuffer<HotTxDetail> {
+    override fun read(buf: ByteBuffer): HotTxDetail {
+        return HotTxDetail(
+            FfiConverterTypeHotTx.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterSequenceTypeHotTxo.read(buf),
+            FfiConverterSequenceTypeHotTxo.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: HotTxDetail): ULong = (
+            FfiConverterTypeHotTx.allocationSize(value.`tx`) +
+            FfiConverterOptionalULong.allocationSize(value.`blockHeight`) +
+            FfiConverterSequenceTypeHotTxo.allocationSize(value.`inputs`) +
+            FfiConverterSequenceTypeHotTxo.allocationSize(value.`outputs`) +
+            FfiConverterULong.allocationSize(value.`feeSats`) +
+            FfiConverterULong.allocationSize(value.`sizeBytes`) +
+            FfiConverterULong.allocationSize(value.`vsize`) +
+            FfiConverterBoolean.allocationSize(value.`signalsRbf`)
+    )
+
+    override fun write(value: HotTxDetail, buf: ByteBuffer) {
+        FfiConverterTypeHotTx.write(value.`tx`, buf)
+        FfiConverterOptionalULong.write(value.`blockHeight`, buf)
+        FfiConverterSequenceTypeHotTxo.write(value.`inputs`, buf)
+        FfiConverterSequenceTypeHotTxo.write(value.`outputs`, buf)
+        FfiConverterULong.write(value.`feeSats`, buf)
+        FfiConverterULong.write(value.`sizeBytes`, buf)
+        FfiConverterULong.write(value.`vsize`, buf)
+        FfiConverterBoolean.write(value.`signalsRbf`, buf)
+    }
+}
+
+
+
+
+public object FfiConverterTypeHotTxo: FfiConverterRustBuffer<HotTxo> {
+    override fun read(buf: ByteBuffer): HotTxo {
+        return HotTxo(
+            FfiConverterOptionalString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterTypeTxoOwner.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: HotTxo): ULong = (
+            FfiConverterOptionalString.allocationSize(value.`address`) +
+            FfiConverterULong.allocationSize(value.`valueSats`) +
+            FfiConverterTypeTxoOwner.allocationSize(value.`owner`)
+    )
+
+    override fun write(value: HotTxo, buf: ByteBuffer) {
+        FfiConverterOptionalString.write(value.`address`, buf)
+        FfiConverterULong.write(value.`valueSats`, buf)
+        FfiConverterTypeTxoOwner.write(value.`owner`, buf)
+    }
+}
+
+
+
+
 public object FfiConverterTypeHotWalletSnapshot: FfiConverterRustBuffer<HotWalletSnapshot> {
     override fun read(buf: ByteBuffer): HotWalletSnapshot {
         return HotWalletSnapshot(
@@ -3406,6 +3489,24 @@ public object FfiConverterTypeMobileSignerError : FfiConverterRustBuffer<MobileS
 
 
 
+public object FfiConverterTypeTxoOwner: FfiConverterRustBuffer<TxoOwner> {
+    override fun read(buf: ByteBuffer): TxoOwner = try {
+        TxoOwner.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: TxoOwner): ULong = 4UL
+
+    override fun write(value: TxoOwner, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
 public object FfiConverterTypeWalletDetails : FfiConverterRustBuffer<WalletDetails>{
     override fun read(buf: ByteBuffer): WalletDetails {
         return when(buf.getInt()) {
@@ -3546,6 +3647,35 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
 
 
 
+public object FfiConverterOptionalTypeHotTxDetail: FfiConverterRustBuffer<HotTxDetail?> {
+    override fun read(buf: ByteBuffer): HotTxDetail? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeHotTxDetail.read(buf)
+    }
+
+    override fun allocationSize(value: HotTxDetail?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeHotTxDetail.allocationSize(value)
+        }
+    }
+
+    override fun write(value: HotTxDetail?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeHotTxDetail.write(value, buf)
+        }
+    }
+}
+
+
+
+
 public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
     override fun read(buf: ByteBuffer): List<kotlin.String> {
         val len = buf.getInt()
@@ -3614,6 +3744,31 @@ public object FfiConverterSequenceTypeHotTx: FfiConverterRustBuffer<List<HotTx>>
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeHotTx.write(it, buf)
+        }
+    }
+}
+
+
+
+
+public object FfiConverterSequenceTypeHotTxo: FfiConverterRustBuffer<List<HotTxo>> {
+    override fun read(buf: ByteBuffer): List<HotTxo> {
+        val len = buf.getInt()
+        return List<HotTxo>(len) {
+            FfiConverterTypeHotTxo.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<HotTxo>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.sumOf { FfiConverterTypeHotTxo.allocationSize(it) }
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<HotTxo>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeHotTxo.write(it, buf)
         }
     }
 }
@@ -3862,6 +4017,22 @@ public actual fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `pas
             FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
             FfiConverterUInt.lower(`index`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * One transaction of the wallet in full, or None when the explorer does not know `txid`.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `hotTxDetail`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `txid`: kotlin.String): HotTxDetail? {
+    return FfiConverterOptionalTypeHotTxDetail.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_tx_detail(
+            FfiConverterSequenceString.lower(`mnemonicWords`),
+            FfiConverterString.lower(`passphrase`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterString.lower(`txid`),
             uniffiRustCallStatus,
         )
     })
