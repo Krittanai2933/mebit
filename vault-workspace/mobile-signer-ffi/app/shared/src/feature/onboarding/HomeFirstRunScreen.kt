@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.SingleSigWallet
+import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_chevron
 import com.mebit.app.resources.ic_warning
@@ -101,7 +102,7 @@ fun HomeFirstRunScreen(
                 Spacer(modifier = Modifier.height(14.dp))
             }
             NotSavedNotice(session, Modifier.padding(bottom = 14.dp))
-            BalanceHero(if (wallet.live) btc(wallet.balanceSats) else "—", zero = wallet.live && wallet.balanceSats == 0L)
+            BalanceHero(heroBalanceText(wallet.balanceSats, wallet.live), zero = wallet.live && wallet.balanceSats == 0L)
             Spacer(modifier = Modifier.height(24.dp))
             Text("จะเริ่มใช้แบบไหน", color = MbNavyInk, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             Text("เลือกตอนนี้ หรือสร้าง Vault ทีหลังก็ได้", color = MbBody, fontSize = 13.sp)
@@ -138,12 +139,8 @@ fun HomeFirstRunScreen(
     }
 }
 
-/** Whole BTC and four decimals, cut off not rounded: 1_250_000 sats is 0.0125. */
-private fun btc(sats: Long): String {
-    val whole = sats / 100_000_000
-    val fraction = (sats % 100_000_000) / 10_000
-    return "$whole.${fraction.toString().padStart(4, '0')}"
-}
+/** The hero's amount, every sat that matters, and a dash until the chain answers. [BalanceHero] adds the unit itself. */
+internal fun heroBalanceText(sats: Long, live: Boolean): String = if (live) formatBtcCompact(sats) else "—"
 
 /** Penpot 1.3.2: sits above the balance until the 24 words are backed up. */
 @Composable
