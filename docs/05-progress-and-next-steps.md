@@ -387,7 +387,7 @@
 ## ภาพรวม: สิ่งที่ยังไม่ได้แตะเลยทั้งระบบ
 
 - **hot wallet ของ mobile-signer-ffi ยังไม่มี Electrum และ PSBT แบบ watch-only** ส่วนอื่นของเลเยอร์นี้มีโค้ดแล้วใน `rust/src/hot_wallet.rs` ดูรายละเอียดในหัวข้อ 3 ด้านบน
-- **Bitcoin testnet จริง** — ทุกอย่างตอนนี้เป็น mock/in-memory ล้วน ยังไม่มีการทดสอบบน testnet จริงแม้แต่ครั้งเดียว (เป็นเกณฑ์ข้อ 1 ใน Definition of Done ของ [`00-capstone-brief.md`](00-capstone-brief.md) §5)
+- **Bitcoin testnet จริงของขา vault และ lending** ทั้งสองขายังเป็น mock หรือ in-memory เป็นส่วนใหญ่ และยังไม่เคยทดสอบบน testnet จริงแม้แต่ครั้งเดียว ส่วน hot wallet single-sig ส่งและรับเงินจริงบน testnet4 จาก iPhone 15 แล้วเมื่อ 2026-11-04 (เป็นเกณฑ์ข้อ 1 ใน Definition of Done ของ [`00-capstone-brief.md`](00-capstone-brief.md) §5)
 - **การเชื่อมต่อระหว่าง service จริง** — custody-service ↔ monitor-service ↔ lender-signer-cli ↔ mobile app ยังไม่มีเส้นเชื่อมไหนที่เป็นของจริงเลยนอกจาก lender-signer-cli fetch จาก custody-service ได้
 - **Auth/security ระหว่าง service** — ยังไม่มีเลย
 - **เอกสาร**: API spec แบบละเอียด, threat model ของ policy engine (ข้อ 5 ใน Definition of Done) ยังไม่ได้เขียน
