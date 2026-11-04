@@ -26,6 +26,10 @@ dependencies@android:
   # Android only: in dependencies it would break the iOS compilation.
   - com.google.zxing:core:3.5.3
 
+test-dependencies@android:
+  # The plain JAR, as in mobileSignerFfi: its test dependencies do not reach this module, and the AAR lacks desktop natives.
+  - net.java.dev.jna:jna:5.18.1
+
 settings:
   compose:
     enabled: true

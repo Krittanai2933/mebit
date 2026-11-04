@@ -9,4 +9,5 @@ xcuserdata
 
 /mobileSignerFfi/cinterop@ios/*_link.def
 /mobileSignerFfi/testResources@android/
+/shared/testResources@android/
 /androidApp/jniLibs/

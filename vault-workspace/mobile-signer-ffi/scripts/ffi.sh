@@ -15,7 +15,7 @@
 #   check  Regenerate the bindings into a temp dir, apply scripts/patch_bindings.py, and diff them
 #          against the committed ones; also diff the vendored btleplug Java and THIRD_PARTY_NOTICES.md
 #          against the btleplug version cargo resolves; fail when a Kotlin golden address is absent from
-#          rust/src/lib.rs, the two JNA versions in module.yaml differ, or a file named like a generated
+#          rust/src/lib.rs, the JNA versions in the two module.yaml files differ, or a file named like a generated
 #          one was not written by the bindgen. Writes nothing under app/ or rust/ (cargo builds into
 #          vault-workspace/target, where the first run also installs the pinned bindgen). Needs cargo
 #          and python3. Only macOS was tried.
@@ -26,7 +26,7 @@
 #          rows ran at runtime and which were build only. Refuses to start while a simulator is booted.
 #   apk    Opt in: copy the built .so files into app/androidApp/jniLibs/<abi>/, the only place that
 #          reaches an APK. Never edits androidApp/module.yaml. After this, every build refreshes the copies.
-#   clean  Remove what build and apk wrote outside git: the link def, the host library copy, the iOS and
+#   clean  Remove what build and apk wrote outside git: the link def, the host library copies, the iOS and
 #          Android target dirs, the staged .so files. Keeps the installed bindgen and the host build.
 # Exit: 0 ok, 1 failure (reason on stderr), 2 usage or a missing tool (the message has the install command).
 #
@@ -44,6 +44,7 @@
 #   C src@android/com/nonpolynomial/, src@android/io/github/gedgygedgy/   btleplug's Android Java (28 files), THIRD_PARTY_NOTICES.md
 #   I cinterop@ios/mobile_signer_ffi_link.def          absolute library paths + a hash of the .a files
 #   I testResources@android/darwin-<arch>/libmobile_signer_ffi.dylib   host library on the host-JVM test classpath
+#   I ../shared/testResources@android/darwin-<arch>/libmobile_signer_ffi.dylib   the same for shared's host-JVM tests
 #   I ../androidApp/jniLibs/<abi>/libmobile_signer_ffi.so   created by apk, refreshed by build
 #   I vault-workspace/target/debug/libmobile_signer_ffi.dylib            host cdylib: bindgen input
 #   I vault-workspace/target/ios-15.0/<triple>/release/libmobile_signer_ffi.a
@@ -132,6 +133,8 @@ guard_synced_values() {
   aar=$(sed -n 's/^ *- net\.java\.dev\.jna:jna:\([0-9.]*\)@aar$/\1/p' "$MOD/module.yaml")
   jar=$(sed -n 's/^ *- net\.java\.dev\.jna:jna:\([0-9.]*\)$/\1/p' "$MOD/module.yaml")
   [ -n "$aar" ] && [ "$aar" = "$jar" ] || die "$MODULE/module.yaml: the JNA AAR ('$aar') and JAR ('$jar') versions must be equal"
+  jar=$(sed -n 's/^ *- net\.java\.dev\.jna:jna:\([0-9.]*\)$/\1/p' "$APP/shared/module.yaml")
+  [ "$aar" = "$jar" ] || die "shared/module.yaml: the JNA JAR ('$jar') must equal the AAR in $MODULE/module.yaml ('$aar')"
 }
 
 build_host_cdylib() {
@@ -245,10 +248,13 @@ android() {
 host_test_lib() {
   # JNA finds the library by the generated name on the classpath under <os>-<arch>/, so the host-JVM test needs
   # no path, property or env var (observed). Copy only on change: a new mtime can trigger a rebuild.
-  local arch dest; case $(uname -m) in arm64) arch=darwin-aarch64 ;; *) arch=darwin-x86-64 ;; esac
-  dest=$MOD/testResources@android/$arch
-  mkdir -p "$dest"
-  cmp -s "$HOST_LIB" "$dest/lib$NS.dylib" || cp "$HOST_LIB" "$dest/"
+  # shared gets its own copy, because a module's test resources reach only that module's tests (observed).
+  local arch m dest; case $(uname -m) in arm64) arch=darwin-aarch64 ;; *) arch=darwin-x86-64 ;; esac
+  for m in "$MOD" "$APP/shared"; do
+    dest=$m/testResources@android/$arch
+    mkdir -p "$dest"
+    cmp -s "$HOST_LIB" "$dest/lib$NS.dylib" || cp "$HOST_LIB" "$dest/"
+  done
 }
 
 generated_files() { echo "src/$PKG_DIR/$NS.common.kt src@android/$PKG_DIR/$NS.android.kt src@ios/$PKG_DIR/$NS.native.kt cinterop@ios/include/$NS.h"; }
@@ -465,13 +471,13 @@ EOF
 cmd_clean() {
   local abi
   rm -f "$MOD/cinterop@ios/${NS}_link.def"
-  rm -rf "${MOD:?}/testResources@android" "${IOS_TARGET_DIR:?}" "${ANDROID_TARGET_DIR:?}" "${JNILIBS:?}"
+  rm -rf "${MOD:?}/testResources@android" "${APP:?}/shared/testResources@android" "${IOS_TARGET_DIR:?}" "${ANDROID_TARGET_DIR:?}" "${JNILIBS:?}"
   for abi in $ABIS; do
     rm -f "$APP/androidApp/jniLibs/$abi/lib$NS.so"
     rmdir "$APP/androidApp/jniLibs/$abi" 2>/dev/null || true
   done
   rmdir "$APP/androidApp/jniLibs" 2>/dev/null || true
-  echo "ffi.sh clean: removed the link def, the host library copy, target/ios-$IOS_MIN, target/android-ndk-$NDK_VERSION, target/jniLibs and the jniLibs copies"
+  echo "ffi.sh clean: removed the link def, the host library copies, target/ios-$IOS_MIN, target/android-ndk-$NDK_VERSION, target/jniLibs and the jniLibs copies"
 }
 
 case ${1:-} in
