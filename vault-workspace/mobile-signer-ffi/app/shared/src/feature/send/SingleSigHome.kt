@@ -74,6 +74,7 @@ import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbPage
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
+import com.mebit.ffi.signer.HotTx
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.painterResource
@@ -97,8 +98,9 @@ fun S1HomeSingleSigScreen(
     onSend: () -> Unit,
     onVault: () -> Unit,
     onHistory: () -> Unit,
+    onOpenTx: (HotTx) -> Unit,
     onOpenCatalog: () -> Unit,
-) = SingleSigHome(wallet, session, quotes, onReceive, onSend, onVault, onHistory, onOpenCatalog, tag = "screen_send/s1")
+) = SingleSigHome(wallet, session, quotes, onReceive, onSend, onVault, onHistory, onOpenTx, onOpenCatalog, tag = "screen_send/s1")
 
 /** The home itself, so the backup gate can show it dimmed behind its sheet under a tag of its own. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -111,6 +113,7 @@ internal fun SingleSigHome(
     onSend: () -> Unit,
     onVault: () -> Unit,
     onHistory: () -> Unit,
+    onOpenTx: (HotTx) -> Unit,
     onOpenCatalog: () -> Unit,
     tag: String,
 ) {
@@ -219,7 +222,7 @@ internal fun SingleSigHome(
                     }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
-                rows.forEachIndexed { index, row -> HomeTxRowItem(row, Modifier.testTag("home_tx_$index")) }
+                rows.forEachIndexed { index, row -> HomeTxRowItem(row, Modifier.testTag("home_tx_$index")) { onOpenTx(row.tx) } }
             }
         }
         // Once the navy block has scrolled up, the status bar still needs a navy ground for its white icons.
@@ -236,24 +239,18 @@ internal fun debugFailureLine(failure: String?, debugBuild: Boolean): String? = 
 
 /** The board's gold 13 sp line under the balance. */
 @Composable
-private fun GoldLine(text: String, modifier: Modifier = Modifier) {
+internal fun GoldLine(text: String, modifier: Modifier = Modifier) {
     Text(text, color = FiatGold, fontSize = 13.sp, fontWeight = FontWeight.Light, lineHeight = 17.sp, modifier = modifier)
 }
 
 /**
  * One recent transaction: the arrow, the title over the date, and the amount over the status, on the board's 67 dp pitch.
- * The icon colours follow board 3.6 Vault Detail, where money in is the navy arrow on the pale wash and money out is the amber
- * arrow on the warm wash. Board S1 Home draws them the other way round, and the user chose 3.6. See open item 69.
+ * A tap anywhere on it calls [onClick].
  */
 @Composable
-internal fun HomeTxRowItem(row: HomeTxRow, modifier: Modifier = Modifier) {
-    Row(modifier = modifier.fillMaxWidth().heightIn(min = 67.dp)) {
-        Box(
-            modifier = Modifier.padding(top = 5.dp).size(32.dp).background(if (row.received) MbChip else MbIconWash, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            TxArrow(down = row.received, color = if (row.received) MbNavy else MbEyebrow)
-        }
+internal fun HomeTxRowItem(row: HomeTxRow, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Row(modifier = modifier.fillMaxWidth().heightIn(min = 67.dp).clickable(role = Role.Button, onClick = onClick)) {
+        TxDirectionIcon(row.received, Modifier.padding(top = 5.dp))
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(row.title, color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.Medium, lineHeight = 17.sp)
@@ -265,6 +262,21 @@ internal fun HomeTxRowItem(row: HomeTxRow, modifier: Modifier = Modifier) {
             Spacer(modifier = Modifier.height(5.dp))
             Text(row.status, color = MbSlate, fontSize = 10.sp, fontWeight = FontWeight.Light, lineHeight = 13.sp)
         }
+    }
+}
+
+/**
+ * The 32 dp circle with the direction arrow, on the rows and on the detail's header. The colours follow board 3.6 Vault Detail, where
+ * money in is the navy arrow on the pale wash and money out is the amber arrow on the warm wash. Board S1 Home draws them the other
+ * way round, and the user chose 3.6. See open item 69.
+ */
+@Composable
+internal fun TxDirectionIcon(received: Boolean, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.size(32.dp).background(if (received) MbChip else MbIconWash, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        TxArrow(down = received, color = if (received) MbNavy else MbEyebrow)
     }
 }
 

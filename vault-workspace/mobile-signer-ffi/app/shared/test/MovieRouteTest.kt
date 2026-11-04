@@ -7,7 +7,7 @@ import kotlin.test.assertTrue
 class MovieRouteTest {
     @Test
     fun coversFortyFourMoviePageBoards() {
-        assertEquals(45, MovieRoute.entries.size)
+        assertEquals(46, MovieRoute.entries.size)
         assertEquals(MovieRoute.Welcome, MovieRoute.start)
         assertEquals("onboarding/import-seed", MovieRoute.ImportSeed.path)
         assertEquals("IMPORT SEED", MovieRoute.ImportSeed.eyebrow)
@@ -17,6 +17,12 @@ class MovieRouteTest {
     fun historyRouteExists() {
         assertEquals("send/s7", MovieRoute.S7History.path)
         assertEquals("HISTORY", MovieRoute.S7History.eyebrow)
+    }
+
+    @Test
+    fun transactionDetailRouteExists() {
+        assertEquals("send/s8", MovieRoute.S8TxDetail.path)
+        assertEquals("TRANSACTION", MovieRoute.S8TxDetail.eyebrow)
     }
 
     @Test

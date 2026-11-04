@@ -301,7 +301,7 @@ internal fun groupedAddress(address: String): AnnotatedString = buildAnnotatedSt
 }
 
 @Composable
-private fun ReviewRow(label: String, value: String, bold: Boolean = false, tag: String? = null) {
+internal fun ReviewRow(label: String, value: String, bold: Boolean = false, tag: String? = null) {
     Row(
         modifier = Modifier.fillMaxWidth().height(45.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -313,7 +313,7 @@ private fun ReviewRow(label: String, value: String, bold: Boolean = false, tag: 
 }
 
 @Composable
-private fun ReviewDivider() {
+internal fun ReviewDivider() {
     Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MbBorder))
 }
 

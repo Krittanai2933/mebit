@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import com.mebit.ffi.signer.FeeTiers
 import com.mebit.ffi.signer.HotSendResult
 import com.mebit.ffi.signer.HotTx
+import com.mebit.ffi.signer.HotTxDetail
 import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.MobileSignerException
@@ -16,6 +17,7 @@ import com.mebit.ffi.signer.hotFeeTiers
 import com.mebit.ffi.signer.hotPrepareSendAll
 import com.mebit.ffi.signer.hotPrepareSendAtRate
 import com.mebit.ffi.signer.hotReceiveAddress
+import com.mebit.ffi.signer.hotTxDetail
 import com.mebit.ffi.signer.hotWalletHistory
 import com.mebit.ffi.signer.hotWalletSnapshot
 import kotlin.time.Clock
@@ -24,7 +26,7 @@ import kotlin.time.Clock
  * Single-sig hot wallet surface for Movie Page S*.
  * Live path uses BIP-84 + Esplora (hot_* UniFFI). Demo path keeps offline fixtures.
  *
- * [prepareAtRate], [prepareAll], [postHex], [snapshot], [fetchHistory], [receiveAddressOf] and [fetchFeeTiers] are the hot_* calls. Tests pass fakes, so they need no native library or network.
+ * [prepareAtRate], [prepareAll], [postHex], [snapshot], [fetchHistory], [receiveAddressOf], [fetchFeeTiers] and [fetchDetail] are the hot_* calls. Tests pass fakes, so they need no native library or network.
  * [nowSeconds] is the phone clock in Unix seconds, which [lastSentAtSeconds] reads when a payment goes out.
  */
 class SingleSigWallet(
@@ -36,6 +38,7 @@ class SingleSigWallet(
     private val nowSeconds: () -> Long = { Clock.System.now().epochSeconds },
     private val receiveAddressOf: (words: List<String>, passphrase: String, network: KeyNetwork, index: UInt) -> String = ::hotReceiveAddress,
     private val fetchFeeTiers: (network: KeyNetwork) -> FeeTiers = ::hotFeeTiers,
+    private val fetchDetail: (words: List<String>, passphrase: String, network: KeyNetwork, txid: String) -> HotTxDetail? = ::hotTxDetail,
 ) {
     /** What the wallet is. A real key is only ever [Live] or [Unavailable], so a real wallet never looks like the demo. */
     enum class WalletMode {
@@ -166,6 +169,19 @@ class SingleSigWallet(
         } catch (e: Exception) {
             LiveFeeTiers.DEFAULT
         }
+
+    /**
+     * What the detail screen knows of [txid] beyond its row. Fewer than 12 words is the demo, as in [bindSession] and [prepare], and asks nothing.
+     * Writes no wallet state, because the screen owns the answer, so a screen left mid-call leaves nothing behind. Blocks, so call it off the main thread.
+     */
+    fun detail(session: OnboardingSession, txid: String, network: KeyNetwork = KeyNetwork.TEST): TxDetailLoad.Done {
+        if (session.words.size < 12) return TxDetailLoad.RowOnly
+        return try {
+            fetchDetail(session.words, session.passphrase, network, txid)?.let { TxDetailLoad.Loaded(it) } ?: TxDetailLoad.NotFound
+        } catch (e: Exception) {
+            TxDetailLoad.Failed(e.message ?: e.toString())
+        }
+    }
 
     /**
      * Signs [amountSats] to [destination] at [feeRateSatVb] and holds the result in [heldSend], with no guard written and nothing posted,
@@ -420,6 +436,24 @@ data class LiveFeeTiers(val slow: Long, val normal: Long, val fast: Long, val li
 
 /** One fee tile: the tier's board copy, its rate and the estimate in sats. */
 data class FeeTile(val tier: FeeTier, val satPerVb: Long, val feeSats: Long)
+
+/** What the detail screen knows beyond its row. [SingleSigWallet.detail] answers only [Done], and [Loading] is the screen's own. */
+sealed interface TxDetailLoad {
+    data object Loading : TxDetailLoad
+
+    sealed interface Done : TxDetailLoad
+
+    data class Loaded(val detail: HotTxDetail) : Done
+
+    /** The explorer does not know the txid now, because it was replaced, dropped, or not yet seen by this host. */
+    data object NotFound : Done
+
+    /** [rustText] is the core's message. The screen words it with [readErrorThai], and a debug build shows it raw. */
+    data class Failed(val rustText: String) : Done
+
+    /** No key, so the demo asks nothing and the row is all there is. */
+    data object RowOnly : Done
+}
 
 /** "0.0050" to 500_000 sats. Null for anything that is not a positive amount of at most 21 million BTC with at most 8 decimals. */
 fun parseBtc(text: String): Long? {

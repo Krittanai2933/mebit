@@ -252,6 +252,12 @@ enum class MovieRoute(
         "ประวัติธุรกรรม",
         "ธุรกรรมทั้งหมดของกระเป๋านี้",
     ),
+    S8TxDetail(
+        "send/s8",
+        "TRANSACTION",
+        "รายละเอียดธุรกรรม",
+        "สถานะ · ค่าธรรมเนียม · TXID",
+    ),
     M1SendVault(
         "send/m1",
         "SEND · VAULT",

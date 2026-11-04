@@ -5,19 +5,22 @@ import com.mebit.app.formatThaiDateTimeShort
 import com.mebit.ffi.signer.HotTx
 import kotlin.math.abs
 
+/** The confirmations the boards count to. The detail's six segments fill up to it, and a row counts blocks up to it. */
+internal const val CONFIRMATION_TARGET = 6u
+
 /** Confirmations from which a row says only that it is confirmed. The board shows a count up to 6 and a bare "confirmed" after it, so 7 is a guess. */
-private const val SETTLED_CONFIRMATIONS = 7u
+private val SETTLED_CONFIRMATIONS = CONFIRMATION_TARGET + 1u
 
 /** How many rows Home shows before it points to the full history. */
 private const val HOME_ROW_LIMIT = 4
 
-/** One line of the recent transactions on Home, already worded. [received] picks the icon and the colour of the amount. */
-internal data class HomeTxRow(val received: Boolean, val title: String, val date: String, val amount: String, val status: String)
+/** One line of the recent transactions on Home, already worded. [tx] is the transaction it shows, which a tap opens. [received] picks the icon and the colour of the amount. */
+internal data class HomeTxRow(val tx: HotTx, val received: Boolean, val title: String, val date: String, val amount: String, val status: String)
 
 /**
  * The first [limit] of [history] as Home rows, in the same order.
  * The amount is the net change of the wallet, so a send includes its fee, and it keeps a sign: a plus for money in, a real minus (U+2212) for money out.
- * A row has no counterparty name or txid, because the wallet knows no name and the id means nothing to the user.
+ * A row shows no counterparty name or txid, because the wallet knows no name and the id means nothing to the user. The detail behind a tap shows the txid.
  * [timeZoneId] is an IANA id for the date, and null means the device's zone.
  */
 internal fun homeRows(history: List<HotTx>, limit: Int = HOME_ROW_LIMIT, timeZoneId: String? = null): List<HomeTxRow> =
@@ -25,6 +28,7 @@ internal fun homeRows(history: List<HotTx>, limit: Int = HOME_ROW_LIMIT, timeZon
         val received = tx.netSats >= 0
         val blockTime = tx.blockTime
         HomeTxRow(
+            tx = tx,
             received = received,
             title = if (received) "รับ" else "ส่งออก",
             date = when {

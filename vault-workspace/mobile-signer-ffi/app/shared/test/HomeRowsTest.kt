@@ -19,9 +19,16 @@ class HomeRowsTest {
     fun theFirstRowOfTheBoardIsReadBackWhole() {
         val rows = homeRows(listOf(tx(2_000_000)), timeZoneId = BANGKOK)
         assertEquals(
-            listOf(HomeTxRow(received = true, title = "รับ", date = "18 ส.ค. 2569 · 14:02", amount = "+0.0200", status = "ยืนยัน 6 บล็อก")),
+            listOf(HomeTxRow(tx = tx(2_000_000), received = true, title = "รับ", date = "18 ส.ค. 2569 · 14:02", amount = "+0.0200", status = "ยืนยัน 6 บล็อก")),
             rows,
         )
+    }
+
+    @Test
+    fun aRowCarriesTheTransactionItShowsSoATapOpensThatOne() {
+        val history = listOf(tx(1_000_000), tx(-2_000_000, confirmations = 0u, blockTime = null), tx(3_000_000), tx(-4_000_000), tx(5_000_000))
+        assertEquals(history.take(4), homeRows(history).map { it.tx })
+        assertEquals(history, historyRows(history).map { it.tx })
     }
 
     @Test
@@ -129,7 +136,8 @@ class HomeRowsTest {
     fun noRowShowsTheTxid() {
         val txid = "9f2c4b7a0d1e3f5a6b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"
         val rows = homeRows(listOf(tx(-1_000, txid = txid), tx(2_000, confirmations = 0u, blockTime = null, txid = txid)))
-        rows.forEach { assertFalse(it.toString().contains(txid.take(8)), it.toString()) }
+        // The row carries its transaction for the tap, so only what it draws is checked.
+        rows.flatMap { listOf(it.title, it.date, it.amount, it.status) }.forEach { assertFalse(it.contains(txid.take(8)), it) }
     }
 
     // On 4 Nov 2026 a real iPhone showed 19,436 sats as 0.0001 BTC, hiding nearly half the money (open item 74).

@@ -13,13 +13,15 @@ import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.theme.MbSlate
+import com.mebit.ffi.signer.HotTx
 
 internal const val HISTORY_EMPTY_TEXT = "ยังไม่มีธุรกรรม"
 
-/** Every loaded transaction as the Home row. The rows do not react to a tap yet, and the detail screen (board 3.6.2) will hang its tap on [HomeTxRowItem]. */
+/** Every loaded transaction as the Home row. A tap on a row opens it on the detail screen (board 3.6.2) through [onOpenTx]. */
 @Composable
 fun S7HistoryScreen(
     wallet: SingleSigWallet,
+    onOpenTx: (HotTx) -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
@@ -34,7 +36,7 @@ fun S7HistoryScreen(
         if (rows.isEmpty()) {
             Text(HISTORY_EMPTY_TEXT, color = MbSlate, fontSize = 13.sp, lineHeight = 17.sp, modifier = Modifier.testTag("history_empty"))
         } else {
-            Column { rows.forEachIndexed { index, row -> HomeTxRowItem(row, Modifier.testTag("history_tx_$index")) } }
+            Column { rows.forEachIndexed { index, row -> HomeTxRowItem(row, Modifier.testTag("history_tx_$index")) { onOpenTx(row.tx) } } }
         }
         Spacer(modifier = Modifier.height(16.dp))
     }

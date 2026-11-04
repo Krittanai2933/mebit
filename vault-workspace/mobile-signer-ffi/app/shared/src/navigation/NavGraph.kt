@@ -75,6 +75,8 @@ import com.mebit.app.feature.send.S4SendScreen
 import com.mebit.app.feature.send.S5ReviewSignScreen
 import com.mebit.app.feature.send.S6SentScreen
 import com.mebit.app.feature.send.S7HistoryScreen
+import com.mebit.app.feature.send.S8TxDetailScreen
+import com.mebit.app.feature.send.DEMO_TX
 import com.mebit.app.feature.send.M1SendVaultScreen
 import com.mebit.app.feature.send.M2CollectSignaturesScreen
 import com.mebit.app.feature.send.M3SignOnJadeScreen
@@ -82,6 +84,7 @@ import com.mebit.app.feature.send.M4ReadyToBroadcastScreen
 import com.mebit.app.rememberBiometrics
 import com.mebit.app.rememberIsDebugBuild
 import com.mebit.app.ui.theme.MbPage
+import com.mebit.ffi.signer.HotTx
 
 private val ImplementedRoutes = MovieRoute.entries.toSet()
 
@@ -107,6 +110,8 @@ fun MebitNavHost(
     var keyFlow by remember { mutableStateOf(KeyFlow.Keyring) }
     var verifyRetryRoute by remember { mutableStateOf(MovieRoute.HardwareWallet) }
     var unsupportedModel by remember { mutableStateOf<String?>(null) }
+    // The row a tap opened, whole, so the detail draws at once. The catalog opens the demo row until a tap.
+    var openedTx by remember { mutableStateOf(DEMO_TX) }
     val current = backStack.last()
 
     // More than a minute away locks the app again, once the user turned the lock on.
@@ -133,6 +138,11 @@ fun MebitNavHost(
 
     // A backup started from the Home banner returns there. The create flow goes on to App Lock.
     fun afterBackup() = navigate(if (MovieRoute.HomeFirstRun in backStack) MovieRoute.HomeFirstRun else MovieRoute.AppLock)
+
+    val openTx: (HotTx) -> Unit = { tx ->
+        openedTx = tx
+        navigate(MovieRoute.S8TxDetail)
+    }
 
     val onBack: (() -> Unit)? = if (backStack.size > 1) ({ goBack() }) else null
     // The link is the only caller, and it is gone in a release build. This keeps the sheet shut even if another caller appears.
@@ -355,10 +365,20 @@ fun MebitNavHost(
             },
             onVault = { navigate(MovieRoute.KeyringFirstVault) },
             onHistory = { navigate(MovieRoute.S7History) },
+            onOpenTx = openTx,
             onOpenCatalog = openCatalog,
         )
         MovieRoute.S7History -> S7HistoryScreen(
             wallet = singleSig,
+            onOpenTx = openTx,
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        MovieRoute.S8TxDetail -> S8TxDetailScreen(
+            tx = openedTx,
+            wallet = singleSig,
+            session = session,
+            quotes = quotes,
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )

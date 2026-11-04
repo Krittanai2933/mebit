@@ -1,6 +1,6 @@
 # Movie Page history (S7)
 
-The history screen lists every transaction the wallet loaded, newest first. Each row is the Home row, with an arrow on a circle, รับ or ส่งออก, the date, the signed amount in compact BTC and the confirmations. Home links to it with ดูทั้งหมด when the wallet has more transactions than the four rows Home shows. A wallet with no loaded transactions shows ยังไม่มีธุรกรรม, and the rows do nothing on a tap yet.
+The history screen lists every transaction the wallet loaded, newest first. Each row is the Home row, with an arrow on a circle, รับ or ส่งออก, the date, the signed amount in compact BTC and the confirmations. Home links to it with ดูทั้งหมด when the wallet has more transactions than the four rows Home shows. A wallet with no loaded transactions shows ยังไม่มีธุรกรรม. A tap on a row opens that transaction's detail, see [transaction detail](./movie-page-tx-detail.md).
 
 ## Sub-features
 
@@ -31,5 +31,5 @@ Preconditions:
 - S7 fetches nothing itself. It shows what Home's last fetch loaded, so pull Home down for newer transactions (see Pull to refresh in [send](./movie-page-send.md)).
 - The core loads only the first page of each address, about 25 confirmed transactions plus those in the mempool, so the list of a busy wallet is not complete (open item 80).
 - The ดูทั้งหมด link, the eyebrow HISTORY, the title ประวัติธุรกรรม and ยังไม่มีธุรกรรม have no Penpot board. Their copy is a default awaiting design review (open item 80).
-- The rows do nothing on a tap until the detail screen of board 3.6.2 exists.
+- A tap on a row opens S8 (`id:screen_send/s8`) for that transaction, and back returns to S7. [Transaction detail](./movie-page-tx-detail.md) drives it from `id:history_tx_1` onward.
 - While the probe is in place, the demo wallet's Home is live too, so it shows the baht line and no demo marker.
