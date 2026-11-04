@@ -51,7 +51,7 @@ import com.mebit.app.data.FiatQuote
 import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
-import com.mebit.app.data.formatBtc
+import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.encodePng
 import com.mebit.app.formatThaiDateTime
@@ -196,7 +196,7 @@ private fun Slip(wallet: SingleSigWallet, draft: SendDraft, quote: FiatQuote?, l
             )
         }
         Text(
-            text = formatBtc(wallet.lastAmountSats, 4) + " BTC",
+            text = formatBtcCompact(wallet.lastAmountSats) + " BTC",
             color = SlipNavy,
             fontSize = 40.sp,
             fontWeight = FontWeight.Bold,

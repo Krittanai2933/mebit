@@ -38,3 +38,10 @@ internal fun homeRows(history: List<HotTx>, limit: Int = 4, timeZoneId: String? 
             },
         )
     }
+
+/**
+ * The Home balance line: the amount in BTC once the chain answered, and a dash while it is unknown or loading.
+ * Four places when they hold the whole amount, every place that matters when they do not, so the line never hides sats.
+ */
+internal fun homeBalanceText(sats: Long, known: Boolean, loading: Boolean): String =
+    if (known && !loading) formatBtcCompact(sats) + " BTC" else "—"

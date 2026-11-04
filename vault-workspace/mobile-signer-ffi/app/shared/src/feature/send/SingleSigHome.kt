@@ -55,7 +55,6 @@ import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
-import com.mebit.app.data.formatBtc
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.feature.onboarding.NotSavedNotice
 import com.mebit.app.resources.Res
@@ -158,7 +157,7 @@ internal fun SingleSigHome(
             Spacer(modifier = Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
-                    text = if (wallet.balanceKnown && !loading) formatBtc(wallet.balanceSats, 4) + " BTC" else "—",
+                    text = homeBalanceText(wallet.balanceSats, wallet.balanceKnown, loading),
                     color = MbWhite,
                     fontSize = 38.sp,
                     fontWeight = FontWeight.Bold,

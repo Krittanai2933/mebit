@@ -51,6 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.formatBtc
+import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.ui.components.BottomActions
 import com.mebit.app.ui.components.IssueBanner
 import com.mebit.app.ui.theme.MbBody
@@ -261,7 +262,7 @@ private fun SendSummary(draft: SendDraft, quote: FiatQuote?) {
         // Send all: the core spends every coin and takes the real fee off the amount, so the amount here is the one-coin estimate. Open item 76.
         Text(if (draft.isSendAll) "ส่งทั้งหมด · จำนวนโดยประมาณ" else "ส่ง", color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
         Row(verticalAlignment = Alignment.Bottom) {
-            Text((if (draft.isSendAll) "≈ " else "") + formatBtc(draft.amountSats, 4), color = MbWhite, fontSize = 38.sp, fontWeight = FontWeight.Bold, lineHeight = 50.sp, modifier = Modifier.testTag("send_amount"))
+            Text((if (draft.isSendAll) "≈ " else "") + formatBtcCompact(draft.amountSats), color = MbWhite, fontSize = 38.sp, fontWeight = FontWeight.Bold, lineHeight = 50.sp, modifier = Modifier.testTag("send_amount"))
             Spacer(modifier = Modifier.width(8.dp))
             Text("BTC", color = MbWhite.copy(alpha = 0.8f), fontSize = 15.sp, fontWeight = FontWeight.Bold, lineHeight = 20.sp, modifier = Modifier.padding(bottom = 5.dp))
         }

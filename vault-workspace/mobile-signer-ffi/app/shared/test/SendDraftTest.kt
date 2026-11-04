@@ -29,7 +29,8 @@ class SendDraftTest {
 
     @Test
     fun aRealAmountNeverReadsAsZero() {
-        // The review headline, the slip and the Home balance cut to 4 places (interrogate finding 15: 9,999 sats read as 0.0000).
+        // formatBtc's 4-place cut is a primitive only. The screens that show money use formatBtcCompact, which never hides sats
+        // (open item 74). This guard stays for any caller that still asks for 4 places (interrogate finding 15: 9,999 sats read as 0.0000).
         assertEquals("0.00009", formatBtc(9_999, 4))
         assertEquals("0.00000001", formatBtc(1, 4))
         assertEquals("0.00009", formatBtc(9_999, 0))

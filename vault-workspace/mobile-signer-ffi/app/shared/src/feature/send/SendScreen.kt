@@ -58,7 +58,7 @@ import com.mebit.app.data.SendIssue
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.bahtText
 import com.mebit.app.data.enterDestination
-import com.mebit.app.data.formatBtc
+import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.data.scanOutcome
 import com.mebit.app.data.sendIssue
@@ -175,7 +175,7 @@ fun S4SendScreen(
                 }
                 is SendIssue.Insufficient -> {
                     Spacer(modifier = Modifier.height(20.dp))
-                    IssuePanel("INSUFFICIENT FUNDS", "ยอดไม่พอ — ขาดอีก ${formatBtc(issue.missingSats, 4)} BTC (รวมค่าธรรมเนียม) ลดจำนวน หรือกดส่งทั้งหมด")
+                    IssuePanel("INSUFFICIENT FUNDS", "ยอดไม่พอ — ขาดอีก ${formatBtcCompact(issue.missingSats)} BTC (รวมค่าธรรมเนียม) ลดจำนวน หรือกดส่งทั้งหมด")
                 }
                 null -> Unit
             }

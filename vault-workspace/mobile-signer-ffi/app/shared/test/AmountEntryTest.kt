@@ -91,14 +91,14 @@ class AmountEntryTest {
         assertFalse(entry.inBaht(null))
         assertEquals("0.01", entry.fieldText(null))
         assertNull(entry.otherLine(null))
-        assertEquals("ใช้ได้ 0.0312 BTC", entry.caption(3_129_999, null))
+        assertEquals("ใช้ได้ 0.03129999 BTC", entry.caption(3_129_999, null))
 
         // A unit picked while a price existed shows BTC once the price is gone.
         entry.pickUnit(AmountUnit.Thb, boardPrice)
         assertTrue(entry.inBaht(boardPrice))
         assertFalse(entry.inBaht(null))
         assertEquals("0.01", entry.fieldText(null))
-        assertEquals("ใช้ได้ 0.0312 BTC", entry.caption(3_129_999, null))
+        assertEquals("ใช้ได้ 0.03129999 BTC", entry.caption(3_129_999, null))
     }
 
     @Test
@@ -138,7 +138,8 @@ class AmountEntryTest {
     @Test
     fun availableIsTheBalanceInTheUnitShownAndBahtIsCutDown() {
         val (_, entry) = fresh()
-        assertEquals("ใช้ได้ 0.0312 BTC", entry.caption(3_129_999, boardPrice))
+        // Every sat shows in BTC: cutting 3,129,999 to 0.0312 hid 9,999 sats of what can be sent (open item 74).
+        assertEquals("ใช้ได้ 0.03129999 BTC", entry.caption(3_129_999, boardPrice))
         entry.pickUnit(AmountUnit.Thb, boardPrice)
         // 3,129,999 sats are 112,742.56 baht.
         assertEquals("ใช้ได้ ฿112,742", entry.caption(3_129_999, boardPrice))

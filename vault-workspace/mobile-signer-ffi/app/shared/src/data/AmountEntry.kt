@@ -120,7 +120,7 @@ class AmountEntry(private val draft: SendDraft) {
     /** The caption under the amount: what the wallet holds in the unit shown, cut down in baht, or the note that the amount is send all. */
     fun caption(balanceSats: Long, quote: FiatQuote?): String {
         if (isSendAll) return "ส่งยอดทั้งหมด · หักค่าธรรมเนียมแล้ว"
-        val priced = bahtQuote(quote) ?: return "ใช้ได้ ${formatBtc(balanceSats, 4)} BTC"
+        val priced = bahtQuote(quote) ?: return "ใช้ได้ ${formatBtcCompact(balanceSats)} BTC"
         return "ใช้ได้ ฿${thousands(satsToBahtFloor(balanceSats, priced.thbPerBtc))}"
     }
 }

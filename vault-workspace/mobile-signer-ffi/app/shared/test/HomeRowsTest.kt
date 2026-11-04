@@ -131,4 +131,16 @@ class HomeRowsTest {
         val rows = homeRows(listOf(tx(-1_000, txid = txid), tx(2_000, confirmations = 0u, blockTime = null, txid = txid)))
         rows.forEach { assertFalse(it.toString().contains(txid.take(8)), it.toString()) }
     }
+
+    // On 4 Nov 2026 a real iPhone showed 19,436 sats as 0.0001 BTC, hiding nearly half the money (open item 74).
+    @Test
+    fun theBalanceShowsEverySatThatMattersAndTheBoardsRoundAmountKeepsFourPlaces() {
+        assertEquals("0.00019436 BTC", homeBalanceText(19_436, known = true, loading = false))
+        assertEquals("0.00009999 BTC", homeBalanceText(9_999, known = true, loading = false))
+        assertEquals("1.00009999 BTC", homeBalanceText(100_009_999, known = true, loading = false), "a whole part never hides the sats")
+        assertEquals("0.0312 BTC", homeBalanceText(3_120_000, known = true, loading = false), "the board's own balance keeps four places")
+        assertEquals("0.0000 BTC", homeBalanceText(0, known = true, loading = false))
+        assertEquals("—", homeBalanceText(19_436, known = false, loading = false))
+        assertEquals("—", homeBalanceText(19_436, known = true, loading = true))
+    }
 }
