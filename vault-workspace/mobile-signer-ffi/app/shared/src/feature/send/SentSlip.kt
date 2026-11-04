@@ -196,14 +196,14 @@ private fun Slip(wallet: SingleSigWallet, draft: SendDraft, quote: FiatQuote?, l
             )
         }
         Text(
-            text = formatBtc(draft.amountSats, 4) + " BTC",
+            text = formatBtc(wallet.lastAmountSats, 4) + " BTC",
             color = SlipNavy,
             fontSize = 40.sp,
             fontWeight = FontWeight.Bold,
             lineHeight = 56.sp,
             modifier = Modifier.align(Alignment.TopCenter).offset(y = 202.dp).testTag("send_amount"),
         )
-        fiatLine(draft.amountSats, quote)?.let {
+        fiatLine(wallet.lastAmountSats, quote)?.let {
             Text(
                 text = it,
                 color = SlipFiat,

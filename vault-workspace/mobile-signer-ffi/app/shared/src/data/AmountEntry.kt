@@ -44,12 +44,8 @@ class AmountEntry(private val draft: SendDraft) {
     var unit: AmountUnit by mutableStateOf(AmountUnit.Btc)
         private set
 
-    // What send all set the amount to. It counts only while the amount is still that, so a payment link's amount ends it without this class hearing of it.
-    private var allSats: Long? by mutableStateOf(null)
-    private val marked: Boolean get() = allSats == draft.amountSats
-
-    /** True while the amount is what "ส่งทั้งหมด" set and is above zero. */
-    val isSendAll: Boolean get() = marked && draft.amountSats > 0
+    /** [SendDraft.isSendAll]: true while the amount is what "ส่งทั้งหมด" set and is above zero. */
+    val isSendAll: Boolean get() = draft.isSendAll
 
     private fun bahtQuote(quote: FiatQuote?): FiatQuote? = if (unit == AmountUnit.Thb) quote else null
 
@@ -65,7 +61,6 @@ class AmountEntry(private val draft: SendDraft) {
     /** Takes the BTC field's text. Anything but digits with at most 8 decimals is ignored, so the field keeps its old text. */
     fun typeBtc(text: String) {
         if (!BtcTyping.matches(text)) return
-        allSats = null
         draft.setAmountBtc(text)
     }
 
@@ -78,27 +73,24 @@ class AmountEntry(private val draft: SendDraft) {
         val digits = text.trimStart('0')
         if (digits.length > MAX_BAHT_DIGITS) return
         val sats = bahtToSats(digits.toLongOrNull() ?: 0L, quote.thbPerBtc) ?: return
-        allSats = null
         draft.setAmountInSats(sats)
     }
 
-    /** Sets the amount to the balance minus the fee, exactly, whichever unit is shown. It stays send all until something else sets the amount. */
+    /** Sets the amount to the balance minus the fee estimate, whichever unit is shown. It stays send all until something else sets the amount, and the core then sets the real amount. */
     fun sendAll(balanceSats: Long) {
-        val all = (balanceSats - draft.feeSats).coerceAtLeast(0)
-        draft.setAmountInSats(all)
-        allSats = all
+        draft.setSendAll((balanceSats - draft.feeSats).coerceAtLeast(0))
     }
 
     /** Picks the fee tier. While the amount is send all, it is worked out again for the new fee. */
     fun chooseTier(tier: FeeTier, balanceSats: Long) {
-        val keepAll = marked
+        val keepAll = draft.sendAllMarked
         draft.chooseTier(tier)
         if (keepAll) sendAll(balanceSats)
     }
 
     /** Takes the fetched rates. While the amount is send all, it is worked out again for the new fee, as [chooseTier] does. */
     fun applyTiers(tiers: LiveFeeTiers, balanceSats: Long) {
-        val keepAll = marked
+        val keepAll = draft.sendAllMarked
         draft.takeTiers(tiers)
         if (keepAll) sendAll(balanceSats)
     }

@@ -1062,6 +1062,9 @@ pub struct PreparedSend {
     /// The fee the transaction pays, in sats: its virtual size times the rate asked for, rounded up.
     /// A payment whose change would be dust is refused instead of folding the change into the fee.
     pub fee_sats: u64,
+    /// What `destination` is paid, in sats: the amount asked for, or for `hot_prepare_send_all`
+    /// the whole balance less `fee_sats`, which is only known once the coins are.
+    pub amount_sats: u64,
 }
 
 /// Scan, select coins, check and sign a payment at `fee_rate_sat_vb`, and post nothing. The only
@@ -1105,7 +1108,39 @@ fn prepared(signed: &Transaction, fee_sats: u64) -> PreparedSend {
         txid: signed.compute_txid().to_string(),
         hex: serialize_hex(signed),
         fee_sats,
+        // Both builders put the destination first and change, if any, second.
+        amount_sats: signed.output[0].value.to_sat(),
     }
+}
+
+/// Scan, spend every coin `hot_prepare_send_at_rate` would consider, and sign one output paying
+/// `destination` the whole balance less the fee, with no change, and post nothing. The fee is the
+/// size of that transaction times `fee_rate_sat_vb`, so it and the amount are only known once the
+/// coins are: the answer's `amount_sats` is what leaves. Refuses, before signing, a rate outside
+/// 1 to 2,000 sat/vB, a wallet with nothing confirmed to spend, a fee above `max_fee_sats`, and a
+/// balance that would leave less than the 546 sat dust limit after the fee. The same scan as
+/// `hot_prepare_send_at_rate`, so call it off the main thread.
+#[uniffi::export]
+pub fn hot_prepare_send_all(
+    mnemonic_words: Vec<String>,
+    passphrase: String,
+    network: KeyNetwork,
+    destination: String,
+    fee_rate_sat_vb: u64,
+    max_fee_sats: u64,
+) -> Result<PreparedSend, MobileSignerError> {
+    let (signed, fee_sats) = signed_send_all(
+        &http_get,
+        &mnemonic_words,
+        &passphrase,
+        network,
+        &destination,
+        fee_rate_sat_vb,
+        max_fee_sats,
+        Instant::now(),
+        &SCAN_CACHE,
+    )?;
+    Ok(prepared(&signed, fee_sats))
 }
 
 /// Post a transaction from `hot_prepare_send_at_rate` once. `txid` must be the id of the transaction in
@@ -1204,12 +1239,121 @@ fn p2wpkh_vsize(inputs: usize, outputs: usize) -> u64 {
 /// Each pass adds at least one input, so a payment over many small coins can run out of passes.
 const FEE_PASSES: usize = 4;
 
+fn check_rate(rate_sat_vb: u64) -> Result<(), MobileSignerError> {
+    if rate_sat_vb < MIN_FEE_RATE {
+        return Err(MobileSignerError::InvalidPsbtJson(format!(
+            "fee rate {rate_sat_vb} is below {MIN_FEE_RATE} sat/vB"
+        )));
+    }
+    if rate_sat_vb > MAX_FEE_RATE {
+        return Err(MobileSignerError::InvalidPsbtJson(format!(
+            "fee rate {rate_sat_vb} is above {MAX_FEE_RATE} sat/vB"
+        )));
+    }
+    Ok(())
+}
+
+fn destination_on(destination: &str, network: KeyNetwork) -> Result<Address, MobileSignerError> {
+    Address::from_str(destination)
+        .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?
+        .require_network(network_of(network))
+        .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))
+}
+
+fn coins_overflow() -> MobileSignerError {
+    MobileSignerError::InvalidPsbtJson("esplora utxo: the coins' values do not fit u64".into())
+}
+
+/// The coins a payment may spend, each with its key, and their sum: every confirmed coin of a
+/// used address, and the wallet's own change unconfirmed too, because it is this wallet's own
+/// transaction and waiting for it would lock the balance after every payment. The coin lists are
+/// asked for on every call, never cached. An outpoint listed twice or a sum past u64 fails the
+/// whole call.
+type Coins<'w> = Vec<(Utxo, &'w OwnKey)>;
+
+fn spendable_coins<'w>(
+    esplora: Esplora,
+    base: &str,
+    wallet: &'w Wallet,
+) -> Result<(Coins<'w>, u64), MobileSignerError> {
+    let owners: Vec<(Chain, &OwnKey)> = wallet.used().collect();
+    let urls: Vec<String> = owners
+        .iter()
+        .map(|(_, k)| format!("{base}/address/{}/utxo", k.address))
+        .collect();
+    let lists = get_all(esplora, &urls)?;
+    let mut seen = HashSet::new();
+    let mut spendable: Vec<(Utxo, &OwnKey)> = Vec::new();
+    for ((chain, owner), list) in owners.iter().zip(&lists) {
+        for utxo in parse_utxos(list)? {
+            if !seen.insert((utxo.txid, utxo.vout)) {
+                return Err(MobileSignerError::InvalidPsbtJson(format!(
+                    "esplora utxo: {}:{} is listed twice",
+                    utxo.txid, utxo.vout
+                )));
+            }
+            if utxo.confirmed || matches!(chain, Chain::Internal) {
+                spendable.push((utxo, owner));
+            }
+        }
+    }
+    let have = spendable
+        .iter()
+        .try_fold(0u64, |sum, (u, _)| sum.checked_add(u.value))
+        .ok_or_else(coins_overflow)?;
+    Ok((spendable, have))
+}
+
+/// `selected` spent to `outputs`, each input signed with its coin's own key.
+fn signed(
+    selected: &[(&Utxo, &OwnKey)],
+    outputs: Vec<TxOut>,
+) -> Result<Transaction, MobileSignerError> {
+    let secp = Secp256k1::new();
+    let tx = Transaction {
+        version: bitcoin::transaction::Version::TWO,
+        lock_time: LockTime::ZERO,
+        input: selected
+            .iter()
+            .map(|(u, _)| TxIn {
+                previous_output: OutPoint {
+                    txid: u.txid,
+                    vout: u.vout,
+                },
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                witness: Witness::new(),
+            })
+            .collect(),
+        output: outputs,
+    };
+    let mut cache = SighashCache::new(tx);
+    for (i, (utxo, owner)) in selected.iter().enumerate() {
+        let sighash = cache
+            .p2wpkh_signature_hash(
+                i,
+                &owner.address.script_pubkey(),
+                Amount::from_sat(utxo.value),
+                EcdsaSighashType::All,
+            )
+            .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?;
+        let msg = Message::from_digest(sighash.to_byte_array());
+        let sig = secp.sign_ecdsa(&msg, &owner.privkey.inner);
+        let mut der = sig.serialize_der().to_vec();
+        der.push(EcdsaSighashType::All as u8);
+        let witness = cache
+            .witness_mut(i)
+            .ok_or_else(|| MobileSignerError::InvalidPsbtJson("missing witness slot".into()))?;
+        *witness = Witness::from_slice(&[der.as_slice(), &owner.pubkey.to_bytes()]);
+    }
+    Ok(cache.into_transaction())
+}
+
 /// A payment from the coins of every used address, each input signed with its own key, any change
 /// paid to the first unused internal (change) address, not yet broadcast, with the fee it pays.
 /// The amount, the rate, the destination and the fee of the smallest payment are checked before
 /// any network call; the change and the real fee after the coins are chosen. Every refusal is an
-/// error, never a changed payment. The used-address set may come from `scan_wallet`'s cache; the
-/// coin lists are asked for on every call, never cached.
+/// error, never a changed payment. The used-address set may come from `scan_wallet`'s cache.
 #[allow(clippy::too_many_arguments)]
 fn signed_payment(
     esplora: Esplora,
@@ -1229,16 +1373,7 @@ fn signed_payment(
             "amount {amount_sats} is below the {DUST} sat dust limit"
         ));
     }
-    if rate_sat_vb < MIN_FEE_RATE {
-        return refuse(format!(
-            "fee rate {rate_sat_vb} is below {MIN_FEE_RATE} sat/vB"
-        ));
-    }
-    if rate_sat_vb > MAX_FEE_RATE {
-        return refuse(format!(
-            "fee rate {rate_sat_vb} is above {MAX_FEE_RATE} sat/vB"
-        ));
-    }
+    check_rate(rate_sat_vb)?;
     // The rate is at most 2,000 and the size a few thousand vB, so the product fits u64.
     let fee_for = |inputs: usize, outputs: usize| rate_sat_vb * p2wpkh_vsize(inputs, outputs);
     let fee_checked = |fee_sats: u64| -> Result<u64, MobileSignerError> {
@@ -1256,44 +1391,11 @@ fn signed_payment(
     // The smallest payment is one input and change. A fee the rules refuse there is refused before any lookup.
     let mut fee_sats = fee_for(1, 2);
     fee_checked(fee_sats)?;
-    let net = network_of(network);
-    let dest = Address::from_str(destination)
-        .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?
-        .require_network(net)
-        .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?;
+    let dest = destination_on(destination, network)?;
 
     let base = esplora_base(network)?;
     let wallet = scan_wallet(esplora, words, passphrase, network, now, cache)?;
-    let owners: Vec<(Chain, &OwnKey)> = wallet.used().collect();
-    let urls: Vec<String> = owners
-        .iter()
-        .map(|(_, k)| format!("{base}/address/{}/utxo", k.address))
-        .collect();
-    let lists = get_all(esplora, &urls)?;
-    let mut seen = HashSet::new();
-    // Own change is spent unconfirmed: it is this wallet's own transaction, and waiting for it would
-    // lock the balance after every payment.
-    let mut spendable: Vec<(Utxo, &OwnKey)> = Vec::new();
-    for ((chain, owner), list) in owners.iter().zip(&lists) {
-        for utxo in parse_utxos(list)? {
-            if !seen.insert((utxo.txid, utxo.vout)) {
-                return refuse(format!(
-                    "esplora utxo: {}:{} is listed twice",
-                    utxo.txid, utxo.vout
-                ));
-            }
-            if utxo.confirmed || matches!(chain, Chain::Internal) {
-                spendable.push((utxo, owner));
-            }
-        }
-    }
-    let overflow = || {
-        MobileSignerError::InvalidPsbtJson("esplora utxo: the coins' values do not fit u64".into())
-    };
-    let have = spendable
-        .iter()
-        .try_fold(0u64, |sum, (u, _)| sum.checked_add(u.value))
-        .ok_or_else(overflow)?;
+    let (spendable, have) = spendable_coins(esplora, base, &wallet)?;
     // The fee depends on how many coins pay it, and the coins on the fee, so the selection is
     // redone until the fee covers the coins it chose. A fee the coins over-cover (the change
     // vanished and the transaction shrank) is kept: it is at least the rate and under the maximum.
@@ -1308,7 +1410,7 @@ fn signed_payment(
         let mut selected = Vec::new();
         let mut total = 0u64;
         for (utxo, owner) in &spendable {
-            total = total.checked_add(utxo.value).ok_or_else(overflow)?;
+            total = total.checked_add(utxo.value).ok_or_else(coins_overflow)?;
             selected.push((utxo, *owner));
             if total >= need {
                 break;
@@ -1330,55 +1432,70 @@ fn signed_payment(
     if change > 0 && change <= DUST {
         return refuse("change below dust, send the whole balance or change the amount".into());
     }
-
-    let secp = Secp256k1::new();
-    let mut tx = Transaction {
-        version: bitcoin::transaction::Version::TWO,
-        lock_time: LockTime::ZERO,
-        input: selected
-            .iter()
-            .map(|(u, _)| TxIn {
-                previous_output: OutPoint {
-                    txid: u.txid,
-                    vout: u.vout,
-                },
-                script_sig: ScriptBuf::new(),
-                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
-                witness: Witness::new(),
-            })
-            .collect(),
-        output: vec![TxOut {
-            value: Amount::from_sat(amount_sats),
-            script_pubkey: dest.script_pubkey(),
-        }],
-    };
+    let mut outputs = vec![TxOut {
+        value: Amount::from_sat(amount_sats),
+        script_pubkey: dest.script_pubkey(),
+    }];
     if change > 0 {
-        tx.output.push(TxOut {
+        outputs.push(TxOut {
             value: Amount::from_sat(change),
             script_pubkey: wallet.next_unused(Chain::Internal).address.script_pubkey(),
         });
     }
+    Ok((signed(&selected, outputs)?, fee_sats))
+}
 
-    let mut cache = SighashCache::new(tx);
-    for (i, (utxo, owner)) in selected.iter().enumerate() {
-        let sighash = cache
-            .p2wpkh_signature_hash(
-                i,
-                &owner.address.script_pubkey(),
-                Amount::from_sat(utxo.value),
-                EcdsaSighashType::All,
-            )
-            .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?;
-        let msg = Message::from_digest(sighash.to_byte_array());
-        let sig = secp.sign_ecdsa(&msg, &owner.privkey.inner);
-        let mut der = sig.serialize_der().to_vec();
-        der.push(EcdsaSighashType::All as u8);
-        let witness = cache
-            .witness_mut(i)
-            .ok_or_else(|| MobileSignerError::InvalidPsbtJson("missing witness slot".into()))?;
-        *witness = Witness::from_slice(&[der.as_slice(), &owner.pubkey.to_bytes()]);
+/// The whole balance to `destination` in one output and no change: every coin `signed_payment`
+/// would consider, the fee the size of that transaction times the rate, and the amount what is
+/// left, not yet broadcast, with the fee it pays. The rate and the destination are checked before
+/// any network call; the fee and the amount once the coins are known. Every refusal is an error,
+/// never a changed payment.
+#[allow(clippy::too_many_arguments)]
+fn signed_send_all(
+    esplora: Esplora,
+    words: &[String],
+    passphrase: &str,
+    network: KeyNetwork,
+    destination: &str,
+    rate_sat_vb: u64,
+    max_fee_sats: u64,
+    now: Instant,
+    cache: &ScanCache,
+) -> Result<(Transaction, u64), MobileSignerError> {
+    let refuse = |what: String| Err(MobileSignerError::InvalidPsbtJson(what));
+    check_rate(rate_sat_vb)?;
+    let dest = destination_on(destination, network)?;
+    let base = esplora_base(network)?;
+    let wallet = scan_wallet(esplora, words, passphrase, network, now, cache)?;
+    let (spendable, have) = spendable_coins(esplora, base, &wallet)?;
+    // One input and one output is the smallest this transaction can be, so a wallet with nothing
+    // to spend is short by that fee and the dust limit.
+    let fee_sats = rate_sat_vb * p2wpkh_vsize(spendable.len().max(1), 1);
+    if spendable.is_empty() {
+        return refuse(format!(
+            "insufficient funds: have {have} confirmed, need {}",
+            fee_sats + DUST
+        ));
     }
-    Ok((cache.into_transaction(), fee_sats))
+    if fee_sats > max_fee_sats {
+        return refuse(format!(
+            "fee {fee_sats} would be more than the {max_fee_sats} shown"
+        ));
+    }
+    let amount_sats = match have.checked_sub(fee_sats) {
+        Some(amount) if amount >= DUST => amount,
+        _ => {
+            return refuse(format!(
+                "the whole balance {have} less the fee {fee_sats} is below the {DUST} sat dust limit"
+            ));
+        }
+    };
+    let selected: Vec<(&Utxo, &OwnKey)> = spendable.iter().map(|(u, k)| (u, *k)).collect();
+    let output = TxOut {
+        value: Amount::from_sat(amount_sats),
+        script_pubkey: dest.script_pubkey(),
+    };
+    Ok((signed(&selected, vec![output])?, fee_sats))
 }
 
 type Answer = Result<ureq::Response, ureq::Error>;
@@ -2665,6 +2782,27 @@ mod tests {
             self.send_at(to, amount, rate, u64::MAX).map(|(tx, _)| tx)
         }
 
+        /// The whole balance at `rate` sat/vB, as `hot_prepare_send_all` reaches it, and the fee it pays.
+        fn send_all_at(
+            &self,
+            to: &str,
+            rate: u64,
+            max_fee: u64,
+        ) -> Result<(Transaction, u64), MobileSignerError> {
+            let words = abandon_about();
+            signed_send_all(
+                &|url| self.get(url),
+                &words,
+                "",
+                KeyNetwork::Test,
+                to,
+                rate,
+                max_fee,
+                self.now(),
+                &self.cache,
+            )
+        }
+
         /// `hot_prepare_send_at_rate` as the app would reach it, against this Fake.
         fn ready(&self, to: &str, amount: u64, rate: u64) -> PreparedSend {
             let (tx, fee) = self.send_at(to, amount, rate, u64::MAX).unwrap();
@@ -2998,6 +3136,141 @@ mod tests {
         assert_eq!(fee_paid(&fake, &tx), 209);
     }
 
+    // Open item 73, seen on an iPhone on 2026-11-04. The app's send all was the balance less the
+    // one-input estimate of 141 vB at the rate, through the ordinary path. Two coins and one output
+    // are 178 vB, so that payment needs more than the wallet holds, and reserving more would leave
+    // dust change. The send-all path spends every coin and takes the real fee off the amount.
+    #[test]
+    fn send_all_over_two_coins_goes_through_the_send_all_path_and_not_the_apps_old_sum() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 5_000, '1');
+        fake.fund(&addr(Chain::External, 1), 5_000, '2');
+        assert_refused(
+            fake.send_at(SOMEONE, 10_000 - 141, 1, 300),
+            "insufficient funds: have 10000 confirmed, need 10037",
+        );
+        let (tx, fee) = fake.send_all_at(SOMEONE, 1, 300).unwrap();
+        assert_eq!(tx.input.len(), 2);
+        assert_eq!(fee, 178);
+        assert_outputs(&tx, &[(SOMEONE, 10_000 - 178)]);
+        assert_eq!(fee_paid(&fake, &tx), 178);
+        let ready = prepared(&tx, fee);
+        assert_eq!((ready.amount_sats, ready.fee_sats), (9_822, 178));
+        assert_eq!(fake.ready(SOMEONE, 6_000, 1).amount_sats, 6_000);
+    }
+
+    #[test]
+    fn send_all_pays_the_real_size_times_the_rate_over_one_two_and_three_coins_with_no_change() {
+        for coins in 1..=3usize {
+            let mut fake = Fake::new();
+            for i in 0..coins {
+                fake.fund(
+                    &addr(Chain::External, i as u32),
+                    4_000,
+                    char::from(b'1' + i as u8),
+                );
+            }
+            let (tx, fee) = fake.send_all_at(SOMEONE, 2, u64::MAX).unwrap();
+            assert_eq!(
+                (tx.input.len(), tx.output.len()),
+                (coins, 1),
+                "{coins} coins"
+            );
+            assert_eq!(fee, 2 * p2wpkh_vsize(coins, 1), "{coins} coins");
+            assert_eq!(fee_paid(&fake, &tx), fee, "{coins} coins");
+            assert_outputs(&tx, &[(SOMEONE, 4_000 * coins as u64 - fee)]);
+            for i in 0..coins {
+                assert!(
+                    signed_by(&tx, i, 4_000, &own(Chain::External, i as u32)),
+                    "{coins} coins, input {i}"
+                );
+            }
+        }
+    }
+
+    // The same coins as the ordinary path: a receive still in the mempool waits, own change does not.
+    #[test]
+    fn send_all_spends_confirmed_receives_and_own_unconfirmed_change_and_leaves_an_unconfirmed_receive()
+     {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 5_000, '1');
+        fake.fund_unconfirmed(&addr(Chain::External, 1), 3_000, '2');
+        fake.fund_unconfirmed(&addr(Chain::Internal, 0), 2_000, '3');
+        let (tx, fee) = fake.send_all_at(SOMEONE, 1, u64::MAX).unwrap();
+        assert_eq!(tx.input.len(), 2);
+        assert_eq!(fee, 178);
+        assert_outputs(&tx, &[(SOMEONE, 7_000 - 178)]);
+    }
+
+    // At 1 sat/vB one coin and one output cost 110, so 656 sats leave exactly the dust limit and go.
+    #[test]
+    fn send_all_that_would_leave_less_than_dust_after_the_fee_is_refused() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 656, '1');
+        assert_outputs(
+            &fake.send_all_at(SOMEONE, 1, u64::MAX).unwrap().0,
+            &[(SOMEONE, 546)],
+        );
+        let mut short = Fake::new();
+        short.fund(&addr(Chain::External, 0), 655, '1');
+        assert_refused(
+            short.send_all_at(SOMEONE, 1, u64::MAX),
+            "the whole balance 655 less the fee 110 is below the 546 sat dust limit",
+        );
+        let mut tiny = Fake::new();
+        tiny.fund(&addr(Chain::External, 0), 100, '1');
+        assert_refused(
+            tiny.send_all_at(SOMEONE, 1, u64::MAX),
+            "the whole balance 100 less the fee 110 is below the 546 sat dust limit",
+        );
+    }
+
+    #[test]
+    fn send_all_above_the_maximum_shown_is_refused_before_signing_and_at_it_passes() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 5_000, '1');
+        fake.fund(&addr(Chain::External, 1), 5_000, '2');
+        assert_refused(
+            fake.send_all_at(SOMEONE, 1, 177),
+            "fee 178 would be more than the 177 shown",
+        );
+        assert_eq!(fake.send_all_at(SOMEONE, 1, 178).unwrap().1, 178);
+    }
+
+    #[test]
+    fn send_all_of_an_empty_wallet_or_one_whose_only_coin_is_unconfirmed_is_refused() {
+        let fake = Fake::new();
+        assert_refused(
+            fake.send_all_at(SOMEONE, 1, u64::MAX),
+            "insufficient funds: have 0 confirmed, need 656",
+        );
+        let mut pending = Fake::new();
+        pending.fund_unconfirmed(&addr(Chain::External, 0), 5_000, '1');
+        assert_refused(
+            pending.send_all_at(SOMEONE, 2, u64::MAX),
+            "insufficient funds: have 0 confirmed, need 766",
+        );
+    }
+
+    #[test]
+    fn send_all_at_a_rate_out_of_range_or_to_the_wrong_network_is_refused_before_any_lookup() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        assert_refused(
+            fake.send_all_at(SOMEONE, 0, u64::MAX),
+            "fee rate 0 is below 1 sat/vB",
+        );
+        assert_refused(
+            fake.send_all_at(SOMEONE, 2_001, u64::MAX),
+            "fee rate 2001 is above 2000 sat/vB",
+        );
+        assert!(
+            fake.send_all_at("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", 1, u64::MAX)
+                .is_err()
+        );
+        assert_eq!(fake.requests(), 0);
+    }
+
     // The review screen showed the fee for one input. Two inputs cost more, and when that is more
     // than the user allowed, the refusal comes before signing.
     #[test]
@@ -3053,6 +3326,10 @@ mod tests {
             "esplora utxo: the coins' values do not fit u64",
         );
         assert!(fake.snapshot("").is_err(), "the balance overflows too");
+        assert_refused(
+            fake.send_all_at(SOMEONE, 1, u64::MAX),
+            "esplora utxo: the coins' values do not fit u64",
+        );
     }
 
     // Finding 9. The same outpoint in one list, and across two addresses' lists.

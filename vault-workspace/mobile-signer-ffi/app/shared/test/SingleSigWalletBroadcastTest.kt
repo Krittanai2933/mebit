@@ -45,6 +45,8 @@ private const val PLAIN_FAILURE = "ส่งไม่สำเร็จ ลอ�
 
 private data class PrepareCall(val words: List<String>, val passphrase: String, val network: KeyNetwork, val destination: String, val amountSats: ULong, val feeRateSatVb: ULong, val maxFeeSats: ULong)
 
+private data class PrepareAllCall(val words: List<String>, val passphrase: String, val network: KeyNetwork, val destination: String, val feeRateSatVb: ULong, val maxFeeSats: ULong)
+
 private data class PostCall(val network: KeyNetwork, val hex: String, val txid: String)
 
 /** What the send screens read after a broadcast. */
@@ -57,11 +59,13 @@ private fun SingleSigWallet.seen(returned: Boolean) = Seen(returned, lastTxid, l
  * The clock is [clock] and stands still unless a test moves it. [store] is the phone the live session is saved on.
  */
 private class FakeHot {
-    var prepareResult: (feeRateSatVb: ULong) -> PreparedSend = { rate -> PreparedSend(TXID, "hex-1", rate * 141uL) }
+    var prepareResult: (feeRateSatVb: ULong) -> PreparedSend = { rate -> PreparedSend(TXID, "hex-1", rate * 141uL, 100_000uL) }
+    var prepareAllResult: (feeRateSatVb: ULong) -> PreparedSend = { rate -> PreparedSend(TXID, "hex-all", rate * 178uL, 1_000_000uL - rate * 178uL) }
     var postResult: () -> HotSendResult = { HotSendResult(TXID) }
     var snapshotResult: () -> HotWalletSnapshot = { HotWalletSnapshot("tb1qbefore", 1_000_000uL, KeyNetwork.TEST) }
     var clock = SENT_AT
     val prepares = mutableListOf<PrepareCall>()
+    val prepareAlls = mutableListOf<PrepareAllCall>()
     val posts = mutableListOf<PostCall>()
     var snapshots = 0
     var history = listOf(HotTx("txid-0", 1_000_000L, 3u, 1_760_000_000uL))
@@ -71,6 +75,10 @@ private class FakeHot {
         prepare = { words, passphrase, network, destination, amountSats, feeRateSatVb, maxFeeSats ->
             prepares += PrepareCall(words, passphrase, network, destination, amountSats, feeRateSatVb, maxFeeSats)
             prepareResult(feeRateSatVb)
+        },
+        prepareAll = { words, passphrase, network, destination, feeRateSatVb, maxFeeSats ->
+            prepareAlls += PrepareAllCall(words, passphrase, network, destination, feeRateSatVb, maxFeeSats)
+            prepareAllResult(feeRateSatVb)
         },
         post = { network, hex, txid ->
             posts += PostCall(network, hex, txid)
@@ -128,6 +136,7 @@ private fun restart(store: FakeSecureStore): OnboardingSession {
 
 private fun walletThatMustNotCallHot(nowSeconds: () -> Long = { 0L }) = SingleSigWallet(
     prepare = { _, _, _, _, _, _, _ -> fail("prepare ran") },
+    prepareAll = { _, _, _, _, _, _ -> fail("prepareAll ran") },
     post = { _, _, _ -> fail("post ran") },
     snapshot = { _, _, _ -> fail("snapshot ran") },
     fetchHistory = { _, _, _ -> fail("history ran") },
@@ -602,11 +611,55 @@ class SingleSigWalletBroadcastTest {
     fun theSlipGetsTheFeeTheSignedTransactionPaysNotTheEstimate() {
         val hot = FakeHot()
         val session = hot.goLive()
-        hot.prepareResult = { PreparedSend(TXID, "hex-1", 1_672uL) }
+        hot.prepareResult = { PreparedSend(TXID, "hex-1", 1_672uL, 100_000uL) }
         assertTrue(hot.wallet.broadcast(session, 100_000, 8, DESTINATION))
         assertEquals(1_672L, hot.wallet.lastFeeSats, "two coins at 8 sat/vB, not 8 x 141")
         hot.wallet.useDemoFixture()
         assertEquals(0L, hot.wallet.lastFeeSats)
+    }
+
+    // Open item 73: send all over two coins. The core spends every coin and sets the amount, so the app's estimate never reaches it.
+    @Test
+    fun aSendAllPaymentIsPreparedBySendAllWithTheRateAndCeilingAndTheSlipGetsWhatLeft() {
+        val hot = FakeHot()
+        val session = hot.goLive()
+        assertTrue(hot.wallet.broadcast(session, 999_859, 1, DESTINATION, sendAll = true))
+        assertEquals(listOf(PrepareAllCall(WORDS, PASSPHRASE, KeyNetwork.TEST, DESTINATION, 1uL, 300uL)), hot.prepareAlls)
+        assertEquals(emptyList<PrepareCall>(), hot.prepares, "the fixed-amount path never ran")
+        assertEquals(listOf(PostCall(KeyNetwork.TEST, "hex-all", TXID)), hot.posts, "the post got what send all prepared")
+        assertEquals(999_822L, hot.wallet.lastAmountSats, "the balance less the two-coin fee, not the 141 vB estimate")
+        assertEquals(178L, hot.wallet.lastFeeSats)
+        assertNull(hot.wallet.unconfirmedSend)
+        assertEquals(TXID, hot.wallet.lastTxid)
+    }
+
+    @Test
+    fun anOrdinaryPaymentNeverTakesTheSendAllPathAndRecordsItsAmount() {
+        val hot = FakeHot()
+        val session = hot.goLive()
+        assertTrue(hot.wallet.broadcast(session, 100_000, 8, DESTINATION))
+        assertEquals(emptyList<PrepareAllCall>(), hot.prepareAlls)
+        assertEquals(1, hot.prepares.size)
+        assertEquals(100_000L, hot.wallet.lastAmountSats)
+        hot.wallet.useDemoFixture()
+        assertEquals(0L, hot.wallet.lastAmountSats)
+    }
+
+    @Test
+    fun aSendAllRefusalSetsNoGuardAndSpeaksThaiAndAMockSendAllIsDeducted() {
+        val hot = FakeHot()
+        val session = hot.goLive()
+        hot.prepareAllResult = { throw MobileSignerException.InvalidPsbtJson("invalid PSBT json: the whole balance 655 less the fee 110 is below the 546 sat dust limit") }
+        assertFalse(hot.wallet.broadcast(session, 514, 1, DESTINATION, sendAll = true))
+        assertEquals(sendErrorThai("the whole balance 655 less the fee 110 is below the 546 sat dust limit"), hot.wallet.lastError)
+        assertNull(hot.wallet.unconfirmedSend)
+        assertEquals(emptyList<PostCall>(), hot.posts)
+        val demo = walletThatMustNotCallHot()
+        val fresh = OnboardingSession()
+        demo.bindSession(fresh)
+        assertTrue(demo.broadcast(fresh, 1_250_000L - 1_128L, 8, DESTINATION, sendAll = true))
+        assertEquals(0L, demo.balanceSats)
+        assertEquals(1_250_000L - 1_128L, demo.lastAmountSats)
     }
 
     @Test

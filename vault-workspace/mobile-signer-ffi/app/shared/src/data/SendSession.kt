@@ -13,6 +13,7 @@ import com.mebit.ffi.signer.MobileSignerException
 import com.mebit.ffi.signer.PreparedSend
 import com.mebit.ffi.signer.hotBroadcast
 import com.mebit.ffi.signer.hotFeeTiers
+import com.mebit.ffi.signer.hotPrepareSendAll
 import com.mebit.ffi.signer.hotPrepareSendAtRate
 import com.mebit.ffi.signer.hotReceiveAddress
 import com.mebit.ffi.signer.hotWalletHistory
@@ -28,6 +29,7 @@ import kotlin.time.Clock
  */
 class SingleSigWallet(
     private val prepare: (words: List<String>, passphrase: String, network: KeyNetwork, destination: String, amountSats: ULong, feeRateSatVb: ULong, maxFeeSats: ULong) -> PreparedSend = ::hotPrepareSendAtRate,
+    private val prepareAll: (words: List<String>, passphrase: String, network: KeyNetwork, destination: String, feeRateSatVb: ULong, maxFeeSats: ULong) -> PreparedSend = ::hotPrepareSendAll,
     private val post: (network: KeyNetwork, hex: String, txid: String) -> HotSendResult = ::hotBroadcast,
     private val snapshot: (words: List<String>, passphrase: String, network: KeyNetwork) -> HotWalletSnapshot = ::hotWalletSnapshot,
     private val fetchHistory: (words: List<String>, passphrase: String, network: KeyNetwork) -> List<HotTx> = ::hotWalletHistory,
@@ -62,6 +64,10 @@ class SingleSigWallet(
 
     /** The fee the last payment that went out pays, in sats: the signed transaction's, not the Send screen's estimate. 0 until a payment goes out. */
     var lastFeeSats: Long by mutableStateOf(0L)
+        private set
+
+    /** What the last payment that went out pays its destination, in sats: the signed transaction's, which for send all is the balance less the real fee. 0 until a payment goes out. */
+    var lastAmountSats: Long by mutableStateOf(0L)
         private set
 
     /** When the last payment went out, in Unix seconds on the phone clock. 0 until a payment goes out, and again after [useDemoFixture]. */
@@ -137,6 +143,8 @@ class SingleSigWallet(
      * Signs and posts [amountSats] to [destination] at [feeRateSatVb]. The fee the transaction pays is its size times the rate, and the
      * core refuses before signing when that is more than twice the estimate the screens showed (at least 300 sats), so a payment never
      * costs more than the user could see. [lastFeeSats] holds the fee paid once the payment is out.
+     * With [sendAll] the core spends every coin and pays the destination the balance less the real fee, so [amountSats] is only the
+     * estimate the screens showed and [lastAmountSats] holds what left.
      */
     fun broadcast(
         session: OnboardingSession,
@@ -144,6 +152,7 @@ class SingleSigWallet(
         feeRateSatVb: Long,
         destination: String,
         network: KeyNetwork = KeyNetwork.TEST,
+        sendAll: Boolean = false,
     ): Boolean {
         lastError = null
         val feeSats = feeRateSatVb * TYPICAL_VSIZE
@@ -164,11 +173,16 @@ class SingleSigWallet(
             balanceSats -= amountSats + feeSats
             lastTxid = "mocktxid_" + balanceSats.toString(16) + "_" + amountSats.toString(16)
             lastFeeSats = feeSats
+            lastAmountSats = amountSats
             lastSentAtSeconds = nowSeconds()
             return true
         }
         val prepared = try {
-            prepare(session.words, session.passphrase, network, destination, amountSats.toULong(), feeRateSatVb.toULong(), maxFeeSats(feeSats).toULong())
+            if (sendAll) {
+                prepareAll(session.words, session.passphrase, network, destination, feeRateSatVb.toULong(), maxFeeSats(feeSats).toULong())
+            } else {
+                prepare(session.words, session.passphrase, network, destination, amountSats.toULong(), feeRateSatVb.toULong(), maxFeeSats(feeSats).toULong())
+            }
         } catch (e: Exception) {
             lastError = sendErrorThai(e.message)
             return false
@@ -200,6 +214,7 @@ class SingleSigWallet(
         clearUnconfirmedSend(session)
         lastTxid = prepared.txid
         lastFeeSats = prepared.feeSats.toLong()
+        lastAmountSats = prepared.amountSats.toLong()
         lastSentAtSeconds = nowSeconds()
         // Its own try: the payment is out once the post returns, and reading it as failed invites a retry that pays twice.
         try {
@@ -227,6 +242,7 @@ class SingleSigWallet(
         receiveAddress = "tb1qmebitdemosinglesig0000000000000000recv"
         lastTxid = ""
         lastFeeSats = 0L
+        lastAmountSats = 0L
         lastSentAtSeconds = 0L
         history = emptyList()
         unconfirmedSend = null
@@ -256,6 +272,8 @@ fun sendErrorThai(message: String?): String {
         m.startsWith("fee ") && " would be more than the " in m -> "ค่าธรรมเนียมจริงสูงกว่าที่แสดง ยังไม่ได้ส่ง ลองใหม่"
         m.startsWith("insufficient funds") -> "ยอดที่ยืนยันแล้วไม่พอ รอให้เงินที่เพิ่งได้รับยืนยันก่อน"
         m.startsWith("change below dust") -> "เงินทอนน้อยเกินไป ส่งทั้งหมดหรือเปลี่ยนจำนวน"
+        // hot_prepare_send_all: the balance less the real fee would be dust.
+        m.startsWith("the whole balance ") -> "ยอดทั้งหมดหลังหักค่าธรรมเนียมน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)"
         m.startsWith("fee ") && " is below " in m -> "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น"
         m.startsWith("fee ") && " is above " in m -> "ค่าธรรมเนียมสูงผิดปกติ ตรวจจำนวนอีกครั้ง"
         m.startsWith("esplora scan:") -> "ประวัติของกระเป๋านี้ผิดปกติ ตรวจกับ explorer ก่อนส่ง"
@@ -372,6 +390,13 @@ class SendDraft {
 
     /** The rate of [tier] in sat/vB, which the broadcast pays. */
     val rateSatVb: Long get() = (tiers ?: LiveFeeTiers.DEFAULT).rate(tier)
+
+    /** True while the amount is what [setSendAll] set, zero included, so a fee change can work it out again. Any other amount ends it. */
+    var sendAllMarked: Boolean by mutableStateOf(false)
+        private set
+
+    /** True while the amount is send all and above zero. The payment then spends every coin and the core sets the amount from the real fee, so [amountSats] is an estimate. */
+    val isSendAll: Boolean get() = sendAllMarked && amountSats > 0
     var destination: String by mutableStateOf("")
     var amountText: String by mutableStateOf("")
         private set
@@ -389,14 +414,22 @@ class SendDraft {
 
     /** Takes what the user typed in the amount field, in BTC. An empty or unreadable text means no amount yet. */
     fun setAmountBtc(text: String) {
+        sendAllMarked = false
         amountText = text
         amountSats = parseBtc(text) ?: 0L
     }
 
     /** Sets the amount to exactly [sats] and writes the BTC text from it, so 500_000 gives "0.005". Zero leaves the text empty. Not `setAmountSats`: that is the private setter's name on the JVM. */
     fun setAmountInSats(sats: Long) {
+        sendAllMarked = false
         amountSats = sats
         amountText = if (sats == 0L) "" else formatBtc(sats).trimEnd('0').trimEnd('.')
+    }
+
+    /** [setAmountInSats] with the amount marked as send all. */
+    fun setSendAll(sats: Long) {
+        setAmountInSats(sats)
+        sendAllMarked = true
     }
 
     fun chooseTier(next: FeeTier) {
@@ -417,6 +450,7 @@ class SendDraft {
             lastError = "จำนวนไม่ถูกต้อง"
             return false
         }
+        sendAllMarked = false
         amountSats = v
         amountText = formatBtc(v).trimEnd('0').trimEnd('.')
         return true

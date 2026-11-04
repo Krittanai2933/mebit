@@ -479,7 +479,12 @@ public data class PreparedSend (
      * The fee the transaction pays, in sats: its virtual size times the rate asked for, rounded up.
      * A payment whose change would be dust is refused instead of folding the change into the fee.
      */
-    var `feeSats`: kotlin.ULong
+    var `feeSats`: kotlin.ULong, 
+    /**
+     * What `destination` is paid, in sats: the amount asked for, or for `hot_prepare_send_all`
+     * the whole balance less `fee_sats`, which is only known once the coins are.
+     */
+    var `amountSats`: kotlin.ULong
 ) {
     public companion object
 }
@@ -948,6 +953,18 @@ public expect fun `hotBroadcast`(`network`: KeyNetwork, `hex`: kotlin.String, `t
  * answer is unusable the fixed tiers 4, 8 and 15 come back with `live` false.
  */
 public expect fun `hotFeeTiers`(`network`: KeyNetwork): FeeTiers
+
+/**
+ * Scan, spend every coin `hot_prepare_send_at_rate` would consider, and sign one output paying
+ * `destination` the whole balance less the fee, with no change, and post nothing. The fee is the
+ * size of that transaction times `fee_rate_sat_vb`, so it and the amount are only known once the
+ * coins are: the answer's `amount_sats` is what leaves. Refuses, before signing, a rate outside
+ * 1 to 2,000 sat/vB, a wallet with nothing confirmed to spend, a fee above `max_fee_sats`, and a
+ * balance that would leave less than the 546 sat dust limit after the fee. The same scan as
+ * `hot_prepare_send_at_rate`, so call it off the main thread.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `feeRateSatVb`: kotlin.ULong, `maxFeeSats`: kotlin.ULong): PreparedSend
 
 /**
  * Scan, select coins, check and sign a payment at `fee_rate_sat_vb`, and post nothing. The only

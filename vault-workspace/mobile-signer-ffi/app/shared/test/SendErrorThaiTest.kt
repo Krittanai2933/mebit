@@ -11,6 +11,7 @@ class SendErrorThaiTest {
         "fee 2115 is more than the amount 1000" to "ค่าธรรมเนียมสูงกว่าจำนวนที่ส่ง เลือกระดับที่ต่ำลง",
         "insufficient funds: have 0 confirmed, need 1100" to "ยอดที่ยืนยันแล้วไม่พอ รอให้เงินที่เพิ่งได้รับยืนยันก่อน",
         "change below dust, send the whole balance or change the amount" to "เงินทอนน้อยเกินไป ส่งทั้งหมดหรือเปลี่ยนจำนวน",
+        "the whole balance 655 less the fee 110 is below the 546 sat dust limit" to "ยอดทั้งหมดหลังหักค่าธรรมเนียมน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)",
         "fee rate 0 is below 1 sat/vB" to "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น",
         "fee rate 2001 is above 2000 sat/vB" to "ค่าธรรมเนียมสูงผิดปกติ ตรวจจำนวนอีกครั้ง",
         "fee 418 would be more than the 300 shown" to "ค่าธรรมเนียมจริงสูงกว่าที่แสดง ยังไม่ได้ส่ง ลองใหม่",

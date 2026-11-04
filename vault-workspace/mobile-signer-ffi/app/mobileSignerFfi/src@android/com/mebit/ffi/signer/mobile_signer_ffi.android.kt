@@ -1050,6 +1050,8 @@ internal typealias UniffiVTableCallbackInterfacePairingCodesUniffiByValue = Unif
 
 
 
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -1117,6 +1119,9 @@ internal object IntegrityCheckingUniffiLib : Library {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_fee_tiers() != 58197.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_all() != 1756.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate() != 47965.toShort()) {
@@ -1202,6 +1207,9 @@ internal object IntegrityCheckingUniffiLib : Library {
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_hot_fee_tiers(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_all(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate(
@@ -1391,6 +1399,16 @@ internal object UniffiLib : Library {
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_func_hot_fee_tiers(
         `network`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_hot_prepare_send_all(
+        `mnemonicWords`: RustBufferByValue,
+        `passphrase`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        `destination`: RustBufferByValue,
+        `feeRateSatVb`: Long,
+        `maxFeeSats`: Long,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     @JvmStatic
@@ -2725,19 +2743,22 @@ public object FfiConverterTypePreparedSend: FfiConverterRustBuffer<PreparedSend>
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
         )
     }
 
     override fun allocationSize(value: PreparedSend): ULong = (
             FfiConverterString.allocationSize(value.`txid`) +
             FfiConverterString.allocationSize(value.`hex`) +
-            FfiConverterULong.allocationSize(value.`feeSats`)
+            FfiConverterULong.allocationSize(value.`feeSats`) +
+            FfiConverterULong.allocationSize(value.`amountSats`)
     )
 
     override fun write(value: PreparedSend, buf: ByteBuffer) {
         FfiConverterString.write(value.`txid`, buf)
         FfiConverterString.write(value.`hex`, buf)
         FfiConverterULong.write(value.`feeSats`, buf)
+        FfiConverterULong.write(value.`amountSats`, buf)
     }
 }
 
@@ -3451,6 +3472,30 @@ public actual fun `hotFeeTiers`(`network`: KeyNetwork): FeeTiers {
     return FfiConverterTypeFeeTiers.lift(uniffiRustCall { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_fee_tiers(
             FfiConverterTypeKeyNetwork.lower(`network`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * Scan, spend every coin `hot_prepare_send_at_rate` would consider, and sign one output paying
+ * `destination` the whole balance less the fee, with no change, and post nothing. The fee is the
+ * size of that transaction times `fee_rate_sat_vb`, so it and the amount are only known once the
+ * coins are: the answer's `amount_sats` is what leaves. Refuses, before signing, a rate outside
+ * 1 to 2,000 sat/vB, a wallet with nothing confirmed to spend, a fee above `max_fee_sats`, and a
+ * balance that would leave less than the 546 sat dust limit after the fee. The same scan as
+ * `hot_prepare_send_at_rate`, so call it off the main thread.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `feeRateSatVb`: kotlin.ULong, `maxFeeSats`: kotlin.ULong): PreparedSend {
+    return FfiConverterTypePreparedSend.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_prepare_send_all(
+            FfiConverterSequenceString.lower(`mnemonicWords`),
+            FfiConverterString.lower(`passphrase`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterString.lower(`destination`),
+            FfiConverterULong.lower(`feeRateSatVb`),
+            FfiConverterULong.lower(`maxFeeSats`),
             uniffiRustCallStatus,
         )
     })
