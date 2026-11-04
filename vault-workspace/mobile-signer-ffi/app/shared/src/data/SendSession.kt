@@ -83,6 +83,10 @@ class SingleSigWallet(
         private set
     var lastError: String? by mutableStateOf(null)
         private set
+
+    /** The Rust text of what the last [bindSession] could not load, after "snapshot: " or "history: ". Only a debug build shows it, so a phone screenshot names the request that failed. Null after a bind that loaded both. */
+    var lastFailure: String? by mutableStateOf(null)
+        private set
     val live: Boolean get() = mode == WalletMode.Live
 
     /** False when the snapshot failed. Screens then show a dash, not [balanceSats], and no payment can start. */
@@ -115,6 +119,7 @@ class SingleSigWallet(
 
     fun bindSession(session: OnboardingSession, network: KeyNetwork = KeyNetwork.TEST) {
         lastError = null
+        lastFailure = null
         if (session.words.size < 12) {
             useDemoFixture()
             return
@@ -131,6 +136,7 @@ class SingleSigWallet(
             val loaded = try {
                 fetchHistory(session.words, session.passphrase, network)
             } catch (e: Exception) {
+                lastFailure = "history: ${e.message ?: e}"
                 null
             }
             history = loaded ?: emptyList()
@@ -140,6 +146,7 @@ class SingleSigWallet(
             // Mode first, so no frame shows the cleared balance as a known one.
             mode = WalletMode.Unavailable
             lastError = readErrorThai(e.message)
+            lastFailure = "snapshot: ${e.message ?: e}"
             balanceSats = 0L
             spendableSats = 0L
             history = emptyList()

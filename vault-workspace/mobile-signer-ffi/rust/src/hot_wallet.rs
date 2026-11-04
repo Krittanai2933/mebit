@@ -307,66 +307,99 @@ const BACKOFF: [Duration; RETRIES] = [Duration::from_secs(1), Duration::from_sec
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(5);
 const MAX_EXTRA_WAIT: Duration = Duration::from_secs(8);
 
+/// Why one attempt at a GET failed, which decides whether it is asked again, with the text the caller
+/// gets when it is the last attempt.
 enum GetError {
-    /// Throttled or a brief server error, answered quickly: the same GET may be asked again.
+    /// Throttled or a brief server error, answered quickly.
     Retryable {
         retry_after: Option<Duration>,
         what: String,
     },
-    /// The host did not answer: no connection, TLS, or a timeout before or inside the body.
-    Unreachable(MobileSignerError),
+    /// No whole answer arrived and no limit ran out: no connection, TLS, a reset, a body cut short.
+    Unreachable(String),
+    /// The connect, a read or the whole request ran past its limit.
+    TimedOut(String),
     /// The host answered and the answer is no use: another status, or a body that cannot be read.
-    Fatal(MobileSignerError),
+    Fatal(String),
 }
 
-/// Asks up to `RETRIES + 1` times and returns only a body some attempt got as a 200. The waits add up
-/// to at most `MAX_EXTRA_WAIT`. shortcut: Retry-After in HTTP-date form is ignored, upgrade if the
-/// host is seen sending it.
+impl GetError {
+    fn text(&mut self) -> &mut String {
+        match self {
+            GetError::Retryable { what, .. } => what,
+            GetError::Unreachable(text) | GetError::TimedOut(text) | GetError::Fatal(text) => text,
+        }
+    }
+}
+
+impl From<GetError> for MobileSignerError {
+    fn from(mut failure: GetError) -> Self {
+        MobileSignerError::InvalidPsbtJson(std::mem::take(failure.text()))
+    }
+}
+
+/// Asks until an attempt gets a 200 or a `Fatal` answer, or the attempts run out: `RETRIES + 1`, or
+/// two once one timed out, because a timeout has already held the call up to `REQUEST_TIMEOUT`. A GET
+/// is a read, so asking again after a lost connection is safe. The waits add up to at most
+/// `MAX_EXTRA_WAIT`. The error is the last attempt's, so the caller sees whether the host answered.
+/// shortcut: Retry-After in HTTP-date form is ignored, upgrade if the host is seen sending it.
 fn get_with_retry(
     attempt: &dyn Fn() -> Result<String, GetError>,
     sleep: &dyn Fn(Duration),
-) -> Result<String, MobileSignerError> {
+) -> Result<String, GetError> {
     let mut slept = Duration::ZERO;
+    let mut timed_out = false;
     for n in 0.. {
-        match attempt() {
+        let mut failure = match attempt() {
             Ok(body) => return Ok(body),
-            Err(GetError::Fatal(e) | GetError::Unreachable(e)) => return Err(e),
-            Err(GetError::Retryable { retry_after, what }) => {
-                if n == RETRIES {
-                    return Err(MobileSignerError::InvalidPsbtJson(format!(
-                        "esplora get: {what}, gave up after {} attempts",
-                        n + 1
-                    )));
-                }
-                let wait = retry_after
-                    .map_or(BACKOFF.get(n).copied().unwrap_or_default(), |d| {
-                        d.min(MAX_RETRY_AFTER)
-                    })
-                    .min(MAX_EXTRA_WAIT - slept);
-                sleep(wait);
-                slept += wait;
+            Err(failure) => failure,
+        };
+        let retry_after = match &failure {
+            GetError::Fatal(_) => return Err(failure),
+            GetError::Retryable { retry_after, .. } => *retry_after,
+            GetError::Unreachable(_) => None,
+            GetError::TimedOut(_) => {
+                timed_out = true;
+                None
             }
+        };
+        if n == RETRIES || (timed_out && n > 0) {
+            let attempts = format!(", gave up after {} attempts", n + 1);
+            failure.text().push_str(&attempts);
+            return Err(failure);
         }
+        let wait = retry_after
+            .map_or(BACKOFF.get(n).copied().unwrap_or_default(), |d| {
+                d.min(MAX_RETRY_AFTER)
+            })
+            .min(MAX_EXTRA_WAIT - slept);
+        sleep(wait);
+        slept += wait;
     }
     unreachable!()
 }
 
-// A timeout is not retried: a host that stayed silent for the connect or read limit will not answer
-// after a one second pause, and a retry would multiply the stall of a scan that fails anyway.
+// A timeout is asked again once: one stalled connection in a scan of hundreds says little about the
+// host, and a second timeout ends it. A limit on a blocking socket can surface as `WouldBlock`, which
+// ureq turns into `TimedOut` while reading the answer but not while writing the request, where a TLS
+// handshake that stalls can run out.
 fn classify(answer: Result<ureq::Response, ureq::Error>) -> Result<String, GetError> {
-    let error = |what: &str, e: &dyn std::fmt::Display| {
-        MobileSignerError::InvalidPsbtJson(format!("{what}: {e}"))
-    };
-    let fatal = |what: &str, e: &dyn std::fmt::Display| GetError::Fatal(error(what, e));
+    use std::io::ErrorKind;
+    let limit = |kind| matches!(kind, ErrorKind::TimedOut | ErrorKind::WouldBlock);
     match answer {
-        // ureq reports a body read that ran past the agent's deadline, or a read limit, as `TimedOut`.
-        Ok(response) => response.into_string().map_err(|e| {
-            if e.kind() == std::io::ErrorKind::TimedOut {
-                GetError::Unreachable(error("esplora body", &e))
-            } else {
-                fatal("esplora body", &e)
-            }
-        }),
+        Ok(response) => {
+            let what = format!("esplora body of {}", response.get_url());
+            response.into_string().map_err(|e| {
+                let text = format!("{what}: {e}");
+                match e.kind() {
+                    kind if limit(kind) => GetError::TimedOut(text),
+                    ErrorKind::ConnectionReset
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::UnexpectedEof => GetError::Unreachable(text),
+                    _ => GetError::Fatal(text),
+                }
+            })
+        }
         Err(ureq::Error::Status(code @ (429 | 502 | 503 | 504), response)) => {
             let retry_after = response
                 .header("Retry-After")
@@ -374,11 +407,21 @@ fn classify(answer: Result<ureq::Response, ureq::Error>) -> Result<String, GetEr
                 .map(Duration::from_secs);
             Err(GetError::Retryable {
                 retry_after,
-                what: format!("HTTP status {code}"),
+                what: format!("esplora get: HTTP status {code}"),
             })
         }
-        Err(e @ ureq::Error::Transport(_)) => Err(GetError::Unreachable(error("esplora get", &e))),
-        Err(e) => Err(fatal("esplora get", &e)),
+        Err(e @ ureq::Error::Transport(_)) => {
+            let timed_out = std::error::Error::source(&e)
+                .and_then(|source| source.downcast_ref::<std::io::Error>())
+                .is_some_and(|io| limit(io.kind()));
+            let text = format!("esplora get: {e}");
+            Err(if timed_out {
+                GetError::TimedOut(text)
+            } else {
+                GetError::Unreachable(text)
+            })
+        }
+        Err(e) => Err(GetError::Fatal(format!("esplora get: {e}"))),
     }
 }
 
@@ -428,8 +471,8 @@ fn pick_host(
     Err(MobileSignerError::InvalidPsbtJson(error))
 }
 
-/// Forgets the host in use after a connection-level failure (no connection, TLS, a timeout before
-/// or inside the body), so the next call probes again, and every cached scan with it, so the next
+/// Forgets the host in use after a GET that got no whole answer (no connection, TLS, a reset, a body
+/// cut short, a timeout), so the next call probes again, and every cached scan with it, so the next
 /// call scans the whole gap limit. A status or an unreadable body is the host answering and changes
 /// nothing.
 fn forget_host_if_unreachable(
@@ -437,7 +480,7 @@ fn forget_host_if_unreachable(
     cache: &HostChoice,
     scans: &ScanCache,
 ) {
-    if matches!(got, Err(GetError::Unreachable(_))) {
+    if matches!(got, Err(GetError::Unreachable(_) | GetError::TimedOut(_))) {
         *cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
@@ -475,24 +518,24 @@ fn http_get(url: &str) -> Result<String, MobileSignerError> {
     let url = on_host(url, selected_base()?);
     get_forgetting(
         &|| classify(AGENT.get(&url).call()),
+        &std::thread::sleep,
         &CHOSEN_HOST,
         &SCAN_CACHE,
     )
 }
 
-/// `call` with the retry, forgetting the host in use and every cached scan after a connection-level
-/// failure. Every GET of the wallet goes through here, the fee tiers included.
+/// `call` with the retry, forgetting the host in use and every cached scan when the last attempt got
+/// no whole answer: a loss the retry recovered says the host answers. Every GET of the wallet goes
+/// through here, the fee tiers included.
 fn get_forgetting(
     call: &dyn Fn() -> Result<String, GetError>,
+    sleep: &dyn Fn(Duration),
     hosts: &HostChoice,
     scans: &ScanCache,
 ) -> Result<String, MobileSignerError> {
-    let attempt = || {
-        let got = call();
-        forget_host_if_unreachable(&got, hosts, scans);
-        got
-    };
-    get_with_retry(&attempt, &std::thread::sleep)
+    let got = get_with_retry(call, sleep);
+    forget_host_if_unreachable(&got, hosts, scans);
+    Ok(got?)
 }
 
 /// Every URL's body, in the order given, `WINDOW` requests in flight at a time. One failure fails
@@ -3969,7 +4012,8 @@ mod tests {
                     .expect("one attempt too many")
             },
             &|d| sleeps.borrow_mut().push(d),
-        );
+        )
+        .map_err(MobileSignerError::from);
         (result, attempts.get(), sleeps.into_inner())
     }
 
@@ -4007,7 +4051,7 @@ mod tests {
 
     #[test]
     fn a_fatal_answer_is_asked_once() {
-        let fatal = GetError::Fatal(MobileSignerError::InvalidPsbtJson("404".into()));
+        let fatal = GetError::Fatal("404".into());
         let (result, attempts, sleeps) = retried(vec![Err(fatal)]);
         assert!(result.is_err());
         assert_eq!((attempts, sleeps.len()), (1, 0));
@@ -4062,19 +4106,30 @@ mod tests {
         }
         let ok = classified("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
         assert!(matches!(ok, Ok(b) if b == "{}"));
-        // A timeout is not retried: waiting a second does not make a silent host answer.
+        assert!(matches!(classify(no_answer()), Err(GetError::TimedOut(_))));
+        // A read limit on a blocking socket, a stalled TLS handshake, reaches ureq's caller as `WouldBlock`.
+        let blocked = std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "Resource temporarily unavailable",
+        );
         assert!(matches!(
-            classify(no_answer()),
+            classify(Err(blocked.into())),
+            Err(GetError::TimedOut(_))
+        ));
+        assert!(matches!(
+            classify(Err(refused())),
             Err(GetError::Unreachable(_))
         ));
-        let refused = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "no");
         assert!(matches!(
-            classify(Err(refused.into())),
+            classify(Err(reset())),
             Err(GetError::Unreachable(_))
         ));
-        // A body cut short is the host answering. A body that times out is tested against a socket
-        // in `a_body_that_trickles_past_the_request_deadline_is_a_failure_that_forgets_the_host`.
-        assert!(matches!(classify(cut_short(200)), Err(GetError::Fatal(_))));
+        // A body cut short is the connection lost mid-answer, not an answer. A body that times out is
+        // tested against a socket in `a_body_that_trickles_past_the_request_deadline_is_a_failure_that_forgets_the_host`.
+        assert!(matches!(
+            classify(cut_short(200)),
+            Err(GetError::Unreachable(_))
+        ));
     }
 
     #[test]
@@ -4095,6 +4150,198 @@ mod tests {
     fn a_retried_200_still_goes_through_the_strict_parser() {
         let (result, _, _) = retried(vec![Err(throttled()), Ok(r#"{"chain_stats":{}}"#.into())]);
         assert!(parse_address_stats(&result.unwrap()).is_err());
+    }
+
+    // What ureq hands over when the connection drops before the answer: no status, no body.
+    fn reset() -> ureq::Error {
+        std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "connection reset by peer",
+        )
+        .into()
+    }
+
+    fn refused() -> ureq::Error {
+        std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "connection refused").into()
+    }
+
+    // Item 75. The public test phrase showed no balance on an iPhone over Tailscale while the same
+    // scan passed on a Mac. 150 used receive and 100 used change addresses make a 290 lookup scan
+    // and two coin lists, about the 299 the Mac measured, and one of them loses its connection.
+    #[test]
+    fn one_lost_connection_among_a_large_wallets_requests_still_loads_it_on_the_same_host() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let losses = [
+            ("a reset", lost as fn() -> Result<String, GetError>),
+            ("a refused connection", || classify(Err(refused()))),
+            ("a timeout", stalled),
+            ("a body cut short", || classify(cut_short(200))),
+        ];
+        let account = Account::new(&abandon_about(), "", Network::Testnet4).unwrap();
+        let at = |chain, index| account.key(chain, index).unwrap().address.to_string();
+        let used: Vec<String> = (0..150)
+            .map(|i| at(Chain::External, i))
+            .chain((0..100).map(|i| at(Chain::Internal, i)))
+            .collect();
+        let mut failed = Vec::new();
+        for (loss, lose) in losses {
+            let mut fake = Fake::new();
+            for address in &used {
+                fake.touch(address);
+            }
+            fake.fund(&at(Chain::External, 149), 60_000, 'a');
+            fake.fund(&at(Chain::Internal, 99), 40_000, 'b');
+            let hosts = Mutex::new(Some(HostVerdict::Chosen(0, fake.now())));
+            let attempts = AtomicUsize::new(0);
+            let esplora = |url: &str| {
+                get_forgetting(
+                    &|| match attempts.fetch_add(1, SeqCst) {
+                        200 => lose(),
+                        _ => classify(answer(200, &fake.get(url).unwrap())),
+                    },
+                    &|_| {},
+                    &hosts,
+                    &fake.cache,
+                )
+            };
+            let snapshot = match snapshot_from(
+                &esplora,
+                &abandon_about(),
+                "",
+                KeyNetwork::Test,
+                fake.now(),
+                &fake.cache,
+            ) {
+                Ok(snapshot) => snapshot,
+                Err(e) => {
+                    failed.push(format!(
+                        "{loss} at request 200 failed the load after {} answers: {e}",
+                        fake.requests()
+                    ));
+                    continue;
+                }
+            };
+            assert_eq!(
+                (
+                    snapshot.balance_sats,
+                    snapshot.spendable_sats,
+                    snapshot.receive_address
+                ),
+                (100_000, 100_000, at(Chain::External, 150)),
+                "{loss}"
+            );
+            assert_eq!(fake.requests(), 292, "{loss}");
+            assert_eq!(
+                attempts.load(SeqCst),
+                293,
+                "{loss}: the lost one is asked once more"
+            );
+            assert_eq!(
+                chosen(&hosts),
+                Some(0),
+                "{loss}: the host that answered stays"
+            );
+            assert_eq!(
+                fake.cache.lock().unwrap().entries.len(),
+                1,
+                "{loss}: the scan is kept for the next call"
+            );
+        }
+        assert!(failed.is_empty(), "\n{}", failed.join("\n"));
+    }
+
+    fn lost() -> Result<String, GetError> {
+        classify(Err(reset()))
+    }
+
+    fn stalled() -> Result<String, GetError> {
+        classify(no_answer())
+    }
+
+    #[test]
+    fn a_lost_connection_is_asked_again_after_one_then_two_seconds_and_a_third_loss_ends_it() {
+        let (result, attempts, sleeps) = retried(vec![lost(), Ok("body".into())]);
+        assert_eq!(result.unwrap(), "body");
+        assert_eq!((attempts, sleeps), (2, secs(&[1])));
+        let (result, attempts, sleeps) = retried(vec![lost(), lost(), lost()]);
+        let MobileSignerError::InvalidPsbtJson(message) = result.unwrap_err() else {
+            panic!("wrong error kind");
+        };
+        assert_eq!(
+            message,
+            "esplora get: Network Error: connection reset by peer, gave up after 3 attempts"
+        );
+        assert_eq!((attempts, sleeps), (3, secs(&[1, 2])));
+    }
+
+    #[test]
+    fn a_get_that_timed_out_is_asked_at_most_twice() {
+        let (result, attempts, sleeps) = retried(vec![stalled(), Ok("body".into())]);
+        assert_eq!(result.unwrap(), "body");
+        assert_eq!((attempts, sleeps), (2, secs(&[1])));
+        for (case, script) in [
+            ("two timeouts", vec![stalled(), stalled()]),
+            ("a loss, then a timeout", vec![lost(), stalled()]),
+            ("a timeout, then a loss", vec![stalled(), lost()]),
+        ] {
+            let (result, attempts, _) = retried(script);
+            let MobileSignerError::InvalidPsbtJson(message) = result.unwrap_err() else {
+                panic!("{case}: wrong error kind");
+            };
+            assert!(
+                message.ends_with("gave up after 2 attempts"),
+                "{case}: {message}"
+            );
+            assert_eq!(attempts, 2, "{case}");
+        }
+    }
+
+    #[test]
+    fn the_host_and_the_scans_are_forgotten_only_when_the_last_attempt_got_no_whole_answer() {
+        let cases = [
+            ("a loss, then a 200", vec![lost(), Ok("{}".into())], false),
+            (
+                "a timeout, then a 200",
+                vec![stalled(), Ok("{}".into())],
+                false,
+            ),
+            (
+                "a loss, then a 404",
+                vec![lost(), classify(answer(404, ""))],
+                false,
+            ),
+            (
+                "three throttles",
+                vec![Err(throttled()), Err(throttled()), Err(throttled())],
+                false,
+            ),
+            ("three losses", vec![lost(), lost(), lost()], true),
+            ("two timeouts", vec![stalled(), stalled()], true),
+        ];
+        for (case, script, forgotten) in cases {
+            let hosts = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
+            let fake = Fake::new();
+            fake.snapshot("").unwrap();
+            let script = Mutex::new(VecDeque::from(script));
+            let next = || {
+                script
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("one attempt too many")
+            };
+            let _ = get_forgetting(&next, &|_| {}, &hosts, &fake.cache);
+            assert!(
+                script.lock().unwrap().is_empty(),
+                "{case}: every attempt was asked"
+            );
+            assert_eq!(chosen(&hosts).is_none(), forgotten, "{case}");
+            assert_eq!(
+                fake.cache.lock().unwrap().entries.is_empty(),
+                forgotten,
+                "{case}"
+            );
+        }
     }
 
     const HOSTS: [&str; 2] = ["https://first.example/api", "https://second.example/api"];
@@ -4255,7 +4502,7 @@ mod tests {
         let got = classify(agent.get(&format!("{host}/block-height/0")).call());
         let took = start.elapsed();
         forget_host_if_unreachable(&got, &cache, &fake.cache);
-        assert!(matches!(got, Err(GetError::Unreachable(_))));
+        assert!(matches!(got, Err(GetError::TimedOut(_))));
         assert!(took < whole + Duration::from_secs(3), "{took:?}");
         assert_eq!(chosen(&cache), None);
         assert!(fake.cache.lock().unwrap().entries.is_empty());
@@ -4475,8 +4722,8 @@ mod tests {
 
         let (cache, fake) = (cached(), scanned());
         forget_host_if_unreachable(&classify(cut_short(200)), &cache, &fake.cache);
-        assert_eq!(chosen(&cache), Some(0), "a body cut short");
-        assert!(scans_kept(&fake), "a body cut short");
+        assert_eq!(chosen(&cache), None, "a body cut short");
+        assert!(!scans_kept(&fake), "a body cut short");
     }
 
     #[test]
@@ -4797,7 +5044,7 @@ mod tests {
         let hosts = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
         let fake = Fake::new();
         fake.snapshot("").unwrap();
-        let get = |_: &str| get_forgetting(&|| classify(no_answer()), &hosts, &fake.cache);
+        let get = |_: &str| get_forgetting(&|| classify(no_answer()), &|_| {}, &hosts, &fake.cache);
         let tiers = fee_tiers_from(&get, KeyNetwork::Test, Instant::now(), &Mutex::new(None));
         assert_eq!(tiers, DEFAULT_FEE_TIERS);
         assert_eq!(chosen(&hosts), None);

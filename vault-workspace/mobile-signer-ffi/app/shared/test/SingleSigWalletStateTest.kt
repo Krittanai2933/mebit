@@ -7,6 +7,7 @@ import com.mebit.ffi.signer.KeyNetwork
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.fail
 
 private val KEY_WORDS = List(11) { "abandon" } + "about"
@@ -18,6 +19,9 @@ private val HISTORY = listOf(HotTx("txid-0", 1_000_000L, 3u, 1_760_000_000uL))
 
 // What Home would print raw for a snapshot that failed, so it is the Thai line for the Rust "esplora get" prefix, never the English text.
 private const val UNREACHABLE_SHOWN = "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง"
+
+// The Rust text of a load that lost the same request three times, as the bindings hand it over.
+private const val RUST_FAILURE = "invalid PSBT json: esplora get: http://node.internal:8889/api/address/tb1qexample: Network Error: connection reset by peer, gave up after 3 attempts"
 
 /** Everything the screens read from a bound wallet. */
 private data class Shown(
@@ -129,6 +133,28 @@ class SingleSigWalletStateTest {
             Shown(WalletMode.Live, 1_000_000L, CHAIN_ADDRESS, HISTORY, null, live = true, balanceKnown = true, addressIsReal = true),
             chain.wallet.shown(),
         )
+    }
+
+    @Test
+    fun aFailedSnapshotKeepsItsRustTextForTheDebugLineAndTheNextLoadClearsIt() {
+        val chain = FakeChain()
+        chain.snapshotResult = { throw IllegalStateException(RUST_FAILURE) }
+        chain.bind()
+        assertEquals("snapshot: $RUST_FAILURE", chain.wallet.lastFailure)
+        assertEquals(UNREACHABLE_SHOWN, chain.wallet.lastError, "the Thai line is unchanged")
+        chain.snapshotResult = { HotWalletSnapshot(CHAIN_ADDRESS, 1_000_000uL, 1_000_000uL, KeyNetwork.TEST) }
+        chain.bind()
+        assertNull(chain.wallet.lastFailure)
+    }
+
+    @Test
+    fun aFailedHistoryKeepsItsRustTextWhileTheWalletStaysLive() {
+        val chain = FakeChain()
+        chain.historyResult = { throw IllegalStateException(RUST_FAILURE) }
+        chain.bind()
+        assertEquals("history: $RUST_FAILURE", chain.wallet.lastFailure)
+        assertEquals(WalletMode.Live, chain.wallet.mode)
+        assertNull(chain.wallet.lastError)
     }
 
     @Test

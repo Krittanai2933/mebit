@@ -57,6 +57,7 @@ import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.feature.onboarding.NotSavedNotice
+import com.mebit.app.rememberIsDebugBuild
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_chevron
 import com.mebit.app.resources.mebit_logo
@@ -125,6 +126,7 @@ internal fun SingleSigHome(
         pulled = false
     }
     var keyDetails by remember { mutableStateOf(false) }
+    val debugBuild = rememberIsDebugBuild()
     val quote = rememberFiatQuote(quotes)
     // A key of 12 or more words is a real one, yet the wallet says Demo until its first bind ends. Read from the session, this holds on the first frame, before any bind has started.
     val loading = session.words.size >= 12 && wallet.mode == WalletMode.Demo
@@ -197,6 +199,10 @@ internal fun SingleSigHome(
                 // Already plain Thai: every read error goes through readErrorThai, so none names the server or the library.
                 Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.testTag("error"))
             }
+            debugFailureLine(wallet.lastFailure, debugBuild)?.let {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(it, color = MbBody, fontSize = 10.sp, lineHeight = 13.sp, modifier = Modifier.testTag("debug_failure"))
+            }
             if (rows.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(24.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -224,6 +230,9 @@ internal fun SingleSigHome(
 
 /** The retry count after a pull. A pull during a bind joins that bind, because a second one would block another thread and could end first. */
 internal fun afterPull(retries: Int, binding: Boolean): Int = if (binding) retries else retries + 1
+
+/** The Rust text under the error line, which names the request that failed. A debug build only: a release build shows the Thai line alone, as before. */
+internal fun debugFailureLine(failure: String?, debugBuild: Boolean): String? = failure?.takeIf { debugBuild }
 
 /** The board's gold 13 sp line under the balance. */
 @Composable
