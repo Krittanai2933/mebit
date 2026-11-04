@@ -218,15 +218,19 @@ private fun GoldLine(text: String, modifier: Modifier = Modifier) {
     Text(text, color = FiatGold, fontSize = 13.sp, fontWeight = FontWeight.Light, lineHeight = 17.sp, modifier = modifier)
 }
 
-/** One recent transaction: the arrow, the title over the date, and the amount over the status, on the board's 67 dp pitch. */
+/**
+ * One recent transaction: the arrow, the title over the date, and the amount over the status, on the board's 67 dp pitch.
+ * The icon colours follow board 3.6 Vault Detail, where money in is the navy arrow on the pale wash and money out is the amber
+ * arrow on the warm wash. Board S1 Home draws them the other way round, and the user chose 3.6. See open item 69.
+ */
 @Composable
 private fun HomeTxRowItem(row: HomeTxRow, modifier: Modifier = Modifier) {
     Row(modifier = modifier.fillMaxWidth().heightIn(min = 67.dp)) {
         Box(
-            modifier = Modifier.padding(top = 5.dp).size(32.dp).background(if (row.received) MbIconWash else MbChip, CircleShape),
+            modifier = Modifier.padding(top = 5.dp).size(32.dp).background(if (row.received) MbChip else MbIconWash, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            TxArrow(down = row.received, color = if (row.received) MbEyebrow else MbNavy)
+            TxArrow(down = row.received, color = if (row.received) MbNavy else MbEyebrow)
         }
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
