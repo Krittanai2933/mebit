@@ -1,12 +1,11 @@
 /* ============================================================
-   Mebit
-   "Unleashing data with the leading location-based platform."
+   Mebit Organize — current Penpot visual reference.
+   See design-reference/README.md for source and scope.
    ============================================================ */
 
 /* ---- Fonts ----------------------------------------------------
-   Kanit (Cadson Demak, OFL) — shipping app typeface (Thai + Latin).
-   Mapboss Penpot historically used FC Vision (non-commercial for us);
-   app/layout parity uses Kanit. Weights: Light 300 … Bold 700.
+   Kanit (Cadson Demak, OFL) is bundled for the app. Penpot Organize
+   uses Anuphan; it is referenced separately and is not bundled here.
 --------------------------------------------------------------- */
 @font-face { font-family:'Kanit'; font-weight:300; font-style:normal;
   src:url('fonts/Kanit-Light.ttf') format('truetype'); font-display:swap; }
@@ -20,12 +19,17 @@
   src:url('fonts/Kanit-Bold.ttf') format('truetype'); font-display:swap; }
 
 :root {
-  /* ---------- Brand greens ---------- */
-  --mb-teal:        #007368;  /* PRIMARY — headings, logo body, key UI       */
-  --mb-teal-deep:   #003E38;  /* deep teal — pressed / dense surfaces        */
-  --mb-green:       #009B68;  /* bright accent green — logo leg, highlights  */
-  --mb-green-leaf:  #4DB848;  /* leaf green — card accent bars, "positive"   */
-  --mb-mint-accent: #00A191;  /* mid teal — secondary headings on light      */
+  /* Current Organize screen values captured from the Settings design. */
+  --org-bg: #f6f7f9;
+  --org-surface: #ffffff;
+  --org-border: #e4e8ee;
+  --org-text-primary: #0e1116;
+  --org-text-secondary: #5b6472;
+  --org-navy: #042c49;
+  --org-amber: #c2700f;
+  --org-amber-soft: #fdefdd;
+  --org-radius-card: 24px;
+  --org-font: 'Anuphan', system-ui, sans-serif;
 
   /* ---------- Dark backgrounds ---------- */
   --mb-green-900:   #06312D;  /* darkest — title / hero slides               */
@@ -48,33 +52,35 @@
   --mb-mint-tint:   #F2F8F7;  /* faint teal wash background                  */
   --mb-white:       #FFFFFF;
 
-  /* ---------- Semantic surface tokens ---------- */
-  --bg-dark:        var(--mb-green-900);
-  --bg-dark-2:      var(--mb-green-850);
-  --bg-light:       var(--mb-off-white);
-  --bg-wash:        var(--mb-mint-tint);
-  --surface-card:   var(--mb-white);
+  /* ---------- Current Organize semantic surfaces ---------- */
+  --bg-dark:        var(--mb-green-900); /* legacy lending surface */
+  --bg-dark-2:      var(--mb-green-850); /* legacy lending surface */
+  --bg-light:       var(--org-bg);
+  --bg-wash:        var(--org-bg);
+  --surface-card:   var(--org-surface);
 
-  --fg-on-dark:     var(--mb-white);
+  --fg-on-dark:     var(--mb-white); /* legacy lending surface */
   --fg-on-dark-2:   rgba(255,255,255,0.72);
-  --fg-on-light:    var(--mb-ink);
-  --fg-on-light-2:  var(--mb-gray-700);
-  --accent:         var(--mb-teal);
-  --accent-bright:  var(--mb-green);
-  --dot:            var(--mb-yellow);
+  --fg-on-light:    var(--org-text-primary);
+  --fg-on-light-2:  var(--org-text-secondary);
+  --accent:         var(--org-amber);
+  --accent-bright:  var(--org-navy);
+  --dot:            var(--org-amber-soft);
 
-  --hairline:       var(--mb-gray-200);
+  --hairline:       var(--org-border);
   --hairline-dark:  rgba(255,255,255,0.14);
 
-  /* ---------- Type families (Kanit OFL — shipping) ---------- */
-  --font-display:   'Kanit', system-ui, sans-serif;
-  --font-body:      'Kanit', system-ui, sans-serif;
-  --font-label:     'Kanit', system-ui, sans-serif;
+  /* Penpot reference family vs. the font bundled by the app. */
+  --font-penpot:    'Anuphan', system-ui, sans-serif;
+  --font-app:       'Kanit', system-ui, sans-serif;
+  --font-display:   var(--font-penpot);
+  --font-body:      var(--font-penpot);
+  --font-label:     var(--font-penpot);
 
   /* ---------- Radii ---------- */
   --radius-sm:   8px;
   --radius-md:   16px;
-  --radius-lg:   28px;   /* the signature soft card corner on dark slides */
+  --radius-lg:   var(--org-radius-card); /* Organize card radius */
   --radius-pill: 999px;
 
   /* ---------- Shadows / elevation ---------- */
@@ -91,11 +97,11 @@
 }
 
 /* ============================================================
-   Base type styles  (sizes tuned for 1920×1080 slide canvas;
-   scale down with rem/clamp for screen UI)
+   Legacy lending-slide type styles. Current mobile typography
+   is specified on Penpot Organize · Design System and uses Anuphan.
    ============================================================ */
 
-.mb-display {            /* hero title — Kanit, big & airy               */
+.mb-display {            /* hero title — Penpot reference family               */
   font-family: var(--font-display);
   font-weight: 400;
   font-size: 128px;
@@ -121,7 +127,7 @@
   font-size: 40px;
   line-height: 1.1;
 }
-.mb-eyebrow {            /* small geometric label — Kanit               */
+.mb-eyebrow {            /* small label — Penpot reference family               */
   font-family: var(--font-label);
   font-weight: 600;
   font-size: 22px;

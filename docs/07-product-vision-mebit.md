@@ -1,6 +1,6 @@
 # mebit — วิสัยทัศน์โปรดักต์ฉบับปรับใหม่ (north star)
 
-เอกสารนี้บันทึกการปรับ framing รอบใหญ่ที่เกิดจากการไล่ทวนความคิดใหม่ทั้งหมด **เอกสาร 01–06 ในชุดนี้ยังใช้ได้อยู่** แต่ตอนนี้ควรอ่านในฐานะ "สเปคของขา lending" ซึ่งเป็นแค่ 1 ใน 3 ขาของโปรดักต์ mebit ไม่ใช่ตัวโปรดักต์ทั้งหมด
+เอกสารนี้บันทึกการปรับ framing รอบใหญ่ที่เกิดจากการไล่ทวนความคิดใหม่ทั้งหมด **เอกสาร 01–05 และส่วน lending เดิมใน 06 ยังใช้ได้อยู่** แต่ตอนนี้ควรอ่านในฐานะ "สเปคของขา lending" ซึ่งเป็นแค่ 1 ใน 3 ขาของโปรดักต์ mebit ไม่ใช่ตัวโปรดักต์ทั้งหมด
 
 ## สิ่งที่เปลี่ยนไปจากกรอบคิดเดิม
 
@@ -24,7 +24,15 @@
 - **Optional add-on = กุญแจสำรองจาก mebit (แนวทาง Casa)** — ระหว่างสร้าง/นำเข้า vault มีตัวเลือกเปิดเผยชัดเจนให้เพิ่มกุญแจสำรองของ mebit เป็นอีก 1 ใน N ใครอยากได้บริการกู้คืน/ความสบายใจก็เลือกได้ ใครไม่อยากมี mebit เกี่ยวข้องเลยก็ปฏิเสธได้ตั้งแต่ต้น
 - **นัยสำคัญ**: คำถามกฎหมายเรื่อง custodian (ที่ตัดออกจากการคุยไปก่อนหน้า) ตอนนี้ผูกอยู่กับ**เฉพาะฟีเจอร์เสริมที่คนเลือกเอง** ไม่ใช่ฟีเจอร์หลักของ multisig อีกต่อไป — ลดพื้นที่เสี่ยงกฎหมายของฟีเจอร์ default ลงไปมาก
 
-## App flow ที่ปรับใหม่ (v3 — เวอร์ชันล่าสุดที่ยืนยันแล้ว)
+## App flow — current Penpot reference and product north star
+
+### Current prototype: Penpot Organize
+
+Use the Organize page as the current UI/flow reference and Organize · Design System for shared visual rules. It groups seven flows: Onboarding; Import existing seed; Add key · keyring; Create vault; Single-sig wallet; Vault send (multisig); and Error & edge states. The audit counted 105 screen boards, 378 navigate-to interactions, and 99 boards reachable from the seven flow starts. Six edge/detail boards remain unreached; see docs/design-notes.md for their names.
+
+The Organize Settings page uses text choices for TH/EN and sat/BTC, with icon controls for light/dark mode. Its captured style references are Anuphan, cool gray backgrounds, white cards, navy and amber accents; exact shared tokens should follow the Penpot Design System.
+
+### Broader product direction (north star, beyond the current prototype)
 
 หลักการ: onboarding เบา ใช้ได้ทันทีสำหรับทุกคน, Home เป็นจุดรวมทางเลือกที่น้ำหนักเท่ากัน ไม่มีอะไรถูกบังคับ
 
@@ -37,7 +45,7 @@
 5. **Borrow → Loan Dashboard → Repay → Success** — ของเดิมจากเอกสาร 01-06 เกือบไม่เปลี่ยน แค่ลดสถานะจาก "หัวใจของแอป" เป็นหนึ่งในทางเลือกบน Home
 6. **Bottom nav**: Activity (ledger รวม), Portfolio (รวมทั้ง 3 ประเภทยอด ไม่ใช่แค่ loan), Settings (จัดการคีย์/cosigner ของทุก vault)
 
-*(แผนภาพ v1–v3 ถูกวาดเป็น artifact ในระหว่างการสนทนาแล้ว — เอกสารนี้สรุปเป็นข้อความสำหรับอ้างอิงและแก้ไขต่อ)*
+*(แผนภาพ v1–v3 เป็น product-level direction จากการสนทนา ไม่ใช่ inventory ของ Penpot Organize; ใช้หน้า Organize เป็น UI reference ปัจจุบัน)*
 
 ## นัยต่อสถาปัตยกรรม backend (vault-core)
 

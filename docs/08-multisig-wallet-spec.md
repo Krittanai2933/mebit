@@ -166,7 +166,7 @@ or(
 ## 11. ความสัมพันธ์กับเอกสารเดิม (01–07)
 
 - ไม่ชนกับ `01-architecture-overview.md`/`02`/`03` — lending vault ยังเป็น 2-of-3 คงที่แบบเดิม แค่ตอนนี้มองเป็น `Vault` instance หนึ่งภายใต้โมเดล Key-first ทั่วไปที่นี่
-- `06-mobile-app-design-mebit.md` และ app flow v3 (คุยกันด้วยวาจา/ผ่าน artifact) ต้องอัปเดตหน้า "สร้าง Vault" ให้เป็น "เพิ่มกุญแจ" ก่อน แล้วค่อย "ประกอบ Vault" แยกขั้นตอน ตามโมเดลนี้ — ยังไม่ได้แก้ไดอะแกรมจริง รอ session หน้า
+- Current wallet/custody UI flows are documented in Penpot Organize and its companion Organize · Design System page. The 12-screen lending-oriented design notes in `06-mobile-app-design-mebit.md` are historical context; implement the current seven Organize flows for the wallet prototype.
 - `bdk` (Bitcoin Dev Kit) ยังเป็นตัวเลือกฐานของ wallet engine ตามที่แนะนำไว้ใน `06` — รองรับ descriptor-based wallet และ PSBT อยู่แล้ว แต่ทีมต้องเช็คว่า miniscript policy compiler (`rust-miniscript`) integrate กับ `bdk` เวอร์ชันที่จะใช้ได้ลื่นแค่ไหน เป็นงานวิจัยเชิงเทคนิคที่ต้องทำก่อนเริ่ม implement จริง
 
 ## 12. Open items ที่ยังไม่ล็อก

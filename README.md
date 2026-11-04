@@ -13,7 +13,7 @@ Start here:
 - **[`docs/02-roles-and-responsibilities.md`](docs/02-roles-and-responsibilities.md)** — who holds which key, who co-signs with whom and when (Thai, lending leg).
 - **[`docs/03-flows.md`](docs/03-flows.md)** — step-by-step: onboarding, open loan, repayment, liquidation, fallback (Thai, lending leg).
 - **[`docs/04-open-items.md`](docs/04-open-items.md)** — design/business decisions not yet finalized — check before assuming a number or rule is locked in (Thai).
-- **[`docs/design-notes.md`](docs/design-notes.md)** — the borrower app's UI/flow reference (from the `mebit` mobile app design), for the `mobile-signer-ffi` team.
+- **[`docs/design-notes.md`](docs/design-notes.md)** — current Penpot Organize wallet/custody flow reference, plus historical lending prototype notes, for the mobile team.
 - **[`docs/05-progress-and-next-steps.md`](docs/05-progress-and-next-steps.md)** — current status and full to-do list per module (Thai). Update this as milestones land — it's a living document, not a snapshot.
 
 ## Layout
