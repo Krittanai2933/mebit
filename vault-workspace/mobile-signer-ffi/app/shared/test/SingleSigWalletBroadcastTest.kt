@@ -17,6 +17,7 @@ import com.mebit.ffi.signer.MobileSignerException
 import com.mebit.ffi.signer.PreparedSend
 import com.mebit.ffi.signer.SoftwareAccountKey
 import kotlinx.atomicfu.atomic
+import kotlinx.atomicfu.update
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -26,6 +27,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -134,6 +136,24 @@ private fun FakeHot.unknownSend(): OnboardingSession {
     assertFalse(wallet.broadcast(session, 100_000, 8, DESTINATION))
     assertEquals(UnconfirmedSend(TXID, SENT_AT), wallet.unconfirmedSend)
     postResult = { HotSendResult(TXID) }
+    return session
+}
+
+/** The real signed payment [SIGNED_HEX] as the core hands it over, so its guard keeps the bytes. */
+private val SIGNED_PAYMENT: (ULong) -> PreparedSend = { rate -> PreparedSend(SIGNED_TXID, SIGNED_HEX, rate * 141uL, 100_000uL) }
+
+/** The guard of [SIGNED_PAYMENT] posted at [SENT_AT], and the call its every post makes. */
+private val SIGNED_GUARD = UnconfirmedSend(SIGNED_TXID, SENT_AT, SIGNED_HEX)
+private val SIGNED_POST = PostCall(KeyNetwork.TEST, SIGNED_HEX, SIGNED_TXID)
+
+/** A live wallet whose first post of [SIGNED_PAYMENT] at [SENT_AT] ended in BroadcastUnknown. A post that reaches the node afterwards is out. */
+private fun FakeHot.unknownSignedSend(): OnboardingSession {
+    prepareResult = SIGNED_PAYMENT
+    val session = goLive()
+    postResult = { throw MobileSignerException.BroadcastUnknown(UNKNOWN_MESSAGE) }
+    assertFalse(wallet.broadcast(session, 100_000, 8, DESTINATION))
+    assertEquals(SIGNED_GUARD, wallet.unconfirmedSend)
+    postResult = { HotSendResult(SIGNED_TXID) }
     return session
 }
 
@@ -1174,6 +1194,201 @@ class SingleSigWalletBroadcastTest {
         assertNull(guards.guardOf(), "the file")
         assertNull(restart(store, guards).unconfirmedSend(), "the next cold start")
         assertTrue(hot.wallet.broadcast(session, 50_000, 8, DESTINATION), "a payment after the clear")
+    }
+
+    // C2. The first post writes the signed bytes into its guard's line before it posts, and only bytes that are its own transaction.
+    // Bytes that are not, as the fakes' "hex-1", stay out of the file and the payment still goes, with nothing to repost.
+    @Test
+    fun theFirstPostKeepsItsSignedBytesWithTheGuardOnlyWhenTheyAreItsTransaction() {
+        val hot = FakeHot()
+        hot.prepareResult = SIGNED_PAYMENT
+        val session = hot.goLive()
+        var inTheFile: String? = null
+        hot.postResult = {
+            inTheFile = hot.guards.text
+            throw MobileSignerException.BroadcastUnknown(UNKNOWN_MESSAGE)
+        }
+        assertFalse(hot.wallet.broadcast(session, 100_000, 8, DESTINATION))
+        assertEquals("$TEST_CHECK $SIGNED_TXID $SENT_AT $SIGNED_HEX\n", inTheFile, "the guard file when the post ran")
+        assertEquals(SIGNED_GUARD, hot.wallet.unconfirmedSend)
+        assertEquals(SIGNED_GUARD, restart(hot.store, hot.guards).unconfirmedSend(), "what a cold start restores")
+
+        val plain = FakeHot()
+        val plainSession = plain.goLive()
+        plain.postResult = { throw MobileSignerException.BroadcastUnknown(UNKNOWN_MESSAGE) }
+        assertFalse(plain.wallet.broadcast(plainSession, 100_000, 8, DESTINATION))
+        assertEquals("$TEST_CHECK $TXID $SENT_AT\n", plain.guards.text, "bytes that are not the txid's transaction")
+        assertEquals(listOf(PostCall(KeyNetwork.TEST, "hex-1", TXID)), plain.posts, "the payment still went to the post")
+        assertEquals(UnconfirmedSend(TXID, SENT_AT), plain.wallet.unconfirmedSend)
+    }
+
+    // C2, decision 3. The node took the same bytes, or answered that it already holds them in its mempool or a block. The core reports
+    // both as a sent txid (hot_wallet.rs, a_4xx_saying_the_node_holds_it_is_sent_with_no_lookup), so the post returns either way.
+    @Test
+    fun aRepostThatIsOutPostsTheSameBytesAndTakesTheGuardAndItsBytesOffThePhone() {
+        val hot = FakeHot()
+        val session = hot.unknownSignedSend()
+        val other = UnconfirmedSend(OTHER_SIGNED_TXID, SENT_AT, OTHER_SIGNED_HEX)
+        assertEquals(Claim.Written, PendingPayments(hot.guards).claim(OTHER_CHECK, other), "another wallet's guard with its bytes")
+        assertEquals(Repost.Out, hot.wallet.repost(session))
+        assertEquals(listOf(SIGNED_POST, SIGNED_POST), hot.posts, "the first post and the repost, the same bytes")
+        assertNull(hot.wallet.unconfirmedSend, "the wallet")
+        assertEquals("$OTHER_CHECK $OTHER_SIGNED_TXID $SENT_AT $OTHER_SIGNED_HEX\n", hot.guards.text, "the file keeps only the other wallet's line")
+        assertNull(restart(hot.store, hot.guards).unconfirmedSend(), "a cold start")
+        assertEquals(Repost.Failed, hot.wallet.repost(session), "a second tap once the guard is gone")
+        assertEquals(2, hot.posts.size, "the second tap posted nothing")
+        hot.prepareResult = { rate -> PreparedSend(TXID, "hex-1", rate * 141uL, 50_000uL) }
+        assertTrue(hot.wallet.broadcast(session, 50_000, 8, DESTINATION), "a new payment once the repost was out")
+    }
+
+    // C2, decision 3. Unlike a first post, a refused repost proves nothing. The payment may have confirmed long ago, or another
+    // transaction may have spent its coins. So every end but Out keeps the guard and its bytes, in memory and on the phone.
+    @Test
+    fun everyRepostThatIsNotOutKeepsTheGuardAndItsBytesEverywhere() {
+        val answers: List<Pair<Repost, () -> HotSendResult>> = listOf(
+            Repost.Unknown to { throw MobileSignerException.BroadcastUnknown(UNKNOWN_MESSAGE) },
+            Repost.Refused to { throw MobileSignerException.InvalidPsbtJson("invalid PSBT json: esplora post: status code 400: sendrawtransaction RPC error -25: bad-txns-inputs-missingorspent") },
+            Repost.Refused to { throw MobileSignerException.InvalidPsbtJson("esplora post: status code 400: sendrawtransaction RPC error -26: txn-mempool-conflict") },
+            Repost.Failed to { throw MobileSignerException.InvalidPsbtJson("broadcast: txid $SIGNED_TXID does not match the transaction $OTHER_SIGNED_TXID") },
+            Repost.Failed to { throw MobileSignerException.InvalidPsbtJson("mainnet Esplora is not enabled in this build") },
+            Repost.Failed to { throw IllegalStateException("the answer could not be read") },
+        )
+        val hot = FakeHot()
+        val session = hot.unknownSignedSend()
+        answers.forEachIndexed { i, (outcome, answer) ->
+            hot.postResult = answer
+            assertEquals(outcome, hot.wallet.repost(session), "answer $i")
+            assertEquals(SIGNED_GUARD, hot.wallet.unconfirmedSend, "the wallet after answer $i")
+            assertEquals("$TEST_CHECK $SIGNED_TXID $SENT_AT $SIGNED_HEX\n", hot.guards.text, "the guard file after answer $i")
+            assertEquals(SIGNED_GUARD, restart(hot.store, hot.guards).unconfirmedSend(), "a cold start after answer $i")
+            assertFalse(hot.wallet.broadcast(session, 50_000, 8, DESTINATION), "a new payment after answer $i")
+        }
+        assertEquals(List(1 + answers.size) { SIGNED_POST }, hot.posts, "every repost posted the same bytes and no new payment went")
+        assertEquals(1, hot.prepares.size, "no new payment was signed")
+    }
+
+    // C2, decision 1. The user's clear takes the signed bytes off the phone with the guard and leaves another wallet's line whole, so
+    // no reader of app storage can post a payment the user gave up on.
+    @Test
+    fun theUsersClearTakesTheBytesOffThePhoneWithTheGuard() {
+        val hot = FakeHot()
+        val session = hot.unknownSignedSend()
+        val other = UnconfirmedSend(OTHER_SIGNED_TXID, SENT_AT, OTHER_SIGNED_HEX)
+        assertEquals(Claim.Written, PendingPayments(hot.guards).claim(OTHER_CHECK, other), "another wallet's guard with its bytes")
+        assertTrue(hot.wallet.clearUnconfirmedSend(session))
+        assertEquals("$OTHER_CHECK $OTHER_SIGNED_TXID $SENT_AT $OTHER_SIGNED_HEX\n", hot.guards.text, "the file after the clear")
+        assertNull(restart(hot.store, hot.guards).unconfirmedSend(), "a cold start")
+        assertEquals(Repost.Failed, hot.wallet.repost(session), "a repost after the clear")
+        assertEquals(listOf(SIGNED_POST), hot.posts, "nothing posted since the clear")
+    }
+
+    // C2, decision 1. A guard with no bytes, as an earlier build's line of three or the move from an older record leaves it, and a
+    // damaged file get no repost. Nothing is posted and the guard stays for the user's clear.
+    @Test
+    fun aGuardWithoutBytesOrADamagedFileGetsNoRepost() {
+        val lineOfThree = FakeHot(FakePlainFile().apply { text = "$TEST_CHECK $SIGNED_TXID $SENT_AT\n" })
+        val lineOfThreeSession = lineOfThree.goLive()
+        val moved = FakeHot()
+        val movedSession = restart(storeHolding(oldRecordBytes(UnconfirmedSend(SIGNED_TXID, SENT_AT))), moved.guards)
+        moved.wallet.bindSession(movedSession)
+        val damaged = FakeHot(FakePlainFile().apply { text = "garbage\n" })
+        val damagedSession = damaged.goLive()
+        val cases = listOf(
+            Triple("a line of three", lineOfThree, lineOfThreeSession),
+            Triple("a guard moved from an older record", moved, movedSession),
+            Triple("a damaged file", damaged, damagedSession),
+        )
+        for ((case, hot, session) in cases) {
+            val guard = assertNotNull(hot.wallet.unconfirmedSend, case)
+            assertNull((guard as? UnconfirmedSend)?.hex, "no bytes to offer, $case")
+            val file = hot.guards.text
+            assertEquals(Repost.Failed, hot.wallet.repost(session), case)
+            assertEquals(emptyList<PostCall>(), hot.posts, case)
+            assertEquals(guard, hot.wallet.unconfirmedSend, "the guard stays, $case")
+            assertEquals(file, hot.guards.text, "the file, $case")
+        }
+    }
+
+    // C2, decision 1. Bytes in the file that are not the line's own transaction make the file damaged, so they are never posted.
+    @Test
+    fun bytesThatAreNotTheLinesTransactionAreNeverPosted() {
+        val hot = FakeHot(FakePlainFile().apply { text = "$TEST_CHECK $SIGNED_TXID $SENT_AT $OTHER_SIGNED_HEX\n" })
+        val session = hot.goLive()
+        val reposted = hot.wallet.repost(session)
+        assertEquals(emptyList<PostCall>(), hot.posts, "what the repost posted")
+        assertEquals(Repost.Failed, reposted)
+        assertEquals(DamagedGuard, hot.wallet.unconfirmedSend, "what the bind took")
+    }
+
+    // C2, decision 4. A second instance cleared the payment and made another one whose outcome is unknown too. The first instance still
+    // shows the old guard, and its repost posts neither the new payment's bytes nor the old ones.
+    @Test
+    fun anInstanceWhoseGuardTheFileNoLongerHoldsPostsNothing() {
+        val first = FakeHot()
+        val firstSession = first.unknownSignedSend()
+        val second = FakeHot(first.guards)
+        val secondSession = restart(first.store, first.guards)
+        second.wallet.bindSession(secondSession)
+        assertTrue(second.wallet.clearUnconfirmedSend(secondSession), "the second instance's clear")
+        second.prepareResult = { rate -> PreparedSend(OTHER_SIGNED_TXID, OTHER_SIGNED_HEX, rate * 141uL, 100_000uL) }
+        second.postResult = { throw MobileSignerException.BroadcastUnknown(UNKNOWN_MESSAGE) }
+        assertFalse(second.wallet.broadcast(secondSession, 100_000, 8, DESTINATION))
+        assertEquals("$TEST_CHECK $OTHER_SIGNED_TXID $SENT_AT $OTHER_SIGNED_HEX\n", first.guards.text, "the new payment's guard")
+        assertEquals(SIGNED_GUARD, first.wallet.unconfirmedSend, "the first instance still shows the old one")
+        assertEquals(Repost.Failed, first.wallet.repost(firstSession))
+        assertEquals(listOf(SIGNED_POST), first.posts, "the first instance posted only its first post")
+    }
+
+    // C2, decision 4. While a repost runs, a clear in another live instance of the wallet waits, so no payment can start while the
+    // reposted bytes may still land. Once the repost ended, unknown again here, the clear goes through.
+    @Test
+    fun aClearInAnotherInstanceWaitsWhileARepostOfThatPaymentRuns() {
+        val first = FakeHot()
+        val firstSession = first.unknownSignedSend()
+        val second = FakeHot(first.guards)
+        val secondSession = restart(first.store, first.guards)
+        second.wallet.bindSession(secondSession)
+        first.postResult = {
+            assertFalse(second.wallet.clearUnconfirmedSend(secondSession), "the other instance's clear during the repost")
+            assertFalse(second.wallet.broadcast(secondSession, 50_000, 8, DESTINATION), "a new payment from it during the repost")
+            throw MobileSignerException.BroadcastUnknown(UNKNOWN_MESSAGE)
+        }
+        assertEquals(Repost.Unknown, first.wallet.repost(firstSession))
+        assertEquals(SIGNED_GUARD, second.wallet.unconfirmedSend, "the other instance keeps the guard")
+        assertEquals(emptyList<PostCall>(), second.posts)
+        assertTrue(second.wallet.clearUnconfirmedSend(secondSession), "its clear once the repost ended")
+        assertNull(first.guards.text)
+    }
+
+    // C2, decision 4. Two live instances of one wallet repost at the same moment. Both read the one line, so both post the same bytes,
+    // which are one transaction, and both end with the guard gone. The node answers only once both are inside the post.
+    @Test
+    fun twoInstancesThatRepostAtOncePostOnlyTheGuardsOwnBytes(): Unit = runBlocking {
+        val first = FakeHot()
+        val firstSession = first.unknownSignedSend()
+        val second = FakeHot(first.guards)
+        val secondSession = restart(first.store, first.guards)
+        second.wallet.bindSession(secondSession)
+        val inside = atomic(0)
+        val most = atomic(0)
+        val node = {
+            val now = inside.incrementAndGet()
+            most.update { maxOf(it, now) }
+            runBlocking { withTimeoutOrNull(10_000) { while (most.value < 2) delay(5) } }
+            inside.decrementAndGet()
+            HotSendResult(SIGNED_TXID)
+        }
+        first.postResult = node
+        second.postResult = node
+        val firstRepost = async(Dispatchers.Default) { first.wallet.repost(firstSession) }
+        val secondRepost = async(Dispatchers.Default) { second.wallet.repost(secondSession) }
+        assertEquals(listOf(Repost.Out, Repost.Out), listOf(firstRepost.await(), secondRepost.await()))
+        assertEquals(2, most.value, "both reposts were inside the post at once")
+        assertEquals(listOf(SIGNED_POST, SIGNED_POST), first.posts, "the first post and the first instance's repost")
+        assertEquals(listOf(SIGNED_POST), second.posts, "the second instance's repost")
+        assertNull(first.wallet.unconfirmedSend, "the first instance")
+        assertNull(second.wallet.unconfirmedSend, "the second instance")
+        assertNull(first.guards.text, "the phone keeps no guard and no bytes")
     }
 }
 

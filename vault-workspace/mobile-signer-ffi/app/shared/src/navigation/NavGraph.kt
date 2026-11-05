@@ -161,6 +161,9 @@ fun MebitNavHost(
         navigate(MovieRoute.S8TxDetail)
     }
 
+    // Posting a guarded payment's bytes again asks the owner as signing does, so a stranger cannot push out a payment the owner gave up on.
+    val confirmRepost: suspend () -> Boolean = { appLock.confirm(biometrics, session.appLockEnabled, "ยืนยันการส่งรายการเดิมอีกครั้ง") }
+
     val onBack: (() -> Unit)? = if (backStack.size > 1) ({ goBack() }) else null
     // The link is the only caller, and it is gone in a release build. This keeps the sheet shut even if another caller appears.
     val debugBuild = rememberIsDebugBuild()
@@ -431,6 +434,7 @@ fun MebitNavHost(
             session = session,
             draft = sendDraft,
             quotes = quotes,
+            confirmRepost = confirmRepost,
             onContinue = { navigate(MovieRoute.S5ReviewSign) },
             onReceive = { navigate(if (session.backupConfirmed) MovieRoute.S3Receive else MovieRoute.S2ReceiveBackupGate) },
             onBack = onBack,
@@ -442,6 +446,7 @@ fun MebitNavHost(
             draft = sendDraft,
             quotes = quotes,
             confirm = { appLock.confirm(biometrics, session.appLockEnabled, "ยืนยันการเซ็นส่งเงิน") },
+            confirmRepost = confirmRepost,
             onSigned = { navigate(MovieRoute.S6SentSlip) },
             onBack = onBack,
             onOpenCatalog = openCatalog,

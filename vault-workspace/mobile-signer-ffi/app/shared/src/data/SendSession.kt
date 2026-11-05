@@ -57,8 +57,13 @@ class SingleSigWallet(
     /** A payment that may be out, which stops every new one: [UnconfirmedSend] when the phone's guard names it, [DamagedGuard] when the guard file is damaged. */
     sealed interface Unsettled
 
-    /** A signed payment that may be out: its post began and has not been answered with a refusal or an explorer that lists it. [txid] is the one hot_prepare_send_at_rate computed. [sinceSeconds] is the phone clock when the post began. */
-    data class UnconfirmedSend(val txid: String, val sinceSeconds: Long) : Unsettled
+    /**
+     * A signed payment that may be out, because its post began and has not been answered with a refusal or an explorer that lists it.
+     * [txid] is the one hot_prepare_send_at_rate computed. [sinceSeconds] is the phone clock when the post began. [hex] is the signed
+     * transaction the guard file keeps beside it, whose txid is [txid], so [repost] can post the same payment again. Null for a guard
+     * written without it, by a build before it or by the move from an older record.
+     */
+    data class UnconfirmedSend(val txid: String, val sinceSeconds: Long, val hex: String? = null) : Unsettled
 
     /** The guard file is on the phone but cannot be read or decoded, so a payment may be out whose txid and time are lost. No explorer can settle it, only the user. */
     data object DamagedGuard : Unsettled
@@ -115,7 +120,7 @@ class SingleSigWallet(
         private set
 
     /**
-     * The payment that may be out, or null. [post] sets it and saves it before the post, and while it is set [prepare] refuses, because the same payment could go out twice. It clears when the post returns or the node refuses, when a [bindSession] loads a [history] that holds its txid, when the user clears it through [clearUnconfirmedSend] after checking the explorer, and in [useDemoFixture]. Never by the clock. [lastTxid] and [lastSentAtSeconds] stay for payments that went out.
+     * The payment that may be out, or null. [post] sets it and saves it before the post, and while it is set [prepare] refuses, because the same payment could go out twice. It clears when the post returns or the node refuses, when a [repost] of its bytes is out, when a [bindSession] loads a [history] that holds its txid, when the user clears it through [clearUnconfirmedSend] after checking the explorer, and in [useDemoFixture]. Never by the clock. [lastTxid] and [lastSentAtSeconds] stay for payments that went out.
      * The session keeps it in the guard file ([OnboardingSession.unconfirmedSend]), so a wallet built after a restart, or another live instance of the wallet, takes it at its next bind, and clearing it here clears the file too.
      * A damaged guard file is [DamagedGuard] here: no history can settle it, so only the user's clear does.
      */
@@ -287,8 +292,9 @@ class SingleSigWallet(
         val (prepared, network) = heldSend ?: return false
         heldSend = null
         // The guard reaches the phone before the post, so an app killed during the post still refuses this payment after the restart.
-        val pending = UnconfirmedSend(prepared.txid, nowSeconds())
-        when (val claim = session.recordUnconfirmedSend(pending.txid, pending.sinceSeconds)) {
+        // It keeps the signed bytes only when they are this txid's transaction. Without them the payment still goes, with no repost.
+        val pending = UnconfirmedSend(prepared.txid, nowSeconds(), prepared.hex.takeIf { txidOf(it) == prepared.txid })
+        when (val claim = session.recordUnconfirmedSend(pending.txid, pending.sinceSeconds, pending.hex)) {
             Claim.Written -> unconfirmedSend = pending
             is Claim.Taken -> {
                 // Another live instance of this wallet, or a run before a restart, guarded a payment that may be out.
@@ -348,6 +354,39 @@ class SingleSigWallet(
         return true
     }
 
+    /**
+     * Posts the guarded payment again, from the signed bytes the guard file keeps with it. The same bytes are the same transaction, so
+     * this can never pay twice and needs no wait. The screen asks the owner first, as it does before signing. [Repost.Out] drops the
+     * guard here, and on the phone unless another instance's repost of it still runs. The balance waits for Home's next bind, so
+     * Review keeps the figures of the payment it shows.
+     * Every other end keeps the guard, a refusal included, because after a first post a refusal can mean the payment confirmed or that
+     * another transaction spent its coins. [Repost.Failed], with nothing posted, when the phone no longer keeps this guard with its bytes.
+     * Blocks, so call it off the main thread.
+     */
+    fun repost(session: OnboardingSession, network: KeyNetwork = KeyNetwork.TEST): Repost {
+        val pending = unconfirmedSend as? UnconfirmedSend ?: return Repost.Failed
+        val outcome = session.repostUnconfirmedSend(pending) { hex ->
+            try {
+                postHex(network, hex, pending.txid)
+                Repost.Out
+            } catch (e: MobileSignerException.BroadcastUnknown) {
+                Repost.Unknown
+            } catch (e: MobileSignerException.InvalidPsbtJson) {
+                // "esplora post:" is the node's own answer. Every other refusal came before anything was posted.
+                if (e.message.orEmpty().removePrefix("invalid PSBT json: ").startsWith("esplora post:")) Repost.Refused else Repost.Failed
+            } catch (e: Exception) {
+                Repost.Failed
+            }
+        } ?: Repost.Failed
+        if (outcome == Repost.Out) {
+            // Out is known, so the wallet lets go even while another instance's repost of these bytes keeps the phone's copy. A claim still
+            // meets that copy until its repost ends out or a bind lists the txid.
+            session.clearUnconfirmedSend(pending)
+            unconfirmedSend = null
+        }
+        return outcome
+    }
+
     /** Whether the screen may offer the clear control now: by [offersUnconfirmedClear] for a payment the guard names, and at once for a damaged guard, which has no post time to wait on. False without a guard. */
     fun unconfirmedClearOffered(): Boolean = when (val pending = unconfirmedSend) {
         null -> false
@@ -371,6 +410,21 @@ class SingleSigWallet(
         heldEpoch++
         heldSend = null
     }
+}
+
+/** How a [SingleSigWallet.repost] ended. Only [Out] drops the guard. */
+enum class Repost {
+    /** The node took the bytes, or answered that it already holds or has confirmed them, so the payment is out. */
+    Out,
+
+    /** The answer was lost again and the explorer does not list the txid. */
+    Unknown,
+
+    /** The node refused the bytes. The payment may have confirmed already, or another transaction may have spent its coins. */
+    Refused,
+
+    /** Anything else, nothing posted included. */
+    Failed,
 }
 
 /** How old a guard must be, by the phone clock, before the screen offers the control that clears it. */

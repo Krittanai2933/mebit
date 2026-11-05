@@ -67,6 +67,7 @@ fun S5ReviewSignScreen(
     draft: SendDraft,
     quotes: QuoteCache,
     confirm: suspend () -> Boolean,
+    confirmRepost: suspend () -> Boolean,
     onSigned: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
@@ -77,10 +78,20 @@ fun S5ReviewSignScreen(
     // Kept local because Home sets wallet.lastError when its balance fetch fails, so it is stale when this screen opens.
     var failed by remember { mutableStateOf(false) }
     val attempt = remember { SignAttempt() }
+    val repost = remember { RepostAttempt() }
+    // A repost that runs, or put the payment out, settles this draft. Signing it again could pay twice, and its first failure no
+    // longer stands. Running counts too, because the guard leaves a moment before the screen learns that the repost is out.
+    val reposted = repost.running || repost.outTxid != null
     // Back and cancel wait while a payment is in flight, because leaving would hide one that still goes out. The back chip stays so the header does not shift.
-    val leave = onBack?.let { back -> { if (!attempt.running) back() } }
-    // A payment held for the fee question is signed and nothing more, so leaving the screen lets it go and none waits here stale.
-    DisposableEffect(wallet) { onDispose { wallet.dropHeldSend() } }
+    val leave = onBack?.let { back -> { if (!attempt.running && !repost.running) back() } }
+    // A payment held for the fee question is signed and nothing more, so leaving the screen lets it go and none waits here stale. A
+    // draft whose payment a repost here put out goes too, so Send does not offer it again.
+    DisposableEffect(wallet) {
+        onDispose {
+            wallet.dropHeldSend()
+            if (repost.outTxid != null) draft.reset()
+        }
+    }
     val total = draft.amountSats + draft.feeSats
     val question = wallet.feeQuestion(draft)
 
@@ -127,7 +138,7 @@ fun S5ReviewSignScreen(
                 linkLabel = "ยกเลิก",
                 linkTag = "cta_s5_cancel",
                 onLink = leave,
-                enabled = !attempt.running && wallet.balanceKnown && wallet.unconfirmedSend == null && wallet.heldSend == null,
+                enabled = !attempt.running && wallet.balanceKnown && wallet.unconfirmedSend == null && wallet.heldSend == null && !reposted,
                 linkColor = MbBody,
             )
         },
@@ -162,11 +173,12 @@ fun S5ReviewSignScreen(
                 onCancel = { wallet.dropHeldSend() },
             )
         }
-        reviewIssue(refused, failed, wallet.unconfirmedSend != null, wallet.lastError)?.let {
+        reviewIssue(refused, failed && !reposted, wallet.unconfirmedSend != null, wallet.lastError)?.let {
             Spacer(modifier = Modifier.height(20.dp))
             IssueBanner(it.title, it.message, it.tag)
         }
-        UnconfirmedClearControl(wallet, session)
+        UnconfirmedClearControl(wallet, session, repost) { txid -> scope.launch { repost.run(txid, confirmRepost) { wallet.repost(session) } } }
+        RepostedNote(repost)
         if (total > wallet.spendableSats) {
             Spacer(modifier = Modifier.height(12.dp))
             Text("ยอดไม่พอ", color = MaterialTheme.colorScheme.error)

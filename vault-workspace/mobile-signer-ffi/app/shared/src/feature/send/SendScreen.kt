@@ -27,6 +27,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -77,6 +78,7 @@ import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbWhite
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.isValidAddress
@@ -97,6 +99,7 @@ fun S4SendScreen(
     session: OnboardingSession,
     draft: SendDraft,
     quotes: QuoteCache,
+    confirmRepost: suspend () -> Boolean,
     onContinue: () -> Unit,
     onReceive: () -> Unit,
     onBack: (() -> Unit)?,
@@ -104,6 +107,8 @@ fun S4SendScreen(
 ) {
     val quote = rememberFiatQuote(quotes)
     val entry = remember(draft) { AmountEntry(draft) }
+    val scope = rememberCoroutineScope()
+    val repost = remember { RepostAttempt() }
     // Once per open of this screen. Rust answers from memory for five minutes, so a second open costs no network call.
     LaunchedEffect(draft) { entry.applyTiers(withContext(Dispatchers.Default) { wallet.feeTiers() }, wallet.spendableSats) }
     val addressOk = if (draft.destination.isEmpty()) null else isValidAddress(draft.destination, KeyNetwork.TEST)
@@ -172,7 +177,13 @@ fun S4SendScreen(
                 SendIssue.PaymentUnconfirmed -> {
                     Spacer(modifier = Modifier.height(20.dp))
                     IssuePanel("PAYMENT UNCONFIRMED", "การส่งครั้งก่อนยังยืนยันไม่ได้ รอสักครู่ แล้วเปิดหน้าแรกเพื่อตรวจยอดก่อนส่งอีกครั้ง")
-                    UnconfirmedClearControl(wallet, session)
+                    UnconfirmedClearControl(wallet, session, repost) { txid ->
+                        scope.launch {
+                            repost.run(txid, confirmRepost) { wallet.repost(session) }
+                            // The form may still hold the payment that just went out, and a second review of it would pay twice.
+                            if (repost.outTxid != null) draft.reset()
+                        }
+                    }
                 }
                 is SendIssue.Insufficient -> {
                     Spacer(modifier = Modifier.height(20.dp))
@@ -180,6 +191,8 @@ fun S4SendScreen(
                 }
                 null -> Unit
             }
+            // Outside the panel, which leaves with the guard the repost settled.
+            RepostedNote(repost)
         }
     }
 }

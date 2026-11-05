@@ -212,21 +212,25 @@ class OnboardingSession(
     fun unconfirmedSend(): SingleSigWallet.Unsettled? = recordGuard ?: payments.of(fingerprint)
 
     /**
-     * The wallet is about to post [txid]. Writes its guard to the guard file, which is what lets the wallet post: [Claim.Written]
-     * only when the file now holds it. [Claim.Taken] when this wallet already has a guard on the phone, which stays.
+     * The wallet is about to post [txid]. Writes its guard to the guard file, with the signed transaction [hex] when there is one,
+     * which is what lets the wallet post. [Claim.Written] only when the file now holds it, and [Claim.Taken] when this wallet already
+     * has a guard on the phone, which stays.
      */
-    fun recordUnconfirmedSend(txid: String, sinceSeconds: Long): Claim =
-        recordGuard?.let { Claim.Taken(it) } ?: payments.claim(fingerprint, SingleSigWallet.UnconfirmedSend(txid, sinceSeconds))
+    fun recordUnconfirmedSend(txid: String, sinceSeconds: Long, hex: String? = null): Claim =
+        recordGuard?.let { Claim.Taken(it) } ?: payments.claim(fingerprint, SingleSigWallet.UnconfirmedSend(txid, sinceSeconds, hex))
 
     /**
      * The payment [guard] is out, refused, listed by the explorer, or cleared by the user, so its guard leaves the phone: every copy or
-     * none, the record's first and then the file's. False, with every copy kept, when the record could not be saved without it.
+     * none, the record's first and then the file's, its signed bytes with it. False, with every copy kept, when the record could not be
+     * saved without it, or while a [repostUnconfirmedSend] of it runs in this process.
      */
     fun clearUnconfirmedSend(guard: SingleSigWallet.Unsettled): Boolean {
         if (guard is SingleSigWallet.UnconfirmedSend && guard.txid == recordGuard?.txid && !persist(dropRecordGuard = true)) return false
-        payments.settle(fingerprint, guard)
-        return true
+        return payments.settle(fingerprint, guard)
     }
+
+    /** [PendingPayments.repost] of this wallet's [guard]. [post] gets the signed bytes the guard file keeps with it, or nothing runs and this is null. */
+    fun <T> repostUnconfirmedSend(guard: SingleSigWallet.UnconfirmedSend, post: (hex: String) -> T): T? = payments.repost(fingerprint, guard, post)
 
     /**
      * After the user confirmed. Erases the saved wallet and the core's scan files, then clears memory. A failed erase keeps them and

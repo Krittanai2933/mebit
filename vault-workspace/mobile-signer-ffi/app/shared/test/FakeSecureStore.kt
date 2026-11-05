@@ -173,6 +173,31 @@ internal fun sendSection(txid: ByteArray, sinceSeconds: Long): ByteArray =
 /** A txid as Esplora writes it: 64 lowercase hex characters. */
 internal const val TEST_TXID = "a14858161cc59cc1fdcafd3b8dfa3d8eb1731e69f28a304f806f98c1d2b9eb9f"
 
+/**
+ * A real signed testnet4 payment shaped as the hot wallet signs one (version 2, one P2WPKH input with a replaceable sequence, two
+ * P2WPKH outputs) and its txid, from `rust/fixtures/proof/testnet4_tx_hex_real.txt`, whose txid the core's proof tests fold into
+ * the header of block 156,696. A Python run of the txid rule gave the same id.
+ */
+internal const val SIGNED_HEX =
+    "020000000001014e1476a453b5bf2d197fe1c55d7d77c578b4eea36cdf114063c882814ec3b2280100000000fdffffff02899f050000000000160014f922f0c9" +
+        "f366db682ab541cdcd4de10b289b14bbe8030000000000001600145d8e5de55dc968ddfc31227f5014930f0c7d9a5c0247304402206aa15f0211d3dbb787" +
+        "74d01775dfeec05d435f2b5d762ed255eb13d810b4a3040220489fc1588fd23ae90f67fe28e380e3182f638529dc4f500e89bf835a2e6c41c00121021fdf63" +
+        "95c09dd67cc9394ca0e19c631d01ad6eb01c5d232ca6a51477f0ff0fb506640200"
+internal const val SIGNED_TXID = "c5ed075ef44b807f51123cf0c6e53c75385a17a510f995b560bf73b1102d5474"
+
+/**
+ * Another real transaction, from `rust/fixtures/proof/mainnet_tx_hex_real.txt`, a taproot spend whose witness holds three items, one
+ * of them a long script, with its txid as the same proof tests check it. Its bytes are never [SIGNED_TXID]'s.
+ */
+internal const val OTHER_SIGNED_HEX =
+    "020000000001011178de7c75a21c6018da2b2a86f922d9857bc5de4f3f56ac9d3477fa54f6310e0a00000000fdffffff012202000000000000160014734b932f" +
+        "31231f1ef91ccfcabd4cc973c7485fc103406911949a601c7d37bdb334646d62e7dde342b3d429cbd4e66530b6262146efbd03a8dae2822fbe50106cd119" +
+        "78a4fba92e8c06cc813c2b9012645ee935c611d98820117f692257b2331233b5705ce9c682be8719ff1b2b64cbca290bd6faeb54423eac06e1e2d18589017" +
+        "50063036f7264010118746578742f706c61696e3b636861727365743d7574662d38003a7b2270223a226272632d3230222c226f70223a226d696e74222c22" +
+        "7469636b223a2273617473222c22616d74223a22313030303030303030227d6821c0117f692257b2331233b5705ce9c682be8719ff1b2b64cbca290bd6faeb" +
+        "54423e00000000"
+internal const val OTHER_SIGNED_TXID = "f13c5f8fbe7f01daf475ce39fdfb6bea766971a2a5cb3398f7da0e3fe7374877"
+
 /** Every probe, each Unavailable reason included. */
 internal val EVERY_PROBE: List<StoreProbe> =
     listOf(StoreProbe.Empty, StoreProbe.Present, StoreProbe.KeyGone) + Why.entries.map { StoreProbe.Unavailable(it) }
