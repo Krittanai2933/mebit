@@ -9,10 +9,13 @@ use std::str::FromStr;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use bitcoin::{Address, Transaction, Txid};
+use bitcoin::block::Header;
+use bitcoin::consensus::encode::deserialize_hex;
+use bitcoin::{Address, BlockHash, Transaction, TxMerkleNode, Txid};
 use serde_json::Value;
 
 use crate::hot_wallet::{FeeTiers, MAX_FEE_RATE};
+use crate::proof::NotProven;
 use crate::{KeyNetwork, MobileSignerError};
 
 /// What the wallet reads from a chain, and the payment it posts. Every read answers in the order asked,
@@ -37,6 +40,13 @@ pub(crate) trait ChainSource {
     fn broadcast(&self, hex: &str, txid: &str) -> Result<String, MobileSignerError>;
     /// Slow, normal and fast rates in sat/vB, or None when the source gives no usable estimate.
     fn fee_tiers(&self) -> Option<FeeTiers>;
+    /// `txid` from the source's raw bytes, unchecked. `prove_use` checks it and the next two answers.
+    /// Each fails `Unreachable` when no answer came and `Lie` when the answer is not the thing asked.
+    fn raw_tx(&self, txid: &Txid) -> Result<Transaction, NotProven>;
+    /// Where `txid` sits in the merkle tree of the block that holds it.
+    fn merkle_branch(&self, txid: &Txid) -> Result<MerkleBranch, NotProven>;
+    /// The header of block `hash`.
+    fn header(&self, hash: &BlockHash) -> Result<Header, NotProven>;
 }
 
 /// What a source says about one address.
@@ -76,6 +86,17 @@ pub(crate) struct Confirmed {
     pub(crate) height: u64,
     /// Unix seconds as the source gave them, unchecked.
     pub(crate) time: Option<u64>,
+    /// The block's id, or None when the source gave none that reads as one. Only a proof needs it.
+    pub(crate) block_hash: Option<BlockHash>,
+}
+
+/// A transaction's place in its block's merkle tree, as Electrum's protocol and Esplora give it.
+pub(crate) struct MerkleBranch {
+    /// The transaction's index in the block. Read lowest bit first, a 1 says the node climbed so far
+    /// is the right child at that level, and a 0 says it is the left.
+    pub(crate) pos: u64,
+    /// The sibling at each level, from the transaction's up to the root's children.
+    pub(crate) hashes: Vec<TxMerkleNode>,
 }
 
 pub(crate) struct Utxo {
@@ -225,6 +246,53 @@ impl ChainSource for EsploraSource<'_> {
         get("/v1/fees/recommended", recommended_estimates)
             .or_else(|| get("/fee-estimates", esplora_estimates))
     }
+
+    fn raw_tx(&self, txid: &Txid) -> Result<Transaction, NotProven> {
+        let hex = self.0.get(&format!("{ESPLORA_TESTNET4}/tx/{txid}/hex"))?;
+        deserialize_hex(hex.trim()).map_err(|e| {
+            NotProven::Lie(format!(
+                "transaction {txid}: the raw answer is not a transaction: {e}"
+            ))
+        })
+    }
+
+    fn merkle_branch(&self, txid: &Txid) -> Result<MerkleBranch, NotProven> {
+        let json = self
+            .0
+            .get(&format!("{ESPLORA_TESTNET4}/tx/{txid}/merkle-proof"))?;
+        read_merkle_branch(&json)
+            .map_err(|what| NotProven::Lie(format!("transaction {txid}: merkle proof {what}")))
+    }
+
+    fn header(&self, hash: &BlockHash) -> Result<Header, NotProven> {
+        let hex = self
+            .0
+            .get(&format!("{ESPLORA_TESTNET4}/block/{hash}/header"))?;
+        deserialize_hex(hex.trim()).map_err(|e| {
+            NotProven::Lie(format!(
+                "block {hash}: the header answer is not a header: {e}"
+            ))
+        })
+    }
+}
+
+/// Esplora's `/tx/{txid}/merkle-proof` answer, `{"block_height", "merkle", "pos"}`. The height is not
+/// read, because the block is the one the history names and the header check ties the branch to it.
+fn read_merkle_branch(json: &str) -> Result<MerkleBranch, String> {
+    let body: Value = serde_json::from_str(json).map_err(|e| format!("is not JSON: {e}"))?;
+    let pos = body["pos"].as_u64().ok_or("has no unsigned integer pos")?;
+    let hashes = body["merkle"]
+        .as_array()
+        .ok_or("has no merkle array")?
+        .iter()
+        .enumerate()
+        .map(|(i, hash)| {
+            hash.as_str()
+                .and_then(|hash| hash.parse().ok())
+                .ok_or_else(|| format!("hash {i} is not 64 hex characters"))
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(MerkleBranch { pos, hashes })
 }
 
 // Defaulting a missing field to 0 would show a Wi-Fi sign-in page as an empty wallet.
@@ -334,6 +402,7 @@ fn tx_view(tx: &Value) -> Result<TxView, String> {
         Some(Confirmed {
             height,
             time: status["block_time"].as_u64(),
+            block_hash: status["block_hash"].as_str().and_then(|h| h.parse().ok()),
         })
     } else {
         None

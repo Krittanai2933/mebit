@@ -10,6 +10,7 @@ pub mod ble;
 mod chain;
 pub mod hot_wallet;
 pub mod price;
+mod proof;
 
 use std::str::FromStr;
 
