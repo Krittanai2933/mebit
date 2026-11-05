@@ -332,7 +332,7 @@ cmd_shot() {
   case $1 in *[!A-Za-z0-9._-]*) die "LABEL may only use letters, digits, . _ -" ;; esac
   load "$STATE" start
   local n base
-  n=$(find "$RUN" -maxdepth 1 -name '[0-9][0-9]-*.png' | wc -l)
+  n=$(find "$RUN" -maxdepth 1 -name '[0-9]*-*.png' | wc -l)
   base="$RUN/$(printf %02d $((n + 1)))-$1"
   adbs exec-out screencap -p > "$base.png" || die "screencap failed"
   dump_ui "$base.xml" || die "uiautomator dump failed"
@@ -456,7 +456,7 @@ cmd_ios_shot() {
   case $1 in *[!A-Za-z0-9._-]*) die "LABEL may only use letters, digits, . _ -" ;; esac
   load "$IOS_STATE" ios-start
   local n base
-  n=$(find "$IOS_RUN" -maxdepth 1 -name '[0-9][0-9]-*.png' | wc -l)
+  n=$(find "$IOS_RUN" -maxdepth 1 -name '[0-9]*-*.png' | wc -l)
   base="$IOS_RUN/$(printf %02d $((n + 1)))-$1.png"
   if [ "${IOS_DEVICE:-}" = 1 ]; then
     xcrun devicectl device capture screenshot --device "$UDID" --destination "$base" > /dev/null 2>&1 || die "devicectl screenshot failed. Is the phone unlocked?"
@@ -476,7 +476,7 @@ ios_ui() {
     id:*) kind=identifier; val=${sel#*:} ;;
   esac
   load "$IOS_STATE" ios-start
-  n=$(find "$IOS_RUN" -maxdepth 1 -name 'ui-[0-9][0-9]-*.log' | wc -l)
+  n=$(find "$IOS_RUN" -maxdepth 1 -name 'ui-[0-9]*-*.log' | wc -l)
   log="$IOS_RUN/ui-$(printf %02d $((n + 1)))-$act.log"
   # xcodebuild once sat for 8 minutes after the test had finished (Xcode 27), so read the result from the
   # test log, give the process a few seconds to exit, and then stop it.
