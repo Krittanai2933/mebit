@@ -1162,8 +1162,8 @@ pub fn hot_tx_detail(
 }
 
 /// Refuses a txid that is not 64 hex before any request. Then `/tx/{txid}` and, second so a block landing between the
-/// two only adds a confirmation, the tip. A 404 is None and asks nothing more. There is no scan, because the wallet's own
-/// addresses are derived offline.
+/// two only adds a confirmation, the tip. A 404 for that transaction is None and asks nothing more. There is no scan, because
+/// the wallet's own addresses are derived offline.
 fn detail_of(
     esplora: Esplora,
     words: &[String],
@@ -1176,7 +1176,7 @@ fn detail_of(
     let base = esplora_base(network)?;
     let account = Account::new(words, passphrase, network_of(network))?;
     let body = match esplora(&format!("{base}/tx/{txid}")) {
-        Err(e) if is_not_found(&e) => return Ok(None),
+        Err(e) if is_not_found(&e, &txid) => return Ok(None),
         answer => answer?,
     };
     let tip = esplora(&format!("{base}/blocks/tip/height"))?;
@@ -1198,8 +1198,9 @@ fn own_addresses(account: &Account) -> Result<HashMap<String, Chain>, MobileSign
 }
 
 /// `tx_json` is the `/tx/{txid}` answer. The row comes from `hot_tx`, so its net and confirmations follow the history's
-/// rule exactly. Strict like every parser here, so another transaction, a part it cannot read, or outputs above the
-/// inputs fail the whole detail.
+/// rule exactly. Strict like every parser here, so another transaction, a part it cannot read, no input or no output, a
+/// coinbase beside other inputs, a side above 21 million BTC, outputs above the inputs, or a weight outside the size to 4 x
+/// the size fails the whole detail.
 fn detail_from(
     tx_json: &str,
     tip_text: &str,
@@ -1232,6 +1233,9 @@ fn detail_from(
     let vout = tx["vout"]
         .as_array()
         .ok_or_else(|| bad("vout is not an array".into()))?;
+    if vin.is_empty() || vout.is_empty() {
+        return Err(bad("no input or no output".into()));
+    }
 
     let mut inputs = Vec::with_capacity(vin.len());
     let mut coinbase = false;
@@ -1244,6 +1248,10 @@ fn detail_from(
         signals_rbf |= sequence < 0xffff_fffe;
         let prevout = &input["prevout"];
         if prevout.is_null() && input["is_coinbase"] == true {
+            // A coinbase makes new coins, so it is its transaction's only input.
+            if vin.len() > 1 {
+                return Err(bad(format!("input {j} is a coinbase beside other inputs")));
+            }
             coinbase = true;
             inputs.push(part(prevout, 0));
             continue;
@@ -1264,15 +1272,17 @@ fn detail_from(
         })
         .collect::<Result<Vec<_>, MobileSignerError>>()?;
 
+    // No amount above 21 million BTC is real, and a side that adds up to at most that holds no value above it.
     let sum = |txos: &[HotTxo], side: &str| {
         txos.iter()
             .try_fold(0u64, |total, t| total.checked_add(t.value_sats))
-            .ok_or_else(|| bad(format!("the {side} do not fit u64")))
+            .filter(|total| *total <= Amount::MAX_MONEY.to_sat())
+            .ok_or_else(|| bad(format!("the {side} add up to more than 21 million BTC")))
     };
+    let (paid_in, paid_out) = (sum(&inputs, "inputs")?, sum(&outputs, "outputs")?);
     let fee_sats = if coinbase {
         0
     } else {
-        let (paid_in, paid_out) = (sum(&inputs, "inputs")?, sum(&outputs, "outputs")?);
         paid_in
             .checked_sub(paid_out)
             .ok_or_else(|| bad(format!("outputs {paid_out} are more than inputs {paid_in}")))?
@@ -1283,6 +1293,13 @@ fn detail_from(
             .filter(|n| *n > 0)
             .ok_or_else(|| bad(format!("no positive integer {field}")))
     };
+    let (size_bytes, weight) = (positive("size")?, positive("weight")?);
+    // Weight is three times the size without witnesses plus the whole size.
+    if !(size_bytes..=size_bytes.saturating_mul(4)).contains(&weight) {
+        return Err(bad(format!(
+            "weight {weight} is outside size {size_bytes} to 4 x size"
+        )));
+    }
     Ok(HotTxDetail {
         block_height: tx["status"]["block_height"]
             .as_u64()
@@ -1291,16 +1308,17 @@ fn detail_from(
         inputs,
         outputs,
         fee_sats,
-        size_bytes: positive("size")?,
-        vsize: positive("weight")?.div_ceil(4),
+        size_bytes,
+        vsize: weight.div_ceil(4),
         signals_rbf,
     })
 }
 
-/// `classify`'s text for an HTTP 404 (ureq 2.12.1 prints "{url}: status code 404", error.rs:214, then maybe
-/// " (redirected from ...)"). The status is gone past the `Esplora` boundary, so a test pins this to `classify`.
-fn is_not_found(error: &MobileSignerError) -> bool {
-    matches!(error, MobileSignerError::InvalidPsbtJson(t) if t.contains(": status code 404"))
+/// `classify`'s text for an HTTP 404 of `/tx/{txid}` on any host (ureq 2.12.1 prints "{url}: status code 404", error.rs:214,
+/// then maybe " (redirected from ...)"). The status is gone past the `Esplora` boundary, so a test pins this to `classify`.
+/// A probe's 404 that `pick_host` quotes in its own error names `/block-height/0`, so it is a failure.
+fn is_not_found(error: &MobileSignerError, txid: &Txid) -> bool {
+    matches!(error, MobileSignerError::InvalidPsbtJson(t) if t.contains(&format!("/tx/{txid}: status code 404")))
 }
 
 fn tip_height(text: &str) -> Result<u64, String> {
@@ -5776,14 +5794,33 @@ mod tests {
         );
     }
 
+    /// `http://127.0.0.1:port` of a server that answers every request the way blockstream.info answers `/tx/{txid}` for a
+    /// txid it never saw.
+    fn not_found_host() -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for mut socket in listener.incoming().flatten() {
+                let _ = socket.read(&mut [0u8; 1024]);
+                let _ = socket.write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 21\r\nConnection: close\r\n\r\nTransaction not found",
+                );
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
     #[test]
     fn an_unknown_txid_is_none_after_one_request() {
+        let host = not_found_host();
         let calls = Mutex::new(0);
-        // The real GET path past the socket, with classify, the retry and the forget.
-        let esplora = |_: &str| {
+        // http_get past the host choice, with the real request, classify, the retry and the forget.
+        let esplora = |url: &str| {
             *calls.lock().unwrap() += 1;
+            let url = on_host(url, &host);
             get_forgetting(
-                &|| classify(not_found()),
+                &|| classify(AGENT.get(&url).call()),
                 &|_| {},
                 &Mutex::new(None),
                 &ScanCache::default(),
@@ -5795,19 +5832,37 @@ mod tests {
     }
 
     #[test]
-    fn a_404_is_told_apart_from_every_other_failure() {
+    fn a_404_for_the_transaction_is_told_apart_from_every_other_failure() {
+        let txid = Txid::from_str(&id('1')).unwrap();
+        let host = not_found_host();
         let failed = |answer: Answer| MobileSignerError::from(classify(answer).unwrap_err());
-        assert!(is_not_found(&failed(not_found())));
+        let asked = |path: String| failed(AGENT.get(&format!("{host}{path}")).call());
+        assert!(is_not_found(&asked(format!("/tx/{txid}")), &txid));
+        assert!(
+            !is_not_found(&asked(format!("/tx/{}", id('2'))), &txid),
+            "another txid"
+        );
+        assert!(
+            !is_not_found(&asked("/blocks/tip/height".into()), &txid),
+            "the tip"
+        );
+        assert!(!is_not_found(&failed(not_found()), &txid), "not a /tx URL");
         for status in [400, 410, 429, 500, 502] {
-            assert!(!is_not_found(&failed(answer(status, ""))), "{status}");
+            assert!(
+                !is_not_found(&failed(answer(status, "")), &txid),
+                "{status}"
+            );
         }
-        assert!(!is_not_found(&failed(no_answer())));
-        assert!(!is_not_found(&failed(cut_short(200))));
-        assert!(!is_not_found(&failed(Err(refused()))));
+        assert!(!is_not_found(&failed(no_answer()), &txid));
+        assert!(!is_not_found(&failed(cut_short(200)), &txid));
+        assert!(!is_not_found(&failed(Err(refused())), &txid));
         // ureq 2.12.1 names the first URL after a redirect (error.rs:214).
-        assert!(is_not_found(&MobileSignerError::InvalidPsbtJson(
-            "esplora get: https://h/tx/1: status code 404 (redirected from https://g/tx/1)".into()
-        )));
+        assert!(is_not_found(
+            &MobileSignerError::InvalidPsbtJson(format!(
+                "esplora get: https://h/tx/{txid}: status code 404 (redirected from https://g/tx/{txid})"
+            )),
+            &txid
+        ));
     }
 
     #[test]
@@ -5966,6 +6021,126 @@ mod tests {
             part(None, 0, TxoOwner::Other),
             "OP_RETURN"
         );
+    }
+
+    // http_get with the network swapped out. The real pick_host runs over the public hosts, where blockstream's probe gets a
+    // real 404 for /block-height/0 through probe_genesis and mempool.space times out, so nothing asks for the transaction.
+    #[test]
+    fn a_probe_404_inside_no_host_reachable_is_a_failure_not_an_unknown_txid() {
+        let answers_404: &'static str = Box::leak(not_found_host().into_boxed_str());
+        let probe = |host: &HostSpec| match host.base {
+            ESPLORA_TESTNET4 => probe_genesis(&HostSpec {
+                base: answers_404,
+                ..*host
+            }),
+            _ => Err(MobileSignerError::InvalidPsbtJson(
+                no_answer().unwrap_err().to_string(),
+            )),
+        };
+        let chosen = Mutex::new(None);
+        let esplora = |url: &str| -> Result<String, MobileSignerError> {
+            let index = pick_host(&PUBLIC_TESTNET4_HOSTS, &probe, Instant::now(), &chosen)?;
+            unreachable!("no host passed its probe, yet {url} went to host {index}")
+        };
+        match detail_of(&esplora, &abandon_about(), "", KeyNetwork::Test, &id('1')) {
+            Err(MobileSignerError::InvalidPsbtJson(m)) => assert!(
+                m.starts_with("esplora get: no testnet4 host is reachable")
+                    && m.contains("/block-height/0: status code 404"),
+                "{m}"
+            ),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    // 21 million BTC is 2,100,000,000,000,000 sat, so no value or sum above it is real.
+    #[test]
+    fn a_value_or_a_sum_above_21_million_btc_is_an_error_and_21_million_is_the_largest_fee() {
+        let max: u64 = 2_100_000_000_000_000;
+        let cases = [
+            (vec![spent(SOMEONE, max + 1)], vec![txo(SOMEONE, 1_000)]),
+            (
+                vec![spent(SOMEONE, max), spent(SOMEONE, 1)],
+                vec![txo(SOMEONE, 1_000)],
+            ),
+            (vec![spent(SOMEONE, max + 2)], vec![txo(SOMEONE, max + 1)]),
+            (
+                vec![spent(SOMEONE, max)],
+                vec![txo(SOMEONE, max), txo(SOMEONE, 1)],
+            ),
+        ];
+        for (vin, vout) in cases {
+            let tx = full_tx('1', &vin, &vout, MEMPOOL);
+            assert_detail_rejected(&tx, TIP, "more than 21 million BTC");
+        }
+        let mut coinbase: Value =
+            serde_json::from_str(&full_tx('1', &[], &[txo(SOMEONE, max + 1)], MEMPOOL)).unwrap();
+        coinbase["vin"] = serde_json::json!([{"is_coinbase": true, "prevout": null, "sequence": 0xffff_ffff_u32}]);
+        assert_detail_rejected(&coinbase.to_string(), TIP, "more than 21 million BTC");
+        let all = full_tx('1', &[spent(SOMEONE, max)], &[txo(SOMEONE, 0)], MEMPOOL);
+        let txid = Txid::from_str(&id('1')).unwrap();
+        assert_eq!(
+            detail_from(&all, TIP, &txid, &HashMap::new())
+                .unwrap()
+                .fee_sats,
+            max
+        );
+    }
+
+    // A coinbase makes new coins and is its transaction's only input. Beside a real input it zeroed the fee and skipped the
+    // outputs-above-inputs check.
+    #[test]
+    fn a_coinbase_input_beside_another_input_is_an_error() {
+        for at in 0..2 {
+            let mut tx: Value = serde_json::from_str(&full_tx(
+                '1',
+                &[spent(SOMEONE, 10_000), spent(SOMEONE, 1)],
+                &[txo(SOMEONE, 6_000), txo(SOMEONE, 3_000)],
+                MEMPOOL,
+            ))
+            .unwrap();
+            tx["vin"][at] = serde_json::json!({"is_coinbase": true, "prevout": null, "sequence": 0xffff_fffd_u32});
+            assert_detail_rejected(&tx.to_string(), TIP, "coinbase");
+        }
+    }
+
+    // Weight is three times the size without witnesses plus the whole size, so it runs from the size to four times the size.
+    #[test]
+    fn a_weight_outside_the_size_to_four_times_the_size_is_an_error() {
+        let weighing = |weight: u64| {
+            let mut tx: Value = serde_json::from_str(&full_tx(
+                '1',
+                &[spent(SOMEONE, 2_000)],
+                &[txo(SOMEONE, 1_000)],
+                MEMPOOL,
+            ))
+            .unwrap();
+            tx["weight"] = weight.into();
+            tx.to_string()
+        };
+        // The size stays 222.
+        for weight in [100, 221, 889] {
+            assert_detail_rejected(&weighing(weight), TIP, "4 x size");
+        }
+        let txid = Txid::from_str(&id('1')).unwrap();
+        for (weight, vsize) in [(222, 56), (888, 222)] {
+            let found = detail_from(&weighing(weight), TIP, &txid, &HashMap::new()).unwrap();
+            assert_eq!(found.vsize, vsize, "{weight}");
+        }
+    }
+
+    #[test]
+    fn a_transaction_with_no_input_or_no_output_is_an_error() {
+        let one_in = [spent(SOMEONE, 2_000)];
+        let one_out = [txo(SOMEONE, 1_000)];
+        let none: [String; 0] = [];
+        for (vin, vout) in [
+            (&none[..], &none[..]),
+            (&one_in[..], &none[..]),
+            (&none[..], &one_out[..]),
+        ] {
+            let tx = full_tx('1', vin, vout, &at(100));
+            assert_detail_rejected(&tx, TIP, "no input or no output");
+        }
     }
 
     // Prints what own_addresses costs at the cap and asserts no time. The phone runs a release build, so measure with

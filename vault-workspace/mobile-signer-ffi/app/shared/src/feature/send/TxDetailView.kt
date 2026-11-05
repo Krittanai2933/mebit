@@ -36,7 +36,8 @@ internal data class TxStatusView(val confirmed: Boolean, val title: String, val 
 /** [addresses] are raw, and the screen groups them by four. */
 internal data class TxAddresses(val label: String, val addresses: List<String>)
 
-internal data class TxCostView(val fee: String, val rate: String, val total: String, val change: String?)
+/** [fee] and [rate] are null when another party's input paid part of the fee, and the screen leaves those rows out. */
+internal data class TxCostView(val fee: String?, val rate: String?, val total: String, val change: String?)
 
 internal data class TxTechnicalView(
     val inputs: List<TxoLine>,
@@ -59,7 +60,8 @@ internal val DEMO_TX = HotTx("6d6562697464656d6f" + "0".repeat(46), -1_801_240L,
 
 /**
  * [row] is what the tapped row drew, shown at once. Once [load] is [TxDetailLoad.Loaded] its fresh row replaces it and the cards
- * that need the inputs and outputs appear. A send then shows what reached others, and until then the net with its fee, labelled so.
+ * that need the inputs and outputs appear. A send the wallet paid alone then shows what reached others. Until then, and for a send
+ * that another party's input helped pay, it shows the net with its fee, labelled so.
  * [network] is the one the detail was asked on. [timeZoneId] is an IANA id for the date, and null means the device's zone.
  */
 internal fun txDetailView(row: HotTx, load: TxDetailLoad, quote: FiatQuote?, network: KeyNetwork, timeZoneId: String? = null): TxDetailView {
@@ -68,8 +70,11 @@ internal fun txDetailView(row: HotTx, load: TxDetailLoad, quote: FiatQuote?, net
     val received = tx.netSats >= 0
     val net = abs(tx.netSats)
     val (others, ownOutputs) = detail?.outputs.orEmpty().partition { it.owner == TxoOwner.OTHER }
+    // Only when every input is the wallet's did the wallet pay every other output and the whole fee. In a payjoin or a coinjoin
+    // another party's input paid part of them, and no field says which part.
+    val soleSend = !received && detail?.inputs?.none { it.owner == TxoOwner.OTHER } == true
     // A self-send reached nobody, so it keeps the net and says the fee is in it.
-    val reached = others.sumOf { it.valueSats }.toLong().takeIf { !received && it > 0 }
+    val reached = others.sumOf { it.valueSats }.toLong().takeIf { soleSend && it > 0 }
     val amountSats = reached ?: net
     return TxDetailView(
         received = received,
@@ -84,18 +89,21 @@ internal fun txDetailView(row: HotTx, load: TxDetailLoad, quote: FiatQuote?, net
             // The server may confirm a transaction without a time the app can print, as on the rows.
             else -> tx.blockTime?.let { formatThaiDateTime(it.toLong(), timeZoneId) } ?: "—"
         },
-        addresses = detail?.let {
-            if (received) TxAddresses("เข้าที่อยู่ของคุณ", ownOutputs.mapNotNull { o -> o.address }) else TxAddresses("ส่งไปที่", others.mapNotNull { o -> o.address })
+        addresses = when {
+            detail == null -> null
+            received -> TxAddresses("เข้าที่อยู่ของคุณ", ownOutputs.mapNotNull { it.address })
+            soleSend -> TxAddresses("ส่งไปที่", others.mapNotNull { it.address })
+            else -> null
         }?.takeIf { it.addresses.isNotEmpty() },
         cost = detail?.takeUnless { received }?.let {
-            val change = ownOutputs.sumOf { o -> o.valueSats }.toLong()
-            TxCostView(realFeeText(it.feeSats.toLong(), quote), rate(it), btc(net), change.takeIf { c -> c > 0 }?.let(::btc))
+            val change = it.outputs.filter { o -> o.owner == TxoOwner.CHANGE }.sumOf { o -> o.valueSats }.toLong()
+            TxCostView(realFeeText(it.feeSats.toLong(), quote).takeIf { soleSend }, rate(it).takeIf { soleSend }, btc(net), change.takeIf { c -> c > 0 }?.let(::btc))
         },
         txid = row.txid,
         technical = detail?.let {
             TxTechnicalView(
                 inputs = it.inputs.map { i -> txoLine(i, if (i.owner == TxoOwner.OTHER) null else OWN) },
-                outputs = it.outputs.map { o -> txoLine(o, outputTag(o.owner, received)) },
+                outputs = it.outputs.map { o -> txoLine(o, outputTag(o.owner, received, soleSend)) },
                 fee = "${thousands(it.feeSats.toLong())} sat",
                 rate = rate(it),
                 size = "${thousands(it.sizeBytes.toLong())} B",
@@ -145,8 +153,8 @@ private fun rate(detail: HotTxDetail): String {
     return "${thousands((tenths / 10u).toLong())}.${tenths % 10u} sat/vB"
 }
 
-private fun outputTag(owner: TxoOwner, received: Boolean): String? = when {
-    owner == TxoOwner.OTHER -> "ปลายทาง".takeUnless { received }
+private fun outputTag(owner: TxoOwner, received: Boolean, soleSend: Boolean): String? = when {
+    owner == TxoOwner.OTHER -> "ปลายทาง".takeIf { soleSend }
     owner == TxoOwner.CHANGE && !received -> "เงินทอน · $OWN"
     else -> OWN
 }

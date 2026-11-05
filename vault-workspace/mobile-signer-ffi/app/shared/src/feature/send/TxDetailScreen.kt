@@ -186,10 +186,14 @@ fun S8TxDetailScreen(
             view.cost?.let { cost ->
                 Spacer(modifier = Modifier.height(14.dp))
                 DetailCard(tag = "tx_cost") {
-                    ReviewRow("ค่าธรรมเนียมเครือข่าย", cost.fee, tag = "tx_fee")
-                    ReviewDivider()
-                    ReviewRow("อัตราค่าธรรมเนียม", cost.rate, tag = "tx_rate")
-                    ReviewDivider()
+                    cost.fee?.let {
+                        ReviewRow("ค่าธรรมเนียมเครือข่าย", it, tag = "tx_fee")
+                        ReviewDivider()
+                    }
+                    cost.rate?.let {
+                        ReviewRow("อัตราค่าธรรมเนียม", it, tag = "tx_rate")
+                        ReviewDivider()
+                    }
                     ReviewRow("รวมออกจากกระเป๋า", cost.total, bold = true, tag = "tx_total")
                     cost.change?.let {
                         ReviewDivider()

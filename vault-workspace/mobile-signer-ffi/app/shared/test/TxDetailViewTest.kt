@@ -34,11 +34,18 @@ private val SENT_OUTPUTS = listOf(HotTxo(DESTINATION, 1_800_000uL, TxoOwner.OTHE
 private fun row(netSats: Long, confirmations: UInt, blockTime: ULong? = BOARD_TIME.takeIf { confirmations > 0u }) =
     HotTx(TXID, netSats, confirmations, blockTime)
 
-private fun sent(confirmations: UInt = 3u, netSats: Long = -1_801_240L, outputs: List<HotTxo> = SENT_OUTPUTS, feeSats: ULong = 1_240uL, vsize: ULong = 294uL) =
+private fun sent(
+    confirmations: UInt = 3u,
+    netSats: Long = -1_801_240L,
+    inputs: List<HotTxo> = SENT_INPUTS,
+    outputs: List<HotTxo> = SENT_OUTPUTS,
+    feeSats: ULong = 1_240uL,
+    vsize: ULong = 294uL,
+) =
     HotTxDetail(
         tx = row(netSats, confirmations),
         blockHeight = 903_412uL.takeIf { confirmations > 0u },
-        inputs = SENT_INPUTS,
+        inputs = inputs,
         outputs = outputs,
         feeSats = feeSats,
         sizeBytes = 374uL,
@@ -106,6 +113,84 @@ class TxDetailViewTest {
         assertEquals("รวมค่าธรรมเนียม", shown.amountNote)
         assertNull(shown.addresses)
         assertEquals(TxCostView("1,240 sat · ฿43", "4.2 sat/vB", "0.0000124 BTC", "0.0349876 BTC"), shown.cost)
+    }
+
+    // A payjoin seen from the payer, with 0.025 of the wallet's and 0.02 of the receiver's own in, 0.04 to the receiver and 0.0049 back
+    // as change. What the receiver got from the wallet and who paid the 10,000 sat fee cannot be told apart.
+    @Test
+    fun aSendWithAnotherPartysInputShowsOnlyWhatLeftTheWalletAndTheChange() {
+        val payjoin = sent(
+            netSats = -2_010_000L,
+            inputs = listOf(HotTxo(SPENT_RECEIVE, 2_500_000uL, TxoOwner.RECEIVE), HotTxo(PAYER, 2_000_000uL, TxoOwner.OTHER)),
+            outputs = listOf(HotTxo(DESTINATION, 4_000_000uL, TxoOwner.OTHER), HotTxo(CHANGE, 490_000uL, TxoOwner.CHANGE)),
+            feeSats = 10_000uL,
+            vsize = 209uL,
+        )
+        val shown = view(row(-2_010_000L, 3u), TxDetailLoad.Loaded(payjoin))
+        assertEquals("0.0201 BTC", shown.amount)
+        assertEquals("รวมค่าธรรมเนียม", shown.amountNote)
+        assertEquals("มูลค่าตอนนี้ ≈ ฿69,104", shown.fiat)
+        assertNull(shown.addresses)
+        assertEquals(TxCostView(null, null, "0.0201 BTC", "0.0049 BTC"), shown.cost)
+        val technical = shown.technical!!
+        assertEquals(listOf("ของกระเป๋านี้", null), technical.inputs.map { it.tag })
+        assertEquals(listOf(null, "เงินทอน · ของกระเป๋านี้"), technical.outputs.map { it.tag })
+        assertEquals("10,000 sat", technical.fee, "the transaction's own fee stays a fact about it")
+        assertEquals("47.8 sat/vB", technical.rate)
+    }
+
+    // A coinjoin with 0.001 in from the wallet and from two others, and 0.00099 out to each, the wallet's to its own receive address.
+    @Test
+    fun aCoinjoinNamesNoDestinationAndClaimsNoShareOfTheFee() {
+        val coinjoin = sent(
+            netSats = -1_000L,
+            inputs = listOf(HotTxo(SPENT_RECEIVE, 100_000uL, TxoOwner.RECEIVE), HotTxo(PAYER, 100_000uL, TxoOwner.OTHER), HotTxo(PAYER_CHANGE, 100_000uL, TxoOwner.OTHER)),
+            outputs = listOf(HotTxo(OWN_RECEIVE, 99_000uL, TxoOwner.RECEIVE), HotTxo(DESTINATION, 99_000uL, TxoOwner.OTHER), HotTxo(PAYER, 99_000uL, TxoOwner.OTHER)),
+            feeSats = 3_000uL,
+            vsize = 141uL,
+        )
+        val shown = view(row(-1_000L, 3u), TxDetailLoad.Loaded(coinjoin))
+        assertEquals("0.00001 BTC", shown.amount)
+        assertEquals("รวมค่าธรรมเนียม", shown.amountNote)
+        assertNull(shown.addresses)
+        assertEquals(TxCostView(null, null, "0.00001 BTC", null), shown.cost)
+        assertEquals(listOf("ของกระเป๋านี้", null, null), shown.technical?.outputs?.map { it.tag })
+    }
+
+    // 0.025 spent, with 0.01 to someone, 0.006 to the wallet's own receive address, 0.0089 to its change address and a 10,000 sat fee.
+    @Test
+    fun theChangeIsWhatWentToTheChangeAddressesNotAPaymentToTheWalletsOwnReceiveAddress() {
+        val toOwnReceiveToo = sent(
+            netSats = -1_010_000L,
+            inputs = listOf(HotTxo(SPENT_RECEIVE, 2_500_000uL, TxoOwner.RECEIVE)),
+            outputs = listOf(HotTxo(DESTINATION, 1_000_000uL, TxoOwner.OTHER), HotTxo(OWN_RECEIVE, 600_000uL, TxoOwner.RECEIVE), HotTxo(CHANGE, 890_000uL, TxoOwner.CHANGE)),
+            feeSats = 10_000uL,
+        )
+        val shown = view(row(-1_010_000L, 3u), TxDetailLoad.Loaded(toOwnReceiveToo))
+        assertEquals("0.0100 BTC", shown.amount)
+        assertEquals(TxCostView("10,000 sat · ฿344", "34.0 sat/vB", "0.0101 BTC", "0.0089 BTC"), shown.cost)
+    }
+
+    // The core refuses any value or sum above 21 million BTC, so all of it as the fee is the most the screen can be given.
+    @Test
+    fun theLargestFeeTheCoreAllowsKeepsItsRateAndAPositiveAmount() {
+        fun shown(vsize: ULong) = view(
+            row(-2_100_000_000_000_000L, 3u),
+            TxDetailLoad.Loaded(
+                sent(
+                    netSats = -2_100_000_000_000_000L,
+                    inputs = listOf(HotTxo(SPENT_RECEIVE, 2_100_000_000_000_000uL, TxoOwner.RECEIVE)),
+                    outputs = listOf(HotTxo(null, 0uL, TxoOwner.OTHER)),
+                    feeSats = 2_100_000_000_000_000uL,
+                    vsize = vsize,
+                ),
+            ),
+            quote = null,
+        )
+        assertEquals("2,100,000,000,000,000 sat", shown(1uL).technical?.fee)
+        assertEquals("2,100,000,000,000,000 sat", shown(1uL).cost?.fee)
+        assertEquals("2,100,000,000,000,000.0 sat/vB", shown(1uL).technical?.rate)
+        assertEquals("14,893,617,021,276.5 sat/vB", shown(141uL).technical?.rate)
     }
 
     @Test
