@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.Repost
+import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.theme.MbBody
@@ -35,8 +36,11 @@ import com.mebit.app.ui.theme.MbEyebrow
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbWhite
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -136,6 +140,17 @@ internal class RepostAttempt {
             running = false
         }
     }
+
+    /**
+     * [run] in [scope], for Send and Review. A repost that puts the payment out drops [draft] in the same step off the main thread
+     * that learns it is out, because the draft may hold that payment and a second review of it would pay twice. Leaving the screen
+     * cancels [scope], which can keep the post from starting but never keeps the draft of a payment that went out.
+     */
+    fun start(scope: CoroutineScope, txid: String, confirm: suspend () -> Boolean, draft: SendDraft, post: () -> Repost): Job =
+        scope.launch { run(txid, confirm) { post().also { if (it == Repost.Out) draft.reset() } } }
+
+    /** [go], unless a repost runs here, because leaving the screen meanwhile would hide a payment that may still go out. */
+    fun unlessRunning(go: () -> Unit): () -> Unit = { if (!running) go() }
 }
 
 /** The text link of BottomActions, on its own. */

@@ -27,6 +27,7 @@ import com.mebit.app.data.TEST_CHECK
 import com.mebit.app.data.TEST_TXID
 import com.mebit.app.data.UnlockResult
 import com.mebit.app.data.WalletRecord
+import com.mebit.app.data.oldRecordBytes
 import com.mebit.app.data.testRecord
 import com.mebit.app.data.v1Bytes
 import com.mebit.ffi.signer.KeyNetwork
@@ -298,6 +299,63 @@ class WalletGateStateTest {
         }
     }
 
+    // R8 H1, the review of 2026-11-06. A Forget from Locked proved the owner by opening the record and dropped what it read, so an
+    // older record's guard (flag 8) went with the erase.
+    @Test
+    fun forgetFromLockedKeepsAnOlderRecordsGuard(): Unit = runBlocking {
+        val pending = UnconfirmedSend(TEST_TXID, SENT_AT)
+        val store = FakeSecureStore(probe = StoreProbe.Present, marker = Marker.Kept)
+        store.write(oldRecordBytes(pending), WriteMode.Create)
+        val guards = FakePlainFile()
+        val wallet = SavedWallet(store)
+        val session = OnboardingSession(wallet, payments = PendingPayments(guards))
+        val gate = WalletGateState(wallet, session)
+        gate.forget("test")
+        assertEquals(Boot.Onboarding, gate.boot, "the forget")
+        assertNotNull(guards.guardOf(), "the older record's guard was dropped by Forget")
+        assertEquals(pending, guards.guardOf(), "the older record's guard after Forget")
+    }
+
+    // R8, the rule behind S1 and H1. An older record's guard leaves the record only for the guard file, so a Forget that cannot move it
+    // is refused as a failed erase is. The record and its guard stay, and the screen says the forget failed. The unlock screen's link
+    // reads the guard in its owner check, and the recovery screen has the one a record showed when it opened but did not install.
+    @Test
+    fun aForgetThatCannotMoveAnOlderRecordsGuardErasesNothingAndSaysItFailed(): Unit = runBlocking {
+        val pending = UnconfirmedSend(TEST_TXID, SENT_AT)
+        val cannotMove = listOf(
+            "a damaged guard file" to { FakePlainFile().apply { text = "garbage\n" } },
+            "a guard file that cannot be written" to { FakePlainFile().apply { failWrite = true } },
+            "another payment's guard in the file" to {
+                FakePlainFile().also { assertEquals(Claim.Written, PendingPayments(it).claim(TEST_CHECK, UnconfirmedSend("f".repeat(64), SENT_AT))) }
+            },
+        )
+        for ((file, guardFile) in cannotMove) {
+            for (recovery in listOf(false, true)) {
+                val case = (if (recovery) "the recovery screen" else "the unlock screen's link") + ", $file"
+                val app = OlderRecordLaunch(pending, guardFile(), derivesTo = if (recovery) OTHER_CHECK else TEST_CHECK)
+                if (recovery) app.gate.unlock("test")
+                val boot = app.gate.boot
+                val text = app.guards.text
+                app.gate.forget("test")
+                assertSame(boot, app.gate.boot, "a refused forget left the screen, $case")
+                assertEquals("Unavailable(Other)", label(app.gate.lastAttempt), "what the screen says, $case")
+                assertEquals(0, app.store.erases, "erases, $case")
+                assertEquals(pending, assertIs<UnlockResult.Opened>(SavedWallet(app.store).open("test"), case).oldGuard, "the record's guard, $case")
+                assertEquals(text, app.guards.text, "the guard file, $case")
+            }
+        }
+        for (recovery in listOf(false, true)) {
+            val app = OlderRecordLaunch(pending, FakePlainFile(), derivesTo = if (recovery) OTHER_CHECK else TEST_CHECK)
+            if (recovery) {
+                app.gate.unlock("test")
+                assertEquals(Cause.Corrupt, assertIs<Boot.Broken>(app.gate.boot, "a record whose key derives to another wallet").cause)
+            }
+            app.gate.forget("test")
+            assertEquals(Boot.Onboarding, app.gate.boot, "a forget whose guard moved, recovery $recovery")
+            assertEquals(pending, app.guards.guardOf(TEST_CHECK), "the guard under the record's fingerprint, recovery $recovery")
+        }
+    }
+
     @Test
     fun aFreshInstallStartsOnboardingAndAnOrphanIsWipedWithItsNotice() {
         val starts = listOf(
@@ -421,6 +479,22 @@ private class AppLaunch(val store: FakeSecureStore) {
     val sheets = Sheets(store)
     private val wallet = SavedWallet(sheets)
     val session = OnboardingSession(wallet, restoreKey = keys.restoreKey)
+    val gate = WalletGateState(wallet, session)
+}
+
+/**
+ * A launch on a phone whose record a build before the guard file saved with [pending] as its guard (flag 8), and whose guard file is
+ * [guards]. The record's words derive to [derivesTo], so any other fingerprint than the record's makes its unlock fail to install.
+ */
+private class OlderRecordLaunch(pending: UnconfirmedSend, val guards: FakePlainFile, derivesTo: String) {
+    val store = FakeSecureStore(marker = Marker.Kept).also { it.write(oldRecordBytes(pending), WriteMode.Create) }
+    private val wallet = SavedWallet(store)
+    private val session = OnboardingSession(
+        wallet,
+        restoreKey = { words, _, _, _ -> SoftwareAccountKey(words, derivesTo, "tpub-test", "m/48'/1'/0'/2'") },
+        forgetScans = {},
+        payments = PendingPayments(guards),
+    )
     val gate = WalletGateState(wallet, session)
 }
 

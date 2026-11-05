@@ -79,6 +79,39 @@ class PendingPaymentsTest {
         assertNull(file.text, "the file once no line is left")
     }
 
+    // R8 S2, the review of 2026-11-06. A settle whose write failed said true, so the screen cleared while the phone still held the
+    // guard, and the payment was refused only at the claim, after the owner check and the signing.
+    @Test
+    fun aSettleWhoseWriteFailsSaysSoAndKeepsTheGuard() {
+        val file = FakePlainFile()
+        val p = PendingPayments(file)
+        val a = UnconfirmedSend(TEST_TXID, SENT_AT)
+        assertEquals(Claim.Written, p.claim(TEST_CHECK, a))
+        assertEquals(Claim.Written, p.claim(OTHER_CHECK, UnconfirmedSend(TEST_TXID, SENT_AT)))
+        file.failWrite = true
+        val ok = p.settle(TEST_CHECK, a)
+        assertEquals(a, PendingPayments(file).of(TEST_CHECK), "guard still on the file")
+        assertFalse(ok, "settle said true although the guard is still on the phone")
+    }
+
+    @Test
+    fun aSettleWhoseDeleteFailsSaysSoAndKeepsTheGuard() {
+        val file = FakePlainFile()
+        val payments = PendingPayments(file)
+        assertEquals(Claim.Written, payments.claim(TEST_CHECK, send))
+        file.failDelete = true
+        assertFalse(payments.settle(TEST_CHECK, send), "the settle of the last line, whose delete failed")
+        assertEquals(send, payments.of(TEST_CHECK), "the guard after the failed delete")
+        for ((case, damaged) in damagedFiles()) {
+            damaged.failDelete = true
+            assertFalse(PendingPayments(damaged).settle(TEST_CHECK, DamagedGuard), "the clear of a damaged file whose delete failed, $case")
+            assertEquals(DamagedGuard, PendingPayments(damaged).of(TEST_CHECK), case)
+        }
+        file.failDelete = false
+        assertTrue(payments.settle(TEST_CHECK, send), "the settle once the delete works")
+        assertNull(file.text, "the file after the settle")
+    }
+
     @Test
     fun theTxidOfATransactionIsTheOneTheChainGivesIt() {
         assertEquals(SIGNED_TXID, txidOf(SIGNED_HEX), "a P2WPKH payment")

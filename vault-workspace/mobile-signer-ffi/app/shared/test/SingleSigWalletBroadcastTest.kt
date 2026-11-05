@@ -1196,6 +1196,21 @@ class SingleSigWalletBroadcastTest {
         assertTrue(hot.wallet.broadcast(session, 50_000, 8, DESTINATION), "a payment after the clear")
     }
 
+    // R8 S2, the review of 2026-11-06. A clear the guard file could not take said it worked, so the screen cleared and the payment was
+    // refused only after the owner check and the signing. The clear now fails, which shows its failed line, and the guard stays.
+    @Test
+    fun aClearTheGuardFileCannotTakeKeepsThePaymentEverywhere() {
+        val hot = FakeHot()
+        val session = hot.unknownSend()
+        hot.guards.failDelete = true
+        assertFalse(hot.wallet.clearUnconfirmedSend(session), "a clear whose delete failed")
+        assertEquals(UnconfirmedSend(TXID, SENT_AT), hot.wallet.unconfirmedSend, "the wallet")
+        assertEquals(UnconfirmedSend(TXID, SENT_AT), hot.guards.guardOf(), "the file")
+        hot.guards.failDelete = false
+        assertTrue(hot.wallet.clearUnconfirmedSend(session), "the clear once the file can take it")
+        assertNull(hot.guards.guardOf(), "the file after the clear")
+    }
+
     // C2. The first post writes the signed bytes into its guard's line before it posts, and only bytes that are its own transaction.
     // Bytes that are not, as the fakes' "hex-1", stay out of the file and the payment still goes, with nothing to repost.
     @Test

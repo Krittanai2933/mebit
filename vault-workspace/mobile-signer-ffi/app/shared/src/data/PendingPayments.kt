@@ -75,13 +75,14 @@ class PendingPayments internal constructor(private val file: PlainFile?) {
     /**
      * Drops [guard] while the file still holds it: a payment's line while it still names that txid, so a late settle never drops a
      * newer payment's guard, and a damaged file while it is still damaged, so a late clear never drops a file that reads again.
-     * False, dropping nothing, while a [repost] of that payment runs in this process.
+     * False, dropping nothing, while a [repost] of that payment runs in this process. False too when the write or the delete that
+     * drops it failed, so the guard may still be on the phone and the screen says the clear could not finish.
      */
     fun settle(fingerprint: String, guard: Unsettled): Boolean = synchronized(guardLock) {
         val f = file ?: return@synchronized true
         val guards = f.guards()
         when (guard) {
-            DamagedGuard -> if (guards == null) f.delete()
+            DamagedGuard -> guards != null || f.delete()
             is UnconfirmedSend -> {
                 if (guard.txid in reposting) return@synchronized false
                 if (guards == null || guards[fingerprint]?.txid != guard.txid) return@synchronized true
@@ -89,7 +90,6 @@ class PendingPayments internal constructor(private val file: PlainFile?) {
                 if (rest.isEmpty()) f.delete() else f.write(encode(rest))
             }
         }
-        true
     }
 }
 

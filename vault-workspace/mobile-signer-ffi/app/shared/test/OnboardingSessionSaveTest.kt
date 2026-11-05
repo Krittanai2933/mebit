@@ -586,6 +586,31 @@ class OnboardingSessionSaveTest {
         assertNull(again.unconfirmedSend(), "the cleared guard after the next unlock")
     }
 
+    // R8 S1, the review of 2026-11-06. The file could not take an older record's guard, so the record held its only copy, and Forget
+    // erased the record and dropped the session's copy, so the same words imported again could pay. Forget now moves that guard to
+    // the file first and erases nothing while it cannot.
+    @Test
+    fun aForgetThatCannotMoveAnOlderRecordsGuardIsRefusedAndKeepsIt() {
+        val pending = UnconfirmedSend(TEST_TXID, SENT_AT)
+        val store = storeHolding(oldRecordBytes(pending))
+        val guards = FakePlainFile().apply { failWrite = true }
+        val keys = Keys()
+        val session = session(store, keys, guards)
+        val opened = store.opened()
+        assertTrue(session.install(opened.record, opened.version, opened.oldGuard), "install")
+        assertEquals(pending, session.unconfirmedSend(), "the guard the wallet takes at its bind")
+        assertFalse(session.forgetSavedWallet(), "a forget while the file cannot take the guard")
+        assertEquals(0, store.erases, "erases")
+        assertEquals(pending, store.opened().oldGuard, "the record after the refused forget")
+        assertEquals(pending, session.unconfirmedSend(), "the session after the refused forget")
+        assertEquals(0, keys.scansForgotten, "the wallet is still on the phone, so its scan stays")
+        guards.failWrite = false
+        assertTrue(session.forgetSavedWallet(), "the forget once the file takes the guard")
+        val again = session(FakeSecureStore(), guards = guards)
+        assertTrue(again.install(testRecord(), ANY_VERSION), "the same words imported again")
+        assertEquals(pending, again.unconfirmedSend(), "guard after forget and reimport")
+    }
+
     @Test
     fun aSaveHeldInTheStoreDoesNotLetALaterSaveBeOverwritten() = runBlocking {
         val store = HoldingStore(FakeSecureStore(), holdCall = 3, failCall = 2)

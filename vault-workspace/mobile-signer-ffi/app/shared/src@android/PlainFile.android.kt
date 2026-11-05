@@ -36,5 +36,9 @@ internal actual fun plainFile(path: String): PlainFile = object : PlainFile {
         return read() == text
     }
 
-    override fun delete() = file.delete()
+    override fun delete(): Boolean {
+        file.delete()
+        // AtomicFile.delete reports nothing, so a read, which counts a backup left behind as the file, says what is left.
+        return read() == ""
+    }
 }

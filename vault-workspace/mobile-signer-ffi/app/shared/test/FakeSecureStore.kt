@@ -110,12 +110,14 @@ internal fun testRecord(
 
 /**
  * An in-memory [PlainFile] for common tests. [text] is what the file holds, null for no file. [failWrite] makes each write fail
- * and [unreadable] each read, as a full disk or a damaged file would, until a delete removes the file. [onRead] runs after a read
- * took the text and before it returns it, so a test can hold a reader between what it read and what it writes.
+ * and [failDelete] each delete, leaving the file as it was, and [unreadable] each read, as a full disk or a damaged file would,
+ * until a delete removes the file. [onRead] runs after a read took the text and before it returns it, so a test can hold a reader
+ * between what it read and what it writes.
  */
 internal class FakePlainFile : PlainFile {
     var text: String? = null
     var failWrite = false
+    var failDelete = false
     var unreadable = false
     var onRead: () -> Unit = {}
     var writes = 0
@@ -134,9 +136,11 @@ internal class FakePlainFile : PlainFile {
         return true
     }
 
-    override fun delete() {
+    override fun delete(): Boolean {
+        if (failDelete) return false
         text = null
         unreadable = false
+        return true
     }
 }
 

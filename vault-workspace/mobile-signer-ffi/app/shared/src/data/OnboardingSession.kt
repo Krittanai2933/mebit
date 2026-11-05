@@ -236,17 +236,24 @@ class OnboardingSession(
      * After the user confirmed. Erases the saved wallet and the core's scan files, then clears memory. A failed erase keeps them and
      * returns false. The pay-twice guards stay, a damaged guard file included: they hold no key and are keyed by fingerprint, so the
      * same words imported again take their guard back and refuse until it settles, and another wallet never meets them.
+     * The record may hold the only copy of an older guard (flag 8). That is this session's own, or [oldGuard], which the gate read from
+     * a record it did not install, with that record's fingerprint. The guard moves to the guard file first, and while it cannot,
+     * nothing is erased and this returns false, as after a failed erase.
      */
-    fun forgetSavedWallet(): Boolean = when (val r = wallet?.forget() ?: EraseResult.Erased) {
-        EraseResult.Erased -> {
-            forgetScans()
-            clear()
-            true
-        }
-        is EraseResult.Failed -> {
-            // The copy is still on the phone, but the erase advanced the store's counter, so the session's Replace must expect the new version or every later save is a Conflict.
-            if (held is Held.Copy) held = Held.Copy(r.version)
-            false
+    fun forgetSavedWallet(oldGuard: Pair<String, SingleSigWallet.UnconfirmedSend>? = null): Boolean {
+        val (heldFor, guard) = oldGuard ?: (fingerprint to recordGuard)
+        if (guard != null && !movedToFile(heldFor, guard)) return false
+        return when (val r = wallet?.forget() ?: EraseResult.Erased) {
+            EraseResult.Erased -> {
+                forgetScans()
+                clear()
+                true
+            }
+            is EraseResult.Failed -> {
+                // The copy is still on the phone, but the erase advanced the store's counter, so the session's Replace must expect the new version or every later save is a Conflict.
+                if (held is Held.Copy) held = Held.Copy(r.version)
+                false
+            }
         }
     }
 
@@ -285,7 +292,7 @@ class OnboardingSession(
         val w = wallet ?: return@synchronized false
         if (words.isEmpty()) return@synchronized false
         recordGuard?.let {
-            if (!dropRecordGuard && !movedToFile(it)) {
+            if (!dropRecordGuard && !movedToFile(fingerprint, it)) {
                 pendingSave = true // every write point and the flush try the move again, and no save drops the guard from the record before it
                 return@synchronized false
             }
@@ -338,10 +345,11 @@ class OnboardingSession(
     }
 
     /**
-     * Whether the guard file holds [guard] now, written by this call or by an earlier move that the record's save did not follow. A
-     * damaged file, one that cannot take it, or another payment of this wallet in the file all leave it in the record alone.
+     * Whether the guard file holds [guard] for the wallet [heldFor] now, written by this call or by an earlier move that the record's
+     * save did not follow. A damaged file, one that cannot take it, or another payment of that wallet in the file all leave it in the
+     * record alone.
      */
-    private fun movedToFile(guard: SingleSigWallet.UnconfirmedSend): Boolean = when (val claim = payments.claim(fingerprint, guard)) {
+    private fun movedToFile(heldFor: String, guard: SingleSigWallet.UnconfirmedSend): Boolean = when (val claim = payments.claim(heldFor, guard)) {
         Claim.Written -> true
         is Claim.Taken -> claim.earlier.txid == guard.txid
         Claim.Damaged, Claim.NotSaved -> false

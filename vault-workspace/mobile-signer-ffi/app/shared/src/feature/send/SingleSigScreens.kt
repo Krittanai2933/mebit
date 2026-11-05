@@ -84,13 +84,10 @@ fun S5ReviewSignScreen(
     val reposted = repost.running || repost.outTxid != null
     // Back and cancel wait while a payment is in flight, because leaving would hide one that still goes out. The back chip stays so the header does not shift.
     val leave = onBack?.let { back -> { if (!attempt.running && !repost.running) back() } }
-    // A payment held for the fee question is signed and nothing more, so leaving the screen lets it go and none waits here stale. A
-    // draft whose payment a repost here put out goes too, so Send does not offer it again.
+    // A payment held for the fee question is signed and nothing more, so leaving the screen lets it go and none waits here stale. The
+    // draft of a payment a repost here put out went already, when the repost learned it was out ([RepostAttempt.start]).
     DisposableEffect(wallet) {
-        onDispose {
-            wallet.dropHeldSend()
-            if (repost.outTxid != null) draft.reset()
-        }
+        onDispose { wallet.dropHeldSend() }
     }
     val total = draft.amountSats + draft.feeSats
     val question = wallet.feeQuestion(draft)
@@ -177,7 +174,7 @@ fun S5ReviewSignScreen(
             Spacer(modifier = Modifier.height(20.dp))
             IssueBanner(it.title, it.message, it.tag)
         }
-        UnconfirmedClearControl(wallet, session, repost) { txid -> scope.launch { repost.run(txid, confirmRepost) { wallet.repost(session) } } }
+        UnconfirmedClearControl(wallet, session, repost) { txid -> repost.start(scope, txid, confirmRepost, draft) { wallet.repost(session) } }
         RepostedNote(repost)
         if (total > wallet.spendableSats) {
             Spacer(modifier = Modifier.height(12.dp))

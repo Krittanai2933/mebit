@@ -78,7 +78,6 @@ import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbWhite
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.isValidAddress
@@ -131,7 +130,8 @@ fun S4SendScreen(
         MebitScreen(
             eyebrow = "SEND · กระเป๋าใช้จ่าย",
             title = null,
-            onBack = onBack,
+            // Back and รับ wait while a repost runs, as Review's back does. The back chip stays so the header does not shift.
+            onBack = onBack?.let(repost::unlessRunning),
             onOpenCatalog = onOpenCatalog,
             tag = "screen_send/s4",
             bottom = {
@@ -141,7 +141,7 @@ fun S4SendScreen(
                 Spacer(modifier = Modifier.height(38.dp))
             },
         ) {
-            ReceiveSendSwitch(sendSelected = true, onReceive = onReceive, onSend = {})
+            ReceiveSendSwitch(sendSelected = true, onReceive = repost.unlessRunning(onReceive), onSend = {})
             Spacer(modifier = Modifier.height(20.dp))
             DestinationField(draft, invalid = issue == SendIssue.InvalidAddress, enter, onScan = if (cameraAvailable) ({ scanning = true }) else null)
             Spacer(modifier = Modifier.height(14.dp))
@@ -177,13 +177,7 @@ fun S4SendScreen(
                 SendIssue.PaymentUnconfirmed -> {
                     Spacer(modifier = Modifier.height(20.dp))
                     IssuePanel("PAYMENT UNCONFIRMED", "การส่งครั้งก่อนยังยืนยันไม่ได้ รอสักครู่ แล้วเปิดหน้าแรกเพื่อตรวจยอดก่อนส่งอีกครั้ง")
-                    UnconfirmedClearControl(wallet, session, repost) { txid ->
-                        scope.launch {
-                            repost.run(txid, confirmRepost) { wallet.repost(session) }
-                            // The form may still hold the payment that just went out, and a second review of it would pay twice.
-                            if (repost.outTxid != null) draft.reset()
-                        }
-                    }
+                    UnconfirmedClearControl(wallet, session, repost) { txid -> repost.start(scope, txid, confirmRepost, draft) { wallet.repost(session) } }
                 }
                 is SendIssue.Insufficient -> {
                     Spacer(modifier = Modifier.height(20.dp))

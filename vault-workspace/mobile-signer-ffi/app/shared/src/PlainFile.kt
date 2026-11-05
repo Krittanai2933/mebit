@@ -8,8 +8,8 @@ internal interface PlainFile {
     /** Replaces the file whole, so a reader finds the old text or the new, never half. True when the new text is on the phone. */
     fun write(text: String): Boolean
 
-    /** Best effort. */
-    fun delete()
+    /** Removes the file. True when [read] then finds no text, as it does once there is no file. */
+    fun delete(): Boolean
 }
 
 /** The file at [path], in the folder [rememberScanStateDir] gives. */

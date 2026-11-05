@@ -27,7 +27,9 @@ internal actual fun plainFile(path: String): PlainFile = object : PlainFile {
         return data.writeToFile(path, atomically = true)
     }
 
-    override fun delete() {
+    override fun delete(): Boolean {
+        // Removing a file that is already gone answers false, so the read says what is left.
         NSFileManager.defaultManager.removeItemAtPath(path, error = null)
+        return read() == ""
     }
 }

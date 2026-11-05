@@ -357,8 +357,8 @@ class SingleSigWallet(
     /**
      * Posts the guarded payment again, from the signed bytes the guard file keeps with it. The same bytes are the same transaction, so
      * this can never pay twice and needs no wait. The screen asks the owner first, as it does before signing. [Repost.Out] drops the
-     * guard here, and on the phone unless another instance's repost of it still runs. The balance waits for Home's next bind, so
-     * Review keeps the figures of the payment it shows.
+     * guard here, and on the phone unless another instance's repost of it still runs. The balance waits for Home's next bind. The
+     * screen's draft of the payment goes in the same step ([com.mebit.app.feature.send.RepostAttempt.start]).
      * Every other end keeps the guard, a refusal included, because after a first post a refusal can mean the payment confirmed or that
      * another transaction spent its coins. [Repost.Failed], with nothing posted, when the phone no longer keeps this guard with its bytes.
      * Blocks, so call it off the main thread.
