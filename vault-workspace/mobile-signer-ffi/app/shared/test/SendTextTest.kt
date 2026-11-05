@@ -1,22 +1,8 @@
 package com.mebit.app.feature.send
 
-import com.mebit.app.Why
-import com.mebit.app.WriteResult
-import com.mebit.app.data.Claim
-import com.mebit.app.data.FakePlainFile
-import com.mebit.app.data.FakeSecureStore
 import com.mebit.app.data.FiatQuote
-import com.mebit.app.data.OnboardingSession
-import com.mebit.app.data.PUBLIC_WORDS_24
-import com.mebit.app.data.PendingPayments
-import com.mebit.app.data.SaveState
-import com.mebit.app.data.SavedWallet
-import com.mebit.app.data.TEST_CHECK
-import com.mebit.app.data.TEST_TXID
-import com.mebit.ffi.signer.SoftwareAccountKey
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 class SendTextTest {
@@ -84,49 +70,5 @@ class SendTextTest {
         assertEquals("≈ 0 sat · ฿0", reviewFeeText(0, boardPrice))
         assertEquals("฿0 · 8 sat/vB", slipFeeText(0, 8, null))
         assertEquals("฿0 · 8 sat/vB", slipFeeText(0, 8, boardPrice))
-    }
-
-    @Test
-    fun aRealKeyOnAPhoneWithNoScreenLockCannotStartASend() {
-        assertEquals("เครื่องนี้ไม่มีรหัสล็อกหน้าจอ จึงยังส่งเงินไม่ได้", cannotSendText(24, SaveState.NotSaved, Why.NoScreenLock))
-    }
-
-    @Test
-    fun aRealKeyOnAPhoneThatCannotKeepKeysCannotStartASend() {
-        for (why in listOf(Why.OsTooOld, Why.NotWired)) {
-            assertEquals("เครื่องนี้ยังส่งเงินไม่ได้ เพราะบันทึกกุญแจในเครื่องไม่ได้", cannotSendText(12, SaveState.NotSaved, why), "$why")
-        }
-    }
-
-    @Test
-    fun aSavedWalletSendsAsBefore() {
-        assertNull(cannotSendText(24, SaveState.Saved, null))
-    }
-
-    @Test
-    fun theDemoWalletSendsAsBefore() {
-        assertNull(cannotSendText(0, SaveState.NotSaved, null))
-    }
-
-    // N1 of open item 79 keeps the pay-twice guard in a plain file that these phones keep too, so the guard no longer stops them at
-    // the post. Until the Spending PIN gives them an owner check, this notice is what keeps Send from opening review.
-    @Test
-    fun aPhoneWithNoOwnerCheckStillCannotStartASendNowThatItKeepsItsGuard() {
-        for (why in listOf(Why.NoScreenLock, Why.OsTooOld)) {
-            val session = OnboardingSession(
-                SavedWallet(FakeSecureStore(write = WriteResult.Unavailable(why))),
-                newKey = { _, _, _ -> SoftwareAccountKey(PUBLIC_WORDS_24, TEST_CHECK, "tpub-test", "m/48'/1'/0'/2'") },
-                payments = PendingPayments(FakePlainFile()),
-            )
-            session.generateThisDevice()
-            assertEquals(Claim.Written, session.recordUnconfirmedSend(TEST_TXID, 1), "the guard this phone keeps, $why")
-            assertNotNull(cannotSendText(session.words.size, session.saved, session.notSavedBecause), "the notice that keeps review off, $why")
-        }
-    }
-
-    @Test
-    fun aSaveThatMayStillPassDoesNotStopASend() {
-        // A TryLater save is tried again when the app comes back and at the post's own save, which may then pass.
-        assertNull(cannotSendText(24, SaveState.NotSaved, Why.TryLater))
     }
 }

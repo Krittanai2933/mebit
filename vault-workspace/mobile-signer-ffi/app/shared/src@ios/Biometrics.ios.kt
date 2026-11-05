@@ -42,6 +42,9 @@ private class IosBiometrics : Biometrics {
         }
     }
 
+    // The passcode alone counts, and the policy that takes it fails only on a phone with no passcode.
+    override fun available(): Boolean = LAContext().canEvaluatePolicy(LAPolicyDeviceOwnerAuthentication, error = null)
+
     private fun outcome(error: NSError?): BiometricResult = when (error?.code) {
         LAErrorAuthenticationFailed -> BiometricResult.Failed
         LAErrorUserCancel, LAErrorSystemCancel, LAErrorAppCancel, LAErrorUserFallback -> BiometricResult.Cancelled

@@ -49,4 +49,14 @@ class AndroidBiometricsTest {
             assertNotEquals(BiometricResult.Failed, androidBiometricOutcome(code), "code $code")
         }
     }
+
+    @Test
+    fun onlyAndroid11WithASecureScreenLockHasAnOwnerCheck() {
+        // The cases where authenticate answers Unavailable without a sheet, so the Spending PIN must guard the session instead.
+        assertEquals(true, androidOwnerCheck(30, deviceSecure = true))
+        assertEquals(true, androidOwnerCheck(36, deviceSecure = true))
+        assertEquals(false, androidOwnerCheck(30, deviceSecure = false), "no screen lock")
+        assertEquals(false, androidOwnerCheck(29, deviceSecure = true), "Android 10 with a lock")
+        assertEquals(false, androidOwnerCheck(24, deviceSecure = false))
+    }
 }

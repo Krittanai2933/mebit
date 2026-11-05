@@ -23,7 +23,7 @@ enum class SaveState { NotSaved, Staged, Saved }
  * plain file beside the key, so a phone that cannot save the key keeps it too. Without a [wallet] the key lives in memory only.
  * With one, each committed change is saved through one write point, and only [forgetSavedWallet] erases the saved copy, and the
  * guards with it. [newKey] and [restoreKey] make the key, and [forgetScans] drops the core's scan of every wallet, and tests
- * replace them because the host JVM has no native library.
+ * replace them because the host JVM has no native library. [pin] is the session Spending PIN, beside the words and never saved.
  */
 class OnboardingSession(
     private val wallet: SavedWallet? = null,
@@ -31,6 +31,7 @@ class OnboardingSession(
     private val restoreKey: (List<String>, String, KeyNetwork, UInt) -> SoftwareAccountKey = { w, p, n, a -> restoreSoftwareMultisigKey(w, p, n, a) },
     private val forgetScans: () -> Unit = { hotForgetScanState() },
     private val payments: PendingPayments = PendingPayments(null),
+    val pin: SpendingPin = SpendingPin(),
 ) {
     var words: List<String> by mutableStateOf(emptyList())
         private set
@@ -189,6 +190,7 @@ class OnboardingSession(
         notSavedBecause = null
         lastSaveFailed = false
         pendingSave = false
+        pin.clear()
     }
 
     fun markBackupConfirmed() {

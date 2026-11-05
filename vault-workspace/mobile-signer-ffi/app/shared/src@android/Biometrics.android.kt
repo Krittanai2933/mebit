@@ -1,5 +1,6 @@
 package com.mebit.app
 
+import android.app.KeyguardManager
 import android.content.Context
 import android.os.Build
 import androidx.compose.runtime.Composable
@@ -15,7 +16,13 @@ private class AndroidBiometrics(private val context: Context) : Biometrics {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return BiometricResult.Unavailable("OsTooOld")
         return androidBiometricOutcome(askOwner(context, reason, crypto = null))
     }
+
+    override fun available(): Boolean =
+        androidOwnerCheck(Build.VERSION.SDK_INT, context.getSystemService(KeyguardManager::class.java).isDeviceSecure)
 }
+
+/** Pure. Whether a phone on [api] has the owner check that [authenticate][Biometrics.authenticate] runs, which needs Android 11 or later and a secure screen lock. */
+internal fun androidOwnerCheck(api: Int, deviceSecure: Boolean): Boolean = api >= Build.VERSION_CODES.R && deviceSecure
 
 /** The sheet needs this Context (the Activity), as the store's read does. */
 @Composable

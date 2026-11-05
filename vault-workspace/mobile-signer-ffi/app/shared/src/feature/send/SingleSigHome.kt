@@ -101,7 +101,8 @@ fun S1HomeSingleSigScreen(
     onHistory: () -> Unit,
     onOpenTx: (HotTx) -> Unit,
     onOpenCatalog: () -> Unit,
-) = SingleSigHome(wallet, session, quotes, onReceive, onSend, onVault, onHistory, onOpenTx, onOpenCatalog, tag = "screen_send/s1")
+    onChangePin: (() -> Unit)? = null,
+) = SingleSigHome(wallet, session, quotes, onReceive, onSend, onVault, onHistory, onOpenTx, onOpenCatalog, tag = "screen_send/s1", onChangePin = onChangePin)
 
 /** The home itself, so the backup gate can show it dimmed behind its sheet under a tag of its own. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -117,6 +118,7 @@ internal fun SingleSigHome(
     onOpenTx: (HotTx) -> Unit,
     onOpenCatalog: () -> Unit,
     tag: String,
+    onChangePin: (() -> Unit)? = null,
 ) {
     var retries by remember { mutableIntStateOf(0) }
     // One bind at a time, because each one blocks a thread until it ends and an older one could end last.
@@ -216,7 +218,7 @@ internal fun SingleSigHome(
                 HomeAction("ส่ง", filled = false, tag = "cta_s1_send", modifier = Modifier.weight(1f), onClick = onSend)
             }
             Spacer(modifier = Modifier.height(58.dp))
-            KeyStatus(backedUp = session.backupConfirmed, fingerprint = session.fingerprint, expanded = keyDetails, onToggle = { keyDetails = !keyDetails })
+            KeyStatus(backedUp = session.backupConfirmed, fingerprint = session.fingerprint, expanded = keyDetails, onToggle = { keyDetails = !keyDetails }, onChangePin = onChangePin)
             Spacer(modifier = Modifier.height(14.dp))
             UpgradeCard(onVault)
             NotSavedNotice(session, Modifier.padding(top = 12.dp))
@@ -342,9 +344,12 @@ private fun HomeAction(label: String, filled: Boolean, tag: String, modifier: Mo
     }
 }
 
-/** Penpot 4.1 closed and 4.1.1 open: the same card, with the key's row under a divider. */
+/**
+ * Penpot 4.1 closed and 4.1.1 open: the same card, with the key's row under a divider. [onChangePin] adds a link under the key's
+ * row where the session Spending PIN guards spending, which no board has yet.
+ */
 @Composable
-private fun KeyStatus(backedUp: Boolean, fingerprint: String, expanded: Boolean, onToggle: () -> Unit) {
+private fun KeyStatus(backedUp: Boolean, fingerprint: String, expanded: Boolean, onToggle: () -> Unit, onChangePin: (() -> Unit)?) {
     val card = RoundedCornerShape(16.dp)
     Column(modifier = Modifier.fillMaxWidth().clip(card).background(MbWhite).border(1.dp, MbBorder, card).testTag("key_status")) {
         Row(modifier = Modifier.fillMaxWidth().height(52.dp).padding(start = 15.dp, end = 18.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -384,6 +389,16 @@ private fun KeyStatus(backedUp: Boolean, fingerprint: String, expanded: Boolean,
                         modifier = Modifier.testTag("key_fingerprint"),
                     )
                 }
+            }
+            onChangePin?.let {
+                Text(
+                    text = "เปลี่ยน PIN",
+                    color = MbNavy,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    lineHeight = 17.sp,
+                    modifier = Modifier.padding(start = 62.dp, bottom = 14.dp).clickable(role = Role.Button, onClick = it).testTag("cta_change_pin"),
+                )
             }
         }
     }

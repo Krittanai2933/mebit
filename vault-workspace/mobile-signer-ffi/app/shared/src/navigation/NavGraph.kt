@@ -19,16 +19,19 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mebit.app.data.AppLockState
 import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.OnboardingSession
+import com.mebit.app.data.OwnerCheck
 import com.mebit.app.data.MultisigSendDraft
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
@@ -55,6 +58,8 @@ import com.mebit.app.feature.onboarding.ImportSeedScreen
 import com.mebit.app.feature.onboarding.KeyCreatedScreen
 import com.mebit.app.feature.onboarding.KeySourceScreen
 import com.mebit.app.feature.onboarding.LockMode
+import com.mebit.app.feature.onboarding.PinSheet
+import com.mebit.app.feature.onboarding.SpendingPinScreen
 import com.mebit.app.feature.onboarding.VerifyWordsScreen
 import com.mebit.app.feature.onboarding.WelcomeScreen
 import com.mebit.app.feature.vault.ChooseKeysScreen
@@ -85,6 +90,7 @@ import com.mebit.app.rememberBiometrics
 import com.mebit.app.rememberIsDebugBuild
 import com.mebit.app.ui.theme.MbPage
 import com.mebit.ffi.signer.HotTx
+import kotlinx.coroutines.launch
 
 private val ImplementedRoutes = MovieRoute.entries.toSet()
 
@@ -104,8 +110,11 @@ fun MebitNavHost(
     val quotes = remember { liveQuoteCache() }
     val sendDraft = remember { SendDraft() }
     val multisigSend = remember { MultisigSendDraft() }
-    val biometrics = rememberBiometrics()
+    val phone = rememberBiometrics()
+    // The gates' owner check, which is the phone's own or, on a phone without one, the Spending PIN (open item 79).
+    val biometrics = remember(phone, session) { OwnerCheck(phone, session) }
     val appLock = remember { AppLockState() }
+    val scope = rememberCoroutineScope()
     // Starts as Keyring so the debug catalog can open Verify Key without passing Key Source.
     var keyFlow by remember { mutableStateOf(KeyFlow.Keyring) }
     var verifyRetryRoute by remember { mutableStateOf(MovieRoute.HardwareWallet) }
@@ -114,9 +123,9 @@ fun MebitNavHost(
     var openedTx by remember { mutableStateOf(DEMO_TX) }
     val current = backStack.last()
 
-    // More than a minute away locks the app again, once the user turned the lock on.
+    // More than a minute away locks the app again, once the user turned the lock on or where the Spending PIN guards it.
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { appLock.onBackground() }
-    LifecycleEventEffect(Lifecycle.Event.ON_START) { appLock.onForeground(session.appLockEnabled) }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { appLock.onForeground(biometrics.locksWhenAway) }
 
     fun navigate(route: MovieRoute) {
         keyFlow = keyFlowAfter(route, keyFlow)
@@ -136,8 +145,16 @@ fun MebitNavHost(
         if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
 
-    // A backup started from the Home banner returns there. The create flow goes on to App Lock.
-    fun afterBackup() = navigate(if (MovieRoute.HomeFirstRun in backStack) MovieRoute.HomeFirstRun else MovieRoute.AppLock)
+    // After create or import comes App Lock on a phone with an owner check, else the Spending PIN, set before Home.
+    fun lockStep() = navigate(if (biometrics.needsPin) MovieRoute.SpendingPin else MovieRoute.AppLock)
+
+    // A backup started from the Home banner returns there. The create flow goes on to the lock step.
+    fun afterBackup() = if (MovieRoute.HomeFirstRun in backStack) navigate(MovieRoute.HomeFirstRun) else lockStep()
+
+    // Once onboarding is over the words open past the Spending PIN where it guards the session, and as before elsewhere.
+    fun openWords() {
+        scope.launch { if (biometrics.guardWords("ดู 24 คำสำรอง")) navigate(MovieRoute.BackupWords) }
+    }
 
     val openTx: (HotTx) -> Unit = { tx ->
         openedTx = tx
@@ -167,14 +184,14 @@ fun MebitNavHost(
         MovieRoute.ImportSeed -> ImportSeedScreen(
             session = session,
             // An import skips backup: the user typed the words from their own record.
-            onRestored = { navigate(MovieRoute.AppLock) },
+            onRestored = { lockStep() },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
         MovieRoute.KeyCreated -> KeyCreatedScreen(
             session = session,
             onBackup = { navigate(MovieRoute.BackupWords) },
-            onSkip = { navigate(MovieRoute.AppLock) },
+            onSkip = { lockStep() },
             onOpenCatalog = openCatalog,
         )
         MovieRoute.BackupWords -> BackupWordsScreen(
@@ -194,6 +211,13 @@ fun MebitNavHost(
             session = session,
             biometrics = biometrics,
             mode = LockMode.Enable,
+            // A lock removed while this screen showed leaves the phone with no owner check, so its PIN comes before Home.
+            onDone = { navigate(if (biometrics.needsPin) MovieRoute.SpendingPin else MovieRoute.HomeFirstRun) },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        MovieRoute.SpendingPin -> SpendingPinScreen(
+            session = session,
             onDone = { navigate(MovieRoute.HomeFirstRun) },
             onBack = onBack,
             onOpenCatalog = openCatalog,
@@ -203,7 +227,7 @@ fun MebitNavHost(
             wallet = singleSig,
             onSingleSig = { navigate(MovieRoute.S1HomeSingleSig) },
             onVault = { navigate(MovieRoute.KeyringFirstVault) },
-            onBackup = { navigate(MovieRoute.BackupWords) },
+            onBackup = { openWords() },
             onOpenCatalog = openCatalog,
         )
         MovieRoute.HwBackupConfirm -> HwBackupConfirmScreen(
@@ -367,6 +391,7 @@ fun MebitNavHost(
             onHistory = { navigate(MovieRoute.S7History) },
             onOpenTx = openTx,
             onOpenCatalog = openCatalog,
+            onChangePin = if (session.pin.isSet) ({ scope.launch { biometrics.changePin("เปลี่ยน PIN") } }) else null,
         )
         MovieRoute.S7History -> S7HistoryScreen(
             wallet = singleSig,
@@ -387,7 +412,7 @@ fun MebitNavHost(
             session = session,
             quotes = quotes,
             onBackedUp = { navigate(MovieRoute.S3Receive) },
-            onGoBackup = { navigate(MovieRoute.BackupWords) },
+            onGoBackup = { openWords() },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
@@ -522,21 +547,28 @@ fun MebitNavHost(
     }
 
     if (appLock.locked) {
-        // Covers everything, swallows taps, and goes away only on Face ID or the device passcode.
+        // A phone the Spending PIN guards unlocks only through the PIN sheet drawn over this cover, never through a check it lacks.
+        val pinLock = biometrics.usesPin
+        // Covers everything, swallows taps, and goes away only on Face ID, the device passcode or the PIN.
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(MbPage)
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
         ) {
-            AppLockScreen(
-                session = session,
-                biometrics = biometrics,
-                mode = LockMode.Unlock,
-                onDone = { appLock.unlock() },
-                onBack = null,
-                onOpenCatalog = {},
-            )
+            if (!pinLock) {
+                AppLockScreen(
+                    session = session,
+                    biometrics = biometrics,
+                    mode = LockMode.Unlock,
+                    onDone = { appLock.unlock() },
+                    onBack = null,
+                    onOpenCatalog = {},
+                )
+            }
         }
+        if (pinLock) LaunchedEffect(Unit) { if (biometrics.unlock("ปลดล็อก mebit")) appLock.unlock() }
     }
+
+    biometrics.asking?.let { PinSheet(it, session.pin) }
 }

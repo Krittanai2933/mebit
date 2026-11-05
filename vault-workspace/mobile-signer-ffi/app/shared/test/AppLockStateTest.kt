@@ -14,8 +14,10 @@ class AppLockStateTest {
     private val clock = TestTimeSource()
     private val state = AppLockState(clock)
 
-    private class Scan(private val result: BiometricResult) : Biometrics {
+    /** The phone's own check. [lock] is whether the phone has a passcode or a secure screen lock. */
+    private class Scan(private val result: BiometricResult, private val lock: Boolean = true) : Biometrics {
         var asked = 0
+        override fun available() = lock
         override suspend fun authenticate(reason: String, allowPasscode: Boolean): BiometricResult {
             asked += 1
             return result
@@ -69,5 +71,13 @@ class AppLockStateTest {
         for (result in listOf(BiometricResult.Failed, BiometricResult.Cancelled, BiometricResult.LockedOut, BiometricResult.Unavailable("x"))) {
             assertFalse(state.confirm(Scan(result), enabled = true, reason = "r"), "must fail closed on $result")
         }
+    }
+
+    @Test
+    fun aPhoneWithNoLockOfItsOwnIsAskedEvenWithTheLockOff() = runBlocking {
+        // Only an owner check that is not the phone's own, the Spending PIN, can answer here. The phone's own fails closed.
+        val noLock = Scan(BiometricResult.Unavailable("NoScreenLock"), lock = false)
+        assertFalse(state.confirm(noLock, enabled = false, reason = "r"))
+        assertEquals(1, noLock.asked)
     }
 }

@@ -7,10 +7,16 @@ import kotlin.test.assertTrue
 class MovieRouteTest {
     @Test
     fun coversFortyFourMoviePageBoards() {
-        assertEquals(46, MovieRoute.entries.size)
+        assertEquals(47, MovieRoute.entries.size)
         assertEquals(MovieRoute.Welcome, MovieRoute.start)
         assertEquals("onboarding/import-seed", MovieRoute.ImportSeed.path)
         assertEquals("IMPORT SEED", MovieRoute.ImportSeed.eyebrow)
+    }
+
+    @Test
+    fun theSpendingPinStepHasARoute() {
+        // Where a phone with no owner check sets its PIN, after create or import and before Home.
+        assertEquals(listOf("SPENDING PIN"), MovieRoute.entries.filter { it.path == "onboarding/spending-pin" }.map { it.eyebrow })
     }
 
     @Test
