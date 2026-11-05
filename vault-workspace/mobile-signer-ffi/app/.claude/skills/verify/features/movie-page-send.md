@@ -15,6 +15,7 @@ Single-sig send checks the typed address and amount against the spendable balanc
 - `mp-s5-review` shows what leaves and what stays, with the baht value when a price arrived, and signs. Send all shows its amount as an estimate.
 - `mp-s5-high-fee` asks once more before posting a signed payment whose real fee is far above the estimate.
 - `mp-s5-pin` asks for the session Spending PIN before signing on a phone with no screen lock, which sets it before Home.
+- `mp-s5-repost` offers ส่งรายการเดิมอีกครั้ง on Review and Send after a payment of unknown outcome. It posts the same signed bytes behind the signing owner check, keeps the guard unless the answer is that the payment is out, and was driven on the Android emulator in run `20261106-012722`.
 - `mp-s6-slip` shows the sent slip with the amount and fee that actually left, a txid, the send date, the baht value when a price arrived, and a share button.
 - `mp-m1-m4` walks vault send → collect → (optional live Jade sign) → broadcast mock.
 
