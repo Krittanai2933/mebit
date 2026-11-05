@@ -50,9 +50,9 @@ const OWN_NODE_FULL_PASS: Duration = Duration::from_secs(30 * 60);
 /// from the design. A full pass asks each index below the frontier plus `GAP` once and proves nothing again.
 const PUBLIC_FULL_PASS: Duration = Duration::from_secs(6 * 60 * 60);
 /// Unused indices after the last used one that a routine sync asks about. shortcut: a coin paid to an
-/// index further out, to an unused index below the last used one, or again to a used address that holds
-/// nothing shows at the next full pass; raise it when a wallet is seen handing out that many addresses
-/// between two syncs.
+/// index further out, to an unused index below the last used one that the wallet does not hand out, or again
+/// to a used address that holds nothing shows at the next full pass; raise it when a wallet is seen handing
+/// out that many addresses between two syncs.
 const LOOKAHEAD: usize = 5;
 
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
@@ -289,9 +289,9 @@ fn complete(wallet: Wallet) -> Result<Wallet, MobileSignerError> {
 ///
 /// - Shared: a sync of this wallet ended under `SHARE_TTL` ago and no payment went out or host was lost
 ///   since it started. Its answer is returned with no request, so the app's snapshot then history is one sync.
-/// - Routine: the funded and pending indices, the proven index and the `LOOKAHEAD` indices after the last used one
-///   of each chain are asked again, so balances are fresh, and the proofs stand while the host calls their indices
-///   used. A lookahead index that turned out used, a pass cut short, and a wallet never scanned go on by
+/// - Routine: the funded and pending indices, the proven index, the index handed out and the `LOOKAHEAD` indices after
+///   the last used one of each chain are asked again, so balances are fresh, and the proofs stand while the host calls
+///   their indices used. A lookahead index that turned out used, a pass cut short, and a wallet never scanned go on by
 ///   `crate::scan::step` from what is known. The index the file holds as proven for a chain is proven again first.
 /// - Full: when the last full pass started `full_pass_every` ago or longer, every index below each chain's
 ///   frontier plus `GAP` is asked again from 0, and the frontier stands, so nothing is proven twice.
@@ -583,8 +583,9 @@ fn lookup(
 }
 
 /// The routine part of a sync. It asks again the funded and pending indices of `scan`, its proven index, so a host
-/// that no longer shows that payment has it shown again, and the `LOOKAHEAD` indices after the last used one, each
-/// answer setting its index's balance in `balances`. It asks `WINDOW` at a time from `routine`, the first index the
+/// that no longer shows that payment has it shown again, the index the chain hands out, which a gap below the frontier
+/// puts below the last used one, and the `LOOKAHEAD` indices after the last used one, each answer setting its index's
+/// balance in `balances`. It asks `WINDOW` at a time from `routine`, the first index the
 /// round has not asked, and moves `routine` past each part answered, so a throttled part ends it `Continuing` and
 /// the next sync goes on from there. Every other index keeps what it was, and holds nothing, because every index
 /// that held coins is asked. When a lookahead index turned out used the chain ends at the lookahead, so the pass
@@ -605,10 +606,11 @@ fn refresh(
         .map_or(0, |last| last + 1);
     let edge = (after_last_used + LOOKAHEAD).min(scan.seen.len());
     let proven = scan.frontier().checked_sub(1).map(|index| index as usize);
+    let issued = scan.issued() as usize;
     let asked: Vec<usize> = (*routine..edge)
         .filter(|&i| {
             let seen = scan.seen[i];
-            i >= after_last_used || seen.funded || seen.pending || Some(i) == proven
+            i >= after_last_used || seen.funded || seen.pending || Some(i) == proven || i == issued
         })
         .collect();
     for part in asked.chunks(WINDOW) {
@@ -7575,6 +7577,283 @@ mod tests {
                 && completed.last().is_some_and(|&last| last >= 21)
                 && completed.windows(2).all(|pair| pair[1] - pair[0] <= 2),
             "complete at hours {completed:?}"
+        );
+    }
+
+    // R7, a later reviewer's repro. The index a chain hands out stood on its highest proven index, while a restore
+    // reaches an index only through used indices from 0 with fewer than `GAP` unused between any two. When a lower one
+    // of them came undone, by a reorg or because a forged proof was never shown again, the wallet handed out an address
+    // no restore asks, and a coin paid to it was lost to every restore, mebit's after a reinstall too.
+
+    /// The last index a plain gap-`GAP` restore asks when `used` are the indices the real chain shows used.
+    fn last_asked_by_a_restore(used: &[u32]) -> u32 {
+        let (mut stop, mut i) = (GAP, 0);
+        while i < stop {
+            if used.contains(&i) {
+                stop = i + 1 + GAP;
+            }
+            i += 1;
+        }
+        stop - 1
+    }
+
+    fn receive_index(address: &str) -> u32 {
+        let account = Account::new(&abandon_about(), "", Network::Testnet4).unwrap();
+        (0..PAID[0])
+            .find(|&i| account.key(Chain::External, i).unwrap().address.to_string() == address)
+            .unwrap()
+    }
+
+    /// A reorg undid the payment to receive `index` and a double spend took its coin, so no host knows it any more.
+    fn undo_payment(fake: &mut Fake, index: u32) {
+        let address = addr(Chain::External, index);
+        fake.stats.remove(&address);
+        fake.utxos.remove(&address);
+        fake.txs.insert(address, "[]".into());
+        fake.unknown.insert(PROOF.txids[index as usize].to_string());
+    }
+
+    // R7. Receive 5 and receive 24 are paid and proven, so the frontier is 25. A reorg undoes the payment to receive 5,
+    // so the real chain shows receive 24 alone and a restore asks receive 0 to 19 and stops.
+    #[test]
+    fn a_reorg_that_undoes_a_lower_proven_payment_leaves_no_receive_address_past_a_restore() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 5), 7_000, '5');
+        fake.fund(&addr(Chain::External, 24), 9_000, '9');
+        let before = fake.snapshot("").unwrap();
+        assert_eq!(
+            (
+                before.scan,
+                before.balance_sats,
+                receive_index(&before.receive_address)
+            ),
+            (HotScan::Complete, 16_000, 25)
+        );
+        undo_payment(&mut fake, 5);
+        fake.tick(PUBLIC_FULL_PASS);
+        let after = fake.snapshot("").unwrap();
+        assert_eq!((after.scan, after.balance_sats), (HotScan::Complete, 9_000));
+        let (receive, reach) = (
+            receive_index(&after.receive_address),
+            last_asked_by_a_restore(&[24]),
+        );
+        assert!(
+            receive <= reach,
+            "the wallet hands out receive {receive}, and a restore over the real chain stops at {reach}"
+        );
+    }
+
+    // R7, through the testnet4 forgery the user accepted. A liar forges receive 19 and lists a real payment to receive
+    // 20, the address the forgery made the wallet hand out. Then only honest hosts answer, which know the payment to
+    // receive 20 and not the forged one, so the proof of 20 holds and the forged 19 under it is never shown again.
+    #[test]
+    fn a_forged_proof_under_a_real_one_leaves_no_receive_address_past_a_restore_once_an_honest_host_answers()
+     {
+        let mut liar = Fake::new();
+        liar.stats.insert(addr(Chain::External, 19), used_stats(0));
+        liar.fund(&addr(Chain::External, 20), 9_000, '9');
+        let mut honest = Fake::new();
+        honest.fund(&addr(Chain::External, 20), 9_000, '9');
+        let real = PROOF.txids[20].to_string();
+        honest.unknown.extend(
+            PROOF
+                .txids
+                .iter()
+                .map(|txid| txid.to_string())
+                .filter(|txid| *txid != real),
+        );
+        let store = ScanStore::default();
+        let sync = |fake: &Fake| {
+            snapshot_from(
+                &EsploraSource(&Reads(&|url| fake.get(url))),
+                &abandon_about(),
+                "",
+                KeyNetwork::Test,
+                &|| honest.now(),
+                &store,
+            )
+            .unwrap()
+        };
+        let forged = sync(&liar);
+        assert_eq!(
+            (forged.scan, receive_index(&forged.receive_address)),
+            (HotScan::Complete, 21),
+            "the accepted testnet4 risk"
+        );
+        let reach = last_asked_by_a_restore(&[20]);
+        for pass in ["first", "second"] {
+            honest.tick(PUBLIC_FULL_PASS);
+            let snapshot = sync(&honest);
+            assert_eq!(
+                (snapshot.scan, snapshot.balance_sats),
+                (HotScan::Complete, 9_000),
+                "{pass} honest full pass"
+            );
+            let receive = receive_index(&snapshot.receive_address);
+            assert!(
+                receive <= reach,
+                "{pass} honest full pass: the wallet hands out receive {receive}, past a restore that stops at {reach}"
+            );
+        }
+    }
+
+    // R7, the bridge. A reorg undid receive 5 and receive 24, so the real chain shows receive 43 alone, a restore asks
+    // receive 0 to 19, and a reinstall finds nothing. The wallet hands out receive 19, the last index that restore
+    // asks, so a payment there carries a restore furthest. Paid in a block, it carries a restore to 39, still short of
+    // 43, so the wallet hands out 39. Paid in a block too, a restore reaches 43 and the wallet hands out 44 again. Each
+    // payment shows at the routine sync after it, and a reinstall's own restore proves 19, 39 and 43 and finds every
+    // coin. The next test shows a payment in the mempool only moves nothing.
+    #[test]
+    fn payments_to_the_addresses_handed_out_past_a_gap_bridge_it_until_a_restore_reaches_the_stranded_payment()
+     {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 5), 7_000, '5');
+        fake.fund(&addr(Chain::External, 24), 8_000, '8');
+        fake.fund(&addr(Chain::External, 43), 9_000, '9');
+        let receive = |snapshot: HotWalletSnapshot| {
+            (
+                snapshot.scan,
+                snapshot.balance_sats,
+                receive_index(&snapshot.receive_address),
+            )
+        };
+        assert_eq!(
+            receive(fake.snapshot("").unwrap()),
+            (HotScan::Complete, 24_000, 44)
+        );
+        undo_payment(&mut fake, 5);
+        undo_payment(&mut fake, 24);
+        fake.tick(PUBLIC_FULL_PASS);
+        assert_eq!(
+            receive(fake.snapshot("").unwrap()),
+            (HotScan::Complete, 9_000, 19)
+        );
+        assert_eq!(
+            receive(fake.snapshot_in(&ScanStore::default()).unwrap()),
+            (HotScan::Complete, 0, 0),
+            "a reinstall finds nothing past the gap"
+        );
+        fake.fund(&addr(Chain::External, 19), 1_000, 'a');
+        fake.tick(SHARE_TTL);
+        assert_eq!(
+            receive(fake.snapshot("").unwrap()),
+            (HotScan::Complete, 10_000, 39),
+            "the first bridge, paid"
+        );
+        fake.fund(&addr(Chain::External, 39), 2_000, 'b');
+        fake.tick(SHARE_TTL);
+        assert_eq!(
+            receive(fake.snapshot("").unwrap()),
+            (HotScan::Complete, 12_000, 44),
+            "the second bridge, paid"
+        );
+        assert_eq!(
+            receive(fake.snapshot_in(&ScanStore::default()).unwrap()),
+            (HotScan::Complete, 12_000, 44),
+            "a reinstall"
+        );
+    }
+
+    // R7, a bridge counts once its payment confirms. Paid in the mempool only, it can still be replaced, which would
+    // open the gap again behind an address handed out past it, so the wallet hands out the same bridge until then. A
+    // reorg undid receive 5, so the real chain shows receive 24 alone and the wallet hands out receive 19. Its payment
+    // confirmed, a restore reaches 24 through it, and the wallet hands out 25 again.
+    #[test]
+    fn a_bridge_paid_in_the_mempool_only_lifts_no_cap_until_its_payment_confirms() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 5), 7_000, '5');
+        fake.fund(&addr(Chain::External, 24), 9_000, '9');
+        fake.snapshot("").unwrap();
+        undo_payment(&mut fake, 5);
+        fake.tick(PUBLIC_FULL_PASS);
+        let receive = |fake: &Fake| {
+            let snapshot = fake.snapshot("").unwrap();
+            (
+                snapshot.scan,
+                snapshot.balance_sats,
+                receive_index(&snapshot.receive_address),
+            )
+        };
+        assert_eq!(receive(&fake), (HotScan::Complete, 9_000, 19));
+        fake.fund_unconfirmed(&addr(Chain::External, 19), 1_000, 'a');
+        fake.tick(SHARE_TTL);
+        assert_eq!(
+            receive(&fake),
+            (HotScan::Complete, 10_000, 19),
+            "the bridge paid in the mempool"
+        );
+        fake.fund(&addr(Chain::External, 19), 1_000, 'a');
+        fake.tick(SHARE_TTL);
+        assert_eq!(
+            receive(&fake),
+            (HotScan::Complete, 10_000, 25),
+            "the bridge's payment confirmed"
+        );
+    }
+
+    // A public host cuts a big wallet's full pass short every hour or two. A pass that has answered no gap yet leaves
+    // the wallet handing out the address after the last one it used, never one it used already.
+    #[test]
+    fn a_full_pass_cut_short_before_any_gap_hands_out_the_address_after_the_last_used_one() {
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+        let mut fake = Fake::new();
+        for i in 0..60 {
+            fake.touch(&addr(Chain::External, i));
+        }
+        assert_eq!(
+            receive_index(&fake.snapshot("").unwrap().receive_address),
+            60
+        );
+        let limited = AtomicBool::new(true);
+        let cut = format!("/address/{}", addr(Chain::External, 20));
+        let throttling = |url: &str| match limited.load(SeqCst) && url.ends_with(&cut) {
+            true => Err(MobileSignerError::InvalidPsbtJson(
+                "esplora get: HTTP status 429, gave up after 3 attempts".into(),
+            )),
+            false => fake.get(url),
+        };
+        let sync = || {
+            let snapshot = snapshot_from(
+                &EsploraSource(&Reads(&throttling)),
+                &abandon_about(),
+                "",
+                KeyNetwork::Test,
+                &|| fake.now(),
+                &fake.store,
+            )
+            .unwrap();
+            (snapshot.scan, receive_index(&snapshot.receive_address))
+        };
+        fake.tick(PUBLIC_FULL_PASS);
+        assert_eq!(
+            sync(),
+            (HotScan::Continuing, 60),
+            "the full pass cut short at receive 20"
+        );
+        limited.store(false, SeqCst);
+        fake.tick(SHARE_TTL);
+        assert_eq!(sync(), (HotScan::Complete, 60), "the full pass ended");
+    }
+
+    // A host caught lying has its claims dropped, so the sync after it has answered no gap and the wallet hands out the
+    // address after the proven one, not receive 19, which it used already.
+    #[test]
+    fn an_unverified_sync_hands_out_the_address_after_the_proven_one() {
+        let mut fake = Fake::new();
+        for i in 0..60 {
+            fake.touch(&addr(Chain::External, i));
+        }
+        assert_eq!(
+            receive_index(&fake.snapshot("").unwrap().receive_address),
+            60
+        );
+        fake.stats.remove(&addr(Chain::External, 59));
+        fake.tick(SHARE_TTL);
+        let caught = fake.snapshot("").unwrap();
+        assert_eq!(
+            (caught.scan, receive_index(&caught.receive_address)),
+            (HotScan::Unverified, 60),
+            "the host still proves the payment it calls unpaid"
         );
     }
 }

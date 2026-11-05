@@ -1,7 +1,9 @@
 //! Discovery's stop rule, as a pure reducer. A chain is asked about up to `GAP` indices past its frontier, and
 //! the frontier moves past an index only once `prove_use` proved that index paid in a block with valid work, so
 //! no source can push the scan with claims alone. The address the wallet hands out stays below `frontier + GAP`,
-//! where a restore with a gap of `GAP` over the real chain finds it.
+//! and once a pass answered a gap, no further than a restore with a gap of `GAP` asks over the confirmed history
+//! the source showed, so after a full pass over a source that shows the real chain a restore over it finds that
+//! address.
 //!
 //! The payment that proved the frontier is kept in memory, so it can be shown again. The scan file keeps only that
 //! payment's index, which backs nothing until a source proves the index used again, because the file is outside data
@@ -150,15 +152,37 @@ impl ChainScan {
     /// The index the wallet hands out on this chain, one past the last index the source calls used but never
     /// `frontier + GAP` or past it. When claims fill the window that is its last index, which may be used already.
     /// Never below the frontier either, where a scan cut short has not asked yet and the last index is used.
+    ///
+    /// A reorg, or a forged proof shown nowhere else, can undo a payment below the proven index and leave a gap no
+    /// restore crosses. So once the source answered `GAP` indices in a row with no confirmed history, all of that is
+    /// capped at the last of them, which is the last index a restore with a gap of `GAP` asks over the confirmed
+    /// history the source showed. A payment there carries a restore furthest, and once it confirms the cap moves
+    /// `GAP` on, until the restore reaches the proven index again. One in the mempool only moves nothing, because it
+    /// can still be replaced, which would open the gap again behind an address handed out past it. A scan that has not
+    /// asked as far as a gap caps nothing, as when it was cut short, a liar's claims were dropped or it never ran.
+    /// shortcut: after a reorg, a pass cut short below the gap hands out the uncapped index until a pass gets there,
+    /// and a reorg that undoes a lower payment whose coin was spent shows only at the next full pass; close them if a
+    /// wallet is seen paid past a restore's reach.
     pub(crate) fn issued(&self) -> u32 {
         let after_last_use = self
             .seen
             .iter()
             .rposition(|seen| seen.used)
             .map_or(0, |last| last as u32 + 1);
+        let mut last_asked = GAP - 1;
+        for (i, seen) in (0..).zip(&self.seen) {
+            if seen.confirmed && i <= last_asked {
+                last_asked = i + GAP;
+            }
+        }
+        let cap = match (last_asked as usize) < self.seen.len() {
+            true => last_asked,
+            false => u32::MAX,
+        };
         after_last_use
             .max(self.frontier())
             .min(self.frontier() + GAP - 1)
+            .min(cap)
     }
 }
 
@@ -613,6 +637,99 @@ mod tests {
             );
         }
         assert!(completed > 100, "only {completed} random scans completed");
+    }
+
+    // R7, a later reviewer's repro, as a property. A scan proved its frontier on a chain whose payments are at most
+    // `GAP` apart. Then a host shows a view of its own: a payment a reorg undid or a forgery left is gone, a liar hides
+    // some and claims others it can prove by forgery, and some indices hold a payment in the mempool only. However far
+    // a full pass over it gets before a throttle, the wallet hands out the index it handed out before the cap, lowered
+    // to the last index a restore over the confirmed history the host showed asks only where the host answered the gap
+    // that stops that restore. So a pass that completes never hands out an index a restore over the host's view misses.
+    #[test]
+    fn whatever_view_a_host_shows_the_wallet_hands_out_an_index_a_restore_over_it_asks() {
+        let before_the_cap = |scan: &ChainScan| {
+            let after_last_use = scan
+                .seen
+                .iter()
+                .rposition(|seen| seen.used)
+                .map_or(0, |last| last as u32 + 1);
+            after_last_use
+                .max(scan.frontier())
+                .min(scan.frontier() + GAP - 1)
+        };
+        let (mut completed, mut capped, mut cut_capped, mut cut_uncapped) = (0, 0, 0, 0);
+        for seed in 1..=3_000 {
+            let mut rng = Rng(seed);
+            let mut paid = Vec::new();
+            let mut next = rng.below(u64::from(GAP)) as u32;
+            while next < 150 {
+                paid.push(next);
+                next += 1 + rng.below(u64::from(GAP)) as u32;
+            }
+            let mut scan = ChainScan::default();
+            run(&mut scan, honest(&paid));
+            let view: Vec<u32> = (0..scan.frontier() + GAP)
+                .filter(|i| rng.chance(if paid.contains(i) { 70 } else { 3 }))
+                .collect();
+            let mempool: Vec<u32> = (0..scan.frontier() + GAP)
+                .filter(|_| rng.chance(5))
+                .collect();
+            let host = |at: &Step| match at {
+                Step::Ask(range) => Event::Asked(
+                    range
+                        .clone()
+                        .map(|i| {
+                            let confirmed = view.contains(&i);
+                            claim(confirmed || mempool.contains(&i), confirmed)
+                        })
+                        .collect(),
+                ),
+                at => honest(&view)(at),
+            };
+            scan.seen.clear();
+            let k = 1 + rng.below(u64::from(GAP)) as usize;
+            let mut asks = rng.below(u64::from(scan.frontier() + GAP));
+            let (status, ..) = run(&mut scan, |at| match at {
+                Step::Ask(_) if asks == 0 => {
+                    Event::Throttled("esplora get: HTTP status 429".into())
+                }
+                at => {
+                    asks = asks.saturating_sub(1);
+                    a_few_at_a_time(k, host)(at)
+                }
+            });
+            let said: Vec<u32> = (0..scan.seen.len() as u32)
+                .filter(|&i| scan.seen[i as usize].confirmed)
+                .collect();
+            let reach = restore_reach(&said);
+            let cap = match reach as usize <= scan.seen.len() {
+                true => reach - 1,
+                false => u32::MAX,
+            };
+            let (issued, before) = (scan.issued(), before_the_cap(&scan));
+            assert_eq!(
+                issued,
+                before.min(cap),
+                "seed {seed}: {status:?}, view {view:?}, mempool {mempool:?}"
+            );
+            match status {
+                ScanStatus::Complete => {
+                    assert!(
+                        issued < restore_reach(&view),
+                        "seed {seed}: issued {issued} past a restore over the view {view:?}"
+                    );
+                    completed += 1;
+                    capped += usize::from(issued < before);
+                }
+                _ if issued < before => cut_capped += 1,
+                _ => cut_uncapped += usize::from(before >= restore_reach(&view)),
+            }
+        }
+        assert!(
+            completed > 1_000 && capped > 600 && cut_capped > 100 && cut_uncapped > 50,
+            "{completed} completed, {capped} of them capped, and of the passes cut short {cut_capped} capped by a gap \
+             they answered and {cut_uncapped} past the view's restore with no gap answered yet"
+        );
     }
 
     // A source that really pays every address it has seen the wallet ask about, in each new block. Each pass
