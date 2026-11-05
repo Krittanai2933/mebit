@@ -40,9 +40,10 @@ struct HostSpec {
 /// ignores: a tailnet address is the developer's own network, not this repository's. A build without
 /// it tries only the public hosts.
 const OWN_NODE: Option<&str> = option_env!("MEBIT_ESPLORA_HOST");
-/// The public testnet4 Esplora hosts in the order they are tried. blockstream.info allows 700
-/// requests an hour per IP. mempool.space is last because its TLS handshake hung from a phone on 5G
-/// and from the user's networks on 2026-11-03.
+/// The public testnet4 Esplora hosts in the order they are tried. blockstream.info's own throttling
+/// reply on 2026-11-03 gave 700 requests an hour and 500,000 a month per IP without an account
+/// (docs/04-open-items.md item 49); mobile networks share IPs. mempool.space is last because its TLS
+/// handshake hung from a phone on 5G and from the user's networks on 2026-11-03.
 const PUBLIC_TESTNET4_HOSTS: [HostSpec; 2] = [
     HostSpec {
         base: ESPLORA_TESTNET4,
@@ -141,6 +142,15 @@ enum HostVerdict {
 }
 type HostChoice = Mutex<Option<HostVerdict>>;
 static CHOSEN_HOST: HostChoice = Mutex::new(None);
+
+/// When each host that answered 429, by its base, may be asked again. `pick_host` skips a host
+/// until then, so a throttled host is left alone instead of being asked again by every retry.
+type Throttled = Mutex<HashMap<&'static str, Instant>>;
+static THROTTLED: LazyLock<Throttled> = LazyLock::new(Throttled::default);
+/// How long a 429 without a usable Retry-After keeps a host out. mempool.space limits per minute.
+const THROTTLE_DEFAULT: Duration = Duration::from_secs(60);
+/// The longest Retry-After believed, so one header cannot shut a host out for good.
+const THROTTLE_MAX: Duration = Duration::from_secs(10 * 60);
 
 // After an unclear broadcast: about 6 s of asking, for the explorer to index what its node took.
 const LOOKUPS: u32 = 4;
@@ -272,8 +282,9 @@ struct CachedScan {
     chains: [Vec<Seen>; 2],
     /// When the last scan over the whole gap limit finished.
     full_at: Instant,
-    /// When this picture was taken.
-    scanned_at: Instant,
+    /// When this picture was taken. `None` once a payment went out after it: the picture still says
+    /// which indices are used, so the next scan can be incremental, but it never answers a call.
+    scanned_at: Option<Instant>,
 }
 
 /// Every cached scan, and how many times they were all forgotten. A scan that started before a
@@ -296,6 +307,21 @@ fn forget_scans(scans: &ScanCache) {
     scans.epoch += 1;
 }
 
+/// After a payment went out, or may have: no cached picture answers a call again, but each keeps
+/// its used indices and `full_at`, so the next scan is incremental. That scan asks every used index
+/// again, so a spent coin's balance is fresh, and the lookahead covers the change, which goes to
+/// the first unused internal index. The epoch moves so a scan that started before the payment is
+/// not written back.
+fn expire_scans(scans: &ScanCache) {
+    let mut scans = scans
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for entry in scans.entries.values_mut() {
+        entry.scanned_at = None;
+    }
+    scans.epoch += 1;
+}
+
 // Retries are for a GET only. A retried broadcast could pay twice, so `broadcast_signed` has none.
 const RETRIES: usize = 2;
 const BACKOFF: [Duration; RETRIES] = [Duration::from_secs(1), Duration::from_secs(2)];
@@ -303,7 +329,10 @@ const MAX_RETRY_AFTER: Duration = Duration::from_secs(5);
 const MAX_EXTRA_WAIT: Duration = Duration::from_secs(8);
 
 enum GetError {
-    /// Throttled or a brief server error, answered quickly: the same GET may be asked again.
+    /// HTTP 429: the host is limiting this client. Asking it again, here or from a sibling lookup,
+    /// only adds to the burst it is refusing, so the host is marked throttled instead.
+    Throttled { retry_after: Option<Duration> },
+    /// A brief server error, answered quickly: the same GET may be asked again.
     Retryable {
         retry_after: Option<Duration>,
         what: String,
@@ -326,6 +355,12 @@ fn get_with_retry(
         match attempt() {
             Ok(body) => return Ok(body),
             Err(GetError::Fatal(e) | GetError::Unreachable(e)) => return Err(e),
+            // "esplora get" and "429" are what `sendErrorThai` turns into the rate-limit line.
+            Err(GetError::Throttled { .. }) => {
+                return Err(MobileSignerError::InvalidPsbtJson(
+                    "esplora get: HTTP status 429, the host is limiting requests".into(),
+                ));
+            }
             Err(GetError::Retryable { retry_after, what }) => {
                 if n == RETRIES {
                     return Err(MobileSignerError::InvalidPsbtJson(format!(
@@ -367,9 +402,13 @@ fn classify(answer: Result<ureq::Response, ureq::Error>) -> Result<String, GetEr
                 .header("Retry-After")
                 .and_then(|v| v.trim().parse::<u64>().ok())
                 .map(Duration::from_secs);
-            Err(GetError::Retryable {
-                retry_after,
-                what: format!("HTTP status {code}"),
+            Err(if code == 429 {
+                GetError::Throttled { retry_after }
+            } else {
+                GetError::Retryable {
+                    retry_after,
+                    what: format!("HTTP status {code}"),
+                }
             })
         }
         Err(e @ ureq::Error::Transport(_)) => Err(GetError::Unreachable(error("esplora get", &e))),
@@ -382,27 +421,62 @@ fn classify(answer: Result<ureq::Response, ureq::Error>) -> Result<String, GetEr
 /// host that answers another hash is skipped like one that does not answer. No host passing fails
 /// with `esplora get: no testnet4 host is reachable`, naming each host's failure, and that round is
 /// remembered for `PROBE_FAILURE_TTL`: a caller inside it gets the same error with no probe.
+///
+/// A host in `throttled` is skipped, unprobed, until its time comes, and named with its 429 in the
+/// error, so a round where every host is limiting reads as the rate limit it is. When an earlier
+/// host's limit runs out, the cached choice of a later host is dropped, so the order of `hosts` (the
+/// own node first) wins again.
 fn pick_host(
     hosts: &[HostSpec],
     probe: &dyn Fn(&HostSpec) -> Result<String, MobileSignerError>,
     now: Instant,
     cache: &HostChoice,
+    throttled: &Throttled,
 ) -> Result<usize, MobileSignerError> {
     let mut verdict = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Copied out so the probes below never hold this lock, which every lookup reads before it asks.
+    let (limits, back) = {
+        let mut throttled = throttled
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut back: Option<usize> = None;
+        throttled.retain(|base, until| {
+            let over = now >= *until;
+            if let Some(index) = hosts.iter().position(|h| h.base == *base).filter(|_| over) {
+                back = Some(back.map_or(index, |b| b.min(index)));
+            }
+            !over
+        });
+        (throttled.clone(), back)
+    };
     let age = |at: &Instant| now.saturating_duration_since(*at);
     match &*verdict {
-        Some(HostVerdict::Chosen(index, verified)) if age(verified) < HOST_TRUST => {
+        Some(HostVerdict::Chosen(index, verified))
+            if age(verified) < HOST_TRUST
+                && back.is_none_or(|b| b > *index)
+                && !limits.contains_key(hosts[*index].base) =>
+        {
             return Ok(*index);
         }
-        Some(HostVerdict::NoneReachable(at, error)) if age(at) < PROBE_FAILURE_TTL => {
+        Some(HostVerdict::NoneReachable(at, error))
+            if age(at) < PROBE_FAILURE_TTL && back.is_none() =>
+        {
             return Err(MobileSignerError::InvalidPsbtJson(error.clone()));
         }
         _ => {}
     }
     let mut failures = Vec::with_capacity(hosts.len());
     for (index, host) in hosts.iter().enumerate() {
+        if let Some(until) = limits.get(host.base) {
+            let left = until.saturating_duration_since(now).as_secs();
+            failures.push(format!(
+                "{}: HTTP status 429, limited for {left} s more",
+                host.base
+            ));
+            continue;
+        }
         match probe(host) {
             Ok(body) if body.trim() == TESTNET4_GENESIS => {
                 *verdict = Some(HostVerdict::Chosen(index, now));
@@ -459,32 +533,104 @@ fn probe_genesis(host: &HostSpec) -> Result<String, MobileSignerError> {
         .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))
 }
 
+/// Keeps `base` out of `pick_host` until `now` plus the host's Retry-After, or `THROTTLE_DEFAULT`
+/// without one, at most `THROTTLE_MAX`, and drops the cached choice when it names `base`, so the
+/// next call picks another host. The scans are kept: the host answered, it only asked for less.
+fn throttle(
+    base: &'static str,
+    retry_after: Option<Duration>,
+    now: Instant,
+    hosts: &[HostSpec],
+    cache: &HostChoice,
+    throttled: &Throttled,
+) {
+    let wait = retry_after
+        .filter(|d| !d.is_zero())
+        .unwrap_or(THROTTLE_DEFAULT)
+        .min(THROTTLE_MAX);
+    let mut verdict = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if matches!(&*verdict, Some(HostVerdict::Chosen(index, _)) if hosts[*index].base == base) {
+        *verdict = None;
+    }
+    throttled
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(base, now + wait);
+}
+
+fn is_throttled(base: &str, now: Instant, throttled: &Throttled) -> bool {
+    throttled
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(base)
+        .is_some_and(|until| now < *until)
+}
+
 /// The base of the testnet4 host in use, probing the list when none is cached.
 fn selected_base() -> Result<&'static str, MobileSignerError> {
     let hosts = &*ESPLORA_TESTNET4_HOSTS;
-    let index = pick_host(hosts, &probe_genesis, Instant::now(), &CHOSEN_HOST)?;
+    let index = pick_host(
+        hosts,
+        &probe_genesis,
+        Instant::now(),
+        &CHOSEN_HOST,
+        &THROTTLED,
+    )?;
     Ok(hosts[index].base)
 }
 
 fn http_get(url: &str) -> Result<String, MobileSignerError> {
-    let url = on_host(url, selected_base()?);
+    let base = selected_base()?;
+    let url = on_host(url, base);
     get_forgetting(
         &|| classify(AGENT.get(&url).call()),
-        &CHOSEN_HOST,
-        &SCAN_CACHE,
+        base,
+        &Shared {
+            hosts: &ESPLORA_TESTNET4_HOSTS,
+            choice: &CHOSEN_HOST,
+            throttled: &THROTTLED,
+            scans: &SCAN_CACHE,
+        },
+        &Instant::now,
     )
 }
 
-/// `call` with the retry, forgetting the host in use and every cached scan after a connection-level
-/// failure. Every GET of the wallet goes through here, the fee tiers included.
+/// The process-wide state a GET reports back into.
+struct Shared<'a> {
+    hosts: &'a [HostSpec],
+    choice: &'a HostChoice,
+    throttled: &'a Throttled,
+    scans: &'a ScanCache,
+}
+
+/// `call` on `base` with the retry. A connection-level failure forgets the host in use and every
+/// cached scan; a 429 throttles `base`. An attempt on a host a sibling lookup has just seen throttle
+/// is not made, so the lookups of a batch stop at the first 429 instead of retrying into it. Every
+/// GET of the wallet goes through here, the fee tiers included.
 fn get_forgetting(
     call: &dyn Fn() -> Result<String, GetError>,
-    hosts: &HostChoice,
-    scans: &ScanCache,
+    base: &'static str,
+    shared: &Shared,
+    clock: &dyn Fn() -> Instant,
 ) -> Result<String, MobileSignerError> {
     let attempt = || {
+        if is_throttled(base, clock(), shared.throttled) {
+            return Err(GetError::Throttled { retry_after: None });
+        }
         let got = call();
-        forget_host_if_unreachable(&got, hosts, scans);
+        forget_host_if_unreachable(&got, shared.choice, shared.scans);
+        if let Err(GetError::Throttled { retry_after }) = &got {
+            throttle(
+                base,
+                *retry_after,
+                clock(),
+                shared.hosts,
+                shared.choice,
+                shared.throttled,
+            );
+        }
         got
     };
     get_with_retry(&attempt, &std::thread::sleep)
@@ -624,7 +770,7 @@ fn scan_wallet(
     };
     let age = |at: Instant| now.saturating_duration_since(at);
     let seed = match &known {
-        Some(c) if age(c.scanned_at) < SHARE_TTL => {
+        Some(c) if c.scanned_at.is_some_and(|at| age(at) < SHARE_TTL) => {
             return Ok(Wallet {
                 chains: [
                     recall_chain(&account, Chain::External, &c.chains[0])?,
@@ -656,7 +802,7 @@ fn scan_wallet(
                     CachedScan {
                         chains: wallet.seen(),
                         full_at: seed.map_or(now, |c| c.full_at),
-                        scanned_at: now,
+                        scanned_at: Some(now),
                     },
                 );
             }
@@ -1143,8 +1289,8 @@ pub fn hot_broadcast(
 }
 
 /// `broadcast_matching` on `host`. When `host` is the error from `pick_host`, nothing is posted.
-/// Once the payment is out, or may be, every cached scan is forgotten (the call does not know
-/// which wallet paid), so the next refresh scans the whole gap limit. A refusal posted nothing.
+/// Once the payment is out, or may be, every cached scan expires (the call does not know which
+/// wallet paid), so the next refresh asks the chain again, incrementally. A refusal posted nothing.
 fn broadcast_via(
     host: Result<&str, MobileSignerError>,
     post: &dyn Fn(&str, &str) -> Answer,
@@ -1163,7 +1309,7 @@ fn broadcast_via(
         txid,
     );
     if matches!(result, Ok(_) | Err(MobileSignerError::BroadcastUnknown(_))) {
-        forget_scans(scans);
+        expire_scans(scans);
     }
     Ok(HotSendResult { txid: result? })
 }
@@ -3391,11 +3537,13 @@ mod tests {
     }
 
     #[test]
-    fn a_broadcast_that_went_out_or_is_unclear_forgets_the_scan_and_a_refusal_keeps_it() {
+    fn a_broadcast_that_went_out_or_is_unclear_expires_the_scan_and_a_refusal_keeps_it() {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
         let ready = fake.ready(SOMEONE, 5_000, 2);
         let full = 41;
+        // Index 0 and the lookahead 1 to 5 externally, the lookahead 0 to 4 internally.
+        let incremental = 6 + 5;
         assert_eq!(fake.requests(), full + 1);
 
         assert!(fake.broadcast(&ready, answer(400, NODE_REFUSES)).is_err());
@@ -3411,8 +3559,8 @@ mod tests {
         fake.snapshot("").unwrap();
         assert_eq!(
             fake.requests(),
-            2 * full + 1,
-            "sent: the next refresh is a full scan"
+            full + 1 + incremental,
+            "sent: the next refresh asks the chain again, incrementally"
         );
 
         match fake.broadcast(&ready, no_answer()) {
@@ -3422,8 +3570,44 @@ mod tests {
         fake.snapshot("").unwrap();
         assert_eq!(
             fake.requests(),
-            3 * full + 1,
-            "unclear: the next refresh is a full scan"
+            full + 1 + 2 * incremental,
+            "unclear: the same"
+        );
+    }
+
+    // The chain after the payment: the coin at external 0 spent, 6,859 change at internal 0, the
+    // first unused change address, which the incremental scan's lookahead covers.
+    #[test]
+    fn after_a_broadcast_the_spent_coin_and_the_change_are_both_seen_without_a_full_scan() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        assert_eq!(fake.snapshot("").unwrap().balance_sats, 10_000);
+        let ready = fake.ready(SOMEONE, 3_000, 1);
+        let change = 10_000 - 3_000 - ready.fee_sats;
+        let paid: Transaction = bitcoin::consensus::encode::deserialize_hex(&ready.hex).unwrap();
+        assert_outputs(
+            &paid,
+            &[(SOMEONE, 3_000), (&addr(Chain::Internal, 0), change)],
+        );
+        fake.broadcast(&ready, answer(200, &ready.txid)).unwrap();
+
+        fake.touch(&addr(Chain::External, 0));
+        fake.utxos.insert(addr(Chain::External, 0), "[]".into());
+        fake.fund_unconfirmed(&addr(Chain::Internal, 0), change, 'b');
+        let before = fake.requests();
+        // Inside the share window of the scan before the payment, which must not answer.
+        assert_eq!(fake.snapshot("").unwrap().balance_sats, change);
+        // External 0 and its lookahead, internal 0 to 4, then internal 5 to 20 now that 0 is used.
+        assert_eq!(
+            fake.requests() - before,
+            6 + 5 + 16,
+            "full would be 21 + 21"
+        );
+        let next = fake.send(SOMEONE, 1_000, 1).unwrap();
+        assert_eq!(
+            pays(&next.output[1]),
+            addr(Chain::Internal, 1),
+            "the next change moves on"
         );
     }
 
@@ -3530,10 +3714,10 @@ mod tests {
         assert!(fake.calls.lock().unwrap().is_empty());
     }
 
-    fn throttled() -> GetError {
+    fn outage() -> GetError {
         GetError::Retryable {
             retry_after: None,
-            what: "HTTP status 429".into(),
+            what: "HTTP status 503".into(),
         }
     }
 
@@ -3562,8 +3746,8 @@ mod tests {
     }
 
     #[test]
-    fn a_throttled_answer_then_a_200_returns_that_body() {
-        let (result, attempts, sleeps) = retried(vec![Err(throttled()), Ok("body".into())]);
+    fn a_brief_outage_then_a_200_returns_that_body() {
+        let (result, attempts, sleeps) = retried(vec![Err(outage()), Ok("body".into())]);
         assert_eq!(result.unwrap(), "body");
         assert_eq!((attempts, sleeps), (2, secs(&[1])));
     }
@@ -3576,14 +3760,13 @@ mod tests {
     }
 
     #[test]
-    fn three_throttled_answers_fail_naming_the_status_and_the_attempts() {
-        let (result, attempts, sleeps) =
-            retried(vec![Err(throttled()), Err(throttled()), Err(throttled())]);
+    fn three_outages_fail_naming_the_status_and_the_attempts() {
+        let (result, attempts, sleeps) = retried(vec![Err(outage()), Err(outage()), Err(outage())]);
         let MobileSignerError::InvalidPsbtJson(message) = result.unwrap_err() else {
             panic!("wrong error kind");
         };
         assert!(
-            message.contains("429") && message.contains("3 attempts"),
+            message.contains("503") && message.contains("3 attempts"),
             "{message}"
         );
         assert_eq!((attempts, sleeps), (3, secs(&[1, 2])));
@@ -3635,8 +3818,10 @@ mod tests {
     }
 
     #[test]
-    fn classify_retries_only_429_502_503_504() {
-        for status in [429, 502, 503, 504] {
+    fn classify_throttles_a_429_and_retries_only_502_503_504() {
+        let got = classified("HTTP/1.1 429 -\r\nContent-Length: 0\r\n\r\n");
+        assert!(matches!(got, Err(GetError::Throttled { .. })));
+        for status in [502, 503, 504] {
             let got = classified(&format!("HTTP/1.1 {status} -\r\nContent-Length: 0\r\n\r\n"));
             assert!(matches!(got, Err(GetError::Retryable { .. })), "{status}");
         }
@@ -3666,8 +3851,8 @@ mod tests {
         let wait = |value: &str| match classified(&format!(
             "HTTP/1.1 429 -\r\nRetry-After: {value}\r\nContent-Length: 0\r\n\r\n"
         )) {
-            Err(GetError::Retryable { retry_after, .. }) => retry_after,
-            _ => panic!("not retryable"),
+            Err(GetError::Throttled { retry_after }) => retry_after,
+            _ => panic!("not throttled"),
         };
         assert_eq!(wait("2"), Some(Duration::from_secs(2)));
         assert_eq!(wait("Wed, 21 Oct 2026 07:28:00 GMT"), None);
@@ -3677,7 +3862,7 @@ mod tests {
 
     #[test]
     fn a_retried_200_still_goes_through_the_strict_parser() {
-        let (result, _, _) = retried(vec![Err(throttled()), Ok(r#"{"chain_stats":{}}"#.into())]);
+        let (result, _, _) = retried(vec![Err(outage()), Ok(r#"{"chain_stats":{}}"#.into())]);
         assert!(parse_address_stats(&result.unwrap()).is_err());
     }
 
@@ -3701,6 +3886,7 @@ mod tests {
     struct Probe {
         answers: HashMap<&'static str, Result<&'static str, &'static str>>,
         asked: Mutex<Vec<String>>,
+        throttled: Throttled,
     }
 
     impl Probe {
@@ -3708,6 +3894,7 @@ mod tests {
             Self {
                 answers: answers.iter().copied().collect(),
                 asked: Mutex::new(Vec::new()),
+                throttled: Throttled::default(),
             }
         }
 
@@ -3725,7 +3912,13 @@ mod tests {
         }
 
         fn pick(&self, now: Instant, cache: &HostChoice) -> Result<usize, MobileSignerError> {
-            pick_host(&SPECS, &|host| self.run(host.base), now, cache)
+            pick_host(
+                &SPECS,
+                &|host| self.run(host.base),
+                now,
+                cache,
+                &self.throttled,
+            )
         }
     }
 
@@ -3784,7 +3977,13 @@ mod tests {
             };
             let cache = Mutex::new(None);
             let start = Instant::now();
-            let result = pick_host(&[host], &probe_genesis, start, &cache);
+            let result = pick_host(
+                &[host],
+                &probe_genesis,
+                start,
+                &cache,
+                &Throttled::default(),
+            );
             let took = start.elapsed();
             let message = no_host_message(result);
             assert!(message.contains("timed out"), "{message}");
@@ -3812,7 +4011,14 @@ mod tests {
         };
         let cache = Mutex::new(None);
         let hosts = hosts_with(Some(OWN_NODE_FIXTURE));
-        let picked = pick_host(&hosts, &probe, Instant::now(), &cache).unwrap();
+        let picked = pick_host(
+            &hosts,
+            &probe,
+            Instant::now(),
+            &cache,
+            &Throttled::default(),
+        )
+        .unwrap();
         assert_eq!(hosts[picked].base, "https://blockstream.info/testnet4/api");
         assert_eq!(
             *asked.lock().unwrap(),
@@ -3877,7 +4083,7 @@ mod tests {
     }
 
     #[test]
-    fn a_scan_overtaken_by_a_broadcast_leaves_the_cache_empty_so_the_next_call_sees_the_payment() {
+    fn a_scan_overtaken_by_a_broadcast_is_not_cached_so_the_next_call_sees_the_payment() {
         use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 50_000, 'a');
@@ -3891,7 +4097,7 @@ mod tests {
         let forgot = AtomicBool::new(false);
         let get = |url: &str| {
             if !forgot.swap(true, SeqCst) {
-                forget_scans(&fake.cache); // what `broadcast_via` does once the payment is out
+                expire_scans(&fake.cache); // what `broadcast_via` does once the payment is out
             }
             fake.get(url)
         };
@@ -3908,7 +4114,18 @@ mod tests {
             stale.balance_sats, 50_000,
             "the overtaken scan still answers its own caller"
         );
-        assert!(fake.cache.lock().unwrap().entries.is_empty());
+        {
+            let entries = &fake.cache.lock().unwrap().entries;
+            assert_eq!(
+                entries.len(),
+                1,
+                "the used indices are kept for the next scan"
+            );
+            assert!(
+                entries.values().all(|e| e.scanned_at.is_none()),
+                "but the picture from before the payment answers no call"
+            );
+        }
         // The chain after the payment: the coin spent, 40,000 change at internal 0.
         fake.touch(&addr(Chain::External, 0));
         fake.utxos.insert(addr(Chain::External, 0), "[]".into());
@@ -3964,7 +4181,13 @@ mod tests {
     fn a_host_on_another_chain_is_never_used_even_when_it_is_the_only_one() {
         let probe = Probe::new(&[(HOSTS[0], Ok(TESTNET3_GENESIS))]);
         let cache = Mutex::new(None);
-        let result = pick_host(&SPECS[..1], &|h| probe.run(h.base), Instant::now(), &cache);
+        let result = pick_host(
+            &SPECS[..1],
+            &|h| probe.run(h.base),
+            Instant::now(),
+            &cache,
+            &Throttled::default(),
+        );
         let message = no_host_message(result);
         assert!(
             message.starts_with("esplora get: no testnet4 host is reachable"),
@@ -4073,6 +4296,201 @@ mod tests {
         forget_host_if_unreachable(&classify(no_answer()), &cache, &ScanCache::default());
         assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1);
         assert_eq!(probe.asked(), HOSTS);
+    }
+
+    /// One GET as `http_get` makes it, at `at`, against SPECS: the first host answers 429 with a
+    /// Retry-After of 30 s until `t0 + 30 s`, the second always answers. Each GET's host is recorded.
+    struct TwoHosts {
+        probe: Probe,
+        choice: HostChoice,
+        scans: ScanCache,
+        asked: Mutex<Vec<&'static str>>,
+        t0: Instant,
+    }
+
+    impl TwoHosts {
+        fn new() -> Self {
+            Self {
+                probe: Probe::new(&[
+                    (HOSTS[0], Ok(TESTNET4_GENESIS)),
+                    (HOSTS[1], Ok(TESTNET4_GENESIS)),
+                ]),
+                choice: Mutex::new(None),
+                scans: ScanCache::default(),
+                asked: Mutex::new(Vec::new()),
+                t0: Instant::now(),
+            }
+        }
+
+        fn get(&self, after: Duration) -> Result<String, MobileSignerError> {
+            let at = self.t0 + after;
+            let index = pick_host(
+                &SPECS,
+                &|h| self.probe.run(h.base),
+                at,
+                &self.choice,
+                &self.probe.throttled,
+            )?;
+            let base = SPECS[index].base;
+            let shared = Shared {
+                hosts: &SPECS,
+                choice: &self.choice,
+                throttled: &self.probe.throttled,
+                scans: &self.scans,
+            };
+            let answer = || {
+                self.asked.lock().unwrap().push(base);
+                if base == HOSTS[0] && after < Duration::from_secs(30) {
+                    Err(GetError::Throttled {
+                        retry_after: Some(Duration::from_secs(30)),
+                    })
+                } else {
+                    Ok(base.to_string())
+                }
+            };
+            get_forgetting(&answer, base, &shared, &|| at)
+        }
+
+        fn asked(&self) -> Vec<&'static str> {
+            self.asked.lock().unwrap().clone()
+        }
+    }
+
+    #[test]
+    fn a_429_is_not_asked_again_and_the_next_call_goes_to_the_second_host() {
+        let world = TwoHosts::new();
+        match world.get(Duration::ZERO) {
+            // `sendErrorThai` shows the rate-limit line for "esplora get" with "429" in it.
+            Err(MobileSignerError::InvalidPsbtJson(m)) => {
+                assert!(m.starts_with("esplora get") && m.contains("429"), "{m}")
+            }
+            other => panic!("expected the 429, got {other:?}"),
+        }
+        assert_eq!(
+            world.asked(),
+            [HOSTS[0]],
+            "no retry against the host refusing us"
+        );
+        assert_eq!(world.get(Duration::from_secs(1)).unwrap(), HOSTS[1]);
+        assert_eq!(world.get(Duration::from_secs(2)).unwrap(), HOSTS[1]);
+        assert_eq!(world.asked(), [HOSTS[0], HOSTS[1], HOSTS[1]]);
+        assert_eq!(
+            world.probe.asked(),
+            HOSTS,
+            "the throttled host is not probed either"
+        );
+        assert_eq!(chosen(&world.choice), Some(1));
+        assert!(
+            world.scans.lock().unwrap().epoch == 0,
+            "a 429 forgets no scan"
+        );
+    }
+
+    #[test]
+    fn the_first_host_is_used_again_once_its_limit_is_over() {
+        let world = TwoHosts::new();
+        assert!(world.get(Duration::ZERO).is_err());
+        assert_eq!(world.get(Duration::from_secs(29)).unwrap(), HOSTS[1]);
+        // The second host is cached for HOST_TRUST, but the own node, or any earlier host, wins back.
+        assert_eq!(world.get(Duration::from_secs(30)).unwrap(), HOSTS[0]);
+        assert_eq!(chosen(&world.choice), Some(0));
+        assert!(world.probe.throttled.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn every_host_limited_names_the_429_and_probes_nothing() {
+        let probe = Probe::new(&[]);
+        let t0 = Instant::now();
+        for host in HOSTS {
+            probe
+                .throttled
+                .lock()
+                .unwrap()
+                .insert(host, t0 + Duration::from_secs(60));
+        }
+        let message = no_host_message(pick_host(
+            &SPECS,
+            &|h| probe.run(h.base),
+            t0,
+            &Mutex::new(None),
+            &probe.throttled,
+        ));
+        assert!(
+            message.starts_with("esplora get: no testnet4 host is reachable")
+                && message.contains("429"),
+            "{message}"
+        );
+        assert!(
+            message.contains(HOSTS[0]) && message.contains(HOSTS[1]),
+            "{message}"
+        );
+        assert!(probe.asked().is_empty());
+    }
+
+    // Ten lookups in flight: one is refused with 429 and the rest get a brief 503. Without the stop,
+    // each 503 would be asked twice more and the second window would follow.
+    #[test]
+    fn a_429_in_a_batch_ends_the_batch_and_the_retries_of_its_siblings() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let calls = AtomicUsize::new(0);
+        let shared = Shared {
+            hosts: &SPECS,
+            choice: &Mutex::new(Some(HostVerdict::Chosen(0, Instant::now()))),
+            throttled: &Throttled::default(),
+            scans: &ScanCache::default(),
+        };
+        let esplora = |url: &str| {
+            let answer = || {
+                calls.fetch_add(1, SeqCst);
+                if url.ends_with("/3") {
+                    Err(GetError::Throttled { retry_after: None })
+                } else {
+                    Err(outage())
+                }
+            };
+            get_forgetting(&answer, HOSTS[0], &shared, &Instant::now)
+        };
+        let urls: Vec<String> = (0..2 * WINDOW)
+            .map(|i| format!("{}/{i}", HOSTS[0]))
+            .collect();
+        assert!(get_all(&esplora, &urls).is_err());
+        assert!(
+            calls.load(SeqCst) <= WINDOW,
+            "{} requests",
+            calls.load(SeqCst)
+        );
+        assert_eq!(
+            chosen(shared.choice),
+            None,
+            "the next call picks another host"
+        );
+    }
+
+    #[test]
+    fn a_throttle_lasts_the_retry_after_capped_at_ten_minutes_and_a_minute_without_one() {
+        let t0 = Instant::now();
+        let until = |retry_after: Option<u64>| {
+            let throttled = Throttled::default();
+            let cache = Mutex::new(Some(HostVerdict::Chosen(1, t0)));
+            throttle(
+                HOSTS[0],
+                retry_after.map(Duration::from_secs),
+                t0,
+                &SPECS,
+                &cache,
+                &throttled,
+            );
+            assert_eq!(chosen(&cache), Some(1), "a choice of another host stays");
+            throttled.lock().unwrap()[HOSTS[0]] - t0
+        };
+        assert_eq!(until(Some(30)), Duration::from_secs(30));
+        assert_eq!(until(Some(86_400)), THROTTLE_MAX);
+        assert_eq!(until(None), THROTTLE_DEFAULT);
+        assert_eq!(
+            until(Some(0)),
+            THROTTLE_DEFAULT,
+            "Retry-After 0 is not an invitation to hammer"
+        );
     }
 
     #[test]
@@ -4381,7 +4799,14 @@ mod tests {
         let hosts = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
         let fake = Fake::new();
         fake.snapshot("").unwrap();
-        let get = |_: &str| get_forgetting(&|| classify(no_answer()), &hosts, &fake.cache);
+        let shared = Shared {
+            hosts: &SPECS,
+            choice: &hosts,
+            throttled: &Throttled::default(),
+            scans: &fake.cache,
+        };
+        let get =
+            |_: &str| get_forgetting(&|| classify(no_answer()), HOSTS[0], &shared, &Instant::now);
         let tiers = fee_tiers_from(&get, KeyNetwork::Test, Instant::now(), &Mutex::new(None));
         assert_eq!(tiers, DEFAULT_FEE_TIERS);
         assert_eq!(chosen(&hosts), None);
