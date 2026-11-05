@@ -7,6 +7,7 @@
 uniffi::setup_scaffolding!();
 
 pub mod ble;
+mod chain;
 pub mod hot_wallet;
 pub mod price;
 

@@ -8,12 +8,20 @@
 //! `1/i`, until `GAP_LIMIT` consecutive unused indices follow the last used one. What a scan
 //! learned (which indices are used, their balances, no key) is kept in `SCAN_CACHE` for the
 //! process, so the next call asks only what can have changed; see `scan_wallet`.
+//!
+//! Every read and the broadcast go through `crate::chain::ChainSource`, so the wallet logic here never
+//! builds a URL, reads a JSON body or picks a host.
 
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::chain::{
+    ChainSource, EsploraSource, Http, TxView, Txo, Utxo, WINDOW, check_network, history_error,
+    tx_error,
+};
+use crate::{KeyNetwork, MobileSignerError};
 use bip39::Mnemonic;
 use bitcoin::absolute::LockTime;
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv, Xpub};
@@ -24,68 +32,7 @@ use bitcoin::{
     Address, Amount, CompressedPublicKey, Network, OutPoint, PrivateKey, ScriptBuf, Sequence,
     Transaction, TxIn, TxOut, Txid, Witness, sighash::EcdsaSighashType, sighash::SighashCache,
 };
-use serde_json::Value;
 
-use crate::{KeyNetwork, MobileSignerError};
-
-/// One testnet4 Esplora host and how long its genesis probe may take, DNS to the last body byte.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct HostSpec {
-    base: &'static str,
-    probe_timeout: Duration,
-}
-
-/// A private Esplora or mempool instance tried before the public hosts, read at build time from
-/// `MEBIT_ESPLORA_HOST`. `scripts/ffi.sh` passes the one line of `esplora-host.local`, which git
-/// ignores: a tailnet address is the developer's own network, not this repository's. A build without
-/// it tries only the public hosts.
-const OWN_NODE: Option<&str> = option_env!("MEBIT_ESPLORA_HOST");
-/// The public testnet4 Esplora hosts in the order they are tried. blockstream.info allows 700
-/// requests an hour per IP. mempool.space is last because its TLS handshake hung from a phone on 5G
-/// and from the user's networks on 2026-11-03.
-const PUBLIC_TESTNET4_HOSTS: [HostSpec; 2] = [
-    HostSpec {
-        base: ESPLORA_TESTNET4,
-        probe_timeout: PROBE_TIMEOUT,
-    },
-    HostSpec {
-        base: "https://mempool.space/testnet4/api",
-        probe_timeout: PROBE_TIMEOUT,
-    },
-];
-/// Testnet4 hosts in the order they are tried: this build's private node first, because it has no
-/// request limit, then the public hosts. Passing the genesis check does not make a host honest about
-/// balances; that residual trust is the same for every host here, see `MAX_SCAN_PER_CHAIN`.
-static ESPLORA_TESTNET4_HOSTS: LazyLock<Vec<HostSpec>> = LazyLock::new(|| hosts_with(OWN_NODE));
-
-/// The hosts of a build whose private node is `own`. Cleartext `http://` is acceptable for a private
-/// host, which Tailscale already encrypts, and for no other.
-fn hosts_with(own: Option<&'static str>) -> Vec<HostSpec> {
-    own.map(|base| HostSpec {
-        base,
-        probe_timeout: OWN_NODE_PROBE_TIMEOUT,
-    })
-    .into_iter()
-    .chain(PUBLIC_TESTNET4_HOSTS)
-    .collect()
-}
-/// The base every URL is built on, and the first public host. `http_get` rewrites it to the host in
-/// use.
-const ESPLORA_TESTNET4: &str = "https://blockstream.info/testnet4/api";
-/// Hash of testnet4 block 0. A host whose `/block-height/0` says anything else serves another
-/// chain, and a balance or a broadcast there would be wrong, so it is never used.
-const TESTNET4_GENESIS: &str = "00000000da84f2bafbbc53dee25a72ae507ff4914b867c565be350b0da8bf043";
-/// How long a host that passed the genesis check is used before it is probed again.
-const HOST_TRUST: Duration = Duration::from_secs(10 * 60);
-/// The whole probe of a public host, DNS to the last body byte. The per-read limit alone let a host
-/// that sent one byte every 3 s hold the host lock for 30 s.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
-/// The own node answers in under 100 ms when Tailscale is up and not at all when it is down, so a
-/// phone off the tailnet loses at most this once per `HOST_TRUST` before the public hosts.
-const OWN_NODE_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
-/// How long a round in which no host passed is answered from memory, so callers that queued on the
-/// host lock during that round do not each probe every host again.
-const PROBE_FAILURE_TTL: Duration = Duration::from_secs(5);
 const ACCOUNT_PATH: &str = "m/84'/1'/0'";
 
 /// BIP-44 gap limit. A chain is scanned until this many consecutive unused indices follow the last
@@ -113,60 +60,6 @@ const FULL_RESCAN: Duration = Duration::from_secs(30 * 60);
 /// scan (`FULL_RESCAN` or an app restart); raise it when a wallet is seen handing out that many
 /// addresses inside half an hour.
 const LOOKAHEAD: usize = 5;
-// Lookups in flight at once. Ten fills a fresh chain's gap in two windows and is a small burst for a
-// public explorer.
-const WINDOW: usize = 10;
-
-// Esplora connects in well under a second. Past 10 s on a weak phone network the host is not answering.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-// Per read and per write. ureq 2 has neither by default, so a server that went silent held the call for good.
-const IO_TIMEOUT: Duration = Duration::from_secs(20);
-// The whole request, DNS to the last body byte. The per-read limit alone lets a body that trickles
-// hold a call for as long as the host likes.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
-
-/// `whole` is ureq's deadline over the request. A body read that runs past it fails with an io
-/// `TimedOut`, which `classify` reports as the host being unreachable.
-fn agent(connect: Duration, io: Duration, whole: Duration) -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(connect)
-        .timeout_read(io)
-        .timeout_write(io)
-        .timeout(whole)
-        .build()
-}
-
-static AGENT: LazyLock<ureq::Agent> =
-    LazyLock::new(|| agent(CONNECT_TIMEOUT, IO_TIMEOUT, REQUEST_TIMEOUT));
-
-/// What the last probe round decided: the index into the host list of the host in use and when it
-/// passed the genesis check, or that no host passed, when, and the error that says so.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum HostVerdict {
-    Chosen(usize, Instant),
-    NoneReachable(Instant, String),
-}
-type HostChoice = Mutex<Option<HostVerdict>>;
-static CHOSEN_HOST: HostChoice = Mutex::new(None);
-
-// After an unclear broadcast: about 6 s of asking, for the explorer to index what its node took.
-const LOOKUPS: u32 = 4;
-const LOOKUP_PAUSE: Duration = Duration::from_secs(2);
-
-// What a node says about a transaction it already holds, so the payment is out. "outputs already in
-// utxo set" is what blockstream.info testnet said on 2026-11-02; older Bitcoin Core says "already in
-// block chain".
-const ALREADY_HELD: [&str; 5] = [
-    "txn-already-in-mempool",
-    "txn-already-known",
-    "already in block chain",
-    "already in utxo set",
-    "already in the utxo set",
-];
-
-/// One GET of an Esplora URL, the whole body as text. Injected so the wallet logic runs without a
-/// network in tests.
-type Esplora<'a> = &'a (dyn Fn(&str) -> Result<String, MobileSignerError> + Sync);
 
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct HotWalletSnapshot {
@@ -184,15 +77,6 @@ fn network_of(key_network: KeyNetwork) -> Network {
     match key_network {
         KeyNetwork::Main => Network::Bitcoin,
         KeyNetwork::Test => Network::Testnet4,
-    }
-}
-
-fn esplora_base(network: KeyNetwork) -> Result<&'static str, MobileSignerError> {
-    match network {
-        KeyNetwork::Test => Ok(ESPLORA_TESTNET4),
-        KeyNetwork::Main => Err(MobileSignerError::InvalidPsbtJson(
-            "mainnet Esplora is not enabled in this build".into(),
-        )),
     }
 }
 
@@ -308,263 +192,14 @@ fn forget_scans(scans: &ScanCache) {
     scans.epoch += 1;
 }
 
-// Retries are for a GET only. A retried broadcast could pay twice, so `broadcast_signed` has none.
-const RETRIES: usize = 2;
-const BACKOFF: [Duration; RETRIES] = [Duration::from_secs(1), Duration::from_secs(2)];
-const MAX_RETRY_AFTER: Duration = Duration::from_secs(5);
-const MAX_EXTRA_WAIT: Duration = Duration::from_secs(8);
+/// The testnet4 hosts this wallet reads and posts through. A GET that loses the host in use forgets
+/// every cached scan too, so the next call scans the whole gap limit on the host chosen next.
+static TESTNET4: EsploraSource = EsploraSource(&Http {
+    lost: forget_every_scan,
+});
 
-/// Why one attempt at a GET failed, which decides whether it is asked again, with the text the caller
-/// gets when it is the last attempt.
-enum GetError {
-    /// Throttled or a brief server error, answered quickly.
-    Retryable {
-        retry_after: Option<Duration>,
-        what: String,
-    },
-    /// No whole answer arrived and no limit ran out: no connection, TLS, a reset, a body cut short.
-    Unreachable(String),
-    /// The connect, a read or the whole request ran past its limit.
-    TimedOut(String),
-    /// The host answered and the answer is no use: another status, or a body that cannot be read.
-    Fatal(String),
-}
-
-impl GetError {
-    fn text(&mut self) -> &mut String {
-        match self {
-            GetError::Retryable { what, .. } => what,
-            GetError::Unreachable(text) | GetError::TimedOut(text) | GetError::Fatal(text) => text,
-        }
-    }
-}
-
-impl From<GetError> for MobileSignerError {
-    fn from(mut failure: GetError) -> Self {
-        MobileSignerError::InvalidPsbtJson(std::mem::take(failure.text()))
-    }
-}
-
-/// Asks until an attempt gets a 200 or a `Fatal` answer, or the attempts run out: `RETRIES + 1`, or
-/// two once one timed out, because a timeout has already held the call up to `REQUEST_TIMEOUT`. A GET
-/// is a read, so asking again after a lost connection is safe. The waits add up to at most
-/// `MAX_EXTRA_WAIT`. The error is the last attempt's, so the caller sees whether the host answered.
-/// shortcut: Retry-After in HTTP-date form is ignored, upgrade if the host is seen sending it.
-fn get_with_retry(
-    attempt: &dyn Fn() -> Result<String, GetError>,
-    sleep: &dyn Fn(Duration),
-) -> Result<String, GetError> {
-    let mut slept = Duration::ZERO;
-    let mut timed_out = false;
-    for n in 0.. {
-        let mut failure = match attempt() {
-            Ok(body) => return Ok(body),
-            Err(failure) => failure,
-        };
-        let retry_after = match &failure {
-            GetError::Fatal(_) => return Err(failure),
-            GetError::Retryable { retry_after, .. } => *retry_after,
-            GetError::Unreachable(_) => None,
-            GetError::TimedOut(_) => {
-                timed_out = true;
-                None
-            }
-        };
-        if n == RETRIES || (timed_out && n > 0) {
-            let attempts = format!(", gave up after {} attempts", n + 1);
-            failure.text().push_str(&attempts);
-            return Err(failure);
-        }
-        let wait = retry_after
-            .map_or(BACKOFF.get(n).copied().unwrap_or_default(), |d| {
-                d.min(MAX_RETRY_AFTER)
-            })
-            .min(MAX_EXTRA_WAIT - slept);
-        sleep(wait);
-        slept += wait;
-    }
-    unreachable!()
-}
-
-// A timeout is asked again once: one stalled connection in a scan of hundreds says little about the
-// host, and a second timeout ends it. A limit on a blocking socket can surface as `WouldBlock`, which
-// ureq turns into `TimedOut` while reading the answer but not while writing the request, where a TLS
-// handshake that stalls can run out.
-fn classify(answer: Result<ureq::Response, ureq::Error>) -> Result<String, GetError> {
-    use std::io::ErrorKind;
-    let limit = |kind| matches!(kind, ErrorKind::TimedOut | ErrorKind::WouldBlock);
-    match answer {
-        Ok(response) => {
-            let what = format!("esplora body of {}", response.get_url());
-            response.into_string().map_err(|e| {
-                let text = format!("{what}: {e}");
-                match e.kind() {
-                    kind if limit(kind) => GetError::TimedOut(text),
-                    ErrorKind::ConnectionReset
-                    | ErrorKind::ConnectionAborted
-                    | ErrorKind::UnexpectedEof => GetError::Unreachable(text),
-                    _ => GetError::Fatal(text),
-                }
-            })
-        }
-        Err(ureq::Error::Status(code @ (429 | 502 | 503 | 504), response)) => {
-            let retry_after = response
-                .header("Retry-After")
-                .and_then(|v| v.trim().parse::<u64>().ok())
-                .map(Duration::from_secs);
-            Err(GetError::Retryable {
-                retry_after,
-                what: format!("esplora get: HTTP status {code}"),
-            })
-        }
-        Err(e @ ureq::Error::Transport(_)) => {
-            let timed_out = std::error::Error::source(&e)
-                .and_then(|source| source.downcast_ref::<std::io::Error>())
-                .is_some_and(|io| limit(io.kind()));
-            let text = format!("esplora get: {e}");
-            Err(if timed_out {
-                GetError::TimedOut(text)
-            } else {
-                GetError::Unreachable(text)
-            })
-        }
-        Err(e) => Err(GetError::Fatal(format!("esplora get: {e}"))),
-    }
-}
-
-/// The index of the host to use: the cached one while it is under `HOST_TRUST` old, else the first
-/// in `hosts` whose `probe` returns the testnet4 genesis hash, which is then cached as of `now`. A
-/// host that answers another hash is skipped like one that does not answer. No host passing fails
-/// with `esplora get: no testnet4 host is reachable`, naming each host's failure, and that round is
-/// remembered for `PROBE_FAILURE_TTL`: a caller inside it gets the same error with no probe.
-fn pick_host(
-    hosts: &[HostSpec],
-    probe: &dyn Fn(&HostSpec) -> Result<String, MobileSignerError>,
-    now: Instant,
-    cache: &HostChoice,
-) -> Result<usize, MobileSignerError> {
-    let mut verdict = cache
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let age = |at: &Instant| now.saturating_duration_since(*at);
-    match &*verdict {
-        Some(HostVerdict::Chosen(index, verified)) if age(verified) < HOST_TRUST => {
-            return Ok(*index);
-        }
-        Some(HostVerdict::NoneReachable(at, error)) if age(at) < PROBE_FAILURE_TTL => {
-            return Err(MobileSignerError::InvalidPsbtJson(error.clone()));
-        }
-        _ => {}
-    }
-    let mut failures = Vec::with_capacity(hosts.len());
-    for (index, host) in hosts.iter().enumerate() {
-        match probe(host) {
-            Ok(body) if body.trim() == TESTNET4_GENESIS => {
-                *verdict = Some(HostVerdict::Chosen(index, now));
-                return Ok(index);
-            }
-            Ok(body) => {
-                let shown: String = body.trim().chars().take(24).collect();
-                failures.push(format!("{}: block 0 is {shown:?}, not testnet4", host.base));
-            }
-            Err(e) => failures.push(format!("{}: {e}", host.base)),
-        }
-    }
-    let error = format!(
-        "esplora get: no testnet4 host is reachable ({})",
-        failures.join("; ")
-    );
-    *verdict = Some(HostVerdict::NoneReachable(now, error.clone()));
-    Err(MobileSignerError::InvalidPsbtJson(error))
-}
-
-/// Forgets the host in use after a GET that got no whole answer (no connection, TLS, a reset, a body
-/// cut short, a timeout), so the next call probes again, and every cached scan with it, so the next
-/// call scans the whole gap limit. A status or an unreadable body is the host answering and changes
-/// nothing.
-fn forget_host_if_unreachable(
-    got: &Result<String, GetError>,
-    cache: &HostChoice,
-    scans: &ScanCache,
-) {
-    if matches!(got, Err(GetError::Unreachable(_) | GetError::TimedOut(_))) {
-        *cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-        forget_scans(scans);
-    }
-}
-
-/// `url` with the canonical base swapped for `base`. Any other URL is returned as it is.
-fn on_host(url: &str, base: &str) -> String {
-    match url.strip_prefix(ESPLORA_TESTNET4) {
-        Some(rest) => format!("{base}{rest}"),
-        None => url.to_string(),
-    }
-}
-
-// The connect and each read get the host's whole-probe limit too: a host that cannot say its block 0
-// hash in time is skipped for the next one instead of holding the scan.
-fn probe_genesis(host: &HostSpec) -> Result<String, MobileSignerError> {
-    let limit = host.probe_timeout;
-    agent(limit, limit, limit)
-        .get(&format!("{}/block-height/0", host.base))
-        .call()
-        .and_then(|response| response.into_string().map_err(ureq::Error::from))
-        .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))
-}
-
-/// The base of the testnet4 host in use, probing the list when none is cached.
-fn selected_base() -> Result<&'static str, MobileSignerError> {
-    let hosts = &*ESPLORA_TESTNET4_HOSTS;
-    let index = pick_host(hosts, &probe_genesis, Instant::now(), &CHOSEN_HOST)?;
-    Ok(hosts[index].base)
-}
-
-fn http_get(url: &str) -> Result<String, MobileSignerError> {
-    let url = on_host(url, selected_base()?);
-    get_forgetting(
-        &|| classify(AGENT.get(&url).call()),
-        &std::thread::sleep,
-        &CHOSEN_HOST,
-        &SCAN_CACHE,
-    )
-}
-
-/// `call` with the retry, forgetting the host in use and every cached scan when the last attempt got
-/// no whole answer: a loss the retry recovered says the host answers. Every GET of the wallet goes
-/// through here, the fee tiers included.
-fn get_forgetting(
-    call: &dyn Fn() -> Result<String, GetError>,
-    sleep: &dyn Fn(Duration),
-    hosts: &HostChoice,
-    scans: &ScanCache,
-) -> Result<String, MobileSignerError> {
-    let got = get_with_retry(call, sleep);
-    forget_host_if_unreachable(&got, hosts, scans);
-    Ok(got?)
-}
-
-/// Every URL's body, in the order given, `WINDOW` requests in flight at a time. One failure fails
-/// the whole batch, so a caller never works from a partial picture of the wallet.
-fn get_all(esplora: Esplora, urls: &[String]) -> Result<Vec<String>, MobileSignerError> {
-    let mut bodies = Vec::with_capacity(urls.len());
-    for window in urls.chunks(WINDOW) {
-        let answers = std::thread::scope(|scope| {
-            let handles: Vec<_> = window
-                .iter()
-                .map(|url| scope.spawn(move || esplora(url.as_str())))
-                .collect();
-            handles.into_iter().map(|h| h.join()).collect::<Vec<_>>()
-        });
-        for answer in answers {
-            let body = answer.map_err(|_| {
-                MobileSignerError::InvalidPsbtJson("esplora get: lookup thread panicked".into())
-            })??;
-            bodies.push(body);
-        }
-    }
-    Ok(bodies)
+fn forget_every_scan() {
+    forget_scans(&SCAN_CACHE);
 }
 
 struct Scanned {
@@ -676,7 +311,7 @@ fn recalled(
 /// A scan that fails forgets the wallet's entry, so the cache never answers from a picture a call
 /// refused. The entry holds no key: see `Seen`.
 fn scan_wallet(
-    esplora: Esplora,
+    source: &dyn ChainSource,
     words: &[String],
     passphrase: &str,
     network: KeyNetwork,
@@ -684,7 +319,7 @@ fn scan_wallet(
     cache: &ScanCache,
 ) -> Result<Wallet, MobileSignerError> {
     let account = Account::new(words, passphrase, network_of(network))?;
-    let base = esplora_base(network)?;
+    check_network(network)?;
     let id = account.id();
     let (epoch, known) = {
         let scans = cache
@@ -707,7 +342,7 @@ fn scan_wallet(
     };
     let scan = |chain: Chain| {
         let known = seed.map(|c| c.chains[chain as usize].as_slice());
-        scan_chain(esplora, base, &account, chain, known)
+        scan_chain(source, &account, chain, known)
     };
     let scanned = scan(Chain::External).and_then(|external| {
         Ok(Wallet {
@@ -751,8 +386,7 @@ fn recall_chain(
 
 /// `indices` of `chain` asked about, in order. Keys are derived here and never leave.
 fn lookup(
-    esplora: Esplora,
-    base: &str,
+    source: &dyn ChainSource,
     account: &Account,
     chain: Chain,
     indices: impl Iterator<Item = usize>,
@@ -760,35 +394,29 @@ fn lookup(
     let keys = indices
         .map(|i| account.key(chain, i as u32))
         .collect::<Result<Vec<_>, _>>()?;
-    let urls: Vec<String> = keys
-        .iter()
-        .map(|k| format!("{base}/address/{}", k.address))
-        .collect();
-    let answers = get_all(esplora, &urls)?;
-    keys.into_iter()
-        .zip(answers)
-        .map(|(key, raw)| {
-            let stats = parse_address_stats(&raw)?;
-            Ok(Scanned {
-                key,
-                used: stats.used,
-                balance: stats.balance,
-            })
+    let addresses: Vec<&Address> = keys.iter().map(|k| &k.address).collect();
+    let summaries = source.summaries(&addresses)?;
+    Ok(keys
+        .into_iter()
+        .zip(summaries)
+        .map(|(key, summary)| Scanned {
+            key,
+            used: summary.used,
+            balance: summary.balance,
         })
-        .collect()
+        .collect())
 }
 
 /// A chain scanned until `GAP_LIMIT` unused indices follow the last used one, `WINDOW` lookups at
 /// a time, starting from `refreshed(known)` when there is a cached chain and from nothing otherwise.
 fn scan_chain(
-    esplora: Esplora,
-    base: &str,
+    source: &dyn ChainSource,
     account: &Account,
     chain: Chain,
     known: Option<&[Seen]>,
 ) -> Result<Vec<Scanned>, MobileSignerError> {
     let mut scanned = match known {
-        Some(known) => refreshed(esplora, base, account, chain, known)?,
+        Some(known) => refreshed(source, account, chain, known)?,
         None => Vec::new(),
     };
     loop {
@@ -807,8 +435,7 @@ fn scan_chain(
         }
         let from = scanned.len();
         scanned.extend(lookup(
-            esplora,
-            base,
+            source,
             account,
             chain,
             from..wanted.min(from + WINDOW),
@@ -821,8 +448,7 @@ fn scan_chain(
 /// lookahead index turned out used the cached tail is kept too, so the chain is complete as it is;
 /// when one did, the chain ends at the lookahead so `scan_chain` scans on from there.
 fn refreshed(
-    esplora: Esplora,
-    base: &str,
+    source: &dyn ChainSource,
     account: &Account,
     chain: Chain,
     known: &[Seen],
@@ -833,7 +459,7 @@ fn refreshed(
         .map_or(0, |last| last + 1);
     let edge = after_last_used + LOOKAHEAD;
     let asked = (0..edge).filter(|&i| i >= after_last_used || known[i].used);
-    let mut fresh = lookup(esplora, base, account, chain, asked)?.into_iter();
+    let mut fresh = lookup(source, account, chain, asked)?.into_iter();
     let mut scanned = Vec::with_capacity(known.len());
     for i in 0..edge {
         scanned.push(match known.get(i) {
@@ -875,7 +501,7 @@ pub fn hot_wallet_snapshot(
     network: KeyNetwork,
 ) -> Result<HotWalletSnapshot, MobileSignerError> {
     snapshot_from(
-        &http_get,
+        &TESTNET4,
         &mnemonic_words,
         &passphrase,
         network,
@@ -889,58 +515,20 @@ pub fn hot_wallet_snapshot(
 /// Esplora calls for a fresh wallet, fewer after `scan_wallet` cached one, plus one coin list per
 /// funded address, so call it off the main thread.
 fn snapshot_from(
-    esplora: Esplora,
+    source: &dyn ChainSource,
     words: &[String],
     passphrase: &str,
     network: KeyNetwork,
     now: Instant,
     cache: &ScanCache,
 ) -> Result<HotWalletSnapshot, MobileSignerError> {
-    let wallet = scan_wallet(esplora, words, passphrase, network, now, cache)?;
-    let (_, spendable_sats) = spendable_coins(esplora, esplora_base(network)?, &wallet)?;
+    let wallet = scan_wallet(source, words, passphrase, network, now, cache)?;
+    let (_, spendable_sats) = spendable_coins(source, &wallet)?;
     Ok(HotWalletSnapshot {
         receive_address: wallet.next_unused(Chain::External).address.to_string(),
         balance_sats: wallet.balance()?,
         spendable_sats,
         network,
-    })
-}
-
-struct AddressStats {
-    used: bool,
-    balance: u64,
-}
-
-// Defaulting a missing field to 0 would show a Wi-Fi sign-in page as an empty wallet.
-fn parse_address_stats(json: &str) -> Result<AddressStats, MobileSignerError> {
-    let bad = |what: String| MobileSignerError::InvalidPsbtJson(format!("esplora balance: {what}"));
-    let body: Value = serde_json::from_str(json).map_err(|e| bad(format!("not JSON: {e}")))?;
-    if !body.is_object() {
-        return Err(bad("not an object".into()));
-    }
-    let sum = |section: &str, field: &str| {
-        body[section][field]
-            .as_u64()
-            .map(u128::from)
-            .ok_or_else(|| bad(format!("no unsigned integer {section}.{field}")))
-    };
-    // Subtract totals. A coin can be funded in chain_stats and spent in mempool_stats.
-    let funded = sum("chain_stats", "funded_txo_sum")? + sum("mempool_stats", "funded_txo_sum")?;
-    let spent = sum("chain_stats", "spent_txo_sum")? + sum("mempool_stats", "spent_txo_sum")?;
-    let balance = funded
-        .checked_sub(spent)
-        .ok_or_else(|| bad(format!("spent {spent} is more than funded {funded}")))?;
-    let balance =
-        u64::try_from(balance).map_err(|_| bad(format!("{balance} sats does not fit u64")))?;
-    let txs = sum("chain_stats", "tx_count")? + sum("mempool_stats", "tx_count")?;
-    if txs == 0 && (funded > 0 || spent > 0) {
-        return Err(bad(format!(
-            "tx_count is 0 but funded {funded} and spent {spent}, the answer contradicts itself"
-        )));
-    }
-    Ok(AddressStats {
-        used: txs > 0,
-        balance,
     })
 }
 
@@ -976,7 +564,7 @@ pub fn hot_wallet_history(
     network: KeyNetwork,
 ) -> Result<Vec<HotTx>, MobileSignerError> {
     history_of(
-        &http_get,
+        &TESTNET4,
         &mnemonic_words,
         &passphrase,
         network,
@@ -993,40 +581,34 @@ pub fn hot_wallet_history(
 /// needs, so call it off the main thread. An answer it cannot read fails the whole call, never one
 /// transaction.
 fn history_of(
-    esplora: Esplora,
+    source: &dyn ChainSource,
     words: &[String],
     passphrase: &str,
     network: KeyNetwork,
     now: Instant,
     cache: &ScanCache,
 ) -> Result<Vec<HotTx>, MobileSignerError> {
-    let base = esplora_base(network)?;
-    let wallet = scan_wallet(esplora, words, passphrase, network, now, cache)?;
-    // shortcut: first page only per address, upgrade when a full History screen exists
-    let urls: Vec<String> = wallet
-        .used()
-        .map(|(_, k)| format!("{base}/address/{}/txs", k.address))
-        .collect();
-    if urls.is_empty() {
+    check_network(network)?;
+    let wallet = scan_wallet(source, words, passphrase, network, now, cache)?;
+    let used: Vec<&Address> = wallet.used().map(|(_, k)| &k.address).collect();
+    if used.is_empty() {
         return Ok(Vec::new());
     }
-    let pages = get_all(esplora, &urls)?;
-    // Second, so a block landing between the calls only raises the tip above every listed tx.
-    let tip = esplora(&format!("{base}/blocks/tip/height"))?;
+    let (pages, tip) = source.history(&used)?;
     let own = wallet.addresses();
     let own: Vec<&str> = own.iter().map(String::as_str).collect();
-    merge_history(&pages, &tip, &own)
+    merge_history(&pages, tip, &own)
 }
 
 fn merge_history(
-    pages: &[String],
-    tip_text: &str,
+    pages: &[Vec<TxView>],
+    tip: u64,
     own: &[&str],
 ) -> Result<Vec<HotTx>, MobileSignerError> {
     let mut seen = HashSet::new();
     let mut all: Vec<HotTx> = Vec::new();
     for page in pages {
-        let page = history_from(page, tip_text, own)?;
+        let page = hot_page(page, tip, own)?;
         all.extend(page.into_iter().filter(|tx| seen.insert(tx.txid.clone())));
     }
     // Esplora lists the mempool first, then the newest block first. A stable sort on
@@ -1035,80 +617,48 @@ fn merge_history(
     Ok(all)
 }
 
-fn history_from(
-    txs_json: &str,
-    tip_text: &str,
-    own: &[&str],
-) -> Result<Vec<HotTx>, MobileSignerError> {
-    let bad = |what: String| MobileSignerError::InvalidPsbtJson(format!("esplora history: {what}"));
-    let tip = tip_height(tip_text).map_err(bad)?;
-    let body: Value = serde_json::from_str(txs_json).map_err(|e| bad(format!("not JSON: {e}")))?;
-    let txs = body.as_array().ok_or_else(|| bad("not an array".into()))?;
-    // A bad transaction fails the list. Skipping it would show a history that is quietly wrong.
-    txs.iter()
+/// One page of history as the wallet saw it, in the source's order.
+fn hot_page(page: &[TxView], tip: u64, own: &[&str]) -> Result<Vec<HotTx>, MobileSignerError> {
+    page.iter()
         .enumerate()
-        .map(|(i, tx)| hot_tx(tx, tip, own).map_err(|e| bad(format!("tx {i}: {e}"))))
+        .map(|(i, tx)| hot_tx(tx, tip, own).map_err(|e| history_error(format!("tx {i}: {e}"))))
         .collect()
 }
 
-fn hot_tx(tx: &Value, tip: u64, own: &[&str]) -> Result<HotTx, String> {
-    let txid = tx["txid"].as_str().ok_or("no string txid")?;
-    let vin = tx["vin"].as_array().ok_or("vin is not an array")?;
-    let vout = tx["vout"].as_array().ok_or("vout is not an array")?;
-    let is_own = |txo: &Value| {
-        txo["scriptpubkey_address"]
-            .as_str()
-            .is_some_and(|a| own.contains(&a))
-    };
+fn hot_tx(tx: &TxView, tip: u64, own: &[&str]) -> Result<HotTx, String> {
+    let is_own = |txo: &Txo| txo.address.as_deref().is_some_and(|a| own.contains(&a));
 
     let mut net = 0i64;
-    for (j, output) in vout.iter().enumerate() {
-        let value = sats(&output["value"])
-            .ok_or_else(|| format!("output {j} has no unsigned integer value"))?;
+    for output in &tx.outputs {
         if is_own(output) {
-            net = net.checked_add(value).ok_or("net sats overflow")?;
+            net = net
+                .checked_add_unsigned(output.value)
+                .ok_or("net sats overflow")?;
         }
     }
-    for (j, input) in vin.iter().enumerate() {
-        let prevout = &input["prevout"];
-        if prevout.is_null() && input["is_coinbase"] == true {
-            continue;
-        }
-        let value = sats(&prevout["value"])
-            .ok_or_else(|| format!("input {j} has no prevout with an unsigned integer value"))?;
+    for prevout in tx.inputs.iter().filter_map(|input| input.prevout.as_ref()) {
         if is_own(prevout) {
-            net = net.checked_sub(value).ok_or("net sats overflow")?;
+            net = net
+                .checked_sub_unsigned(prevout.value)
+                .ok_or("net sats overflow")?;
         }
     }
 
-    let status = &tx["status"];
-    let (confirmations, block_time) = if status["confirmed"]
-        .as_bool()
-        .ok_or("status.confirmed is not a boolean")?
-    {
-        let height = status["block_height"]
-            .as_u64()
-            .ok_or("confirmed without an integer block_height")?;
-        // A lagging backend or a reorg can leave the tip below the height. That still reads 1.
-        let depth = tip.saturating_sub(height).saturating_add(1);
-        let time = status["block_time"]
-            .as_u64()
-            .filter(|t| (1..=LATEST_BLOCK_TIME).contains(t));
-        (u32::try_from(depth).unwrap_or(u32::MAX), time)
-    } else {
-        (0, None)
+    let (confirmations, block_time) = match &tx.confirmed {
+        Some(block) => {
+            // A lagging backend or a reorg can leave the tip below the height. That still reads 1.
+            let depth = tip.saturating_sub(block.height).saturating_add(1);
+            let time = block.time.filter(|t| (1..=LATEST_BLOCK_TIME).contains(t));
+            (u32::try_from(depth).unwrap_or(u32::MAX), time)
+        }
+        None => (0, None),
     };
     Ok(HotTx {
-        txid: txid.to_string(),
+        txid: tx.txid.clone(),
         net_sats: net,
         confirmations,
         block_time,
     })
-}
-
-// i64 because a net is signed, and a value above i64::MAX is no real amount.
-fn sats(value: &Value) -> Option<i64> {
-    value.as_u64().and_then(|n| i64::try_from(n).ok())
 }
 
 /// Who owns an output, whether the transaction creates it or an input spends it.
@@ -1158,14 +708,14 @@ pub fn hot_tx_detail(
     network: KeyNetwork,
     txid: String,
 ) -> Result<Option<HotTxDetail>, MobileSignerError> {
-    detail_of(&http_get, &mnemonic_words, &passphrase, network, &txid)
+    detail_of(&TESTNET4, &mnemonic_words, &passphrase, network, &txid)
 }
 
 /// Refuses a txid that is not 64 hex before any request. Then `/tx/{txid}` and, second so a block landing between the
 /// two only adds a confirmation, the tip. A 404 for that transaction is None and asks nothing more. There is no scan, because
 /// the wallet's own addresses are derived offline.
 fn detail_of(
-    esplora: Esplora,
+    source: &dyn ChainSource,
     words: &[String],
     passphrase: &str,
     network: KeyNetwork,
@@ -1173,14 +723,12 @@ fn detail_of(
 ) -> Result<Option<HotTxDetail>, MobileSignerError> {
     let txid = Txid::from_str(txid)
         .map_err(|e| tx_error(format!("txid is not 64 hex characters: {e}")))?;
-    let base = esplora_base(network)?;
+    check_network(network)?;
     let account = Account::new(words, passphrase, network_of(network))?;
-    let body = match esplora(&format!("{base}/tx/{txid}")) {
-        Err(e) if is_not_found(&e, &txid) => return Ok(None),
-        answer => answer?,
+    let Some((tx, tip)) = source.tx(&txid)? else {
+        return Ok(None);
     };
-    let tip = esplora(&format!("{base}/blocks/tip/height"))?;
-    detail_from(&body, &tip, &txid, &own_addresses(&account)?).map(Some)
+    hot_detail(&tx, tip, &txid, &own_addresses(&account)?).map(Some)
 }
 
 /// Every address a scan of this wallet can reach, with its chain, which is every index below `MAX_SCAN_PER_CHAIN` on
@@ -1197,80 +745,57 @@ fn own_addresses(account: &Account) -> Result<HashMap<String, Chain>, MobileSign
     Ok(own)
 }
 
-/// `tx_json` is the `/tx/{txid}` answer. The row comes from `hot_tx`, so its net and confirmations follow the history's
-/// rule exactly. Strict like every parser here, so another transaction, a part it cannot read, no input or no output, a
-/// coinbase beside other inputs, a side above 21 million BTC, outputs above the inputs, or a weight outside the size to 4 x
-/// the size fails the whole detail.
-fn detail_from(
-    tx_json: &str,
-    tip_text: &str,
+/// The detail of `tx`, read at `tip`. The row comes from `hot_tx`, so its net and confirmations follow the history's
+/// rule exactly. Strict like every reader here, so no input or no output, a sequence that is not a u32, a coinbase beside
+/// other inputs, a side above 21 million BTC, outputs above the inputs, no size or weight, or a weight outside the size to
+/// 4 x the size fails the whole detail.
+fn hot_detail(
+    tx: &TxView,
+    tip: u64,
     txid: &Txid,
     own: &HashMap<String, Chain>,
 ) -> Result<HotTxDetail, MobileSignerError> {
     let bad = |what: String| tx_error(format!("transaction {txid}: {what}"));
-    let tip = tip_height(tip_text).map_err(bad)?;
-    let tx: Value = serde_json::from_str(tx_json).map_err(|e| bad(format!("not JSON: {e}")))?;
-    if tx["txid"] != txid.to_string().as_str() {
-        return Err(bad("the answer is another transaction".into()));
-    }
     let own_keys: Vec<&str> = own.keys().map(String::as_str).collect();
-    let row = hot_tx(&tx, tip, &own_keys).map_err(bad)?;
-    let part = |txo: &Value, value_sats: u64| {
-        let address = txo["scriptpubkey_address"].as_str();
-        HotTxo {
-            address: address.map(str::to_string),
-            value_sats,
-            owner: match address.and_then(|a| own.get(a)) {
-                Some(Chain::External) => TxoOwner::Receive,
-                Some(Chain::Internal) => TxoOwner::Change,
-                None => TxoOwner::Other,
-            },
-        }
+    let row = hot_tx(tx, tip, &own_keys).map_err(bad)?;
+    let part = |address: Option<&str>, value_sats: u64| HotTxo {
+        address: address.map(str::to_string),
+        value_sats,
+        owner: match address.and_then(|a| own.get(a)) {
+            Some(Chain::External) => TxoOwner::Receive,
+            Some(Chain::Internal) => TxoOwner::Change,
+            None => TxoOwner::Other,
+        },
     };
-    let vin = tx["vin"]
-        .as_array()
-        .ok_or_else(|| bad("vin is not an array".into()))?;
-    let vout = tx["vout"]
-        .as_array()
-        .ok_or_else(|| bad("vout is not an array".into()))?;
-    if vin.is_empty() || vout.is_empty() {
+    if tx.inputs.is_empty() || tx.outputs.is_empty() {
         return Err(bad("no input or no output".into()));
     }
 
-    let mut inputs = Vec::with_capacity(vin.len());
+    let mut inputs = Vec::with_capacity(tx.inputs.len());
     let mut coinbase = false;
     let mut signals_rbf = false;
-    for (j, input) in vin.iter().enumerate() {
-        let sequence = input["sequence"]
-            .as_u64()
+    for (j, input) in tx.inputs.iter().enumerate() {
+        let sequence = input
+            .sequence
             .and_then(|s| u32::try_from(s).ok())
             .ok_or_else(|| bad(format!("input {j} has no u32 sequence")))?;
         signals_rbf |= sequence < 0xffff_fffe;
-        let prevout = &input["prevout"];
-        if prevout.is_null() && input["is_coinbase"] == true {
+        let Some(prevout) = &input.prevout else {
             // A coinbase makes new coins, so it is its transaction's only input.
-            if vin.len() > 1 {
+            if tx.inputs.len() > 1 {
                 return Err(bad(format!("input {j} is a coinbase beside other inputs")));
             }
             coinbase = true;
-            inputs.push(part(prevout, 0));
+            inputs.push(part(None, 0));
             continue;
-        }
-        let value = prevout["value"]
-            .as_u64()
-            .ok_or_else(|| bad(format!("input {j} has no prevout value")))?;
-        inputs.push(part(prevout, value));
+        };
+        inputs.push(part(prevout.address.as_deref(), prevout.value));
     }
-    let outputs = vout
+    let outputs: Vec<HotTxo> = tx
+        .outputs
         .iter()
-        .enumerate()
-        .map(|(j, output)| {
-            let value = output["value"]
-                .as_u64()
-                .ok_or_else(|| bad(format!("output {j} has no value")))?;
-            Ok(part(output, value))
-        })
-        .collect::<Result<Vec<_>, MobileSignerError>>()?;
+        .map(|output| part(output.address.as_deref(), output.value))
+        .collect();
 
     // No amount above 21 million BTC is real, and a side that adds up to at most that holds no value above it.
     let sum = |txos: &[HotTxo], side: &str| {
@@ -1287,13 +812,12 @@ fn detail_from(
             .checked_sub(paid_out)
             .ok_or_else(|| bad(format!("outputs {paid_out} are more than inputs {paid_in}")))?
     };
-    let positive = |field: &str| {
-        tx[field]
-            .as_u64()
+    let positive = |field: &str, value: Option<u64>| {
+        value
             .filter(|n| *n > 0)
             .ok_or_else(|| bad(format!("no positive integer {field}")))
     };
-    let (size_bytes, weight) = (positive("size")?, positive("weight")?);
+    let (size_bytes, weight) = (positive("size", tx.size)?, positive("weight", tx.weight)?);
     // Weight is three times the size without witnesses plus the whole size.
     if !(size_bytes..=size_bytes.saturating_mul(4)).contains(&weight) {
         return Err(bad(format!(
@@ -1301,9 +825,7 @@ fn detail_from(
         )));
     }
     Ok(HotTxDetail {
-        block_height: tx["status"]["block_height"]
-            .as_u64()
-            .filter(|_| row.confirmations > 0),
+        block_height: tx.confirmed.as_ref().map(|block| block.height),
         tx: row,
         inputs,
         outputs,
@@ -1312,23 +834,6 @@ fn detail_from(
         vsize: weight.div_ceil(4),
         signals_rbf,
     })
-}
-
-/// `classify`'s text for an HTTP 404 of `/tx/{txid}` on any host (ureq 2.12.1 prints "{url}: status code 404", error.rs:214,
-/// then maybe " (redirected from ...)"). The status is gone past the `Esplora` boundary, so a test pins this to `classify`.
-/// A probe's 404 that `pick_host` quotes in its own error names `/block-height/0`, so it is a failure.
-fn is_not_found(error: &MobileSignerError, txid: &Txid) -> bool {
-    matches!(error, MobileSignerError::InvalidPsbtJson(t) if t.contains(&format!("/tx/{txid}: status code 404")))
-}
-
-fn tip_height(text: &str) -> Result<u64, String> {
-    text.trim()
-        .parse()
-        .map_err(|e| format!("tip height is not an integer: {e}"))
-}
-
-fn tx_error(what: String) -> MobileSignerError {
-    MobileSignerError::InvalidPsbtJson(format!("esplora tx: {what}"))
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -1378,7 +883,7 @@ pub fn hot_prepare_send_at_rate(
     fee_rate_sat_vb: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
     let (signed, fee_sats) = signed_payment(
-        &http_get,
+        &TESTNET4,
         &mnemonic_words,
         &passphrase,
         network,
@@ -1417,7 +922,7 @@ pub fn hot_prepare_send_all(
     fee_rate_sat_vb: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
     let (signed, fee_sats) = signed_send_all(
-        &http_get,
+        &TESTNET4,
         &mnemonic_words,
         &passphrase,
         network,
@@ -1442,77 +947,30 @@ pub fn hot_broadcast(
     hex: String,
     txid: String,
 ) -> Result<HotSendResult, MobileSignerError> {
-    esplora_base(network)?;
-    let post = |base: &str, hex: &str| {
-        AGENT
-            .post(&format!("{base}/tx"))
-            .set("Content-Type", "text/plain")
-            .send_string(hex)
-    };
-    // Not /tx/{txid}/status: Esplora answers that one 200 for a txid it never saw (blockstream.info, 2026-11-02).
-    let lookup = |base: &str, txid: &str| AGENT.get(&format!("{base}/tx/{txid}")).call();
-    let pause = || std::thread::sleep(LOOKUP_PAUSE);
-    broadcast_via(
-        selected_base(),
-        &post,
-        &lookup,
-        &pause,
-        &hex,
-        &txid,
-        &SCAN_CACHE,
-    )
+    check_network(network)?;
+    broadcast_via(&TESTNET4, &hex, &txid, &SCAN_CACHE)
 }
 
-/// `broadcast_matching` on `host`. When `host` is the error from `pick_host`, nothing is posted.
-/// Once the payment is out, or may be, every cached scan is forgotten (the call does not know
-/// which wallet paid), so the next refresh scans the whole gap limit. A refusal posted nothing.
+/// `source`'s broadcast. Once the payment is out, or may be, every cached scan is forgotten (the call
+/// does not know which wallet paid), so the next refresh scans the whole gap limit. A refusal posted
+/// nothing.
 fn broadcast_via(
-    host: Result<&str, MobileSignerError>,
-    post: &dyn Fn(&str, &str) -> Answer,
-    lookup: &dyn Fn(&str, &str) -> Answer,
-    pause: &dyn Fn(),
+    source: &dyn ChainSource,
     hex: &str,
     txid: &str,
     scans: &ScanCache,
 ) -> Result<HotSendResult, MobileSignerError> {
-    let base = host?;
-    let result = broadcast_matching(
-        &|hex| post(base, hex),
-        &|txid| lookup(base, txid),
-        pause,
-        hex,
-        txid,
-    );
+    let result = source.broadcast(hex, txid);
     if matches!(result, Ok(_) | Err(MobileSignerError::BroadcastUnknown(_))) {
         forget_scans(scans);
     }
     Ok(HotSendResult { txid: result? })
 }
 
-/// `broadcast_signed`, after checking that `hex` is a transaction whose id is `txid`.
-fn broadcast_matching(
-    post: &dyn Fn(&str) -> Answer,
-    lookup: &dyn Fn(&str) -> Answer,
-    pause: &dyn Fn(),
-    hex: &str,
-    txid: &str,
-) -> Result<String, MobileSignerError> {
-    let tx: Transaction = bitcoin::consensus::encode::deserialize_hex(hex).map_err(|e| {
-        MobileSignerError::InvalidPsbtJson(format!("broadcast: not a transaction: {e}"))
-    })?;
-    let computed = tx.compute_txid().to_string();
-    if computed != txid {
-        return Err(MobileSignerError::InvalidPsbtJson(format!(
-            "broadcast: txid {txid} does not match the transaction {computed}"
-        )));
-    }
-    broadcast_signed(post, lookup, pause, hex, txid)
-}
-
 /// Smallest output the network relays. The same floor on the amount and on change.
 const DUST: u64 = 546;
 const MIN_FEE_RATE: u64 = 1;
-const MAX_FEE_RATE: u64 = 2_000;
+pub(crate) const MAX_FEE_RATE: u64 = 2_000;
 
 /// Virtual size, rounded up, of a transaction spending `inputs` P2WPKH coins to outputs whose
 /// scripts are `output_scripts` bytes long: 10.5 vB overhead (version, locktime, counts, segwit
@@ -1569,30 +1027,19 @@ fn coins_overflow() -> MobileSignerError {
 type Coins<'w> = Vec<(Utxo, &'w OwnKey)>;
 
 fn spendable_coins<'w>(
-    esplora: Esplora,
-    base: &str,
+    source: &dyn ChainSource,
     wallet: &'w Wallet,
 ) -> Result<(Coins<'w>, u64), MobileSignerError> {
     let owners: Vec<(Chain, &OwnKey)> = wallet.funded().collect();
-    let urls: Vec<String> = owners
-        .iter()
-        .map(|(_, k)| format!("{base}/address/{}/utxo", k.address))
-        .collect();
-    let lists = get_all(esplora, &urls)?;
-    let mut seen = HashSet::new();
+    let addresses: Vec<&Address> = owners.iter().map(|(_, k)| &k.address).collect();
+    let lists = source.utxos(&addresses)?;
     let mut listed: Vec<(Utxo, &OwnKey, Chain)> = Vec::new();
-    for ((chain, owner), list) in owners.iter().zip(&lists) {
-        for utxo in parse_utxos(list)? {
-            if !seen.insert((utxo.txid, utxo.vout)) {
-                return Err(MobileSignerError::InvalidPsbtJson(format!(
-                    "esplora utxo: {}:{} is listed twice",
-                    utxo.txid, utxo.vout
-                )));
-            }
+    for ((chain, owner), list) in owners.iter().zip(lists) {
+        for utxo in list {
             listed.push((utxo, owner, *chain));
         }
     }
-    let own_change = own_change_transactions(esplora, base, wallet, &listed)?;
+    let own_change = own_change_transactions(source, wallet, &listed)?;
     let spendable: Coins = listed
         .into_iter()
         .filter(|(utxo, _, chain)| {
@@ -1611,8 +1058,7 @@ fn spendable_coins<'w>(
 /// wallet signed: each spends a coin of one of the wallet's own addresses. One lookup per
 /// transaction, none when there is no such coin.
 fn own_change_transactions(
-    esplora: Esplora,
-    base: &str,
+    source: &dyn ChainSource,
     wallet: &Wallet,
     listed: &[(Utxo, &OwnKey, Chain)],
 ) -> Result<HashSet<Txid>, MobileSignerError> {
@@ -1625,38 +1071,16 @@ fn own_change_transactions(
     if pending.is_empty() {
         return Ok(HashSet::new());
     }
-    let urls: Vec<String> = pending.iter().map(|t| format!("{base}/tx/{t}")).collect();
-    let answers = get_all(esplora, &urls)?;
+    let spends = source.spends_from(&pending)?;
     let own = wallet.addresses();
     let own: Vec<&str> = own.iter().map(String::as_str).collect();
     let mut signed = HashSet::new();
-    for (txid, body) in pending.iter().zip(&answers) {
-        if spends_own(body, txid, &own)? {
+    for (txid, from) in pending.iter().zip(&spends) {
+        if from.iter().any(|a| own.contains(&a.as_str())) {
             signed.insert(*txid);
         }
     }
     Ok(signed)
-}
-
-/// Whether the `/tx/{txid}` answer `json` spends an output of one of `own`. An answer that is not
-/// that transaction, or whose inputs cannot be read, is an error: a guess either way would spend
-/// a stranger's coin or hide the wallet's own.
-fn spends_own(json: &str, txid: &Txid, own: &[&str]) -> Result<bool, MobileSignerError> {
-    let bad = |what: &str| {
-        MobileSignerError::InvalidPsbtJson(format!("esplora utxo: transaction {txid}: {what}"))
-    };
-    let tx: Value = serde_json::from_str(json).map_err(|e| bad(&format!("not JSON: {e}")))?;
-    if tx["txid"] != txid.to_string().as_str() {
-        return Err(bad("the answer is another transaction"));
-    }
-    let vin = tx["vin"]
-        .as_array()
-        .ok_or_else(|| bad("vin is not an array"))?;
-    Ok(vin.iter().any(|input| {
-        input["prevout"]["scriptpubkey_address"]
-            .as_str()
-            .is_some_and(|a| own.contains(&a))
-    }))
 }
 
 /// `selected` spent to `outputs`, each input signed with its coin's own key.
@@ -1711,7 +1135,7 @@ fn signed(
 /// error, never a changed payment. The used-address set may come from `scan_wallet`'s cache.
 #[allow(clippy::too_many_arguments)]
 fn signed_payment(
-    esplora: Esplora,
+    source: &dyn ChainSource,
     words: &[String],
     passphrase: &str,
     network: KeyNetwork,
@@ -1749,9 +1173,9 @@ fn signed_payment(
     let mut fee_sats = fee_for(1, true);
     fee_checked(fee_sats)?;
 
-    let base = esplora_base(network)?;
-    let wallet = scan_wallet(esplora, words, passphrase, network, now, cache)?;
-    let (mut spendable, have) = spendable_coins(esplora, base, &wallet)?;
+    check_network(network)?;
+    let wallet = scan_wallet(source, words, passphrase, network, now, cache)?;
+    let (mut spendable, have) = spendable_coins(source, &wallet)?;
     // Largest first, ties by outpoint: which coins pay never depends on the host's listing order,
     // and dust is touched only once the big coins fall short.
     spendable.sort_by(|(a, _), (b, _)| {
@@ -1816,7 +1240,7 @@ fn signed_payment(
 /// never a changed payment.
 #[allow(clippy::too_many_arguments)]
 fn signed_send_all(
-    esplora: Esplora,
+    source: &dyn ChainSource,
     words: &[String],
     passphrase: &str,
     network: KeyNetwork,
@@ -1828,9 +1252,9 @@ fn signed_send_all(
     let refuse = |what: String| Err(MobileSignerError::InvalidPsbtJson(what));
     check_rate(rate_sat_vb)?;
     let dest = destination_on(destination, network)?;
-    let base = esplora_base(network)?;
-    let wallet = scan_wallet(esplora, words, passphrase, network, now, cache)?;
-    let (spendable, have) = spendable_coins(esplora, base, &wallet)?;
+    check_network(network)?;
+    let wallet = scan_wallet(source, words, passphrase, network, now, cache)?;
+    let (spendable, have) = spendable_coins(source, &wallet)?;
     // One input and one output is the smallest this transaction can be, so a wallet with nothing
     // to spend is short by that fee and the dust limit.
     let fee_sats = rate_sat_vb * vsize(spendable.len().max(1), &[dest.script_pubkey().len()]);
@@ -1856,107 +1280,6 @@ fn signed_send_all(
     Ok((signed(&selected, vec![output])?, fee_sats))
 }
 
-type Answer = Result<ureq::Response, ureq::Error>;
-
-/// Posts the signed transaction once and returns `txid`, the id computed from it here, when the
-/// explorer shows it took it. A txid the server sends back is never trusted.
-///
-/// A 200 naming `txid`, or a 4xx whose reason says the node already holds it, means the payment is
-/// out. Any other 4xx is a refusal, and a retry after a refusal is safe. Anything else (no answer, a
-/// 5xx, a 200 naming something else, a body that cannot be read) leaves it unclear: it looks `txid`
-/// up to `LOOKUPS` times with `pause` between asks and never posts again. Still not found is
-/// `BroadcastUnknown`, because a retry could pay twice.
-fn broadcast_signed(
-    post: &dyn Fn(&str) -> Answer,
-    lookup: &dyn Fn(&str) -> Answer,
-    pause: &dyn Fn(),
-    hex: &str,
-    txid: &str,
-) -> Result<String, MobileSignerError> {
-    match post(hex) {
-        Ok(answer) if answer.status() == 200 => {
-            if answer.into_string().is_ok_and(|body| body.trim() == txid) {
-                return Ok(txid.to_string());
-            }
-        }
-        Err(refusal @ ureq::Error::Status(400..=499, _)) => {
-            let error = format!("esplora post: {refusal}");
-            // A reason that cannot be read may be the node saying it already holds the transaction.
-            if let Some(Ok(reason)) = refusal.into_response().map(ureq::Response::into_string) {
-                let reason = reason.to_lowercase();
-                if ALREADY_HELD.iter().any(|held| reason.contains(held)) {
-                    return Ok(txid.to_string());
-                }
-                return Err(MobileSignerError::InvalidPsbtJson(error));
-            }
-        }
-        _ => {}
-    }
-    for ask in 0..LOOKUPS {
-        if ask > 0 {
-            pause();
-        }
-        if lookup(txid).is_ok_and(|answer| shows(answer, txid)) {
-            return Ok(txid.to_string());
-        }
-    }
-    Err(MobileSignerError::BroadcastUnknown(txid.to_string()))
-}
-
-// Only the transaction itself counts as found: a Wi-Fi sign-in page answers 200 to any URL.
-fn shows(answer: ureq::Response, txid: &str) -> bool {
-    answer.status() == 200
-        && answer
-            .into_string()
-            .ok()
-            .and_then(|body| serde_json::from_str::<Value>(&body).ok())
-            .is_some_and(|tx| tx["txid"] == txid)
-}
-
-struct Utxo {
-    txid: Txid,
-    vout: u32,
-    value: u64,
-    confirmed: bool,
-}
-
-// A bad element fails the whole list. Skipping it would hide funds behind "insufficient funds".
-// `status.confirmed` is read strictly: a missing status would otherwise spend an incoming coin that
-// may never confirm.
-fn parse_utxos(json: &str) -> Result<Vec<Utxo>, MobileSignerError> {
-    let bad = |what: String| MobileSignerError::InvalidPsbtJson(format!("esplora utxo: {what}"));
-    let body: serde_json::Value =
-        serde_json::from_str(json).map_err(|e| bad(format!("not JSON: {e}")))?;
-    let items = body.as_array().ok_or_else(|| bad("not an array".into()))?;
-    items
-        .iter()
-        .enumerate()
-        .map(|(i, item)| {
-            let txid = item["txid"]
-                .as_str()
-                .ok_or_else(|| bad(format!("item {i} has no string txid")))?;
-            let txid = Txid::from_str(txid)
-                .map_err(|e| bad(format!("item {i} txid is not 64 hex characters: {e}")))?;
-            let vout = item["vout"]
-                .as_u64()
-                .and_then(|v| u32::try_from(v).ok())
-                .ok_or_else(|| bad(format!("item {i} has no u32 vout")))?;
-            let value = item["value"]
-                .as_u64()
-                .ok_or_else(|| bad(format!("item {i} has no unsigned integer value")))?;
-            let confirmed = item["status"]["confirmed"]
-                .as_bool()
-                .ok_or_else(|| bad(format!("item {i} has no boolean status.confirmed")))?;
-            Ok(Utxo {
-                txid,
-                vout,
-                value,
-                confirmed,
-            })
-        })
-        .collect()
-}
-
 /// The fee tiers the Send screen offers, in sat/vB. `slow_sat_vb` aims at confirmation in about an
 /// hour, `normal_sat_vb` in about half an hour and `fast_sat_vb` in the next block or two. `live` is
 /// true when they come from the explorer's view of the mempool and false when they are the fixed
@@ -1979,9 +1302,6 @@ const DEFAULT_FEE_TIERS: FeeTiers = FeeTiers {
 const FEE_TIERS_TTL: Duration = Duration::from_secs(5 * 60);
 /// How long the fallback answers from memory, so a host that comes back is noticed soon.
 const FEE_FALLBACK_TTL: Duration = Duration::from_secs(30);
-/// Confirmation targets in blocks for slow, normal and fast. mempool's `hourFee`, `halfHourFee` and
-/// `fastestFee` are read as these same targets, so both answer formats go through one rule.
-const FEE_TARGETS: [u32; 3] = [6, 3, 1];
 
 type FeeCache = Mutex<Option<(FeeTiers, Instant)>>;
 static FEE_CACHE: FeeCache = Mutex::new(None);
@@ -1991,18 +1311,18 @@ static FEE_CACHE: FeeCache = Mutex::new(None);
 /// answer is unusable the fixed tiers 4, 8 and 15 come back with `live` false.
 #[uniffi::export]
 pub fn hot_fee_tiers(network: KeyNetwork) -> FeeTiers {
-    fee_tiers_from(&http_get, network, Instant::now(), &FEE_CACHE)
+    fee_tiers_from(&TESTNET4, network, Instant::now(), &FEE_CACHE)
 }
 
 fn fee_tiers_from(
-    esplora: Esplora,
+    source: &dyn ChainSource,
     network: KeyNetwork,
     now: Instant,
     cache: &FeeCache,
 ) -> FeeTiers {
-    let Ok(base) = esplora_base(network) else {
+    if check_network(network).is_err() {
         return DEFAULT_FEE_TIERS;
-    };
+    }
     // The lock is held through the fetch so callers that queue on it get the same answer, not a
     // fetch each.
     let mut cached = cache
@@ -2018,74 +1338,9 @@ fn fee_tiers_from(
             return tiers.clone();
         }
     }
-    let tiers = fetch_fee_tiers(esplora, base).unwrap_or(DEFAULT_FEE_TIERS);
+    let tiers = source.fee_tiers().unwrap_or(DEFAULT_FEE_TIERS);
     *cached = Some((tiers.clone(), now));
     tiers
-}
-
-/// mempool's `/v1/fees/recommended` first, since the own node is one; a host without it
-/// (blockstream.info answers 404) is asked Esplora's `/fee-estimates` instead. `None` when neither
-/// gives a usable rate.
-fn fetch_fee_tiers(esplora: Esplora, base: &str) -> Option<FeeTiers> {
-    let get = |path: &str, estimates: fn(&Value) -> Vec<(u32, &Value)>| {
-        let body = esplora(&format!("{base}{path}")).ok()?;
-        let json: Value = serde_json::from_str(&body).ok()?;
-        tiers_from(&estimates(&json))
-    };
-    get("/v1/fees/recommended", recommended_estimates)
-        .or_else(|| get("/fee-estimates", esplora_estimates))
-}
-
-/// `hourFee`, `halfHourFee` and `fastestFee` as the targets 6, 3 and 1.
-fn recommended_estimates(json: &Value) -> Vec<(u32, &Value)> {
-    ["hourFee", "halfHourFee", "fastestFee"]
-        .into_iter()
-        .zip(FEE_TARGETS)
-        .map(|(field, target)| (target, &json[field]))
-        .collect()
-}
-
-/// Esplora's map from confirmation target in blocks to sat/vB, as `{"1": 12.3, "2": 9.0}`.
-fn esplora_estimates(json: &Value) -> Vec<(u32, &Value)> {
-    json.as_object()
-        .into_iter()
-        .flatten()
-        .filter_map(|(target, rate)| Some((target.parse().ok()?, rate)))
-        .collect()
-}
-
-/// A rate as the Send screen can use it: a finite positive number rounded up to whole sat/vB and
-/// capped at `MAX_FEE_RATE`, above which `hot_prepare_send_at_rate` refuses the payment. Anything else
-/// (zero, negative, NaN, a string, a missing field) is no estimate.
-fn whole_sat_vb(rate: &Value) -> Option<u64> {
-    let rate = rate.as_f64().filter(|r| r.is_finite() && *r > 0.0)?;
-    Some((rate.ceil() as u64).min(MAX_FEE_RATE))
-}
-
-/// Slow, normal and fast from whatever targets a host gave. Each tier takes the rate at the nearest
-/// present target, the faster one on a tie, so a sparse map still gives a fee that confirms in the
-/// tier's time. The lower tiers are then raised to keep slow <= normal <= fast: a host's estimates
-/// are not always in that order and the screen promises it.
-fn tiers_from(estimates: &[(u32, &Value)]) -> Option<FeeTiers> {
-    let usable: Vec<(u32, u64)> = estimates
-        .iter()
-        .filter_map(|(target, rate)| Some((*target, whole_sat_vb(rate)?)))
-        .collect();
-    let nearest = |wanted: u32| {
-        usable
-            .iter()
-            .min_by_key(|(target, _)| (target.abs_diff(wanted), *target))
-            .map(|(_, rate)| *rate)
-    };
-    let [slow, normal, fast] = FEE_TARGETS.map(nearest);
-    let (slow, normal, fast) = (slow?, normal?, fast?);
-    let normal = normal.max(slow);
-    Some(FeeTiers {
-        slow_sat_vb: slow,
-        normal_sat_vb: normal,
-        fast_sat_vb: fast.max(normal),
-        live: true,
-    })
 }
 
 #[cfg(test)]
@@ -2094,13 +1349,106 @@ mod tests {
     use std::collections::{HashMap, HashSet, VecDeque};
     use std::sync::Mutex;
 
+    use serde_json::Value;
+
     use super::*;
+    use crate::chain::*;
 
     fn abandon_about() -> Vec<String> {
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
             .split_whitespace()
             .map(str::to_string)
             .collect()
+    }
+
+    /// A transport that answers every GET with `.0` and posts nothing.
+    struct Reads<'a>(&'a (dyn Fn(&str) -> Result<String, MobileSignerError> + Sync));
+
+    impl Transport for Reads<'_> {
+        fn get(&self, url: &str) -> Result<String, MobileSignerError> {
+            (self.0)(url)
+        }
+
+        fn broadcast(&self, _: &str, _: &str) -> Result<String, MobileSignerError> {
+            unreachable!("a test that only reads posts nothing")
+        }
+    }
+
+    /// A transport that posts with `post` to `host` and looks up with `lookup`, pausing for nothing,
+    /// and reads nothing.
+    struct Posts<'a> {
+        host: Result<&'static str, &'static str>,
+        post: &'a (dyn Fn(&str, &str) -> Answer + Sync),
+        lookup: &'a (dyn Fn(&str, &str) -> Answer + Sync),
+    }
+
+    impl Transport for Posts<'_> {
+        fn get(&self, url: &str) -> Result<String, MobileSignerError> {
+            unreachable!("a test that only posts asked for {url}")
+        }
+
+        fn broadcast(&self, hex: &str, txid: &str) -> Result<String, MobileSignerError> {
+            let host = self
+                .host
+                .map_err(|why| MobileSignerError::InvalidPsbtJson(why.into()));
+            broadcast_on(host, self.post, self.lookup, &|| {}, hex, txid)
+        }
+    }
+
+    /// The fixtures' wallet address, for a URL that the scripted answers below ignore.
+    fn wallet_address() -> Address {
+        Address::from_str(WALLET).unwrap().assume_checked()
+    }
+
+    /// `json` read by `EsploraSource` as one address's summary.
+    fn parse_address_stats(json: &str) -> Result<Summary, MobileSignerError> {
+        EsploraSource(&Reads(&|_| Ok(json.to_string())))
+            .summaries(&[&wallet_address()])
+            .map(|mut found| found.remove(0))
+    }
+
+    /// `json` read by `EsploraSource` as one address's coin list.
+    fn parse_utxos(json: &str) -> Result<Vec<Utxo>, MobileSignerError> {
+        EsploraSource(&Reads(&|_| Ok(json.to_string())))
+            .utxos(&[&wallet_address()])
+            .map(|mut lists| lists.remove(0))
+    }
+
+    /// The page `txs` of one address and the tip read by `EsploraSource`, then the page as the wallet
+    /// reads it.
+    fn history_from(txs: &str, tip: &str, own: &[&str]) -> Result<Vec<HotTx>, MobileSignerError> {
+        let answer = |url: &str| {
+            let body = if url.ends_with("/blocks/tip/height") {
+                tip
+            } else {
+                txs
+            };
+            Ok(body.to_string())
+        };
+        let (pages, height) = EsploraSource(&Reads(&answer)).history(&[&wallet_address()])?;
+        hot_page(&pages[0], height, own)
+    }
+
+    /// The `/tx/{txid}` answer `json` and the tip read by `EsploraSource`, then detailed as the wallet
+    /// details it.
+    fn detail_from(
+        json: &str,
+        tip: &str,
+        txid: &Txid,
+        own: &HashMap<String, Chain>,
+    ) -> Result<HotTxDetail, MobileSignerError> {
+        let answer = |url: &str| {
+            let body = if url.ends_with("/blocks/tip/height") {
+                tip
+            } else {
+                json
+            };
+            Ok(body.to_string())
+        };
+        let (tx, height) = EsploraSource(&Reads(&answer))
+            .tx(txid)?
+            .expect("a scripted answer is never a 404");
+        hot_detail(&tx, height, txid, own)
     }
 
     // Every address here was derived outside this crate (stdlib PBKDF2 + BIP-32 + bech32) at
@@ -3119,7 +2467,7 @@ mod tests {
             passphrase: &str,
         ) -> Result<HotWalletSnapshot, MobileSignerError> {
             snapshot_from(
-                &|url| self.get(url),
+                &EsploraSource(&Reads(&|url| self.get(url))),
                 words,
                 passphrase,
                 KeyNetwork::Test,
@@ -3130,7 +2478,7 @@ mod tests {
 
         fn history(&self) -> Result<Vec<HotTx>, MobileSignerError> {
             history_of(
-                &|url| self.get(url),
+                &EsploraSource(&Reads(&|url| self.get(url))),
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
@@ -3148,7 +2496,7 @@ mod tests {
         ) -> Result<(Transaction, u64), MobileSignerError> {
             let words = abandon_about();
             signed_payment(
-                &|url| self.get(url),
+                &EsploraSource(&Reads(&|url| self.get(url))),
                 &words,
                 "",
                 KeyNetwork::Test,
@@ -3172,7 +2520,7 @@ mod tests {
         ) -> Result<(Transaction, u64), MobileSignerError> {
             let words = abandon_about();
             signed_send_all(
-                &|url| self.get(url),
+                &EsploraSource(&Reads(&|url| self.get(url))),
                 &words,
                 "",
                 KeyNetwork::Test,
@@ -3197,10 +2545,11 @@ mod tests {
         ) -> Result<HotSendResult, MobileSignerError> {
             let post = Mutex::new(Some(post));
             broadcast_via(
-                Ok(ESPLORA_TESTNET4),
-                &|_, _| post.lock().unwrap().take().expect("one post"),
-                &|_, _| not_found(),
-                &|| {},
+                &EsploraSource(&Posts {
+                    host: Ok(ESPLORA_TESTNET4),
+                    post: &|_, _| post.lock().unwrap().take().expect("one post"),
+                    lookup: &|_, _| not_found(),
+                }),
                 &ready.hex,
                 &ready.txid,
                 &self.cache,
@@ -3771,7 +3120,7 @@ mod tests {
             Ok(used_stats(0))
         };
         let result = snapshot_from(
-            &liar,
+            &EsploraSource(&Reads(&liar)),
             &abandon_about(),
             "",
             KeyNetwork::Test,
@@ -4465,11 +3814,11 @@ mod tests {
                     },
                     &|_| {},
                     &hosts,
-                    &fake.cache,
+                    &|| forget_scans(&fake.cache),
                 )
             };
             let snapshot = match snapshot_from(
-                &esplora,
+                &EsploraSource(&Reads(&esplora)),
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
@@ -4594,7 +3943,7 @@ mod tests {
                     .pop_front()
                     .expect("one attempt too many")
             };
-            let _ = get_forgetting(&next, &|_| {}, &hosts, &fake.cache);
+            let _ = get_forgetting(&next, &|_| {}, &hosts, &|| forget_scans(&fake.cache));
             assert!(
                 script.lock().unwrap().is_empty(),
                 "{case}: every attempt was asked"
@@ -4612,11 +3961,11 @@ mod tests {
     const SPECS: [HostSpec; 2] = [
         HostSpec {
             base: HOSTS[0],
-            probe_timeout: PROBE_TIMEOUT,
+            operator: Operator::Blockstream,
         },
         HostSpec {
             base: HOSTS[1],
-            probe_timeout: PROBE_TIMEOUT,
+            operator: Operator::MempoolSpace,
         },
     ];
     const TESTNET3_GENESIS: &str =
@@ -4704,11 +4053,12 @@ mod tests {
 
     #[test]
     fn a_probe_of_a_host_that_trickles_its_genesis_hash_fails_inside_that_hosts_probe_deadline() {
-        for probe_timeout in [OWN_NODE_PROBE_TIMEOUT, PROBE_TIMEOUT] {
+        for operator in [Operator::Mebit, Operator::Blockstream] {
             let host = HostSpec {
                 base: Box::leak(dripping_host(Duration::from_secs(3), 10).into_boxed_str()),
-                probe_timeout,
+                operator,
             };
+            let probe_timeout = host.probe_timeout();
             let cache = Mutex::new(None);
             let start = Instant::now();
             let result = pick_host(&[host], &probe_genesis, start, &cache);
@@ -4727,11 +4077,14 @@ mod tests {
     {
         let asked = Mutex::new(Vec::new());
         let probe = |host: &HostSpec| {
-            asked.lock().unwrap().push((host.base, host.probe_timeout));
+            asked
+                .lock()
+                .unwrap()
+                .push((host.base, host.probe_timeout()));
             if host.base.starts_with("http://") {
                 Err(MobileSignerError::InvalidPsbtJson(format!(
                     "timed out after {:?}",
-                    host.probe_timeout
+                    host.probe_timeout()
                 )))
             } else {
                 Ok(TESTNET4_GENESIS.to_string())
@@ -4765,7 +4118,7 @@ mod tests {
         let start = Instant::now();
         let got = classify(agent.get(&format!("{host}/block-height/0")).call());
         let took = start.elapsed();
-        forget_host_if_unreachable(&got, &cache, &fake.cache);
+        forget_host_if_unreachable(&got, &cache, &|| forget_scans(&fake.cache));
         assert!(matches!(got, Err(GetError::TimedOut(_))));
         assert!(took < whole + Duration::from_secs(3), "{took:?}");
         assert_eq!(chosen(&cache), None);
@@ -4823,7 +4176,7 @@ mod tests {
             fake.get(url)
         };
         let stale = snapshot_from(
-            &get,
+            &EsploraSource(&Reads(&get)),
             &abandon_about(),
             "",
             KeyNetwork::Test,
@@ -4955,23 +4308,31 @@ mod tests {
         let scans_kept = |fake: &Fake| fake.cache.lock().unwrap().entries.len() == 1;
 
         let (cache, fake) = (cached(), scanned());
-        forget_host_if_unreachable(&classify(no_answer()), &cache, &fake.cache);
+        forget_host_if_unreachable(&classify(no_answer()), &cache, &|| {
+            forget_scans(&fake.cache)
+        });
         assert_eq!(chosen(&cache), None, "a timeout");
         assert!(!scans_kept(&fake), "a timeout");
 
         let (cache, fake) = (cached(), scanned());
         let refused = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "no");
-        forget_host_if_unreachable(&classify(Err(refused.into())), &cache, &fake.cache);
+        forget_host_if_unreachable(&classify(Err(refused.into())), &cache, &|| {
+            forget_scans(&fake.cache)
+        });
         assert_eq!(chosen(&cache), None, "a refused connection");
         assert!(!scans_kept(&fake), "a refused connection");
 
         let (cache, fake) = (cached(), scanned());
-        forget_host_if_unreachable(&classify(answer(500, "")), &cache, &fake.cache);
+        forget_host_if_unreachable(&classify(answer(500, "")), &cache, &|| {
+            forget_scans(&fake.cache)
+        });
         assert_eq!(chosen(&cache), Some(0), "HTTP 500");
         assert!(scans_kept(&fake), "HTTP 500");
 
         let (cache, fake) = (cached(), scanned());
-        forget_host_if_unreachable(&classify(answer(404, "")), &cache, &fake.cache);
+        forget_host_if_unreachable(&classify(answer(404, "")), &cache, &|| {
+            forget_scans(&fake.cache)
+        });
         assert_eq!(chosen(&cache), Some(0), "HTTP 404");
         assert!(scans_kept(&fake), "HTTP 404");
 
@@ -4979,13 +4340,15 @@ mod tests {
         forget_host_if_unreachable(
             &classify(answer(200, "<html>Sign in</html>")),
             &cache,
-            &fake.cache,
+            &|| forget_scans(&fake.cache),
         );
         assert_eq!(chosen(&cache), Some(0), "a 200 with a bad body");
         assert!(scans_kept(&fake), "a 200 with a bad body");
 
         let (cache, fake) = (cached(), scanned());
-        forget_host_if_unreachable(&classify(cut_short(200)), &cache, &fake.cache);
+        forget_host_if_unreachable(&classify(cut_short(200)), &cache, &|| {
+            forget_scans(&fake.cache)
+        });
         assert_eq!(chosen(&cache), None, "a body cut short");
         assert!(!scans_kept(&fake), "a body cut short");
     }
@@ -4997,7 +4360,7 @@ mod tests {
             (HOSTS[1], Ok(TESTNET4_GENESIS)),
         ]);
         let cache = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
-        forget_host_if_unreachable(&classify(no_answer()), &cache, &ScanCache::default());
+        forget_host_if_unreachable(&classify(no_answer()), &cache, &|| {});
         assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1);
         assert_eq!(probe.asked(), HOSTS);
     }
@@ -5043,8 +4406,17 @@ mod tests {
         );
         let hosts = hosts_with(Some(OWN_NODE_FIXTURE));
         assert_eq!(hosts[0].base, OWN_NODE_FIXTURE);
-        let seconds: Vec<u64> = hosts.iter().map(|h| h.probe_timeout.as_secs()).collect();
+        let seconds: Vec<u64> = hosts.iter().map(|h| h.probe_timeout().as_secs()).collect();
         assert_eq!(seconds, [3, 8, 8]);
+        let operators: Vec<Operator> = hosts.iter().map(|h| h.operator).collect();
+        assert_eq!(
+            operators,
+            [
+                Operator::Mebit,
+                Operator::Blockstream,
+                Operator::MempoolSpace
+            ]
+        );
         let distinct: HashSet<_> = hosts.iter().map(|h| h.base).collect();
         assert_eq!(distinct.len(), hosts.len());
         for host in &hosts {
@@ -5067,18 +4439,12 @@ mod tests {
             answer(200, &good.txid)
         };
         let lookup = |_: &str, _: &str| not_found();
-        let no_host = Err(MobileSignerError::InvalidPsbtJson(
-            "esplora get: no testnet4 host is reachable (both down)".into(),
-        ));
-        let result = broadcast_via(
-            no_host,
-            &post,
-            &lookup,
-            &|| {},
-            &good.hex,
-            &good.txid,
-            &fake.cache,
-        );
+        let no_host = Posts {
+            host: Err("esplora get: no testnet4 host is reachable (both down)"),
+            post: &post,
+            lookup: &lookup,
+        };
+        let result = broadcast_via(&EsploraSource(&no_host), &good.hex, &good.txid, &fake.cache);
         match result {
             Err(MobileSignerError::InvalidPsbtJson(m)) => {
                 assert!(m.starts_with("esplora get: no testnet4 host"), "{m}")
@@ -5087,15 +4453,12 @@ mod tests {
         }
         assert!(posted_to.lock().unwrap().is_empty());
 
-        let result = broadcast_via(
-            Ok(HOSTS[1]),
-            &post,
-            &lookup,
-            &|| {},
-            &good.hex,
-            &good.txid,
-            &fake.cache,
-        );
+        let second = Posts {
+            host: Ok(HOSTS[1]),
+            post: &post,
+            lookup: &lookup,
+        };
+        let result = broadcast_via(&EsploraSource(&second), &good.hex, &good.txid, &fake.cache);
         assert_eq!(result.unwrap().txid, good.txid);
         assert_eq!(*posted_to.lock().unwrap(), vec![HOSTS[1]]);
     }
@@ -5134,7 +4497,7 @@ mod tests {
 
         fn tiers(&self) -> FeeTiers {
             fee_tiers_from(
-                &|url| self.get(url),
+                &EsploraSource(&Reads(&|url| self.get(url))),
                 KeyNetwork::Test,
                 *self.now.lock().unwrap(),
                 &self.cache,
@@ -5265,7 +4628,7 @@ mod tests {
         assert_eq!(host.calls(), 2);
         let host = FeeHost::new(Ok(RECOMMENDED), NOT_FOUND);
         let main = fee_tiers_from(
-            &|url| host.get(url),
+            &EsploraSource(&Reads(&|url| host.get(url))),
             KeyNetwork::Main,
             *host.now.lock().unwrap(),
             &host.cache,
@@ -5308,8 +4671,17 @@ mod tests {
         let hosts = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
         let fake = Fake::new();
         fake.snapshot("").unwrap();
-        let get = |_: &str| get_forgetting(&|| classify(no_answer()), &|_| {}, &hosts, &fake.cache);
-        let tiers = fee_tiers_from(&get, KeyNetwork::Test, Instant::now(), &Mutex::new(None));
+        let get = |_: &str| {
+            get_forgetting(&|| classify(no_answer()), &|_| {}, &hosts, &|| {
+                forget_scans(&fake.cache)
+            })
+        };
+        let tiers = fee_tiers_from(
+            &EsploraSource(&Reads(&get)),
+            KeyNetwork::Test,
+            Instant::now(),
+            &Mutex::new(None),
+        );
         assert_eq!(tiers, DEFAULT_FEE_TIERS);
         assert_eq!(chosen(&hosts), None);
         assert!(fake.cache.lock().unwrap().entries.is_empty());
@@ -5332,11 +4704,11 @@ mod tests {
         let requests = std::sync::atomic::AtomicUsize::new(0);
         let counted = |url: &str| {
             requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            http_get(url)
+            TESTNET4.0.get(url)
         };
         let start = std::time::Instant::now();
         let wallet = scan_wallet(
-            &counted,
+            &EsploraSource(&Reads(&counted)),
             &abandon_about(),
             "",
             KeyNetwork::Test,
@@ -5372,11 +4744,11 @@ mod tests {
         let requests = std::sync::atomic::AtomicUsize::new(0);
         let counted = |url: &str| {
             requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            http_get(url)
+            TESTNET4.0.get(url)
         };
         let start = std::time::Instant::now();
         let snapshot = snapshot_from(
-            &counted,
+            &EsploraSource(&Reads(&counted)),
             &words,
             "",
             KeyNetwork::Test,
@@ -5668,7 +5040,7 @@ mod tests {
 
     fn detail(fake: &Fake, txid: &str) -> Result<Option<HotTxDetail>, MobileSignerError> {
         detail_of(
-            &|url| fake.get(url),
+            &EsploraSource(&Reads(&|url| fake.get(url))),
             &abandon_about(),
             "",
             KeyNetwork::Test,
@@ -5815,7 +5187,7 @@ mod tests {
     fn an_unknown_txid_is_none_after_one_request() {
         let host = not_found_host();
         let calls = Mutex::new(0);
-        // http_get past the host choice, with the real request, classify, the retry and the forget.
+        // `Http::get` past the host choice, with the real request, classify, the retry and the forget.
         let esplora = |url: &str| {
             *calls.lock().unwrap() += 1;
             let url = on_host(url, &host);
@@ -5823,10 +5195,16 @@ mod tests {
                 &|| classify(AGENT.get(&url).call()),
                 &|_| {},
                 &Mutex::new(None),
-                &ScanCache::default(),
+                &|| {},
             )
         };
-        let found = detail_of(&esplora, &abandon_about(), "", KeyNetwork::Test, &id('1'));
+        let found = detail_of(
+            &EsploraSource(&Reads(&esplora)),
+            &abandon_about(),
+            "",
+            KeyNetwork::Test,
+            &id('1'),
+        );
         assert!(matches!(found, Ok(None)), "{found:?}");
         assert_eq!(*calls.lock().unwrap(), 1);
     }
@@ -5887,7 +5265,7 @@ mod tests {
             }
         }
         let main = detail_of(
-            &|url| fake.get(url),
+            &EsploraSource(&Reads(&|url| fake.get(url))),
             &abandon_about(),
             "",
             KeyNetwork::Main,
@@ -6023,7 +5401,7 @@ mod tests {
         );
     }
 
-    // http_get with the network swapped out. The real pick_host runs over the public hosts, where blockstream's probe gets a
+    // `Http::get` with the network swapped out. The real pick_host runs over the public hosts, where blockstream's probe gets a
     // real 404 for /block-height/0 through probe_genesis and mempool.space times out, so nothing asks for the transaction.
     #[test]
     fn a_probe_404_inside_no_host_reachable_is_a_failure_not_an_unknown_txid() {
@@ -6042,7 +5420,13 @@ mod tests {
             let index = pick_host(&PUBLIC_TESTNET4_HOSTS, &probe, Instant::now(), &chosen)?;
             unreachable!("no host passed its probe, yet {url} went to host {index}")
         };
-        match detail_of(&esplora, &abandon_about(), "", KeyNetwork::Test, &id('1')) {
+        match detail_of(
+            &EsploraSource(&Reads(&esplora)),
+            &abandon_about(),
+            "",
+            KeyNetwork::Test,
+            &id('1'),
+        ) {
             Err(MobileSignerError::InvalidPsbtJson(m)) => assert!(
                 m.starts_with("esplora get: no testnet4 host is reachable")
                     && m.contains("/block-height/0: status code 404"),
