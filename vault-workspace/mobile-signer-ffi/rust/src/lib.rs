@@ -11,6 +11,7 @@ mod chain;
 pub mod hot_wallet;
 pub mod price;
 mod proof;
+mod scan;
 
 use std::str::FromStr;
 

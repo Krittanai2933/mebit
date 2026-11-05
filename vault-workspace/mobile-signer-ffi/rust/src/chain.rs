@@ -47,11 +47,17 @@ pub(crate) trait ChainSource {
     fn merkle_branch(&self, txid: &Txid) -> Result<MerkleBranch, NotProven>;
     /// The header of block `hash`.
     fn header(&self, hash: &BlockHash) -> Result<Header, NotProven>;
+    /// Leaves the host that gave the last answers, which lied, for the rest of this source's life, and says
+    /// whether another host passed the network check to read from instead.
+    fn skip_host(&self) -> bool;
 }
 
 /// What a source says about one address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Summary {
     pub(crate) used: bool,
+    /// A block holds a transaction of it, so `prove_use` can prove it used.
+    pub(crate) confirmed: bool,
     pub(crate) balance: u64,
 }
 
@@ -274,6 +280,10 @@ impl ChainSource for EsploraSource<'_> {
             ))
         })
     }
+
+    fn skip_host(&self) -> bool {
+        self.0.skip_host()
+    }
 }
 
 /// Esplora's `/tx/{txid}/merkle-proof` answer, `{"block_height", "merkle", "pos"}`. The height is not
@@ -316,7 +326,8 @@ fn parse_address_stats(json: &str) -> Result<Summary, MobileSignerError> {
         .ok_or_else(|| bad(format!("spent {spent} is more than funded {funded}")))?;
     let balance =
         u64::try_from(balance).map_err(|_| bad(format!("{balance} sats does not fit u64")))?;
-    let txs = sum("chain_stats", "tx_count")? + sum("mempool_stats", "tx_count")?;
+    let confirmed = sum("chain_stats", "tx_count")?;
+    let txs = confirmed + sum("mempool_stats", "tx_count")?;
     if txs == 0 && (funded > 0 || spent > 0) {
         return Err(bad(format!(
             "tx_count is 0 but funded {funded} and spent {spent}, the answer contradicts itself"
@@ -324,6 +335,7 @@ fn parse_address_stats(json: &str) -> Result<Summary, MobileSignerError> {
     }
     Ok(Summary {
         used: txs > 0,
+        confirmed: confirmed > 0,
         balance,
     })
 }
@@ -677,17 +689,62 @@ pub(crate) trait Transport: Sync {
     fn get(&self, url: &str) -> Result<String, MobileSignerError>;
     /// Runs `broadcast_on` against the host a payment goes to.
     fn broadcast(&self, hex: &str, txid: &str) -> Result<String, MobileSignerError>;
+    /// `ChainSource::skip_host`. A transport with one host has none to go to.
+    fn skip_host(&self) -> bool {
+        false
+    }
 }
 
 /// The real transport over the hosts this build knows, with the genesis probe that picks one and the
-/// retry. `lost` runs each time a GET leaves the host in use forgotten.
+/// retry. `lost` runs each time a GET leaves the host in use forgotten. A host it skipped after a lie is
+/// never read again through it, so a scan makes one `Http` per pass.
 pub(crate) struct Http {
-    pub(crate) lost: fn(),
+    lost: fn(),
+    hosts: Mutex<Skips>,
+}
+
+/// The hosts an `Http` skipped, as indices into the host list, and the one its last read went to.
+struct Skips {
+    skipped: Vec<usize>,
+    last: Option<usize>,
+}
+
+impl Http {
+    pub(crate) const fn new(lost: fn()) -> Self {
+        Http {
+            lost,
+            hosts: Mutex::new(Skips {
+                skipped: Vec::new(),
+                last: None,
+            }),
+        }
+    }
+
+    fn skips(&self) -> std::sync::MutexGuard<'_, Skips> {
+        self.hosts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The base of the host to read from, probing the list when none is cached, never one this source skipped.
+    fn base(&self) -> Result<&'static str, MobileSignerError> {
+        let skipped = self.skips().skipped.clone();
+        let hosts = &*ESPLORA_TESTNET4_HOSTS;
+        let index = pick_host(
+            hosts,
+            &probe_genesis,
+            Instant::now(),
+            &CHOSEN_HOST,
+            &skipped,
+        )?;
+        self.skips().last = Some(index);
+        Ok(hosts[index].base)
+    }
 }
 
 impl Transport for Http {
     fn get(&self, url: &str) -> Result<String, MobileSignerError> {
-        let url = on_host(url, selected_base()?);
+        let url = on_host(url, self.base()?);
         get_forgetting(
             &|| classify(AGENT.get(&url).call()),
             &std::thread::sleep,
@@ -706,7 +763,26 @@ impl Transport for Http {
         // Not /tx/{txid}/status: Esplora answers that one 200 for a txid it never saw (blockstream.info, 2026-11-02).
         let lookup = |base: &str, txid: &str| AGENT.get(&format!("{base}/tx/{txid}")).call();
         let pause = || std::thread::sleep(LOOKUP_PAUSE);
-        broadcast_on(selected_base(), &post, &lookup, &pause, hex, txid)
+        broadcast_on(self.base(), &post, &lookup, &pause, hex, txid)
+    }
+
+    fn skip_host(&self) -> bool {
+        let skipped = {
+            let mut skips = self.skips();
+            if let Some(last) = skips.last.take() {
+                skips.skipped.push(last);
+            }
+            skips.skipped.clone()
+        };
+        let hosts = &*ESPLORA_TESTNET4_HOSTS;
+        pick_host(
+            hosts,
+            &probe_genesis,
+            Instant::now(),
+            &CHOSEN_HOST,
+            &skipped,
+        )
+        .is_ok()
     }
 }
 
@@ -756,7 +832,7 @@ pub(crate) const PUBLIC_TESTNET4_HOSTS: [HostSpec; 2] = [
 ];
 /// Testnet4 hosts in the order they are tried: this build's private node first, because it has no
 /// request limit, then the public hosts. Passing the genesis check does not make a host honest about
-/// balances; that residual trust is the same for every host here, see `MAX_SCAN_PER_CHAIN`.
+/// balances, which every host here is trusted with alike. Only a proof moves a scan, see `crate::scan`.
 pub(crate) static ESPLORA_TESTNET4_HOSTS: LazyLock<Vec<HostSpec>> =
     LazyLock::new(|| hosts_with(OWN_NODE));
 
@@ -948,21 +1024,25 @@ pub(crate) fn classify(answer: Result<ureq::Response, ureq::Error>) -> Result<St
 
 /// The index of the host to use: the cached one while it is under `HOST_TRUST` old, else the first
 /// in `hosts` whose `probe` returns the testnet4 genesis hash, which is then cached as of `now`. A
-/// host that answers another hash is skipped like one that does not answer. No host passing fails
-/// with `esplora get: no testnet4 host is reachable`, naming each host's failure, and that round is
-/// remembered for `PROBE_FAILURE_TTL`: a caller inside it gets the same error with no probe.
+/// host that answers another hash is skipped like one that does not answer. A host in `skipped` (a
+/// scan caught it lying) is neither used nor probed. No host passing fails with `esplora get: no
+/// testnet4 host is reachable`, naming each host's failure, and that round is remembered for
+/// `PROBE_FAILURE_TTL`: a caller inside it gets the same error with no probe.
 pub(crate) fn pick_host(
     hosts: &[HostSpec],
     probe: &dyn Fn(&HostSpec) -> Result<String, MobileSignerError>,
     now: Instant,
     cache: &HostChoice,
+    skipped: &[usize],
 ) -> Result<usize, MobileSignerError> {
     let mut verdict = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let age = |at: &Instant| now.saturating_duration_since(*at);
     match &*verdict {
-        Some(HostVerdict::Chosen(index, verified)) if age(verified) < HOST_TRUST => {
+        Some(HostVerdict::Chosen(index, verified))
+            if age(verified) < HOST_TRUST && !skipped.contains(index) =>
+        {
             return Ok(*index);
         }
         Some(HostVerdict::NoneReachable(at, error)) if age(at) < PROBE_FAILURE_TTL => {
@@ -972,6 +1052,10 @@ pub(crate) fn pick_host(
     }
     let mut failures = Vec::with_capacity(hosts.len());
     for (index, host) in hosts.iter().enumerate() {
+        if skipped.contains(&index) {
+            failures.push(format!("{}: skipped, it lied", host.base));
+            continue;
+        }
         match probe(host) {
             Ok(body) if body.trim() == TESTNET4_GENESIS => {
                 *verdict = Some(HostVerdict::Chosen(index, now));
@@ -1025,13 +1109,6 @@ pub(crate) fn probe_genesis(host: &HostSpec) -> Result<String, MobileSignerError
         .call()
         .and_then(|response| response.into_string().map_err(ureq::Error::from))
         .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))
-}
-
-/// The base of the testnet4 host in use, probing the list when none is cached.
-fn selected_base() -> Result<&'static str, MobileSignerError> {
-    let hosts = &*ESPLORA_TESTNET4_HOSTS;
-    let index = pick_host(hosts, &probe_genesis, Instant::now(), &CHOSEN_HOST)?;
-    Ok(hosts[index].base)
 }
 
 /// `call` with the retry, forgetting the host in use and calling `lost` when the last attempt got no

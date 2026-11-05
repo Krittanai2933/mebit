@@ -15,7 +15,6 @@ use crate::chain::{ChainSource, MerkleBranch};
 
 /// What a proof's header must carry beyond meeting its own target.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(not(test), allow(dead_code))] // wired in S3
 pub(crate) enum Anchor {
     /// Nothing more. Testnet4 accepts a minimum-difficulty block whenever 20 minutes pass without
     /// one, so no floor holds there, and a lying testnet4 source can forge a proof with about 2^32
@@ -45,11 +44,32 @@ pub(crate) enum NotProven {
     Lie(String),
 }
 
+impl ProvenUse {
+    /// The wallet index whose payment this proves.
+    pub(crate) fn index(&self) -> u32 {
+        self.index
+    }
+
+    /// A proof of a payment to `index` that a test models instead of checking, so a scan runs without a source.
+    #[cfg(test)]
+    pub(crate) fn modelled(index: u32) -> Self {
+        ProvenUse {
+            index,
+            txid: Txid::all_zeros(),
+            height: 0,
+        }
+    }
+}
+
 /// A source's read failed. The wallet's reads report lost connections and unreadable bodies alike,
-/// so a history this proof cannot read counts as unreachable, never as a lie.
+/// so a history this proof cannot read counts as unreachable, never as a lie. The text is the read's own,
+/// so a throttled read still names its status.
 impl From<MobileSignerError> for NotProven {
     fn from(error: MobileSignerError) -> Self {
-        NotProven::Unreachable(error.to_string())
+        NotProven::Unreachable(match error {
+            MobileSignerError::InvalidPsbtJson(text) => text,
+            other => other.to_string(),
+        })
     }
 }
 
@@ -59,7 +79,6 @@ impl From<MobileSignerError> for NotProven {
 /// the block the source names, through no inner node that reads as a transaction. That block's
 /// header must hash to the block's id and meet its own target, within the network's limit and the
 /// `anchor`. Five reads: the history and tip, then the raw transaction, the branch and the header.
-#[cfg_attr(not(test), allow(dead_code))] // wired in S3
 pub(crate) fn prove_use(
     source: &dyn ChainSource,
     anchor: Anchor,
