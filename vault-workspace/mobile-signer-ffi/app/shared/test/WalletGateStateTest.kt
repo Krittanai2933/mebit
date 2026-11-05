@@ -9,16 +9,22 @@ import com.mebit.app.Why
 import com.mebit.app.WriteMode
 import com.mebit.app.data.ANY_VERSION
 import com.mebit.app.data.Cause
+import com.mebit.app.data.Claim
+import com.mebit.app.data.FakePlainFile
 import com.mebit.app.data.FakeSecureStore
 import com.mebit.app.data.failedErase
+import com.mebit.app.data.guardOf
 import com.mebit.app.data.OnboardingSession
+import com.mebit.app.data.PendingPayments
 import com.mebit.app.data.PUBLIC_WORDS_12
 import com.mebit.app.data.PUBLIC_WORDS_24
 import com.mebit.app.data.SaveResult
 import com.mebit.app.data.SaveState
 import com.mebit.app.data.SavedWallet
+import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
 import com.mebit.app.data.StartNotice
 import com.mebit.app.data.TEST_CHECK
+import com.mebit.app.data.TEST_TXID
 import com.mebit.app.data.UnlockResult
 import com.mebit.app.data.WalletRecord
 import com.mebit.app.data.testRecord
@@ -257,6 +263,41 @@ class WalletGateStateTest {
         assertTrue(fresh.session.words == PUBLIC_WORDS_12, "a forget from Onboarding cleared the wallet made in this launch")
     }
 
+    // N1c, the review of 2026-11-05. Both ways back to the 24 words forget the saved wallet: the recovery screen's one button, which a
+    // removed screen lock leads to on Android, and the unlock screen's link. The forget erased every guard line, so the same words
+    // imported again could pay while a payment of unknown outcome may be out. The guard file holds no key and is keyed by fingerprint,
+    // so it stays: the same words take their guard back, and another wallet is not stopped by it.
+    @Test
+    fun forgetKeepsTheGuardFileSoTheSameWordsStillRefuseAndAnotherWalletDoesNot(): Unit = runBlocking {
+        val starts = listOf(
+            "the recovery screen with the key gone" to FakeSecureStore(probe = StoreProbe.KeyGone, marker = Marker.Kept),
+            "the unlock screen's link" to FakeSecureStore(marker = Marker.Kept).also { it.write(v1Bytes(), WriteMode.Create) },
+        )
+        for ((case, store) in starts) {
+            val pending = UnconfirmedSend(TEST_TXID, SENT_AT)
+            val guards = FakePlainFile()
+            assertEquals(Claim.Written, PendingPayments(guards).claim(TEST_CHECK, pending), "the guard written before a post that ended unknown")
+            val wallet = SavedWallet(store)
+            val session = OnboardingSession(
+                wallet,
+                restoreKey = { words, _, _, _ -> SoftwareAccountKey(words, TEST_CHECK, "tpub-test", "m/48'/1'/0'/2'") },
+                forgetScans = {},
+                payments = PendingPayments(guards),
+            )
+            val gate = WalletGateState(wallet, session)
+            gate.forget("test")
+            assertEquals(Boot.Onboarding, gate.boot, case)
+            assertEquals(pending, guards.guardOf(), "the guard file after the forget, $case")
+            session.restoreFromWords(PUBLIC_WORDS_24)
+            assertEquals(pending, session.unconfirmedSend(), "the same words imported again, $case")
+            assertEquals(pending, assertIs<Claim.Taken>(session.recordUnconfirmedSend("f".repeat(64), SENT_AT + 600), case).earlier)
+            val other = OnboardingSession(restoreKey = { words, _, _, _ -> SoftwareAccountKey(words, OTHER_CHECK, "tpub-test", "m/48'/1'/0'/2'") }, payments = PendingPayments(guards))
+            other.restoreFromWords(PUBLIC_WORDS_12)
+            assertNull(other.unconfirmedSend(), "another wallet, $case")
+            assertEquals(Claim.Written, other.recordUnconfirmedSend("e".repeat(64), SENT_AT + 600), "another wallet's payment, $case")
+        }
+    }
+
     @Test
     fun aFreshInstallStartsOnboardingAndAnOrphanIsWipedWithItsNotice() {
         val starts = listOf(
@@ -319,6 +360,8 @@ class WalletGateStateTest {
 
 /** Another wallet's check value, distinct from [TEST_CHECK]. */
 private const val OTHER_CHECK = "9f8e7d6c"
+
+private const val SENT_AT = 1_792_740_720L
 
 /** The model test replays this many seeded walks of [STEPS] steps each. */
 private const val WALKS = 1_000

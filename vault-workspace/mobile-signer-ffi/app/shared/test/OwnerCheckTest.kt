@@ -10,6 +10,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TestTimeSource
@@ -176,6 +177,33 @@ class OwnerCheckTest {
         assertTrue(opened.answer())
 
         assertFalse(OwnerCheck(Phone(lock = true), sessionWithKey(SpendingPin(clock))).locksWhenAway, "a phone with a lock and App Lock off stays open, as before")
+    }
+
+    // N1c hardening. A gate that started while the 60-second lock asked took the lock's sheet, so the unlock answered false, nothing
+    // asked again and the cover stayed with no sheet. A locked app signs nothing and shows no words, so that gate passes nothing.
+    @Test
+    fun aGateThatStartsWhileTheLockAsksPassesNothingAndLeavesTheLockItsSheet() = runBlocking {
+        val session = sessionWithKey(SpendingPin(clock))
+        assertTrue(session.pin.set("270419"))
+        val owner = OwnerCheck(Phone(lock = false), session)
+        val opened = gate(owner) { owner.unlock("ปลดล็อก mebit") }
+        val lock = assertNotNull(owner.asking)
+        val words = gate(owner) { owner.guardWords("ดู 24 คำสำรอง") }
+        assertSame(lock, owner.asking, "the lock's sheet after another gate started")
+        assertFalse(opened.isCompleted, "the lock still asks")
+        assertFalse(words.answer(), "the words behind the lock")
+        val signed = gate(owner) { appLock.confirm(owner, enabled = false, reason = "ยืนยันการเซ็นส่งเงิน") }
+        assertFalse(signed.answer(), "a payment behind the lock")
+        assertSame(lock, owner.asking)
+        lock.enter("270419")
+        assertTrue(opened.answer(), "the PIN still unlocks")
+        assertNull(owner.asking)
+        // A sheet that may be cancelled still gives way to a newer gate.
+        val first = gate(owner) { owner.guardWords("ดู 24 คำสำรอง") }
+        val second = gate(owner) { appLock.confirm(owner, enabled = false, reason = "ยืนยันการเซ็นส่งเงิน") }
+        assertFalse(first.answer(), "the sheet a newer gate replaced")
+        assertNotNull(owner.asking).enter("270419")
+        assertTrue(second.answer())
     }
 
     @Test

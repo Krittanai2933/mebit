@@ -110,7 +110,7 @@ class OnboardingSessionSaveTest {
         session.markBackupConfirmed()
         session.markAppLockEnabled()
         session.recordUnconfirmedSend(TEST_TXID, SENT_AT)
-        session.clearUnconfirmedSend(TEST_TXID)
+        session.clearUnconfirmedSend(UnconfirmedSend(TEST_TXID, SENT_AT))
         assertTrue(store.writes.isEmpty() && store.markerWrites.isEmpty(), "a session with no words wrote")
         assertEquals(SaveState.NotSaved, session.saved, "a wallet was inferred from a flag")
         assertTrue(session.words.isEmpty(), "words appeared")
@@ -394,7 +394,7 @@ class OnboardingSessionSaveTest {
         assertTrue(session.forgetSavedWallet(), "forget")
         assertEquals(1, store.erases, "erases")
         assertEquals(1, keys.scansForgotten, "the core's scan file went with the wallet")
-        assertNull(guards.text, "the guard file went with the wallet")
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), guards.guardOf(), "the guard stays for the same words imported again")
         assertTrue(session.words.isEmpty() && session.fingerprint.isEmpty() && session.passphrase.isEmpty(), "the key stayed in memory")
         assertEquals(listOf(false, false, false), session.flags(), "flags after forget")
         assertEquals(SaveState.NotSaved, session.saved, "saved after forget")
@@ -411,6 +411,19 @@ class OnboardingSessionSaveTest {
         assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), stuckGuards.guardOf(), "the wallet is still on the phone, so its guard stays")
         assertTrue(kept.words == PUBLIC_WORDS_24, "a failed erase cleared memory")
         assertEquals(SaveState.Saved, kept.saved, "saved after a failed erase")
+    }
+
+    // N1c. A forget never touches the guard file, a damaged one included: its way out is the user's clear.
+    @Test
+    fun forgetLeavesADamagedGuardFileForTheUsersClear() {
+        val guards = FakePlainFile().apply { text = "garbage\n" }
+        val session = session(FakeSecureStore(), guards = guards)
+        session.generateThisDevice()
+        assertEquals(SingleSigWallet.DamagedGuard, session.unconfirmedSend(), "the damaged file before the forget")
+        assertTrue(session.forgetSavedWallet(), "forget")
+        assertEquals("garbage\n", guards.text, "the damaged file after the forget")
+        session.generateThisDevice()
+        assertEquals(SingleSigWallet.DamagedGuard, session.unconfirmedSend(), "the next wallet on the phone")
     }
 
     @Test
@@ -456,14 +469,14 @@ class OnboardingSessionSaveTest {
         assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), session.unconfirmedSend(), "the session after recording")
         assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), guards.guardOf(), "the guard file after recording")
         assertEquals(listOf("Create"), store.modes(), "the secure store was written for the guard")
-        session.clearUnconfirmedSend("f".repeat(64))
+        session.clearUnconfirmedSend(UnconfirmedSend("f".repeat(64), SENT_AT))
         assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), guards.guardOf(), "a clear of another payment dropped this one")
-        session.clearUnconfirmedSend(TEST_TXID)
+        session.clearUnconfirmedSend(UnconfirmedSend(TEST_TXID, SENT_AT))
         assertNull(session.unconfirmedSend(), "the session after clearing")
         assertNull(guards.guardOf(), "the guard file after clearing")
         assertEquals(listOf("Create"), store.modes(), "the secure store was written for the clear")
         val writes = guards.writes
-        session.clearUnconfirmedSend(TEST_TXID)
+        session.clearUnconfirmedSend(UnconfirmedSend(TEST_TXID, SENT_AT))
         assertEquals(writes, guards.writes, "a clear with nothing held wrote")
     }
 
@@ -510,6 +523,67 @@ class OnboardingSessionSaveTest {
         assertEquals(pending, guards.guardOf(), "the guard file after the flush")
         assertNull(store.opened().oldGuard, "the record after the flush")
         assertTrue(store.opened().record.backupConfirmed, "the flag the flush saved")
+    }
+
+    // N1c, decision 2. A damaged guard file cannot take an older record's guard, so the guard stays held and the record keeps it, as
+    // when the file refuses the write, and the move goes through once the file reads again.
+    @Test
+    fun anOlderRecordsGuardIsNeverDroppedBecauseTheGuardFileIsDamaged() {
+        val pending = UnconfirmedSend(TEST_TXID, SENT_AT)
+        val store = storeHolding(oldRecordBytes(pending))
+        val guards = FakePlainFile().apply { text = "garbage\n" }
+        val session = session(store, guards = guards)
+        val opened = store.opened()
+        assertTrue(session.install(opened.record, opened.version, opened.oldGuard), "install")
+        assertEquals(pending, session.unconfirmedSend(), "the guard the wallet takes at its bind")
+        assertEquals(pending, assertIs<Claim.Taken>(session.recordUnconfirmedSend("f".repeat(64), SENT_AT), "a new payment").earlier)
+        session.markBackupConfirmed()
+        session.flushPendingSave()
+        assertEquals(listOf("Create"), store.modes(), "the record was saved without its guard while the file was damaged")
+        assertEquals(pending, store.opened().oldGuard, "the record while the file is damaged")
+        assertEquals("garbage\n", guards.text, "the damaged file")
+        PendingPayments(guards).settle(TEST_CHECK, SingleSigWallet.DamagedGuard) // the user's clear of the damaged file in another instance
+        session.flushPendingSave()
+        assertEquals(pending, guards.guardOf(), "the guard file once it reads again")
+        assertNull(store.opened().oldGuard, "the record once the file holds its guard")
+        assertTrue(store.opened().record.backupConfirmed, "the flag the flush saved")
+    }
+
+    // N1c. The record's payment and the damaged file are two guards, so clearing the first leaves the second in force.
+    @Test
+    fun clearingAnOlderRecordsGuardLeavesADamagedFileInForce() {
+        val pending = UnconfirmedSend(TEST_TXID, SENT_AT)
+        val store = storeHolding(oldRecordBytes(pending))
+        val guards = FakePlainFile().apply { text = "garbage\n" }
+        val session = session(store, guards = guards)
+        val opened = store.opened()
+        assertTrue(session.install(opened.record, opened.version, opened.oldGuard), "install")
+        assertTrue(session.clearUnconfirmedSend(pending), "the user's clear of the record's payment")
+        assertNull(store.opened().oldGuard, "the record after the clear")
+        assertEquals(SingleSigWallet.DamagedGuard, session.unconfirmedSend(), "the damaged file still stops payments")
+        assertEquals(Claim.Damaged, session.recordUnconfirmedSend("f".repeat(64), SENT_AT), "a new payment")
+        assertEquals("garbage\n", guards.text, "the damaged file")
+    }
+
+    // N1c, the review of 2026-11-05 (r7). The record's save after the move failed, so flag 8 stayed on the phone. The user's clear
+    // emptied the file, and the next unlock moved the cleared payment back from the record.
+    @Test
+    fun aMovedGuardTheUserClearedNeverComesBackFromTheOlderRecord() {
+        val pending = UnconfirmedSend(TEST_TXID, SENT_AT)
+        val store = FakeSecureStore(failWrite = 2).also { it.write(oldRecordBytes(pending), WriteMode.Create) }
+        val guards = FakePlainFile()
+        val session = session(store, guards = guards)
+        val opened = store.opened()
+        assertTrue(session.install(opened.record, opened.version, opened.oldGuard), "install")
+        assertEquals(pending, guards.guardOf(), "moved to the file")
+        assertEquals(pending, store.opened().oldGuard, "the record's save failed, so flag 8 is still on the phone")
+        assertTrue(session.clearUnconfirmedSend(pending), "the user checked the explorer and cleared it")
+        assertNull(guards.guardOf(), "the file after the clear")
+        assertNull(store.opened().oldGuard, "the record after the clear")
+        val again = session(store, guards = guards)
+        val reopened = store.opened()
+        assertTrue(again.install(reopened.record, reopened.version, reopened.oldGuard), "the next unlock")
+        assertNull(again.unconfirmedSend(), "the cleared guard after the next unlock")
     }
 
     @Test

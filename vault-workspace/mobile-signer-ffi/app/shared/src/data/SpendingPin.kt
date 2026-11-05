@@ -201,8 +201,11 @@ class OwnerCheck(private val phone: Biometrics, private val session: OnboardingS
     suspend fun unlock(reason: String): Boolean = ask(reason, change = false, cancellable = false)
 
     private suspend fun ask(reason: String, change: Boolean, cancellable: Boolean): Boolean {
-        // A newer gate takes the sheet, and the one it replaces passes nothing.
-        asking?.cancel()
+        // A newer gate takes a sheet that may be cancelled, and the one it replaces passes nothing. The lock's sheet is never taken:
+        // a locked app signs nothing and shows no words, so the newer gate passes nothing instead.
+        val shown = asking
+        if (shown != null && !shown.cancellable) return false
+        shown?.cancel()
         val ask = PinAsk(reason, PinEntry(session.pin, change), cancellable)
         asking = ask
         try {

@@ -21,8 +21,8 @@ enum class SaveState { NotSaved, Staged, Saved }
 /**
  * Onboarding state for Movie Page 00.* screens, plus the hot wallet's payment of unknown outcome, which [payments] keeps in a
  * plain file beside the key, so a phone that cannot save the key keeps it too. Without a [wallet] the key lives in memory only.
- * With one, each committed change is saved through one write point, and only [forgetSavedWallet] erases the saved copy, and the
- * guards with it. [newKey] and [restoreKey] make the key, and [forgetScans] drops the core's scan of every wallet, and tests
+ * With one, each committed change is saved through one write point, and only [forgetSavedWallet] erases the saved copy. The
+ * guards outlive it. [newKey] and [restoreKey] make the key, and [forgetScans] drops the core's scan of every wallet, and tests
  * replace them because the host JVM has no native library. [pin] is the session Spending PIN, beside the words and never saved.
  */
 class OnboardingSession(
@@ -97,10 +97,12 @@ class OnboardingSession(
         private set
 
     /**
-     * A guard that a record from a build before the guard file held (flag 8), which [payments] has not taken yet. It stops this
-     * wallet's payments like a guard in the file, and the write point moves it to the file before any save can drop it from the record.
+     * The payment of unknown outcome that the record on the phone still holds, because a build before the guard file saved it there
+     * (flag 8). It stops this wallet's payments like a guard in the file. Every save drops that section, so the write point saves only
+     * once the guard file holds the same payment, or the payment settled, and this stays until such a save succeeds. So a damaged file
+     * or another payment's guard in the file never drops it, and a payment the user cleared never comes back from the record.
      */
-    private var unmoved: SingleSigWallet.UnconfirmedSend? = null
+    private var recordGuard: SingleSigWallet.UnconfirmedSend? = null
 
     /** A save that failed and has not been repeated yet. [flushPendingSave] and the next write point repeat it. */
     private var pendingSave = false
@@ -185,7 +187,7 @@ class OnboardingSession(
         appLockEnabled = false
         lastError = null
         network = KeyNetwork.TEST
-        unmoved = null
+        recordGuard = null
         held = Held.Nothing
         notSavedBecause = null
         lastSaveFailed = false
@@ -207,28 +209,33 @@ class OnboardingSession(
      * The wallet's payment of unknown outcome ([SingleSigWallet.unconfirmedSend]) as the phone keeps it, so a wallet built after a
      * restart, or another live instance of it, takes it at its next bind. Null when there is none. Reads the guard file.
      */
-    fun unconfirmedSend(): SingleSigWallet.UnconfirmedSend? = unmoved ?: payments.of(fingerprint)
+    fun unconfirmedSend(): SingleSigWallet.Unsettled? = recordGuard ?: payments.of(fingerprint)
 
     /**
      * The wallet is about to post [txid]. Writes its guard to the guard file, which is what lets the wallet post: [Claim.Written]
      * only when the file now holds it. [Claim.Taken] when this wallet already has a guard on the phone, which stays.
      */
     fun recordUnconfirmedSend(txid: String, sinceSeconds: Long): Claim =
-        unmoved?.let { Claim.Taken(it) } ?: payments.claim(fingerprint, SingleSigWallet.UnconfirmedSend(txid, sinceSeconds))
+        recordGuard?.let { Claim.Taken(it) } ?: payments.claim(fingerprint, SingleSigWallet.UnconfirmedSend(txid, sinceSeconds))
 
-    /** The payment [txid] is out, refused, listed by the explorer, or cleared by the user, so its guard leaves the phone. */
-    fun clearUnconfirmedSend(txid: String) {
-        payments.settle(fingerprint, txid)
-        if (unmoved?.txid != txid) return
-        unmoved = null
-        persist() // the older record still holds it
+    /**
+     * The payment [guard] is out, refused, listed by the explorer, or cleared by the user, so its guard leaves the phone: every copy or
+     * none, the record's first and then the file's. False, with every copy kept, when the record could not be saved without it.
+     */
+    fun clearUnconfirmedSend(guard: SingleSigWallet.Unsettled): Boolean {
+        if (guard is SingleSigWallet.UnconfirmedSend && guard.txid == recordGuard?.txid && !persist(dropRecordGuard = true)) return false
+        payments.settle(fingerprint, guard)
+        return true
     }
 
-    /** After the user confirmed. Erases the saved wallet, the core's scan files and the pay-twice guards, then clears memory. A failed erase keeps them all and returns false. */
+    /**
+     * After the user confirmed. Erases the saved wallet and the core's scan files, then clears memory. A failed erase keeps them and
+     * returns false. The pay-twice guards stay, a damaged guard file included: they hold no key and are keyed by fingerprint, so the
+     * same words imported again take their guard back and refuse until it settles, and another wallet never meets them.
+     */
     fun forgetSavedWallet(): Boolean = when (val r = wallet?.forget() ?: EraseResult.Erased) {
         EraseResult.Erased -> {
             forgetScans()
-            payments.erase()
             clear()
             true
         }
@@ -243,7 +250,7 @@ class OnboardingSession(
      * Puts a released record into the session, all or nothing: the key must derive and its fingerprint must equal the
      * record's. Derives once. Catches Exception only: a missing native library is a packaging bug and must crash, not
      * offer to delete a good wallet. [oldGuard], the guard a record from a build before the guard file held, moves to that
-     * file, and the save that follows writes the record without it, so it moves once.
+     * file, and the save that follows writes the record without it, so it moves once ([recordGuard]).
      */
     internal fun install(record: WalletRecord, version: StoreVersion, oldGuard: SingleSigWallet.UnconfirmedSend? = null): Boolean {
         val key = try {
@@ -257,7 +264,7 @@ class OnboardingSession(
         imported = record.imported
         appLockEnabled = record.appLockEnabled
         held = Held.Copy(version)
-        unmoved = oldGuard
+        recordGuard = oldGuard
         if (oldGuard != null) persist()
         return true
     }
@@ -267,17 +274,17 @@ class OnboardingSession(
 
     /**
      * The single write point. A hardware-only session has no words and writes nothing. [fresh]: this call saves a key the user
-     * has not relied on yet. True when the copy on the phone now holds this record.
+     * has not relied on yet. [dropRecordGuard]: the payment of [recordGuard] settled, so the save may drop it without moving it first.
+     * True when the copy on the phone now holds this record.
      */
-    private fun persist(fresh: Boolean = false): Boolean = synchronized(persistLock) {
+    private fun persist(fresh: Boolean = false, dropRecordGuard: Boolean = false): Boolean = synchronized(persistLock) {
         val w = wallet ?: return@synchronized false
         if (words.isEmpty()) return@synchronized false
-        unmoved?.let {
-            if (payments.claim(fingerprint, it) == Claim.NotSaved) {
-                pendingSave = true // the flush tries the move again, and no save drops the guard from the record before it
+        recordGuard?.let {
+            if (!dropRecordGuard && !movedToFile(it)) {
+                pendingSave = true // every write point and the flush try the move again, and no save drops the guard from the record before it
                 return@synchronized false
             }
-            unmoved = null
         }
         val mode = when (val h = held) {
             Held.Staged, Held.Stale -> return@synchronized false
@@ -287,6 +294,7 @@ class OnboardingSession(
         when (val r = w.save(toRecord(), mode)) {
             is SaveResult.Written -> {
                 held = Held.Copy(r.version)
+                recordGuard = null // the record on the phone no longer holds it
                 notSavedBecause = null
                 lastSaveFailed = false
                 pendingSave = false
@@ -323,6 +331,16 @@ class OnboardingSession(
             }
         }
         false
+    }
+
+    /**
+     * Whether the guard file holds [guard] now, written by this call or by an earlier move that the record's save did not follow. A
+     * damaged file, one that cannot take it, or another payment of this wallet in the file all leave it in the record alone.
+     */
+    private fun movedToFile(guard: SingleSigWallet.UnconfirmedSend): Boolean = when (val claim = payments.claim(fingerprint, guard)) {
+        Claim.Written -> true
+        is Claim.Taken -> claim.earlier.txid == guard.txid
+        Claim.Damaged, Claim.NotSaved -> false
     }
 
     /** Tries a save that failed again, for example when the app comes back to the foreground. Does nothing unless one is pending. */

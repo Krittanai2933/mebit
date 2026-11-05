@@ -110,8 +110,8 @@ internal fun testRecord(
 
 /**
  * An in-memory [PlainFile] for common tests. [text] is what the file holds, null for no file. [failWrite] makes each write fail
- * and [unreadable] each read, as a full disk or a damaged file would. [onRead] runs after a read took the text and before it
- * returns it, so a test can hold a reader between what it read and what it writes.
+ * and [unreadable] each read, as a full disk or a damaged file would, until a delete removes the file. [onRead] runs after a read
+ * took the text and before it returns it, so a test can hold a reader between what it read and what it writes.
  */
 internal class FakePlainFile : PlainFile {
     var text: String? = null
@@ -136,11 +136,12 @@ internal class FakePlainFile : PlainFile {
 
     override fun delete() {
         text = null
+        unreadable = false
     }
 }
 
 /** The guard this file holds for the wallet [fingerprint], read the way a new session reads it. */
-internal fun FakePlainFile.guardOf(fingerprint: String = TEST_CHECK): SingleSigWallet.UnconfirmedSend? = PendingPayments(this).of(fingerprint)
+internal fun FakePlainFile.guardOf(fingerprint: String = TEST_CHECK): SingleSigWallet.Unsettled? = PendingPayments(this).of(fingerprint)
 
 /** The bytes of a record that a build before the guard file saved with [pending] as its guard (flag 8). */
 internal fun oldRecordBytes(pending: SingleSigWallet.UnconfirmedSend, flags: Int = 0): ByteArray =

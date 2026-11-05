@@ -3,8 +3,10 @@ package com.mebit.app.data
 import com.mebit.app.Why
 import com.mebit.app.WriteMode
 import com.mebit.app.WriteResult
+import com.mebit.app.data.SingleSigWallet.DamagedGuard
 import com.mebit.app.data.SingleSigWallet.HeldSend
 import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
+import com.mebit.app.data.SingleSigWallet.Unsettled
 import com.mebit.ffi.signer.FeeTiers
 import com.mebit.ffi.signer.HotSendResult
 import com.mebit.ffi.signer.HotTx
@@ -367,9 +369,9 @@ class SingleSigWalletBroadcastTest {
     fun theGuardIsOnThePhoneBeforeThePostStartsAndGoneOnceThePaymentIsOut() {
         val hot = FakeHot()
         val session = hot.goLive()
-        var inTheFile: UnconfirmedSend? = null
-        var onThePhone: UnconfirmedSend? = null
-        var inTheSession: UnconfirmedSend? = null
+        var inTheFile: Unsettled? = null
+        var onThePhone: Unsettled? = null
+        var inTheSession: Unsettled? = null
         hot.postResult = {
             inTheFile = hot.guards.guardOf()
             onThePhone = restart(hot.store, hot.guards).unconfirmedSend()
@@ -450,9 +452,11 @@ class SingleSigWalletBroadcastTest {
         assertNull(restart(hot.store, hot.guards).unconfirmedSend(), "what the next cold start restores")
         assertTrue(hot.wallet.broadcast(session, 100_000, 8, DESTINATION), "the retry once the phone can save")
         assertEquals(1, hot.posts.size)
+        // A file that is there but cannot be read may name a payment that is out, so it reads as one, not as a failed save.
         hot.guards.unreadable = true
         assertFalse(hot.wallet.broadcast(session, 100_000, 8, DESTINATION), "a payment while the guard file cannot be read")
-        assertEquals(GUARD_NOT_SAVED, hot.wallet.lastError)
+        assertEquals(EARLIER_UNSETTLED, hot.wallet.lastError)
+        assertEquals(DamagedGuard, hot.wallet.unconfirmedSend, "what Send and Review show")
         assertEquals(1, hot.posts.size, "a post while the guard file cannot be read")
     }
 
@@ -726,7 +730,7 @@ class SingleSigWalletBroadcastTest {
         assertNull(session.unconfirmedSend(), "the session's guard before the user confirmed")
         assertEquals(emptyList<PostCall>(), hot.posts, "a post before the user confirmed")
         assertEquals(Seen(true, "", null, 1_000_000L, "tb1qbefore"), hot.wallet.seen(true), "nothing reads as sent")
-        var onThePhone: UnconfirmedSend? = null
+        var onThePhone: Unsettled? = null
         hot.postResult = {
             onThePhone = restart(hot.store, hot.guards).unconfirmedSend()
             HotSendResult(TXID)
@@ -1018,7 +1022,7 @@ class SingleSigWalletBroadcastTest {
             val hot = FakeHot()
             val session = hot.goLive()
             hot.store.write = answer
-            var inTheFile: UnconfirmedSend? = null
+            var inTheFile: Unsettled? = null
             hot.postResult = {
                 inTheFile = hot.guards.guardOf()
                 HotSendResult(TXID)
@@ -1063,6 +1067,113 @@ class SingleSigWalletBroadcastTest {
         assertEquals(1, first.posts.size + second.posts.size, "payments that reached the node")
         assertEquals(1, sent.count { it }, "posts that reported a payment out")
         assertEquals(EARLIER_UNSETTLED, listOf(first, second).single { it.posts.isEmpty() }.wallet.lastError)
+    }
+
+    // N1c. A damaged guard file read as no guard at the bind, so Send let a payment start, and its claim then failed as a plain failure
+    // with no reason and no way out. It is a payment of unknown outcome now, offered to the user's clear at once, and only that clear
+    // deletes it.
+    @Test
+    fun aDamagedGuardFileIsAnUnsettledPaymentUntilTheUserClearsItAndThenAPaymentPostsWithAFreshGuard() {
+        val hot = FakeHot()
+        hot.guards.text = "garbage\n"
+        val session = hot.goLive()
+        assertEquals(DamagedGuard, hot.wallet.unconfirmedSend, "what the bind took from the damaged file")
+        assertTrue(hot.wallet.unconfirmedClearOffered(), "the clear is offered at once, with no post time to wait on")
+        assertFalse(hot.wallet.broadcast(session, 100_000, 8, DESTINATION))
+        assertEquals(EARLIER_UNSETTLED, hot.wallet.lastError)
+        assertEquals(emptyList<PrepareCall>(), hot.prepares, "a payment was signed while the guard file was damaged")
+        assertEquals(emptyList<PostCall>(), hot.posts)
+        hot.wallet.bindSession(session)
+        assertEquals(DamagedGuard, hot.wallet.unconfirmedSend, "a later bind")
+        assertEquals("garbage\n", hot.guards.text, "the damaged file before the user's clear")
+        assertTrue(hot.wallet.clearUnconfirmedSend(session), "the user's clear")
+        assertNull(hot.wallet.unconfirmedSend)
+        assertNull(hot.guards.text, "the clear deleted the damaged file")
+        var onThePhone: Unsettled? = null
+        hot.postResult = {
+            onThePhone = hot.guards.guardOf()
+            HotSendResult(TXID)
+        }
+        assertTrue(hot.wallet.broadcast(session, 100_000, 8, DESTINATION), "a payment after the clear")
+        assertEquals(UnconfirmedSend(TXID, SENT_AT), onThePhone, "the fresh guard on the phone when the post ran")
+        assertEquals(1, hot.posts.size)
+        assertNull(hot.guards.text, "the payment is out, so its guard is gone")
+    }
+
+    // N1c. One damaged file stops every wallet on the phone and one clear frees them all, and a wallet that clears the damaged guard
+    // late never drops the guard another wallet wrote since.
+    @Test
+    fun aDamagedGuardFileStopsEveryWalletAndALateClearKeepsANewerGuard() {
+        val guards = FakePlainFile().apply { text = "garbage\n" }
+        val first = FakeHot(guards)
+        val firstSession = first.goLive()
+        val other = FakeHot(guards, OTHER_CHECK)
+        val otherSession = other.goLive()
+        assertEquals(DamagedGuard, first.wallet.unconfirmedSend)
+        assertEquals(DamagedGuard, other.wallet.unconfirmedSend, "another wallet")
+        assertFalse(other.wallet.broadcast(otherSession, 50_000, 8, DESTINATION), "a payment from another wallet")
+        assertTrue(first.wallet.clearUnconfirmedSend(firstSession))
+        first.postResult = { throw MobileSignerException.BroadcastUnknown(UNKNOWN_MESSAGE) }
+        assertFalse(first.wallet.broadcast(firstSession, 100_000, 8, DESTINATION))
+        assertEquals(UnconfirmedSend(TXID, SENT_AT), guards.guardOf(TEST_CHECK), "the first wallet's fresh guard")
+        assertEquals(DamagedGuard, other.wallet.unconfirmedSend, "the other wallet still holds what its bind took")
+        assertTrue(other.wallet.clearUnconfirmedSend(otherSession), "the other wallet's late clear")
+        assertEquals(UnconfirmedSend(TXID, SENT_AT), guards.guardOf(TEST_CHECK), "the first wallet's guard after the late clear")
+        assertTrue(other.wallet.broadcast(otherSession, 50_000, 8, DESTINATION), "the other wallet after its clear")
+        assertEquals(1, other.posts.size)
+        assertFalse(first.wallet.broadcast(firstSession, 50_000, 8, DESTINATION), "the first wallet's payment may be out")
+        assertEquals(1, first.posts.size)
+    }
+
+    // N1c, the review of 2026-11-05. An older record's payment P1 met a file that already held another payment P2 of the wallet. The move
+    // answered Taken and dropped P1 from the session and the record, so once P2 settled nothing guarded P1.
+    @Test
+    fun anOlderRecordsPaymentAndTheFilesOtherPaymentMustBothSettleBeforeAPaymentPosts() {
+        val p1 = UnconfirmedSend(TEST_TXID, SENT_AT)
+        val p2 = UnconfirmedSend("f".repeat(64), SENT_AT + 60)
+        val store = storeHolding(oldRecordBytes(p1))
+        val guards = FakePlainFile()
+        assertEquals(Claim.Written, PendingPayments(guards).claim(TEST_CHECK, p2), "another payment of the wallet in the file")
+        val session = restart(store, guards)
+        assertEquals(p1, assertIs<UnlockResult.Opened>(SavedWallet(store).openNow()).oldGuard, "the record keeps P1 while the file holds P2")
+        val hot = FakeHot(guards)
+        hot.wallet.bindSession(session)
+        assertEquals(p1, hot.wallet.unconfirmedSend, "the record's payment is shown")
+        assertFalse(hot.wallet.broadcast(session, 50_000, 8, DESTINATION), "a payment while P1 may be out")
+        assertTrue(hot.wallet.clearUnconfirmedSend(session), "the user's clear of P1")
+        assertNull(assertIs<UnlockResult.Opened>(SavedWallet(store).openNow()).oldGuard, "the record after P1's clear")
+        assertEquals(p2, guards.guardOf(), "P2 after P1's clear")
+        assertFalse(hot.wallet.broadcast(session, 50_000, 8, DESTINATION), "a payment while P2 may be out")
+        assertEquals(p2, hot.wallet.unconfirmedSend, "P2 is shown once the claim met it")
+        assertEquals(emptyList<PostCall>(), hot.posts, "a post before both settled")
+        assertTrue(hot.wallet.clearUnconfirmedSend(session), "the user's clear of P2")
+        assertTrue(hot.wallet.broadcast(session, 50_000, 8, DESTINATION), "a payment once both settled")
+        assertEquals(1, hot.posts.size)
+        assertNull(restart(store, guards).unconfirmedSend(), "the next cold start")
+    }
+
+    // N1c, the review of 2026-11-05. The record's copy of a moved payment stayed when its save failed, the user's clear then emptied the
+    // file, and the next unlock moved the cleared payment back. A clear now drops the record's copy first, or drops nothing.
+    @Test
+    fun aClearThatCannotDropTheRecordsCopyKeepsThePaymentEverywhere() {
+        val pending = UnconfirmedSend(TEST_TXID, SENT_AT)
+        val store = storeHolding(oldRecordBytes(pending))
+        store.write = WriteResult.Unavailable(Why.TryLater)
+        val guards = FakePlainFile()
+        val session = restart(store, guards)
+        assertEquals(pending, guards.guardOf(), "the move reached the file")
+        val hot = FakeHot(guards)
+        hot.wallet.bindSession(session)
+        assertFalse(hot.wallet.clearUnconfirmedSend(session), "a clear while the record cannot be saved")
+        assertEquals(pending, hot.wallet.unconfirmedSend, "the wallet")
+        assertEquals(pending, guards.guardOf(), "the file")
+        assertEquals(pending, assertIs<UnlockResult.Opened>(SavedWallet(store).openNow()).oldGuard, "the record")
+        assertFalse(hot.wallet.broadcast(session, 50_000, 8, DESTINATION))
+        store.write = null
+        assertTrue(hot.wallet.clearUnconfirmedSend(session), "the clear once the record can be saved")
+        assertNull(guards.guardOf(), "the file")
+        assertNull(restart(store, guards).unconfirmedSend(), "the next cold start")
+        assertTrue(hot.wallet.broadcast(session, 50_000, 8, DESTINATION), "a payment after the clear")
     }
 }
 

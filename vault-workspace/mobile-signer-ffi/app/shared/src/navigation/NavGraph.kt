@@ -6,7 +6,6 @@ import androidx.compose.ui.unit.dp
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -88,6 +87,7 @@ import com.mebit.app.feature.send.M3SignOnJadeScreen
 import com.mebit.app.feature.send.M4ReadyToBroadcastScreen
 import com.mebit.app.rememberBiometrics
 import com.mebit.app.rememberIsDebugBuild
+import com.mebit.app.ui.components.coversScreen
 import com.mebit.app.ui.theme.MbPage
 import com.mebit.ffi.signer.HotTx
 import kotlinx.coroutines.launch
@@ -554,7 +554,7 @@ fun MebitNavHost(
             modifier = Modifier
                 .fillMaxSize()
                 .background(MbPage)
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
+                .coversScreen(),
         ) {
             if (!pinLock) {
                 AppLockScreen(

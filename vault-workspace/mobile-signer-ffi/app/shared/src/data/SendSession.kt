@@ -54,8 +54,14 @@ class SingleSigWallet(
         Unavailable,
     }
 
+    /** A payment that may be out, which stops every new one: [UnconfirmedSend] when the phone's guard names it, [DamagedGuard] when the guard file is damaged. */
+    sealed interface Unsettled
+
     /** A signed payment that may be out: its post began and has not been answered with a refusal or an explorer that lists it. [txid] is the one hot_prepare_send_at_rate computed. [sinceSeconds] is the phone clock when the post began. */
-    data class UnconfirmedSend(val txid: String, val sinceSeconds: Long)
+    data class UnconfirmedSend(val txid: String, val sinceSeconds: Long) : Unsettled
+
+    /** The guard file is on the phone but cannot be read or decoded, so a payment may be out whose txid and time are lost. No explorer can settle it, only the user. */
+    data object DamagedGuard : Unsettled
 
     /** A payment the core signed that nothing has posted: what [prepare] holds until [post] sends it or [dropHeldSend] lets it go. [network] is the one it was signed for, so [post] cannot send it anywhere else. */
     data class HeldSend(val prepared: PreparedSend, val network: KeyNetwork)
@@ -111,8 +117,9 @@ class SingleSigWallet(
     /**
      * The payment that may be out, or null. [post] sets it and saves it before the post, and while it is set [prepare] refuses, because the same payment could go out twice. It clears when the post returns or the node refuses, when a [bindSession] loads a [history] that holds its txid, when the user clears it through [clearUnconfirmedSend] after checking the explorer, and in [useDemoFixture]. Never by the clock. [lastTxid] and [lastSentAtSeconds] stay for payments that went out.
      * The session keeps it in the guard file ([OnboardingSession.unconfirmedSend]), so a wallet built after a restart, or another live instance of the wallet, takes it at its next bind, and clearing it here clears the file too.
+     * A damaged guard file is [DamagedGuard] here: no history can settle it, so only the user's clear does.
      */
-    var unconfirmedSend: UnconfirmedSend? by mutableStateOf(null)
+    var unconfirmedSend: Unsettled? by mutableStateOf(null)
         private set
 
     /**
@@ -150,7 +157,7 @@ class SingleSigWallet(
             }
             history = loaded ?: emptyList()
             // Only a list that names the txid can settle it: the empty list of a failed call says nothing, and neither does the clock.
-            if (loaded != null && unconfirmedSend?.let { pending -> loaded.any { it.txid == pending.txid } } == true) clearUnconfirmedSend(session)
+            if (loaded != null && (unconfirmedSend as? UnconfirmedSend)?.let { pending -> loaded.any { it.txid == pending.txid } } == true) clearUnconfirmedSend(session)
         } catch (e: Exception) {
             // Mode first, so no frame shows the cleared balance as a known one.
             mode = WalletMode.Unavailable
@@ -289,8 +296,14 @@ class SingleSigWallet(
                 lastError = EARLIER_UNSETTLED
                 return false
             }
+            Claim.Damaged -> {
+                // The file can no longer say whose payment may be out, so it may be this wallet's.
+                unconfirmedSend = DamagedGuard
+                lastError = EARLIER_UNSETTLED
+                return false
+            }
             Claim.NotSaved -> {
-                lastError = "บันทึกสถานะการส่งไม่ได้ จึงยังไม่ส่ง ลองใหม่ภายหลัง"
+                lastError = GUARD_NOT_SAVED
                 return false
             }
         }
@@ -323,15 +336,24 @@ class SingleSigWallet(
         return true
     }
 
-    /** The user checked the explorer and found no such transaction. Clears the guard here and on the phone, so a new payment can start. */
-    fun clearUnconfirmedSend(session: OnboardingSession) {
-        val pending = unconfirmedSend ?: return
+    /**
+     * The payment is out or refused, the explorer lists it, or the user checked and found no such transaction. Clears the guard here
+     * and on the phone, so a new payment can start. False, with the guard kept here and on the phone, when the phone could not drop
+     * every copy of it ([OnboardingSession.clearUnconfirmedSend]).
+     */
+    fun clearUnconfirmedSend(session: OnboardingSession): Boolean {
+        val pending = unconfirmedSend ?: return true
+        if (!session.clearUnconfirmedSend(pending)) return false
         unconfirmedSend = null
-        session.clearUnconfirmedSend(pending.txid)
+        return true
     }
 
-    /** Whether the screen may offer the clear control now, by [offersUnconfirmedClear]. False without a guard. */
-    fun unconfirmedClearOffered(): Boolean = unconfirmedSend?.let { offersUnconfirmedClear(it.sinceSeconds, nowSeconds()) } ?: false
+    /** Whether the screen may offer the clear control now: by [offersUnconfirmedClear] for a payment the guard names, and at once for a damaged guard, which has no post time to wait on. False without a guard. */
+    fun unconfirmedClearOffered(): Boolean = when (val pending = unconfirmedSend) {
+        null -> false
+        DamagedGuard -> true
+        is UnconfirmedSend -> offersUnconfirmedClear(pending.sinceSeconds, nowSeconds())
+    }
 
     /** Offline fixture for catalog / no-seed CI. */
     fun useDemoFixture() {
@@ -408,6 +430,9 @@ fun scanErrorThai(scan: HotScan): String? = ABNORMAL_HISTORY.takeIf { scan == Ho
 
 /** [SingleSigWallet.prepare] and [SingleSigWallet.post] while an earlier payment may be out. */
 private const val EARLIER_UNSETTLED = "การส่งครั้งก่อนยังยืนยันไม่ได้ จึงยังส่งใหม่ไม่ได้"
+
+/** [SingleSigWallet.post] when the guard file could not take the payment's guard ([Claim.NotSaved]), so nothing was posted. Review shows it too. */
+internal const val GUARD_NOT_SAVED = "บันทึกสถานะการส่งไม่ได้ จึงยังไม่ส่ง ลองใหม่ภายหลัง"
 
 /** [sendErrorThai] for a failed read of the wallet: its generic fallback would say a send failed when only a fetch did. */
 fun readErrorThai(message: String?): String =

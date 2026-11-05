@@ -3,7 +3,6 @@ package com.mebit.app.feature.onboarding
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -48,6 +47,7 @@ import com.mebit.app.data.SpendingPin
 import com.mebit.app.hideWhen
 import com.mebit.app.rememberCaptureGuard
 import com.mebit.app.ui.components.MebitScreen
+import com.mebit.app.ui.components.coversScreen
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbChip
@@ -116,7 +116,7 @@ fun PinSheet(ask: PinAsk, pin: SpendingPin) {
         modifier = Modifier
             .fillMaxSize()
             .background(MbNavyInk.copy(alpha = 0.45f))
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
+            .coversScreen()
             .testTag("pin_sheet"),
     ) {
         Column(

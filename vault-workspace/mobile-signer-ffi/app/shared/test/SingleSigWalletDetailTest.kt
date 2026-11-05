@@ -22,7 +22,7 @@ private val FOUND = HotTxDetail(ROW, 903_412uL, emptyList(), emptyList(), 1_240u
 private data class Asked(val words: List<String>, val passphrase: String, val network: KeyNetwork, val txid: String)
 
 /** Everything a detail must leave as it found it. */
-private data class WalletState(val mode: WalletMode, val history: List<HotTx>, val lastError: String?, val lastFailure: String?, val unconfirmedSend: SingleSigWallet.UnconfirmedSend?)
+private data class WalletState(val mode: WalletMode, val history: List<HotTx>, val lastError: String?, val lastFailure: String?, val unconfirmedSend: SingleSigWallet.Unsettled?)
 
 private fun SingleSigWallet.state() = WalletState(mode, history, lastError, lastFailure, unconfirmedSend)
 
@@ -84,7 +84,7 @@ class SingleSigWalletDetailTest {
             val chain = DetailChain(answer)
             val before = chain.wallet.state()
             assertEquals(WalletMode.Live, before.mode)
-            assertEquals(PENDING_TXID, before.unconfirmedSend?.txid, "the guard is there to be kept")
+            assertEquals(PENDING_TXID, (before.unconfirmedSend as? SingleSigWallet.UnconfirmedSend)?.txid, "the guard is there to be kept")
             chain.wallet.detail(chain.session, DETAIL_TXID)
             assertEquals(before, chain.wallet.state())
         }

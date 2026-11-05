@@ -1,7 +1,9 @@
 package com.mebit.app.data
 
 import com.mebit.app.PlainFile
+import com.mebit.app.data.SingleSigWallet.DamagedGuard
 import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
+import com.mebit.app.data.SingleSigWallet.Unsettled
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
 
@@ -13,7 +15,10 @@ sealed interface Claim {
     /** The wallet already has a guard on the phone, [earlier], which stays. That payment may be out, so this one must not go. */
     class Taken(val earlier: UnconfirmedSend) : Claim
 
-    /** The file could not be read or written, so the phone may not hold the guard and the payment must not go. */
+    /** The file is on the phone but cannot be read or decoded ([DamagedGuard]), so any wallet may have a payment out and this one must not go. Nothing is written. */
+    data object Damaged : Claim
+
+    /** There is no file to keep the guard in, or the write failed, so the phone may not hold the guard and the payment must not go. */
     data object NotSaved : Claim
 }
 
@@ -24,33 +29,44 @@ sealed interface Claim {
  * Every call holds one lock for the whole process, so two live instances of one wallet never both find no guard and both post.
  * With no [file] there is nowhere to keep a guard, so every claim is [Claim.NotSaved].
  *
- * Layout: one line per wallet, "fingerprint txid seconds" and a newline, the txid empty or 64 lowercase hex. Text that is anything
- * else reads as unreadable, so a damaged file stops every payment instead of hiding a guard.
+ * Layout: one line per wallet, "fingerprint txid seconds" and a newline, the txid empty or 64 lowercase hex. A file that cannot be
+ * read, or holds anything else, is damaged: it may hide any wallet's guard, so it is [DamagedGuard] for every wallet, refuses every
+ * claim, and only the user's clear deletes it. Only a wallet's own settle deletes its guard, never a forget of the wallet, so the
+ * same words imported again still refuse until that payment settles.
  */
 class PendingPayments internal constructor(private val file: PlainFile?) {
-    /** The guard of the wallet [fingerprint], or null when it has none or the file cannot be read. */
-    fun of(fingerprint: String): UnconfirmedSend? = synchronized(guardLock) { file?.read()?.let(::decode)?.get(fingerprint) }
+    /** The guard of the wallet [fingerprint]: null when it has none or there is no [file], and [DamagedGuard] while the file is damaged. */
+    fun of(fingerprint: String): Unsettled? = synchronized(guardLock) {
+        val f = file ?: return@synchronized null
+        val guards = f.guards() ?: return@synchronized DamagedGuard
+        guards[fingerprint]
+    }
 
-    /** Writes [send] as the guard of [fingerprint], unless that wallet already has one or the file cannot take it. */
+    /** Writes [send] as the guard of [fingerprint], unless that wallet already has one, or the file is damaged or cannot take it. */
     fun claim(fingerprint: String, send: UnconfirmedSend): Claim = synchronized(guardLock) {
         val f = file ?: return@synchronized Claim.NotSaved
-        val guards = f.read()?.let(::decode) ?: return@synchronized Claim.NotSaved
+        val guards = f.guards() ?: return@synchronized Claim.Damaged
         guards[fingerprint]?.let { return@synchronized Claim.Taken(it) }
         val written = FINGERPRINT.matches(fingerprint) && TXID.matches(send.txid) && f.write(encode(guards + (fingerprint to send)))
         if (written) Claim.Written else Claim.NotSaved
     }
 
-    /** Drops the guard of [fingerprint] while it is still the payment [txid], so a late settle never drops a newer payment's guard. */
-    fun settle(fingerprint: String, txid: String): Unit = synchronized(guardLock) {
+    /**
+     * Drops [guard] while the file still holds it: a payment's line while it still names that txid, so a late settle never drops a
+     * newer payment's guard, and a damaged file while it is still damaged, so a late clear never drops a file that reads again.
+     */
+    fun settle(fingerprint: String, guard: Unsettled): Unit = synchronized(guardLock) {
         val f = file ?: return@synchronized
-        val guards = f.read()?.let(::decode) ?: return@synchronized
-        if (guards[fingerprint]?.txid != txid) return@synchronized
-        val rest = guards - fingerprint
-        if (rest.isEmpty()) f.delete() else f.write(encode(rest))
+        val guards = f.guards()
+        when (guard) {
+            DamagedGuard -> if (guards == null) f.delete()
+            is UnconfirmedSend -> {
+                if (guards == null || guards[fingerprint]?.txid != guard.txid) return@synchronized
+                val rest = guards - fingerprint
+                if (rest.isEmpty()) f.delete() else f.write(encode(rest))
+            }
+        }
     }
-
-    /** Deletes every guard, for a wallet the user forgot. */
-    fun erase(): Unit = synchronized(guardLock) { file?.delete() }
 }
 
 /** One lock for every [PendingPayments] in the process, because they all share the one file. */
@@ -58,6 +74,9 @@ private val guardLock = SynchronizedObject()
 
 private val FINGERPRINT = Regex("[0-9a-f]{8}")
 private val TXID = Regex("(?:[0-9a-f]{64})?")
+
+/** The guards the file holds, or null when it is damaged: there but unreadable, or holding text [encode] never writes. */
+private fun PlainFile.guards(): Map<String, UnconfirmedSend>? = read()?.let(::decode)
 
 private fun encode(guards: Map<String, UnconfirmedSend>): String =
     guards.entries.joinToString("") { (fingerprint, send) -> "$fingerprint ${send.txid} ${send.sinceSeconds}\n" }

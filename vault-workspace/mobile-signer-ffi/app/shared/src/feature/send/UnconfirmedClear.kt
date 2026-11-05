@@ -30,15 +30,17 @@ import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
+import com.mebit.app.ui.theme.MbEyebrow
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbWhite
 import kotlinx.coroutines.delay
 
 /**
- * The way out of a payment guard that nothing settles: a text link, offered once the guard is old enough by the phone clock
- * ([SingleSigWallet.unconfirmedClearOffered]), that opens an inline confirm naming the txid, whose confirm clears the guard in
- * memory and on the phone. Nothing here, so no screen that shows the guard is left showing it. The copy is a default awaiting
+ * The way out of a payment guard that nothing settles: a text link, offered once the guard is old enough by the phone clock, or at
+ * once for a damaged guard file ([SingleSigWallet.unconfirmedClearOffered]), that opens an inline confirm naming the txid, or saying
+ * the record is damaged, whose confirm clears the guard in memory and on the phone. Nothing here, so no screen that shows the guard is
+ * left showing it. A clear the phone could not finish keeps the guard and says so under the confirm. The copy is a default awaiting
  * design review (docs/04-open-items.md).
  */
 @Composable
@@ -54,6 +56,7 @@ internal fun UnconfirmedClearControl(wallet: SingleSigWallet, session: Onboardin
     }
     if (!offered) return
     var confirming by remember(pending) { mutableStateOf(false) }
+    var stuck by remember(pending) { mutableStateOf(false) }
     Spacer(modifier = Modifier.height(12.dp))
     if (!confirming) {
         LinkRow("ตรวจแล้วว่ายังไม่ออก ส่งใหม่ได้", "unconfirmed_clear") { confirming = true }
@@ -61,11 +64,19 @@ internal fun UnconfirmedClearControl(wallet: SingleSigWallet, session: Onboardin
     }
     val shape = RoundedCornerShape(16.dp)
     Column(modifier = Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(16.dp)) {
-        Text("txid ${shorten(pending.txid, "…")}", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, modifier = Modifier.testTag("unconfirmed_clear_txid"))
+        val (named, tag) = when (pending) {
+            is SingleSigWallet.UnconfirmedSend -> "txid ${shorten(pending.txid, "…")}" to "unconfirmed_clear_txid"
+            SingleSigWallet.DamagedGuard -> "บันทึกการส่งครั้งก่อนเสียหาย ไม่ทราบ txid" to "unconfirmed_clear_damaged"
+        }
+        Text(named, color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, modifier = Modifier.testTag(tag))
         Spacer(modifier = Modifier.height(6.dp))
         Text("กดต่อเมื่อตรวจใน explorer แล้วว่าไม่มีธุรกรรมนี้ ถ้าส่งไปแล้วจะจ่ายซ้ำ", color = MbNavyInk, fontSize = 14.sp, lineHeight = 20.sp)
         Spacer(modifier = Modifier.height(12.dp))
-        PrimaryCta("ยืนยันส่งใหม่", "unconfirmed_clear_confirm", { wallet.clearUnconfirmedSend(session) }, height = 44.dp)
+        PrimaryCta("ยืนยันส่งใหม่", "unconfirmed_clear_confirm", { stuck = !wallet.clearUnconfirmedSend(session) }, height = 44.dp)
+        if (stuck) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text("ล้างสถานะการส่งครั้งก่อนไม่สำเร็จ ลองใหม่ภายหลัง", color = MbEyebrow, fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 17.sp, modifier = Modifier.testTag("unconfirmed_clear_failed"))
+        }
         Spacer(modifier = Modifier.height(4.dp))
         LinkRow("ยกเลิก", "unconfirmed_clear_cancel", color = MbBody) { confirming = false }
     }

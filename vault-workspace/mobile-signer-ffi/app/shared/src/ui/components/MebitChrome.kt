@@ -32,8 +32,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.dialog
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -354,6 +357,13 @@ fun BottomActions(
         Text(linkLabel, color = linkColor, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
     }
 }
+
+/**
+ * For a layer over the whole screen until the user answers it, as the PIN sheet and the 60-second lock are. It takes every tap meant
+ * for the screen behind, and screen readers meet it as a dialog, which keeps the screen behind out of their reach without making the
+ * layer one button, so its texts read as text and only its own controls as buttons.
+ */
+fun Modifier.coversScreen(): Modifier = semantics { dialog() }.pointerInput(Unit) {}
 
 /** Debug-only link floating in the home-indicator inset, so it takes no layout space: the bottom block then ends where the boards end it. Nothing in a release build. */
 @Composable

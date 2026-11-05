@@ -16,6 +16,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.FiatQuote
+import com.mebit.app.data.GUARD_NOT_SAVED
 import com.mebit.app.feature.onboarding.LockWords
 import com.mebit.app.getPlatform
 import com.mebit.app.data.OnboardingSession
@@ -161,7 +162,7 @@ fun S5ReviewSignScreen(
                 onCancel = { wallet.dropHeldSend() },
             )
         }
-        reviewIssue(refused, failed, wallet.unconfirmedSend != null)?.let {
+        reviewIssue(refused, failed, wallet.unconfirmedSend != null, wallet.lastError)?.let {
             Spacer(modifier = Modifier.height(20.dp))
             IssueBanner(it.title, it.message, it.tag)
         }
@@ -176,6 +177,8 @@ fun S5ReviewSignScreen(
 internal enum class ReviewIssue(val title: String, val message: String, val tag: String) {
     SignRefused("ส่งไม่สำเร็จ", "ยืนยันตัวตนไม่สำเร็จ ลองอีกครั้ง · ยังไม่มีอะไรถูกเซ็นหรือส่ง", "sign_refused"),
     BroadcastFailed("ส่งไม่สำเร็จ", "ลองอีกครั้ง · ตรวจยอดคงเหลือก่อนส่งซ้ำ", "error"),
+    // The phone could not keep the payment's guard, so nothing was posted and a later try is safe.
+    GuardNotSaved("ยังไม่ได้ส่ง", GUARD_NOT_SAVED, "guard_not_saved"),
     // Not "failed", because the payment may be out.
     BroadcastUnknown("ยังไม่ทราบผลการส่ง", "ไม่ทราบว่าการส่งล่าสุดออกไปแล้วหรือยัง อย่าส่งซ้ำ · เปิดหน้าแรกเพื่อตรวจยอดคงเหลือและรายการ", "send_unknown"),
 }
@@ -238,10 +241,15 @@ private fun HighFeeConfirm(held: PreparedSend, sendAll: Boolean, quote: FiatQuot
     }
 }
 
-/** A payment that may be out ([unconfirmedSend]) wins over everything, because sending again could pay twice. A refusal wins over a failed broadcast, because nothing was signed. */
-internal fun reviewIssue(refused: Boolean, failed: Boolean, unconfirmedSend: Boolean = false): ReviewIssue? = when {
+/**
+ * A payment that may be out ([unconfirmedSend]) wins over everything, because sending again could pay twice. A refusal wins over a
+ * failed broadcast, because nothing was signed. [failure] is the wallet's line for the failed attempt, so a guard the phone could not
+ * keep ([GUARD_NOT_SAVED]) names its own reason.
+ */
+internal fun reviewIssue(refused: Boolean, failed: Boolean, unconfirmedSend: Boolean = false, failure: String? = null): ReviewIssue? = when {
     unconfirmedSend -> ReviewIssue.BroadcastUnknown
     refused -> ReviewIssue.SignRefused
+    failed && failure == GUARD_NOT_SAVED -> ReviewIssue.GuardNotSaved
     failed -> ReviewIssue.BroadcastFailed
     else -> null
 }
