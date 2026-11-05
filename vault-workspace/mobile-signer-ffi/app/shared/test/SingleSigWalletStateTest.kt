@@ -2,6 +2,7 @@ package com.mebit.app.data
 
 import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.ffi.signer.HotTx
+import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.KeyNetwork
 import kotlin.test.Test
@@ -41,7 +42,7 @@ private data class Derivation(val words: List<String>, val passphrase: String, v
 
 /** Fakes for the hot_* calls a bind makes. A test swaps a result to change what the next bind gets. Nothing here may send. */
 private class FakeChain {
-    var snapshotResult: () -> HotWalletSnapshot = { HotWalletSnapshot(CHAIN_ADDRESS, 1_000_000uL, 1_000_000uL, KeyNetwork.TEST) }
+    var snapshotResult: () -> HotWalletSnapshot = { HotWalletSnapshot(CHAIN_ADDRESS, 1_000_000uL, 1_000_000uL, KeyNetwork.TEST, HotScan.COMPLETE) }
     var historyResult: () -> List<HotTx> = { HISTORY }
     var offlineResult: () -> String = { OFFLINE_ADDRESS }
     val derivations = mutableListOf<Derivation>()
@@ -77,6 +78,46 @@ class SingleSigWalletStateTest {
     @Test
     fun aLoadedSnapshotIsLiveWithItsBalanceAddressAndHistory() {
         val chain = FakeChain()
+        chain.bind()
+        assertEquals(
+            Shown(WalletMode.Live, 1_000_000L, CHAIN_ADDRESS, HISTORY, null, live = true, balanceKnown = true, addressIsReal = true),
+            chain.wallet.shown(),
+        )
+    }
+
+    // The core answers a scan that stopped short, and refuses the history then, as it does for a payment.
+    @Test
+    fun aSnapshotWhoseScanGoesOnIsLiveWithItsAddressAndADashAndAPaymentStopsBeforeTheCore() {
+        val chain = FakeChain()
+        chain.snapshotResult = { HotWalletSnapshot(CHAIN_ADDRESS, 400_000uL, 0uL, KeyNetwork.TEST, HotScan.CONTINUING) }
+        chain.historyResult = { throw IllegalStateException("esplora get: receive index 190 could not be asked: esplora get: HTTP status 429, gave up after 3 attempts") }
+        chain.bind()
+        assertEquals(
+            Shown(WalletMode.Live, 400_000L, CHAIN_ADDRESS, emptyList(), null, live = true, balanceKnown = false, addressIsReal = true),
+            chain.wallet.shown(),
+        )
+        assertFalse(chain.wallet.prepare(chain.session, 10_000L, 8L, CHAIN_ADDRESS))
+        assertEquals("ยังดึงยอดคงเหลือไม่ได้ จึงยังส่งไม่ได้", chain.wallet.lastError)
+    }
+
+    @Test
+    fun aSnapshotWhoseScanAHostLiedInShowsTheRedLineAndADash() {
+        val chain = FakeChain()
+        chain.snapshotResult = { HotWalletSnapshot(CHAIN_ADDRESS, 400_000uL, 0uL, KeyNetwork.TEST, HotScan.UNVERIFIED) }
+        chain.historyResult = { throw IllegalStateException("esplora scan: receive index 19: tb1qexample: the raw answer is not a transaction") }
+        chain.bind()
+        assertEquals(
+            Shown(WalletMode.Live, 400_000L, CHAIN_ADDRESS, emptyList(), "ประวัติของกระเป๋านี้ผิดปกติ ตรวจกับ explorer ก่อนส่ง", live = true, balanceKnown = false, addressIsReal = true),
+            chain.wallet.shown(),
+        )
+    }
+
+    @Test
+    fun aCompleteSnapshotAfterOneThatWentOnShowsTheWholeBalance() {
+        val chain = FakeChain()
+        chain.snapshotResult = { HotWalletSnapshot(CHAIN_ADDRESS, 400_000uL, 0uL, KeyNetwork.TEST, HotScan.CONTINUING) }
+        chain.bind()
+        chain.snapshotResult = { HotWalletSnapshot(CHAIN_ADDRESS, 1_000_000uL, 1_000_000uL, KeyNetwork.TEST, HotScan.COMPLETE) }
         chain.bind()
         assertEquals(
             Shown(WalletMode.Live, 1_000_000L, CHAIN_ADDRESS, HISTORY, null, live = true, balanceKnown = true, addressIsReal = true),
@@ -127,7 +168,7 @@ class SingleSigWalletStateTest {
         val chain = FakeChain()
         chain.snapshotResult = { throw IllegalStateException("esplora get: connection refused") }
         chain.bind()
-        chain.snapshotResult = { HotWalletSnapshot(CHAIN_ADDRESS, 1_000_000uL, 1_000_000uL, KeyNetwork.TEST) }
+        chain.snapshotResult = { HotWalletSnapshot(CHAIN_ADDRESS, 1_000_000uL, 1_000_000uL, KeyNetwork.TEST, HotScan.COMPLETE) }
         chain.bind()
         assertEquals(
             Shown(WalletMode.Live, 1_000_000L, CHAIN_ADDRESS, HISTORY, null, live = true, balanceKnown = true, addressIsReal = true),
@@ -142,7 +183,7 @@ class SingleSigWalletStateTest {
         chain.bind()
         assertEquals("snapshot: $RUST_FAILURE", chain.wallet.lastFailure)
         assertEquals(UNREACHABLE_SHOWN, chain.wallet.lastError, "the Thai line is unchanged")
-        chain.snapshotResult = { HotWalletSnapshot(CHAIN_ADDRESS, 1_000_000uL, 1_000_000uL, KeyNetwork.TEST) }
+        chain.snapshotResult = { HotWalletSnapshot(CHAIN_ADDRESS, 1_000_000uL, 1_000_000uL, KeyNetwork.TEST, HotScan.COMPLETE) }
         chain.bind()
         assertNull(chain.wallet.lastFailure)
     }

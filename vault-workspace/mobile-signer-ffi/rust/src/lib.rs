@@ -12,6 +12,7 @@ pub mod hot_wallet;
 pub mod price;
 mod proof;
 mod scan;
+mod scan_store;
 
 use std::str::FromStr;
 
@@ -877,6 +878,14 @@ mod tests {
             (
                 "func_hot_fee_tiers",
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_fee_tiers(),
+            ),
+            (
+                "func_hot_use_state_dir",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_use_state_dir(),
+            ),
+            (
+                "func_hot_forget_scan_state",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_forget_scan_state(),
             ),
             (
                 "func_is_valid_address",

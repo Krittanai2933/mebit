@@ -5,8 +5,9 @@
 //!
 //! Why a scan ends without a cap. Let H be the highest index of a chain that was really paid in a block with
 //! valid work. The frontier rises only to one past a proven index, so it never passes H + 1. At one frontier a
-//! scan asks once and proves once, then the frontier rises or the scan ends. So one source's scan of a chain
-//! asks at most H + 1 + GAP summaries and makes at most one proof per window it moves.
+//! scan asks the rest of the window, in parts when the source answers a few indices at a time, and proves once,
+//! then the frontier rises or the scan ends. So one source's scan of a chain asks at most H + 1 + GAP summaries
+//! and makes at most one proof per window it moves.
 
 use std::ops::Range;
 
@@ -21,7 +22,30 @@ pub(crate) const GAP: u32 = 20;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ChainScan {
     pub(crate) frontier: u32,
-    pub(crate) seen: Vec<Summary>,
+    pub(crate) seen: Vec<Seen>,
+}
+
+/// What a scan keeps of a source's summary of one index, which is its flags and change token and never its amount.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Seen {
+    pub(crate) used: bool,
+    pub(crate) confirmed: bool,
+    pub(crate) pending: bool,
+    /// It held coins, so a routine sync asks it again for its balance.
+    pub(crate) funded: bool,
+    pub(crate) token: u64,
+}
+
+impl From<&Summary> for Seen {
+    fn from(summary: &Summary) -> Self {
+        Seen {
+            used: summary.used,
+            confirmed: summary.confirmed,
+            pending: summary.pending,
+            funded: summary.balance > 0,
+            token: summary.token,
+        }
+    }
 }
 
 /// What a scan does next.
@@ -36,8 +60,11 @@ pub(crate) enum Step {
 
 /// The answer to a step.
 pub(crate) enum Event {
-    /// The source's summary of each index asked, in order.
+    /// The source's summary of the first indices asked, in order, at least one, so a scan keeps what it was
+    /// told before a later read is refused.
     Asked(Vec<Summary>),
+    /// The source refused to answer the ask for now.
+    Throttled(String),
     Proven(ProvenUse),
     NotProven(NotProven),
 }
@@ -84,26 +111,37 @@ impl ChainScan {
 
     /// The index the wallet hands out on this chain, one past the last index the source calls used but never
     /// `frontier + GAP` or past it. When claims fill the window that is its last index, which may be used already.
+    /// Never below the frontier either, where a scan cut short has not asked yet and the last index is used.
     pub(crate) fn issued(&self) -> u32 {
         let after_last_use = self
             .seen
             .iter()
             .rposition(|seen| seen.used)
             .map_or(0, |last| last as u32 + 1);
-        after_last_use.min(self.frontier + GAP - 1)
+        after_last_use
+            .max(self.frontier)
+            .min(self.frontier + GAP - 1)
     }
 }
 
 /// The one transition, `event` being the answer to `at`. Every call raises the frontier, or moves to a later
-/// step at the same frontier (Ask, then Prove, then Done).
+/// step at the same frontier (Ask, then Prove, then Done), or asks more indices in the same step.
 pub(crate) fn step(scan: &mut ChainScan, at: Step, event: Event) -> Step {
     let before = standing(scan, &at);
     let next = match (at, event) {
         (Step::Ask(asked), Event::Asked(summaries)) => {
-            debug_assert_eq!(summaries.len(), asked.len(), "one summary per index asked");
-            scan.seen.extend(summaries);
+            debug_assert!(
+                (1..=asked.len()).contains(&summaries.len()),
+                "{} summaries for {asked:?}",
+                summaries.len()
+            );
+            scan.seen.extend(summaries.iter().map(Seen::from));
             scan.next()
         }
+        (Step::Ask(asked), Event::Throttled(why)) => Step::Done(ScanStatus::Continuing(format!(
+            "index {} could not be asked: {why}",
+            asked.start
+        ))),
         (Step::Prove(index), Event::Proven(proven)) => {
             debug_assert_eq!(proven.index(), index, "the proof is of the index asked");
             scan.frontier = proven.index() + 1;
@@ -130,14 +168,15 @@ pub(crate) fn step(scan: &mut ChainScan, at: Step, event: Event) -> Step {
     next
 }
 
-/// Where a scan stands, by its frontier and then by how far along the window it is.
-fn standing(scan: &ChainScan, at: &Step) -> (u32, u8) {
+/// Where a scan stands, by its frontier, then by how far along the window it is, then by how many indices it
+/// was told about.
+fn standing(scan: &ChainScan, at: &Step) -> (u32, u8, usize) {
     let phase = match at {
         Step::Ask(_) => 0,
         Step::Prove(_) => 1,
         Step::Done(_) => 2,
     };
-    (scan.frontier, phase)
+    (scan.frontier, phase, scan.seen.len())
 }
 
 #[cfg(test)]
@@ -160,21 +199,38 @@ mod tests {
         }
     }
 
-    /// Where a scan stands, ordered as the invariant says it must rise, by the frontier and then Ask, Prove, Done.
-    fn rank(scan: &ChainScan, at: &Step) -> (u32, u8) {
+    /// Where a scan stands, ordered as the invariant says it must rise. The frontier counts first, then Ask,
+    /// Prove and Done, then how many indices were asked.
+    fn rank(scan: &ChainScan, at: &Step) -> (u32, u8, usize) {
         let phase = match at {
             Step::Ask(_) => 0,
             Step::Prove(_) => 1,
             Step::Done(_) => 2,
         };
-        (scan.frontier, phase)
+        (scan.frontier, phase, scan.seen.len())
+    }
+
+    /// `answer` with every ask answered for its first `k` indices only, as a source read a window at a time does.
+    fn a_few_at_a_time(
+        k: usize,
+        mut answer: impl FnMut(&Step) -> Event,
+    ) -> impl FnMut(&Step) -> Event {
+        move |at| match answer(at) {
+            Event::Asked(mut summaries) => {
+                summaries.truncate(k);
+                Event::Asked(summaries)
+            }
+            other => other,
+        }
     }
 
     fn claim(used: bool, confirmed: bool) -> Summary {
         Summary {
             used,
             confirmed,
+            pending: used && !confirmed,
             balance: 0,
+            token: 0,
         }
     }
 
@@ -183,18 +239,21 @@ mod tests {
     }
 
     /// A scan of `scan` to its end against `answer`, checking at every step that the scan's standing rose, with
-    /// the status it ended in, the summaries it asked and the proofs it tried.
+    /// the status it ended in, the summaries it was given and the proofs it tried.
     fn run(scan: &mut ChainScan, mut answer: impl FnMut(&Step) -> Event) -> (ScanStatus, u32, u32) {
         let (mut asked, mut proofs) = (0, 0);
         let mut at = scan.next();
         loop {
             match &at {
-                Step::Ask(range) => asked += range.len() as u32,
+                Step::Ask(_) => {}
                 Step::Prove(_) => proofs += 1,
                 Step::Done(status) => return (status.clone(), asked, proofs),
             }
             let before = rank(scan, &at);
             let event = answer(&at);
+            if let Event::Asked(summaries) = &event {
+                asked += summaries.len() as u32;
+            }
             at = step(scan, at, event);
             let after = rank(scan, &at);
             assert!(after > before, "the scan went from {before:?} to {after:?}");
@@ -230,20 +289,30 @@ mod tests {
         reach
     }
 
-    /// A source whose answers are drawn from `rng`. Each summary may tell the truth about `paid`, invent a use or
-    /// omit one, and each proof may be lost or refused. It never proves an index that was not paid, which is
-    /// what proof of work buys.
+    /// A source whose answers are drawn from `rng`. Each ask may be throttled or answered for its first few
+    /// indices only, each summary may tell the truth about `paid`, invent a use or omit one, and each proof may
+    /// be lost or refused. It never proves an index that was not paid, which is what proof of work buys.
     fn random_source<'a>(rng: &'a mut Rng, paid: &'a [u32]) -> impl FnMut(&Step) -> Event + 'a {
         move |at| match at {
-            Step::Ask(range) => Event::Asked(
-                range
-                    .clone()
-                    .map(|i| {
-                        let used = paid.contains(&i) != rng.chance(15);
-                        claim(used, used && rng.chance(80))
-                    })
-                    .collect(),
-            ),
+            Step::Ask(_) if rng.below(1_000) < 5 => {
+                Event::Throttled("esplora get: HTTP status 429".into())
+            }
+            Step::Ask(range) => {
+                let answered = match rng.chance(30) {
+                    true => 1 + rng.below(range.len() as u64) as usize,
+                    false => range.len(),
+                };
+                Event::Asked(
+                    range
+                        .clone()
+                        .take(answered)
+                        .map(|i| {
+                            let used = paid.contains(&i) != rng.chance(15);
+                            claim(used, used && rng.chance(80))
+                        })
+                        .collect(),
+                )
+            }
             Step::Prove(i) => match rng.below(10) {
                 0 => Event::NotProven(NotProven::Unreachable("esplora get: timed out".into())),
                 1 => Event::NotProven(NotProven::NoConfirmedPayment),
@@ -262,10 +331,12 @@ mod tests {
         (h, paid)
     }
 
-    // The termination argument as a property. Whatever a source answers, every step raises (frontier, phase),
-    // and the frontier never passes H + 1, so a scan ends within 2 (H + 2) steps having asked H + 1 + GAP.
+    // The termination argument as a property. Whatever a source answers, every step raises (frontier, phase,
+    // indices asked), and the frontier never passes H + 1, so a scan asks at most H + 1 + GAP indices, proves at
+    // most H + 1 times and ends within as many steps plus one.
     #[test]
-    fn every_step_raises_the_frontier_or_the_phase_whatever_the_source_answers() {
+    fn every_step_raises_the_frontier_or_the_phase_or_the_indices_asked_whatever_the_source_answers()
+     {
         for seed in 1..=3_000 {
             let mut rng = Rng(seed);
             let (h, paid) = random_chain(&mut rng);
@@ -288,7 +359,10 @@ mod tests {
                 );
                 steps += 1;
             }
-            assert!(steps <= 2 * (h + 2), "seed {seed}: {steps} steps for H {h}");
+            assert!(
+                steps <= (h + 1 + GAP) + (h + 1) + 1,
+                "seed {seed}: {steps} steps for H {h}"
+            );
             assert!(scan.seen.len() as u32 <= h + 1 + GAP, "seed {seed}");
         }
     }
@@ -368,7 +442,8 @@ mod tests {
     #[test]
     fn whatever_a_source_answers_a_plain_restore_reaches_every_index_the_wallet_hands_out() {
         let mut completed = 0;
-        for seed in 1..=3_000 {
+        // About one random scan in 35 completes, so 3,000 seeds sat right at the floor below.
+        for seed in 1..=5_000 {
             let mut rng = Rng(seed);
             let (_, paid) = random_chain(&mut rng);
             let mut scan = ChainScan::default();
@@ -455,6 +530,87 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_scan_answered_a_few_indices_at_a_time_ends_where_one_answered_whole_ends() {
+        let paid: Vec<u32> = (0..=137).filter(|i| i % 3 == 0).collect();
+        let mut whole = ChainScan::default();
+        let (status, asked, proofs) = run(&mut whole, honest(&paid));
+        for k in [1, 7, 10] {
+            let mut parts = ChainScan::default();
+            assert_eq!(
+                run(&mut parts, a_few_at_a_time(k, honest(&paid))),
+                (status.clone(), asked, proofs),
+                "{k} at a time"
+            );
+            assert_eq!(parts, whole, "{k} at a time");
+        }
+    }
+
+    // A public host answers 429 once its hourly quota is spent. The pass keeps every index it was told about, so
+    // the next one asks only the rest and proves nothing twice.
+    #[test]
+    fn a_throttled_ask_ends_the_scan_continuing_and_the_next_scan_asks_only_the_rest() {
+        let paid: Vec<u32> = (0..=57).collect();
+        let mut whole = ChainScan::default();
+        let (_, asked, proofs) = run(&mut whole, honest(&paid));
+        let mut scan = ChainScan::default();
+        let mut answers = 0;
+        let (status, first_asked, first_proofs) = run(&mut scan, |at| {
+            answers += 1;
+            match at {
+                Step::Ask(_) if answers > 6 => Event::Throttled(
+                    "esplora get: HTTP status 429, gave up after 3 attempts".into(),
+                ),
+                at => a_few_at_a_time(10, honest(&paid))(at),
+            }
+        });
+        assert!(
+            matches!(&status, ScanStatus::Continuing(why) if why.contains("429")),
+            "{status:?}"
+        );
+        assert!(
+            scan.frontier > 0 && scan.frontier < whole.frontier,
+            "{scan:?}"
+        );
+        let (status, rest_asked, rest_proofs) = run(&mut scan, a_few_at_a_time(10, honest(&paid)));
+        assert_eq!(status, ScanStatus::Complete);
+        assert_eq!(scan, whole);
+        assert_eq!(first_asked + rest_asked, asked, "no index is asked twice");
+        assert_eq!(
+            first_proofs + rest_proofs,
+            proofs,
+            "no index is proven twice"
+        );
+    }
+
+    // A full pass starts again from index 0 and keeps the frontier, so until it reaches the frontier the indices
+    // below it are unknown. One of them is the last proven used, and the ones before it most likely are too.
+    #[test]
+    fn a_scan_cut_short_below_its_frontier_hands_out_no_index_below_the_frontier() {
+        let mut scan = ChainScan {
+            frontier: 30,
+            seen: Vec::new(),
+        };
+        assert_eq!(scan.issued(), 30);
+        let mut answered = false;
+        let (status, ..) = run(&mut scan, |at| match at {
+            Step::Ask(range) if !answered => {
+                answered = true;
+                Event::Asked(
+                    range
+                        .clone()
+                        .take(10)
+                        .map(|i| claim(i < 4, i < 4))
+                        .collect(),
+                )
+            }
+            _ => Event::Throttled("esplora get: HTTP status 429".into()),
+        });
+        assert!(matches!(status, ScanStatus::Continuing(_)), "{status:?}");
+        assert_eq!(scan.seen.len(), 10);
+        assert_eq!(scan.issued(), 30);
+    }
+
     // No number but the gap bounds a scan. The 5,000-index chain above is the behaviour, and this is the guard
     // against a ceiling coming back.
     #[test]
@@ -462,6 +618,7 @@ mod tests {
         let production = |text: &'static str| text.split("#[cfg(test)]").next().unwrap();
         for (file, text) in [
             ("scan.rs", include_str!("scan.rs")),
+            ("scan_store.rs", include_str!("scan_store.rs")),
             ("hot_wallet.rs", include_str!("hot_wallet.rs")),
             ("chain.rs", include_str!("chain.rs")),
         ] {

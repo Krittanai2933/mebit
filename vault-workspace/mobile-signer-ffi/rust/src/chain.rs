@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use bitcoin::block::Header;
 use bitcoin::consensus::encode::deserialize_hex;
+use bitcoin::hashes::{Hash, sha256};
 use bitcoin::{Address, BlockHash, Transaction, TxMerkleNode, Txid};
 use serde_json::Value;
 
@@ -50,6 +51,8 @@ pub(crate) trait ChainSource {
     /// Leaves the host that gave the last answers, which lied, for the rest of this source's life, and says
     /// whether another host passed the network check to read from instead.
     fn skip_host(&self) -> bool;
+    /// Who runs the host the next read goes to, which sets how often a full pass runs.
+    fn operator(&self) -> Result<Operator, MobileSignerError>;
 }
 
 /// What a source says about one address.
@@ -58,7 +61,12 @@ pub(crate) struct Summary {
     pub(crate) used: bool,
     /// A block holds a transaction of it, so `prove_use` can prove it used.
     pub(crate) confirmed: bool,
+    /// The mempool holds a transaction of it, so its picture changes once a block takes that one.
+    pub(crate) pending: bool,
     pub(crate) balance: u64,
+    /// Changes whenever the address's history does, so a page read while it was the same is still the page.
+    /// Esplora's is a hash of the counts and sums it reports.
+    pub(crate) token: u64,
 }
 
 /// A transaction as a source reports it, read as far as every reader needs and no further. Each value
@@ -284,6 +292,10 @@ impl ChainSource for EsploraSource<'_> {
     fn skip_host(&self) -> bool {
         self.0.skip_host()
     }
+
+    fn operator(&self) -> Result<Operator, MobileSignerError> {
+        self.0.operator()
+    }
 }
 
 /// Esplora's `/tx/{txid}/merkle-proof` answer, `{"block_height", "merkle", "pos"}`. The height is not
@@ -327,16 +339,27 @@ fn parse_address_stats(json: &str) -> Result<Summary, MobileSignerError> {
     let balance =
         u64::try_from(balance).map_err(|_| bad(format!("{balance} sats does not fit u64")))?;
     let confirmed = sum("chain_stats", "tx_count")?;
-    let txs = confirmed + sum("mempool_stats", "tx_count")?;
+    let pending = sum("mempool_stats", "tx_count")?;
+    let txs = confirmed + pending;
     if txs == 0 && (funded > 0 || spent > 0) {
         return Err(bad(format!(
             "tx_count is 0 but funded {funded} and spent {spent}, the answer contradicts itself"
         )));
     }
+    let mut stats = Vec::with_capacity(6);
+    for section in ["chain_stats", "mempool_stats"] {
+        for field in ["tx_count", "funded_txo_sum", "spent_txo_sum"] {
+            stats.push(sum(section, field)?.to_string());
+        }
+    }
+    let [a, b, c, d, e, f, g, h, ..] =
+        sha256::Hash::hash(stats.join(",").as_bytes()).to_byte_array();
     Ok(Summary {
         used: txs > 0,
         confirmed: confirmed > 0,
+        pending: pending > 0,
         balance,
+        token: u64::from_le_bytes([a, b, c, d, e, f, g, h]),
     })
 }
 
@@ -450,6 +473,21 @@ fn read_tx(tx_json: &str, tip_text: &str, txid: &Txid) -> Result<(TxView, u64), 
 /// A probe's 404 that `pick_host` quotes in its own error names `/block-height/0`, so it is a failure.
 pub(crate) fn is_not_found(error: &MobileSignerError, txid: &Txid) -> bool {
     matches!(error, MobileSignerError::InvalidPsbtJson(t) if t.contains(&format!("/tx/{txid}: status code 404")))
+}
+
+/// The text of a read the host refused with HTTP 429, its request limit, after the retries, or of a probe
+/// round where a host did, or None for any other failure. `classify` writes the first form and ureq the
+/// second ("{url}: status code 429"), which `pick_host` quotes, and a test pins both.
+pub(crate) fn throttled(error: &MobileSignerError) -> Option<&str> {
+    match error {
+        MobileSignerError::InvalidPsbtJson(text)
+            if text.starts_with("esplora get: ")
+                && (text.contains("HTTP status 429") || text.contains("status code 429")) =>
+        {
+            Some(text)
+        }
+        _ => None,
+    }
 }
 
 fn tip_height(text: &str) -> Result<u64, String> {
@@ -693,6 +731,10 @@ pub(crate) trait Transport: Sync {
     fn skip_host(&self) -> bool {
         false
     }
+    /// `ChainSource::operator`. A test's transport stands for the first public host unless it says otherwise.
+    fn operator(&self) -> Result<Operator, MobileSignerError> {
+        Ok(Operator::Blockstream)
+    }
 }
 
 /// The real transport over the hosts this build knows, with the genesis probe that picks one and the
@@ -726,8 +768,8 @@ impl Http {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// The base of the host to read from, probing the list when none is cached, never one this source skipped.
-    fn base(&self) -> Result<&'static str, MobileSignerError> {
+    /// The host to read from, probing the list when none is cached, never one this source skipped.
+    fn host(&self) -> Result<&'static HostSpec, MobileSignerError> {
         let skipped = self.skips().skipped.clone();
         let hosts = &*ESPLORA_TESTNET4_HOSTS;
         let index = pick_host(
@@ -738,7 +780,11 @@ impl Http {
             &skipped,
         )?;
         self.skips().last = Some(index);
-        Ok(hosts[index].base)
+        Ok(&hosts[index])
+    }
+
+    fn base(&self) -> Result<&'static str, MobileSignerError> {
+        Ok(self.host()?.base)
     }
 }
 
@@ -783,6 +829,10 @@ impl Transport for Http {
             &skipped,
         )
         .is_ok()
+    }
+
+    fn operator(&self) -> Result<Operator, MobileSignerError> {
+        Ok(self.host()?.operator)
     }
 }
 

@@ -483,16 +483,18 @@ public data class HotTxo (
 public data class HotWalletSnapshot (
     var `receiveAddress`: kotlin.String, 
     /**
-     * Confirmed plus mempool, over every address of both chains: what the wallet holds.
+     * Confirmed plus mempool, over every address of both chains: what the wallet holds, once `scan` is
+     * `Complete`. Before that, only what the scan has found so far, which no screen may show as the balance.
      */
     var `balanceSats`: kotlin.ULong, 
     /**
      * What a payment could spend now: the confirmed coins of receive addresses and the wallet's
      * own change, confirmed or not. The same coins `hot_prepare_send_all` spends, so a receive
-     * still in the mempool counts in `balance_sats` and not here.
+     * still in the mempool counts in `balance_sats` and not here. 0 unless `scan` is `Complete`.
      */
     var `spendableSats`: kotlin.ULong, 
-    var `network`: KeyNetwork
+    var `network`: KeyNetwork, 
+    var `scan`: HotScan
 ) {
     public companion object
 }
@@ -689,6 +691,34 @@ public sealed class BleException(message: String): kotlin.Exception(message) {
     public class Protocol(message: String) : BleException(message)
     
 }
+
+
+
+
+/**
+ * How far the scan behind a snapshot got.
+ */
+
+
+public enum class HotScan {
+    
+    /**
+     * Every address a restore finds was asked, so the figures are the wallet's.
+     */
+    COMPLETE,
+    /**
+     * The scan stopped short and goes on at the next call, after a host's request limit or a payment that
+     * no block holds yet.
+     */
+    CONTINUING,
+    /**
+     * A host lied about the wallet's history, so the figures are not the wallet's.
+     */
+    UNVERIFIED;
+    public companion object
+}
+
+
 
 
 
@@ -1046,6 +1076,12 @@ public expect fun `hotBroadcast`(`network`: KeyNetwork, `hex`: kotlin.String, `t
 public expect fun `hotFeeTiers`(`network`: KeyNetwork): FeeTiers
 
 /**
+ * Forgets every wallet's scan, in memory and in the folder `hot_use_state_dir` named. Call it when the
+ * wallet is erased.
+ */
+public expect fun `hotForgetScanState`()
+
+/**
  * Scan, spend every coin `hot_prepare_send_at_rate` would consider, and sign one output paying
  * `destination` the whole balance less the fee, with no change, and post nothing. The fee is the
  * size of that transaction times `fee_rate_sat_vb`, so it and the amount are only known once the
@@ -1086,6 +1122,12 @@ public expect fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `pas
  */
 @Throws(MobileSignerException::class)
 public expect fun `hotTxDetail`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `txid`: kotlin.String): HotTxDetail?
+
+/**
+ * Keeps each wallet's scan in `dir`, app storage that no backup copies, so the first sync after a restart
+ * asks only what can have changed. Call it once at app start. Without it scans live in memory only.
+ */
+public expect fun `hotUseStateDir`(`dir`: kotlin.String)
 
 /**
  * The latest transactions of the wallet's address, each as the wallet saw it. The order is

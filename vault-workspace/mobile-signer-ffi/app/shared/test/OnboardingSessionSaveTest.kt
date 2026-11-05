@@ -382,20 +382,24 @@ class OnboardingSessionSaveTest {
     @Test
     fun forgetSavedWalletErasesThenClears() {
         val store = FakeSecureStore()
-        val session = session(store)
+        val keys = Keys()
+        val session = session(store, keys)
         session.generateThisDevice()
         session.markBackupConfirmed()
         assertTrue(session.forgetSavedWallet(), "forget")
         assertEquals(1, store.erases, "erases")
+        assertEquals(1, keys.scansForgotten, "the core's scan file went with the wallet")
         assertTrue(session.words.isEmpty() && session.fingerprint.isEmpty() && session.passphrase.isEmpty(), "the key stayed in memory")
         assertEquals(listOf(false, false, false), session.flags(), "flags after forget")
         assertEquals(SaveState.NotSaved, session.saved, "saved after forget")
         assertNull(session.notSavedBecause)
 
         val stuck = FakeSecureStore(erase = failedErase(Why.TryLater))
-        val kept = session(stuck)
+        val stuckKeys = Keys()
+        val kept = session(stuck, stuckKeys)
         kept.generateThisDevice()
         assertFalse(kept.forgetSavedWallet(), "a failed erase reported success")
+        assertEquals(0, stuckKeys.scansForgotten, "the wallet is still on the phone, so its scan stays")
         assertTrue(kept.words == PUBLIC_WORDS_24, "a failed erase cleared memory")
         assertEquals(SaveState.Saved, kept.saved, "saved after a failed erase")
     }
@@ -722,7 +726,7 @@ class OnboardingSessionSaveTest {
         assertEmpty(damaged, "a damaged passphrase")
     }
 
-    private fun session(store: SecureStore, keys: Keys = Keys()) = OnboardingSession(SavedWallet(store), keys.newKey, keys.restoreKey)
+    private fun session(store: SecureStore, keys: Keys = Keys()) = OnboardingSession(SavedWallet(store), keys.newKey, keys.restoreKey, keys.forgetScans)
 
     /** Saves through [make], loads the saved copy into a new session, and compares every record field with what was set. */
     private fun roundTrip(case: String, flags: List<Boolean>, unconfirmedSend: UnconfirmedSend? = null, make: OnboardingSession.() -> Unit) {
@@ -779,6 +783,11 @@ private class Keys(val words: List<String> = PUBLIC_WORDS_24, val fingerprint: S
 
     val newKey: (String, KeyNetwork, UInt) -> SoftwareAccountKey = { _, _, _ -> key(words) }
     val restoreKey: (List<String>, String, KeyNetwork, UInt) -> SoftwareAccountKey = { w, _, _, _ -> key(w) }
+
+    /** How many times the session dropped the core's scan of every wallet. */
+    var scansForgotten = 0
+        private set
+    val forgetScans: () -> Unit = { scansForgotten++ }
 
     private fun key(words: List<String>): SoftwareAccountKey {
         made++

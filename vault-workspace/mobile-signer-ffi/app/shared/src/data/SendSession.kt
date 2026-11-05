@@ -4,7 +4,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
 import com.mebit.ffi.signer.FeeTiers
+import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotSendResult
 import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.HotTxDetail
@@ -61,6 +63,10 @@ class SingleSigWallet(
     /** The [WalletMode] the last [bindSession] left. [WalletMode.Demo] until the first bind. */
     var mode: WalletMode by mutableStateOf(WalletMode.Demo)
         private set
+
+    /** How far the scan behind the last snapshot got. The figures are the wallet's only once it is [HotScan.COMPLETE], see [figuresKnown]. */
+    var scan: HotScan by mutableStateOf(HotScan.COMPLETE)
+        private set
     /** What the wallet holds, confirmed and mempool: Home's figure. */
     var balanceSats: Long by mutableStateOf(0L)
         private set
@@ -92,8 +98,8 @@ class SingleSigWallet(
         private set
     val live: Boolean get() = mode == WalletMode.Live
 
-    /** False when the snapshot failed. Screens then show a dash, not [balanceSats], and no payment can start. */
-    val balanceKnown: Boolean get() = mode != WalletMode.Unavailable
+    /** False when the snapshot failed or its scan has not reached the end of the wallet. Screens then show a dash, not [balanceSats], and no payment can start. */
+    val balanceKnown: Boolean get() = figuresKnown(mode, scan)
 
     /** True when [receiveAddress] belongs to the key, so money sent to it arrives. The demo's address is made up. */
     val addressIsReal: Boolean get() = mode != WalletMode.Demo && receiveAddress.isNotEmpty()
@@ -131,10 +137,10 @@ class SingleSigWallet(
         if (unconfirmedSend == null) unconfirmedSend = session.unconfirmedSend
         try {
             val snap = snapshot(session.words, session.passphrase, network)
-            receiveAddress = snap.receiveAddress
-            balanceSats = snap.balanceSats.toLong()
-            spendableSats = snap.spendableSats.toLong()
-            mode = WalletMode.Live
+            show(snap) {
+                mode = WalletMode.Live
+                lastError = scanErrorThai(snap.scan)
+            }
             // A history failure is not the wallet's, so its own try keeps it from changing the mode or reaching lastError.
             val loaded = try {
                 fetchHistory(session.words, session.passphrase, network)
@@ -160,6 +166,18 @@ class SingleSigWallet(
                 ""
             }
         }
+    }
+
+    /**
+     * Takes [snap]'s figures and status, with [also], in one snapshot of the state, so no frame pairs a new partial sum with the
+     * old status and shows it as the balance, or the old sum with a new complete status.
+     */
+    private fun show(snap: HotWalletSnapshot, also: () -> Unit = {}) = Snapshot.withMutableSnapshot {
+        scan = snap.scan
+        receiveAddress = snap.receiveAddress
+        balanceSats = snap.balanceSats.toLong()
+        spendableSats = snap.spendableSats.toLong()
+        also()
     }
 
     /** The fee tiers for the Send screen. Blocks on the network for a few seconds at most, so call it off the main thread. The fixed tiers when the bridge fails, as when Rust cannot be reached. */
@@ -208,8 +226,8 @@ class SingleSigWallet(
             lastError = EARLIER_UNSETTLED
             return false
         }
-        // A real key never takes the mock below, which would show a made-up payment as sent.
-        if (session.words.size >= 12 && !live) {
+        // A real key never takes the mock below, which would show a made-up payment as sent, and never pays from a scan that has not found the whole wallet.
+        if (session.words.size >= 12 && !(live && balanceKnown)) {
             lastError = "ยังดึงยอดคงเหลือไม่ได้ จึงยังส่งไม่ได้"
             return false
         }
@@ -292,10 +310,7 @@ class SingleSigWallet(
         lastSentAtSeconds = nowSeconds()
         // Its own try: the payment is out once the post returns, and reading it as failed invites a retry that pays twice.
         try {
-            val snap = snapshot(session.words, session.passphrase, network)
-            balanceSats = snap.balanceSats.toLong()
-            spendableSats = snap.spendableSats.toLong()
-            receiveAddress = snap.receiveAddress
+            show(snapshot(session.words, session.passphrase, network))
         } catch (e: Exception) {
         }
         return true
@@ -313,6 +328,7 @@ class SingleSigWallet(
     /** Offline fixture for catalog / no-seed CI. */
     fun useDemoFixture() {
         mode = WalletMode.Demo
+        scan = HotScan.COMPLETE
         balanceSats = 1_250_000L
         spendableSats = 1_250_000L
         receiveAddress = "tb1qmebitdemosinglesig0000000000000000recv"
@@ -353,7 +369,7 @@ fun sendErrorThai(message: String?): String {
         m.startsWith("the whole balance ") -> "ยอดทั้งหมดหลังหักค่าธรรมเนียมน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)"
         m.startsWith("fee ") && " is below " in m -> "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น"
         m.startsWith("fee ") && " is above " in m -> "ค่าธรรมเนียมสูงผิดปกติ ตรวจจำนวนอีกครั้ง"
-        m.startsWith("esplora scan:") -> "ประวัติของกระเป๋านี้ผิดปกติ ตรวจกับ explorer ก่อนส่ง"
+        m.startsWith("esplora scan:") -> ABNORMAL_HISTORY
         m.startsWith("esplora utxo:") || m.startsWith("esplora balance:") -> "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง"
         m == "amount plus fee does not fit u64" -> "จำนวนผิดปกติ"
         m.startsWith("broadcast:") || m.startsWith("esplora post:") -> "ส่งไม่สำเร็จ"
@@ -365,6 +381,22 @@ fun sendErrorThai(message: String?): String {
 }
 
 private const val SEND_FALLBACK = "ส่งไม่สำเร็จ ลองใหม่ภายหลัง"
+
+/** The line for a host that lied about the wallet's history, on a payment it refused and on Home for a snapshot whose scan is [HotScan.UNVERIFIED]. */
+private const val ABNORMAL_HISTORY = "ประวัติของกระเป๋านี้ผิดปกติ ตรวจกับ explorer ก่อนส่ง"
+
+/**
+ * Whether screens may show and spend the wallet's figures. Never a live wallet's until its scan reached the end of the wallet,
+ * so a sum of part of the wallet never reads as its balance and makes the user think money is missing.
+ */
+fun figuresKnown(mode: SingleSigWallet.WalletMode, scan: HotScan): Boolean = when (mode) {
+    SingleSigWallet.WalletMode.Demo -> true
+    SingleSigWallet.WalletMode.Unavailable -> false
+    SingleSigWallet.WalletMode.Live -> scan == HotScan.COMPLETE
+}
+
+/** Home's red line for a snapshot whose scan a host lied in, or null. */
+fun scanErrorThai(scan: HotScan): String? = ABNORMAL_HISTORY.takeIf { scan == HotScan.UNVERIFIED }
 
 /** [SingleSigWallet.prepare] and [SingleSigWallet.post] while an earlier payment may be out. */
 private const val EARLIER_UNSETTLED = "การส่งครั้งก่อนยังยืนยันไม่ได้ จึงยังส่งใหม่ไม่ได้"

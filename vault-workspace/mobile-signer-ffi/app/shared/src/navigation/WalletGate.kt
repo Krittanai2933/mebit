@@ -8,6 +8,8 @@ import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.SavedWallet
 import com.mebit.app.data.rememberSavedWallet
 import com.mebit.app.feature.onboarding.UnlockScreen
+import com.mebit.app.rememberScanStateDir
+import com.mebit.ffi.signer.hotUseStateDir
 
 /**
  * What App() shows: Welcome, the unlock or recovery screen, or the nav host at the route the saved wallet opens at.
@@ -16,6 +18,9 @@ import com.mebit.app.feature.onboarding.UnlockScreen
  */
 @Composable
 fun WalletGate(wallet: SavedWallet = rememberSavedWallet()) {
+    // Before any screen asks the core about the wallet, so its first sync after a restart reads the scan file.
+    val scanDir = rememberScanStateDir()
+    remember(scanDir) { scanDir?.let(::hotUseStateDir) }
     // One wallet under both, because the gate's forget erases through the session.
     val session = remember(wallet) { OnboardingSession(wallet) }
     val gate = remember(wallet) { WalletGateState(wallet, session) }

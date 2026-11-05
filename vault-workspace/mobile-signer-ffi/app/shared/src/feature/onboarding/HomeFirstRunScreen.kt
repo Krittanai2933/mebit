@@ -40,7 +40,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.SingleSigWallet
+import com.mebit.app.data.figuresKnown
 import com.mebit.app.data.formatBtcCompact
+import com.mebit.ffi.signer.HotScan
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_chevron
 import com.mebit.app.resources.ic_warning
@@ -102,7 +104,8 @@ fun HomeFirstRunScreen(
                 Spacer(modifier = Modifier.height(14.dp))
             }
             NotSavedNotice(session, Modifier.padding(bottom = 14.dp))
-            BalanceHero(heroBalanceText(wallet.balanceSats, wallet.live), zero = wallet.live && wallet.balanceSats == 0L)
+            val known = heroKnows(wallet.mode, wallet.scan)
+            BalanceHero(heroBalanceText(wallet.balanceSats, known), zero = known && wallet.balanceSats == 0L)
             Spacer(modifier = Modifier.height(24.dp))
             Text("จะเริ่มใช้แบบไหน", color = MbNavyInk, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             Text("เลือกตอนนี้ หรือสร้าง Vault ทีหลังก็ได้", color = MbBody, fontSize = 13.sp)
@@ -139,8 +142,15 @@ fun HomeFirstRunScreen(
     }
 }
 
-/** The hero's amount, every sat that matters, and a dash until the chain answers. [BalanceHero] adds the unit itself. */
-internal fun heroBalanceText(sats: Long, live: Boolean): String = if (live) formatBtcCompact(sats) else "—"
+/** The hero's amount, every sat that matters, and a dash until [known]. [BalanceHero] adds the unit itself. */
+internal fun heroBalanceText(sats: Long, known: Boolean): String = if (known) formatBtcCompact(sats) else "—"
+
+/**
+ * Whether the hero shows the wallet's own figures. It shows a live wallet's once its scan reached the end of the wallet, so a sum
+ * of part of it never reads as the balance. The demo fixture belongs to the catalog's Home, not to this one.
+ */
+internal fun heroKnows(mode: SingleSigWallet.WalletMode, scan: HotScan): Boolean =
+    mode == SingleSigWallet.WalletMode.Live && figuresKnown(mode, scan)
 
 /** Penpot 1.3.2: sits above the balance until the 24 words are backed up. */
 @Composable

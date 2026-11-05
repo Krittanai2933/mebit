@@ -144,7 +144,8 @@ fun S5ReviewSignScreen(
             ReviewDivider()
             ReviewRow("หักจากกระเป๋ารวม", "${formatBtcCompact(total)} BTC", bold = true)
             ReviewDivider()
-            ReviewRow("คงเหลือ", "${formatBtcCompact((wallet.balanceSats - total).coerceAtLeast(0))} BTC")
+            // A scan that has not found the whole wallet leaves no balance to take the payment from.
+            ReviewRow("คงเหลือ", if (wallet.balanceKnown) "${formatBtcCompact((wallet.balanceSats - total).coerceAtLeast(0))} BTC" else "—")
         }
         if (question != null) {
             HighFeeConfirm(

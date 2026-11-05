@@ -1322,6 +1322,10 @@ internal val UniffiVTableCallbackInterfacePairingCodesUniffiByValue.`uniffiFree`
 
 
 
+
+
+
+
 internal object UniffiLib {
     init {
             uniffiCallbackInterfacePairingCodes.register(this)
@@ -1500,6 +1504,11 @@ internal object UniffiLib {
         `network`,
         uniffiCallStatus,
     )
+    fun uniffi_mobile_signer_ffi_fn_func_hot_forget_scan_state(
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_forget_scan_state(
+        uniffiCallStatus,
+    )
     fun uniffi_mobile_signer_ffi_fn_func_hot_prepare_send_all(
         `mnemonicWords`: RustBufferByValue,
         `passphrase`: RustBufferByValue,
@@ -1556,6 +1565,13 @@ internal object UniffiLib {
         `passphrase`,
         `network`,
         `txid`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_func_hot_use_state_dir(
+        `dir`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_use_state_dir(
+        `dir`,
         uniffiCallStatus,
     )
     fun uniffi_mobile_signer_ffi_fn_func_hot_wallet_history(
@@ -2019,6 +2035,9 @@ internal object UniffiLib {
     fun uniffi_mobile_signer_ffi_checksum_func_hot_fee_tiers(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_fee_tiers(
     )
+    fun uniffi_mobile_signer_ffi_checksum_func_hot_forget_scan_state(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_forget_scan_state(
+    )
     fun uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_all(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_all(
     )
@@ -2030,6 +2049,9 @@ internal object UniffiLib {
     )
     fun uniffi_mobile_signer_ffi_checksum_func_hot_tx_detail(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_tx_detail(
+    )
+    fun uniffi_mobile_signer_ffi_checksum_func_hot_use_state_dir(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_use_state_dir(
     )
     fun uniffi_mobile_signer_ffi_checksum_func_hot_wallet_history(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_wallet_history(
@@ -3095,6 +3117,7 @@ public object FfiConverterTypeHotWalletSnapshot: FfiConverterRustBuffer<HotWalle
             FfiConverterULong.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterTypeKeyNetwork.read(buf),
+            FfiConverterTypeHotScan.read(buf),
         )
     }
 
@@ -3102,7 +3125,8 @@ public object FfiConverterTypeHotWalletSnapshot: FfiConverterRustBuffer<HotWalle
             FfiConverterString.allocationSize(value.`receiveAddress`) +
             FfiConverterULong.allocationSize(value.`balanceSats`) +
             FfiConverterULong.allocationSize(value.`spendableSats`) +
-            FfiConverterTypeKeyNetwork.allocationSize(value.`network`)
+            FfiConverterTypeKeyNetwork.allocationSize(value.`network`) +
+            FfiConverterTypeHotScan.allocationSize(value.`scan`)
     )
 
     override fun write(value: HotWalletSnapshot, buf: ByteBuffer) {
@@ -3110,6 +3134,7 @@ public object FfiConverterTypeHotWalletSnapshot: FfiConverterRustBuffer<HotWalle
         FfiConverterULong.write(value.`balanceSats`, buf)
         FfiConverterULong.write(value.`spendableSats`, buf)
         FfiConverterTypeKeyNetwork.write(value.`network`, buf)
+        FfiConverterTypeHotScan.write(value.`scan`, buf)
     }
 }
 
@@ -3305,6 +3330,24 @@ public object FfiConverterTypeBleError : FfiConverterRustBuffer<BleException> {
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+public object FfiConverterTypeHotScan: FfiConverterRustBuffer<HotScan> {
+    override fun read(buf: ByteBuffer): HotScan = try {
+        HotScan.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: HotScan): ULong = 4UL
+
+    override fun write(value: HotScan, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
     }
 }
 
@@ -3954,6 +3997,18 @@ public actual fun `hotFeeTiers`(`network`: KeyNetwork): FeeTiers {
 }
 
 /**
+ * Forgets every wallet's scan, in memory and in the folder `hot_use_state_dir` named. Call it when the
+ * wallet is erased.
+ */
+public actual fun `hotForgetScanState`() {
+    uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_forget_scan_state(
+            uniffiRustCallStatus,
+        )
+    }
+}
+
+/**
  * Scan, spend every coin `hot_prepare_send_at_rate` would consider, and sign one output paying
  * `destination` the whole balance less the fee, with no change, and post nothing. The fee is the
  * size of that transaction times `fee_rate_sat_vb`, so it and the amount are only known once the
@@ -4036,6 +4091,19 @@ public actual fun `hotTxDetail`(`mnemonicWords`: List<kotlin.String>, `passphras
             uniffiRustCallStatus,
         )
     })
+}
+
+/**
+ * Keeps each wallet's scan in `dir`, app storage that no backup copies, so the first sync after a restart
+ * asks only what can have changed. Call it once at app start. Without it scans live in memory only.
+ */
+public actual fun `hotUseStateDir`(`dir`: kotlin.String) {
+    uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_use_state_dir(
+            FfiConverterString.lower(`dir`),
+            uniffiRustCallStatus,
+        )
+    }
 }
 
 /**

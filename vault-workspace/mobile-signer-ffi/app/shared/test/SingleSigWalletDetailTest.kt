@@ -3,6 +3,7 @@ package com.mebit.app.data
 import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.HotTxDetail
+import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.MobileSignerException
@@ -30,7 +31,7 @@ private class DetailChain(var answer: () -> HotTxDetail?) {
     val wallet = SingleSigWallet(
         prepareAtRate = { _, _, _, _, _, _ -> fail("prepare ran") },
         postHex = { _, _, _ -> fail("post ran") },
-        snapshot = { _, _, network -> HotWalletSnapshot("tb1qaddressthesnapshotreported", 1_000_000uL, 1_000_000uL, network) },
+        snapshot = { _, _, network -> HotWalletSnapshot("tb1qaddressthesnapshotreported", 1_000_000uL, 1_000_000uL, network, HotScan.COMPLETE) },
         fetchHistory = { _, _, _ -> listOf(ROW) },
         fetchDetail = { words, passphrase, network, txid ->
             asked += Asked(words, passphrase, network, txid)

@@ -8,6 +8,7 @@ import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
 import com.mebit.ffi.signer.FeeTiers
 import com.mebit.ffi.signer.HotSendResult
 import com.mebit.ffi.signer.HotTx
+import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.MobileSignerException
@@ -67,7 +68,7 @@ private class FakeHot {
     var prepareResult: (feeRateSatVb: ULong) -> PreparedSend = { rate -> PreparedSend(TXID, "hex-1", rate * 141uL, 100_000uL) }
     var prepareAllResult: (feeRateSatVb: ULong) -> PreparedSend = { rate -> PreparedSend(TXID, "hex-all", rate * 178uL, 1_000_000uL - rate * 178uL) }
     var postResult: () -> HotSendResult = { HotSendResult(TXID) }
-    var snapshotResult: () -> HotWalletSnapshot = { HotWalletSnapshot("tb1qbefore", 1_000_000uL, 1_000_000uL, KeyNetwork.TEST) }
+    var snapshotResult: () -> HotWalletSnapshot = { HotWalletSnapshot("tb1qbefore", 1_000_000uL, 1_000_000uL, KeyNetwork.TEST, HotScan.COMPLETE) }
     var clock = SENT_AT
     val prepares = mutableListOf<PrepareCall>()
     val prepareAlls = mutableListOf<PrepareAllCall>()
@@ -186,7 +187,7 @@ class SingleSigWalletBroadcastTest {
         val hot = FakeHot()
         val session = hot.goLive()
         val snapshots = hot.snapshots
-        hot.snapshotResult = { HotWalletSnapshot("tb1qafter", 898_872uL, 800_000uL, KeyNetwork.TEST) }
+        hot.snapshotResult = { HotWalletSnapshot("tb1qafter", 898_872uL, 800_000uL, KeyNetwork.TEST, HotScan.COMPLETE) }
         val returned = hot.wallet.broadcast(session, 100_000, 8, DESTINATION)
         assertEquals(Seen(true, TXID, null, 898_872L, "tb1qafter"), hot.wallet.seen(returned))
         assertEquals(800_000L, hot.wallet.spendableSats, "the spendable figure from the refresh")
@@ -234,7 +235,7 @@ class SingleSigWalletBroadcastTest {
         }
         hot.snapshotResult = {
             hot.clock += 5
-            HotWalletSnapshot("tb1qafter", 898_872uL, 898_872uL, KeyNetwork.TEST)
+            HotWalletSnapshot("tb1qafter", 898_872uL, 898_872uL, KeyNetwork.TEST, HotScan.COMPLETE)
         }
         assertEquals(0L, hot.wallet.lastSentAtSeconds, "nothing sent yet")
         assertTrue(hot.wallet.broadcast(session, 100_000, 8, DESTINATION))
@@ -904,7 +905,7 @@ class SingleSigWalletBroadcastTest {
     @Test
     fun theSpendableBalanceComesFromTheSnapshotBesideTheBalanceThatKeepsTheMempool() {
         val hot = FakeHot()
-        hot.snapshotResult = { HotWalletSnapshot("tb1qbefore", 10_000_000uL, 1_000_000uL, KeyNetwork.TEST) }
+        hot.snapshotResult = { HotWalletSnapshot("tb1qbefore", 10_000_000uL, 1_000_000uL, KeyNetwork.TEST, HotScan.COMPLETE) }
         val session = hot.goLive()
         assertEquals(10_000_000L, hot.wallet.balanceSats, "Home's figure")
         assertEquals(1_000_000L, hot.wallet.spendableSats, "the Send screen's figure")

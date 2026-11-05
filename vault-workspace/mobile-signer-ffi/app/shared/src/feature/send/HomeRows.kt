@@ -1,7 +1,9 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.formatThaiDateTimeShort
+import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotTx
 import kotlin.math.abs
 
@@ -59,3 +61,17 @@ internal fun homeHasMoreHistory(history: List<HotTx>): Boolean = history.size > 
  */
 internal fun homeBalanceText(sats: Long, known: Boolean, loading: Boolean): String =
     if (known && !loading) formatBtcCompact(sats) + " BTC" else "—"
+
+/** True while a live wallet's scan stopped short and Home asks again by itself, after [scanContinueDelayMillis]. */
+internal fun scanContinues(mode: WalletMode, scan: HotScan): Boolean = mode == WalletMode.Live && scan == HotScan.CONTINUING
+
+/** The calm line under Home's dash while the scan goes on by itself, or null. The copy is a draft, because no board shows this state yet. */
+internal fun homeScanLine(mode: WalletMode, scan: HotScan): String? =
+    "กำลังค้นหาประวัติของกระเป๋า · จะค้นต่อให้อัตโนมัติ".takeIf { scanContinues(mode, scan) }
+
+/**
+ * How long Home waits before it asks again after the [asked]th ask in a row whose scan stopped short. It is a minute, then twice
+ * as long each time, and never more than a quarter of an hour. While a public host that refused with its request limit stays the
+ * host in use, it answers each ask of a ten-address window three times over, so asking every minute could keep it refusing.
+ */
+internal fun scanContinueDelayMillis(asked: Int): Long = (60_000L shl asked.coerceIn(0, 4)).coerceAtMost(15 * 60_000L)

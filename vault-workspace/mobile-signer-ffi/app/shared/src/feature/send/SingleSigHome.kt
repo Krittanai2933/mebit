@@ -76,6 +76,7 @@ import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.ffi.signer.HotTx
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.painterResource
 
@@ -128,6 +129,18 @@ internal fun SingleSigHome(
         binding = false
         pulled = false
     }
+    // A scan that stopped short goes on by itself, as its line under the dash promises, while Home is on screen. A bind that
+    // starts in the wait restarts this effect, so the wait ends with no bind running.
+    var asked by remember { mutableIntStateOf(0) }
+    LaunchedEffect(wallet.mode, wallet.scan, binding) {
+        if (!scanContinues(wallet.mode, wallet.scan)) {
+            asked = 0
+        } else if (!binding) {
+            delay(scanContinueDelayMillis(asked))
+            asked++
+            retries++
+        }
+    }
     var keyDetails by remember { mutableStateOf(false) }
     val debugBuild = rememberIsDebugBuild()
     val quote = rememberFiatQuote(quotes)
@@ -176,10 +189,20 @@ internal fun SingleSigHome(
                 }
             }
             Spacer(modifier = Modifier.height(2.dp))
-            // The board's baht line sits here, and so do the fetch note and the retry. The room stays when none shows, so nothing below it moves.
+            // The board's baht line sits here, and so do the fetch note, the scan's calm line and the retry. The room stays when none shows, so nothing below it moves.
+            val scanLine = homeScanLine(wallet.mode, wallet.scan)
             Box(modifier = Modifier.height(17.dp)) {
                 when {
                     loading -> GoldLine("กำลังดึงยอด…")
+                    scanLine != null -> Text(
+                        scanLine,
+                        color = MbWhite.copy(alpha = 0.6f),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Light,
+                        lineHeight = 17.sp,
+                        maxLines = 1,
+                        modifier = Modifier.testTag("ss_scan_line"),
+                    )
                     !wallet.balanceKnown -> GoldLine(
                         text = "ดึงยอดไม่สำเร็จ · แตะเพื่อลองใหม่",
                         modifier = Modifier.clickable(role = Role.Button, enabled = !binding) { retries++ }.testTag("cta_s1_retry"),

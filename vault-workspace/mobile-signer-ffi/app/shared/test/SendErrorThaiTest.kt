@@ -15,7 +15,11 @@ class SendErrorThaiTest {
         "fee rate 0 is below 1 sat/vB" to "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น",
         "fee rate 2001 is above 2000 sat/vB" to "ค่าธรรมเนียมสูงผิดปกติ ตรวจจำนวนอีกครั้ง",
         "fee did not settle in 4 passes, send a smaller amount" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
-        "esplora scan: more than 1000 addresses on one chain, the history is abnormal" to "ประวัติของกระเป๋านี้ผิดปกติ ตรวจกับ explorer ก่อนส่ง",
+        // A host lied in a proof, and no other host was left.
+        "esplora scan: receive index 19: tb1qexample: transaction 1111111111111111111111111111111111111111111111111111111111111111 does not pay it" to "ประวัติของกระเป๋านี้ผิดปกติ ตรวจกับ explorer ก่อนส่ง",
+        // A payment or a history while the scan goes on, after a host's request limit or a lost read.
+        "esplora get: receive index 190 could not be asked: esplora get: HTTP status 429, gave up after 3 attempts" to "explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่",
+        "esplora get: receive index 3 could not be proven: esplora get: https://blockstream.info/testnet4/api/tx/aa/hex: Network Error: connection reset by peer, gave up after 3 attempts" to "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง",
         "esplora utxo: 1111111111111111111111111111111111111111111111111111111111111111:0 is listed twice" to "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง",
         "esplora utxo: the coins' values do not fit u64" to "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง",
         "esplora balance: 18446744073709551616 sats does not fit u64" to "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง",

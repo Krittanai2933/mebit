@@ -10,6 +10,7 @@ import com.mebit.app.WriteMode
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
 import com.mebit.ffi.signer.generateSoftwareMultisigKey
+import com.mebit.ffi.signer.hotForgetScanState
 import com.mebit.ffi.signer.restoreSoftwareMultisigKey
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
@@ -20,13 +21,14 @@ enum class SaveState { NotSaved, Staged, Saved }
 /**
  * Onboarding state for Movie Page 00.* screens, plus the hot wallet's payment of unknown outcome, which is saved with the
  * key. Without a [wallet] it lives in memory only. With one, each committed change is saved through one write point, and
- * only [forgetSavedWallet] erases the saved copy. [newKey] and [restoreKey] make the key, and tests replace them because
- * the host JVM has no native library.
+ * only [forgetSavedWallet] erases the saved copy. [newKey] and [restoreKey] make the key, and [forgetScans] drops the core's
+ * scan of every wallet, and tests replace them because the host JVM has no native library.
  */
 class OnboardingSession(
     private val wallet: SavedWallet? = null,
     private val newKey: (String, KeyNetwork, UInt) -> SoftwareAccountKey = { p, n, a -> generateSoftwareMultisigKey(p, n, a) },
     private val restoreKey: (List<String>, String, KeyNetwork, UInt) -> SoftwareAccountKey = { w, p, n, a -> restoreSoftwareMultisigKey(w, p, n, a) },
+    private val forgetScans: () -> Unit = { hotForgetScanState() },
 ) {
     var words: List<String> by mutableStateOf(emptyList())
         private set
@@ -214,9 +216,10 @@ class OnboardingSession(
         persist()
     }
 
-    /** After the user confirmed. Erases the saved wallet, then clears memory. A failed erase keeps both and returns false. */
+    /** After the user confirmed. Erases the saved wallet and the core's scan files, then clears memory. A failed erase keeps all three and returns false. */
     fun forgetSavedWallet(): Boolean = when (val r = wallet?.forget() ?: EraseResult.Erased) {
         EraseResult.Erased -> {
+            forgetScans()
             clear()
             true
         }
