@@ -107,11 +107,6 @@ fun M2CollectSignaturesScreen(
             }
             Spacer(modifier = Modifier.height(8.dp))
         }
-        if (vaultKeys.isEmpty()) {
-            Text("ไม่มีกุญแจของ Vault ในคลัง — ใช้ demo soft-sign", color = MaterialTheme.colorScheme.error)
-            SecondaryCta("จำลองลายเซ็น #1", "cta_sign_demo_1", { draft.markSigned("DEMO0001") })
-            SecondaryCta("จำลองลายเซ็น #2", "cta_sign_demo_2", { draft.markSigned("DEMO0002") })
-        }
         Spacer(modifier = Modifier.height(16.dp))
         PrimaryCta(
             "พร้อมส่งธุรกรรม",
@@ -178,11 +173,6 @@ fun M3SignOnJadeScreen(
                     busyMsg = e.message
                 }
             }
-        })
-        Spacer(modifier = Modifier.height(8.dp))
-        SecondaryCta("จำลองเซ็นสำเร็จ (CI)", "cta_m3_signed", {
-            draft.markSigned("JADEDEMO")
-            onSigned()
         })
         busyMsg?.let {
             Spacer(modifier = Modifier.height(8.dp))
