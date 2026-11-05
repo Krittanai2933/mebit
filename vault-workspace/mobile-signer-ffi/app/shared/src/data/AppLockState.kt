@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.mebit.app.BiometricResult
 import com.mebit.app.Biometrics
+import com.mebit.app.SleepCountingTime
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
@@ -15,7 +16,7 @@ import kotlin.time.TimeSource
  * In memory only: a cold start begins at the wallet gate, which asks for the owner itself when a wallet is saved, and this lock
  * starts unlocked with the nav host that owns it.
  */
-class AppLockState(private val clock: TimeSource = TimeSource.Monotonic) {
+class AppLockState(internal val clock: TimeSource = SleepCountingTime) {
     var locked: Boolean by mutableStateOf(false)
         private set
 

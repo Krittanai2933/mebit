@@ -1,9 +1,11 @@
 package com.mebit.app.data
 
+import com.mebit.app.SleepCountingTime
 import com.mebit.app.sha256
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
@@ -96,6 +98,11 @@ class SpendingPinTest {
             pin.waitLeft()
         }
         assertEquals(listOf(Duration.ZERO, Duration.ZERO, 10.seconds, 30.seconds, 1.minutes, 2.minutes, 5.minutes, 10.minutes, 30.minutes, 30.minutes, 30.minutes), waits)
+    }
+
+    @Test
+    fun theWaitsRunOnTheClockThatCountsSleep() {
+        assertSame(SleepCountingTime, SpendingPin().clock, "a wait spent asleep has passed")
     }
 
     @Test

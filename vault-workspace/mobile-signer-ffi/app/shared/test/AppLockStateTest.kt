@@ -2,10 +2,14 @@ package com.mebit.app.data
 
 import com.mebit.app.BiometricResult
 import com.mebit.app.Biometrics
+import com.mebit.app.NanosTimeSource
+import com.mebit.app.SleepCountingTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TestTimeSource
 import kotlinx.coroutines.runBlocking
@@ -59,6 +63,29 @@ class AppLockStateTest {
         assertTrue(state.locked)
         state.unlock()
         assertFalse(state.locked)
+    }
+
+    @Test
+    fun aMinuteAsleepLocksOnlyOnAClockThatCountsSleep() {
+        // Ten minutes away, all but two seconds of them in deep sleep, read by a clock that stops in deep sleep, as System.nanoTime
+        // does on Android, and by one that counts it.
+        var awake = 0L
+        var withSleep = 0L
+        val stopsAsleep = AppLockState(NanosTimeSource { awake })
+        val countsSleep = AppLockState(NanosTimeSource { withSleep })
+        stopsAsleep.onBackground()
+        countsSleep.onBackground()
+        awake += 2.seconds.inWholeNanoseconds
+        withSleep += 10.minutes.inWholeNanoseconds
+        stopsAsleep.onForeground(enabled = true)
+        countsSleep.onForeground(enabled = true)
+        assertFalse(stopsAsleep.locked, "a clock that stops in deep sleep counts two seconds away and leaves Home open")
+        assertTrue(countsSleep.locked, "ten minutes away locks, asleep or not")
+    }
+
+    @Test
+    fun theLockRunsOnTheClockThatCountsSleep() {
+        assertSame(SleepCountingTime, AppLockState().clock, "the 60-second lock counts a minute spent asleep")
     }
 
     @Test

@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.mebit.app.BiometricResult
 import com.mebit.app.Biometrics
+import com.mebit.app.SleepCountingTime
 import com.mebit.app.sha256
 import kotlin.random.Random
 import kotlin.time.Duration
@@ -22,7 +23,7 @@ const val PIN_LENGTH = 6
  * beside the words in [OnboardingSession] and goes with them, as a salted hash in memory and a count of the wrong PINs since the
  * last right one, timed on the monotonic [clock]. Nothing of it is ever written, and no number of wrong PINs wipes anything.
  */
-class SpendingPin(private val clock: TimeSource = TimeSource.Monotonic) {
+class SpendingPin(internal val clock: TimeSource = SleepCountingTime) {
     private class Salted(val salt: ByteArray, val hash: ByteArray)
 
     private var stored: Salted? by mutableStateOf(null)
