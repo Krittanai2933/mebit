@@ -54,7 +54,7 @@ fun M1SendVaultScreen(
         Text("จำนวน · ${draft.amountSats} sats")
         Spacer(modifier = Modifier.height(20.dp))
         PrimaryCta("ต่อไป · เก็บลายเซ็น", "cta_m1_collect", {
-            draft.resetSignatures()
+            draft.resetSignatures(vault)
             onContinue()
         })
     }
@@ -62,7 +62,6 @@ fun M1SendVaultScreen(
 
 @Composable
 fun M2CollectSignaturesScreen(
-    vault: CreatedVault?,
     store: KeyringStore,
     draft: MultisigSendDraft,
     onSignJade: () -> Unit,
@@ -70,7 +69,8 @@ fun M2CollectSignaturesScreen(
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
-    val m = vault?.m ?: 2
+    val vault = draft.vault
+    val m = vault?.m ?: 0
     MebitScreen(
         eyebrow = "COLLECT SIGNATURES",
         title = "เก็บลายเซ็น",
@@ -85,6 +85,7 @@ fun M2CollectSignaturesScreen(
         )
         Text(draft.psbtBase64.take(48) + "…", style = MaterialTheme.typography.bodySmall)
         Spacer(modifier = Modifier.height(12.dp))
+        if (vault == null) Text("ยังไม่ได้เริ่มส่งจาก Vault · กลับไปหน้าก่อน", color = MaterialTheme.colorScheme.error)
         val vaultKeys = vault?.keyFingerprints.orEmpty().mapNotNull { fp ->
             store.keys.find { it.fingerprint.equals(fp, ignoreCase = true) }
         }
@@ -116,7 +117,7 @@ fun M2CollectSignaturesScreen(
             "พร้อมส่งธุรกรรม",
             "cta_m2_ready",
             onReady,
-            enabled = draft.readyToBroadcast(m),
+            enabled = draft.readyToBroadcast(),
         )
         draft.lastError?.let {
             Spacer(modifier = Modifier.height(8.dp))
@@ -162,8 +163,11 @@ fun M3SignOnJadeScreen(
                         link.unlock()
                         val account = link.accountXpub(TESTNET_MULTISIG_ACCOUNT)
                         val signed = link.signPsbt(draft.psbtBase64, account.masterFingerprint)
+                        if (!draft.markSigned(account.masterFingerprint)) {
+                            busyMsg = draft.lastError
+                            return@launch
+                        }
                         draft.setSignedPsbt(signed)
-                        draft.markSigned(account.masterFingerprint)
                         busyMsg = null
                         onSigned()
                     } finally {
@@ -189,13 +193,12 @@ fun M3SignOnJadeScreen(
 
 @Composable
 fun M4ReadyToBroadcastScreen(
-    vault: CreatedVault?,
     draft: MultisigSendDraft,
     onBroadcast: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
-    val m = vault?.m ?: 2
+    val m = draft.vault?.m ?: 0
     MebitScreen(
         eyebrow = "READY TO BROADCAST",
         title = "พร้อมส่งธุรกรรม",
@@ -211,8 +214,8 @@ fun M4ReadyToBroadcastScreen(
         }
         Spacer(modifier = Modifier.height(20.dp))
         PrimaryCta("Broadcast", "cta_m4_broadcast", {
-            if (draft.broadcastMock(m)) onBroadcast()
-        }, enabled = draft.readyToBroadcast(m))
+            if (draft.broadcastMock()) onBroadcast()
+        }, enabled = draft.readyToBroadcast() && draft.broadcastTxid.isBlank())
         draft.lastError?.let {
             Spacer(modifier = Modifier.height(8.dp))
             Text(it, color = MaterialTheme.colorScheme.error)

@@ -465,7 +465,6 @@ fun MebitNavHost(
             onOpenCatalog = openCatalog,
         )
         MovieRoute.M2CollectSignatures -> M2CollectSignaturesScreen(
-            vault = vaultDraft.selectedVault(),
             store = keyring,
             draft = multisigSend,
             onSignJade = { navigate(MovieRoute.M3SignOnJade) },
@@ -480,7 +479,6 @@ fun MebitNavHost(
             onOpenCatalog = openCatalog,
         )
         MovieRoute.M4ReadyToBroadcast -> M4ReadyToBroadcastScreen(
-            vault = vaultDraft.selectedVault(),
             draft = multisigSend,
             onBroadcast = { navigate(MovieRoute.VaultDetail) },
             onBack = onBack,

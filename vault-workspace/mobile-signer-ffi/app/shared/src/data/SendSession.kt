@@ -578,10 +578,19 @@ class SendDraft {
     }
 }
 
+/**
+ * One send from one vault. [resetSignatures] binds the vault being spent, and [markSigned] keeps a fingerprint only when it is a
+ * key of that vault, once, so [signedFingerprints] is the set of distinct vault signers and [readyToBroadcast] compares its size
+ * with the vault's own `m`. Nothing a screen passes in can lower the threshold or count a key from outside the vault.
+ */
 class MultisigSendDraft {
     var amountSats: Long by mutableStateOf(100_000L)
     var destination: String by mutableStateOf("tb1qvaultdestinationdemo000000000000000")
-    val signedFingerprints = mutableStateListOf<String>()
+    var vault: CreatedVault? by mutableStateOf(null)
+        private set
+    private val signed = mutableStateListOf<String>()
+    /** Uppercase master fingerprints of the vault keys that have signed this send, each once. */
+    val signedFingerprints: List<String> get() = signed
     var psbtBase64: String by mutableStateOf("")
         private set
     var lastError: String? by mutableStateOf(null)
@@ -589,26 +598,34 @@ class MultisigSendDraft {
     var broadcastTxid: String by mutableStateOf("")
         private set
 
-    fun resetSignatures() {
-        signedFingerprints.clear()
+    fun resetSignatures(vault: CreatedVault) {
+        this.vault = vault
+        signed.clear()
         broadcastTxid = ""
         lastError = null
         // Placeholder PSBT body until vault PSBT builder lands; HW sign still goes through WalletLink.
         psbtBase64 = "cHNidP8BAF4CAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/////wAAAAA="
     }
 
-    fun markSigned(fingerprint: String) {
+    /** Records that a vault key signed. False, with [lastError], when no send is started or [fingerprint] is not a key of its vault. */
+    fun markSigned(fingerprint: String): Boolean {
         val fp = fingerprint.uppercase()
-        if (fp !in signedFingerprints) signedFingerprints.add(fp)
+        val keys = vault?.keyFingerprints.orEmpty()
+        if (keys.none { it.equals(fp, ignoreCase = true) }) {
+            lastError = "กุญแจนี้ไม่ใช่กุญแจของ Vault นี้"
+            return false
+        }
+        if (fp !in signed) signed.add(fp)
+        return true
     }
 
     fun setSignedPsbt(base64: String) {
         psbtBase64 = base64
     }
 
-    fun signaturesNeeded(m: Int): Int = (m - signedFingerprints.size).coerceAtLeast(0)
+    fun signaturesNeeded(): Int = ((vault?.m ?: 0) - signed.size).coerceAtLeast(0)
 
-    fun readyToBroadcast(m: Int): Boolean = signedFingerprints.size >= m
+    fun readyToBroadcast(): Boolean = vault?.let { signed.size >= it.m } ?: false
 
     /** Destination + amount gate before HW sign (vault-core real-PSBT policy is Term-2). */
     fun policyAllowsSign(): Boolean {
@@ -619,13 +636,17 @@ class MultisigSendDraft {
         return true
     }
 
-    fun broadcastMock(m: Int): Boolean {
-        if (!readyToBroadcast(m)) {
+    /** Stand-in for the network broadcast: it only mints a txid. A send that already has one is not broadcast again. */
+    fun broadcastMock(): Boolean {
+        if (!readyToBroadcast()) {
             lastError = "ลายเซ็นยังไม่ครบ"
             return false
         }
-        val n = signedFingerprints.size
-        broadcastTxid = "mockvaulttx_${n}_${amountSats.toString(16)}"
+        if (broadcastTxid.isNotBlank()) {
+            lastError = "ส่งธุรกรรมนี้ไปแล้ว"
+            return false
+        }
+        broadcastTxid = "mockvaulttx_${signed.size}_${amountSats.toString(16)}"
         return true
     }
 }
