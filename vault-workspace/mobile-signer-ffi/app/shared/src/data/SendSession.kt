@@ -110,7 +110,7 @@ class SingleSigWallet(
 
     /**
      * The payment that may be out, or null. [post] sets it and saves it before the post, and while it is set [prepare] refuses, because the same payment could go out twice. It clears when the post returns or the node refuses, when a [bindSession] loads a [history] that holds its txid, when the user clears it through [clearUnconfirmedSend] after checking the explorer, and in [useDemoFixture]. Never by the clock. [lastTxid] and [lastSentAtSeconds] stay for payments that went out.
-     * The session saves it with the wallet ([OnboardingSession.unconfirmedSend]), so a wallet built after a restart takes it back at its first bind and clearing it here clears the saved copy too.
+     * The session keeps it in the guard file ([OnboardingSession.unconfirmedSend]), so a wallet built after a restart, or another live instance of the wallet, takes it at its next bind, and clearing it here clears the file too.
      */
     var unconfirmedSend: UnconfirmedSend? by mutableStateOf(null)
         private set
@@ -133,8 +133,8 @@ class SingleSigWallet(
             useDemoFixture()
             return
         }
-        // A wallet built after a restart has no guard of its own yet, so it takes the one the session restored from the saved wallet.
-        if (unconfirmedSend == null) unconfirmedSend = session.unconfirmedSend
+        // A wallet with no guard of its own takes the one the phone keeps for this key, which a run before a restart or another instance wrote.
+        if (unconfirmedSend == null) unconfirmedSend = session.unconfirmedSend()
         try {
             val snap = snapshot(session.words, session.passphrase, network)
             show(snap) {
@@ -281,11 +281,18 @@ class SingleSigWallet(
         heldSend = null
         // The guard reaches the phone before the post, so an app killed during the post still refuses this payment after the restart.
         val pending = UnconfirmedSend(prepared.txid, nowSeconds())
-        unconfirmedSend = pending
-        if (!session.recordUnconfirmedSend(pending.txid, pending.sinceSeconds)) {
-            clearUnconfirmedSend(session)
-            lastError = "บันทึกสถานะการส่งไม่ได้ จึงยังไม่ส่ง ลองใหม่ภายหลัง"
-            return false
+        when (val claim = session.recordUnconfirmedSend(pending.txid, pending.sinceSeconds)) {
+            Claim.Written -> unconfirmedSend = pending
+            is Claim.Taken -> {
+                // Another live instance of this wallet, or a run before a restart, guarded a payment that may be out.
+                unconfirmedSend = claim.earlier
+                lastError = EARLIER_UNSETTLED
+                return false
+            }
+            Claim.NotSaved -> {
+                lastError = "บันทึกสถานะการส่งไม่ได้ จึงยังไม่ส่ง ลองใหม่ภายหลัง"
+                return false
+            }
         }
         try {
             postHex(network, prepared.hex, prepared.txid)
@@ -316,10 +323,11 @@ class SingleSigWallet(
         return true
     }
 
-    /** The user checked the explorer and found no such transaction. Clears the guard here and the saved copy, so a new payment can start. */
+    /** The user checked the explorer and found no such transaction. Clears the guard here and on the phone, so a new payment can start. */
     fun clearUnconfirmedSend(session: OnboardingSession) {
+        val pending = unconfirmedSend ?: return
         unconfirmedSend = null
-        session.clearUnconfirmedSend()
+        session.clearUnconfirmedSend(pending.txid)
     }
 
     /** Whether the screen may offer the clear control now, by [offersUnconfirmedClear]. False without a guard. */

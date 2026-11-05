@@ -5,9 +5,11 @@ import androidx.compose.runtime.remember
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mebit.app.data.OnboardingSession
+import com.mebit.app.data.PendingPayments
 import com.mebit.app.data.SavedWallet
 import com.mebit.app.data.rememberSavedWallet
 import com.mebit.app.feature.onboarding.UnlockScreen
+import com.mebit.app.plainFile
 import com.mebit.app.rememberScanStateDir
 import com.mebit.ffi.signer.hotUseStateDir
 
@@ -21,8 +23,8 @@ fun WalletGate(wallet: SavedWallet = rememberSavedWallet()) {
     // Before any screen asks the core about the wallet, so its first sync after a restart reads the scan file.
     val scanDir = rememberScanStateDir()
     remember(scanDir) { scanDir?.let(::hotUseStateDir) }
-    // One wallet under both, because the gate's forget erases through the session.
-    val session = remember(wallet) { OnboardingSession(wallet) }
+    // One wallet under both, because the gate's forget erases through the session. The pay-twice guard file sits beside the scan files.
+    val session = remember(wallet, scanDir) { OnboardingSession(wallet, payments = PendingPayments(scanDir?.let { plainFile("$it/pending-payment") })) }
     val gate = remember(wallet) { WalletGateState(wallet, session) }
 
     // A failed save is tried again when the app comes back, for example once the user has set a passcode. Not while Locked or

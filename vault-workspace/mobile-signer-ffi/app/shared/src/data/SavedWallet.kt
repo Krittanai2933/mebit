@@ -55,7 +55,8 @@ fun reinstallPolicy(marker: Marker, probe: StoreProbe): ReinstallAction = when (
 
 /** How an attempt to open the saved wallet ended. */
 sealed interface UnlockResult {
-    class Opened(val record: WalletRecord, val version: StoreVersion) : UnlockResult
+    /** [oldGuard] is the pay-twice guard a build before the guard file saved in the record (flag 8), which [OnboardingSession.install] moves to that file. */
+    class Opened(val record: WalletRecord, val version: StoreVersion, val oldGuard: SingleSigWallet.UnconfirmedSend? = null) : UnlockResult
 
     /** The Enable step's read-back: the saved copy opened and its fingerprint matches this session. Carries no data. */
     data object Verified : UnlockResult
@@ -124,7 +125,7 @@ class SavedWallet internal constructor(private val store: SecureStore) {
                 is Decoded.Ok -> if (d.record.network in NETWORKS) {
                     // A wallet its owner has opened is theirs whatever the marker said, so a later launch must never take it for an orphan. Best effort.
                     store.writeMarker(Marker.Kept)
-                    UnlockResult.Opened(d.record, r.version)
+                    UnlockResult.Opened(d.record, r.version, d.oldGuard)
                 } else {
                     UnlockResult.Broken(Cause.UnsupportedNetwork)
                 }
@@ -186,13 +187,13 @@ class SavedWallet internal constructor(private val store: SecureStore) {
  * Layout, big endian: magic "MB" (2), version (1), network (1: 0 test, 1 main), flags (1: 1 backup, 2 imported, 4 lock,
  * 8 unconfirmed send), fingerprint (8 ASCII), words as ONE UTF-8 string joined by single spaces (u16 length + bytes),
  * passphrase (u16 length + bytes, byte exact), then only with flag 8 the payment of unknown outcome: its txid (u16 length +
- * ASCII, empty or 64 lowercase hex) and when its broadcast ended (8, Unix seconds, never negative). A record without that
- * payment has the same bytes as before flag 8 existed, so an older build still reads it, and reads one with it as Newer.
+ * ASCII, empty or 64 lowercase hex) and when its broadcast ended (8, Unix seconds, never negative). Only builds before the
+ * guard file wrote flag 8. decode still reads it, so [OnboardingSession.install] can move that guard to [PendingPayments],
+ * and encode never writes it, so every record this build saves has the bytes an older build reads too.
  * encode throws, naming no word, on a record it could not read back exactly: a fingerprint that is not 8 ASCII characters,
- * an empty word or one holding a space, text UTF-8 cannot carry (a lone surrogate), a field over 65,535 bytes, a txid or
- * time decode would refuse.
+ * an empty word or one holding a space, text UTF-8 cannot carry (a lone surrogate), a field over 65,535 bytes.
  * decode never throws: bad magic, short or trailing bytes, word count outside BIP39_SIZES, an empty word, a fingerprint byte
- * outside ASCII, bad UTF-8, a txid or time encode never writes => Corrupt; a version above VERSION, or a network byte or
+ * outside ASCII, bad UTF-8, a txid or time no build wrote => Corrupt; a version above VERSION, or a network byte or
  * flag bit v1 never writes => Newer.
  */
 private object RecordCodec {
@@ -211,23 +212,16 @@ private object RecordCodec {
     fun encode(r: WalletRecord): ByteArray {
         require(r.fingerprint.length == FINGERPRINT && r.fingerprint.all { it.code < 0x80 }) { "fingerprint shape" }
         require(r.words.none { it.isEmpty() || ' ' in it }) { "word shape" } // either would split into other words on decode
-        val send = r.unconfirmedSend
-        require(send == null || (TXID.matches(send.txid) && send.sinceSeconds >= 0)) { "unconfirmed send shape" }
         return utf8(r.words.joinToString(" ")) { words ->
             utf8(r.passphrase) { passphrase ->
                 require(words.size <= MAX_FIELD && passphrase.size <= MAX_FIELD) { "field length" }
-                val out = ByteArray(HEADER + 2 + words.size + 2 + passphrase.size + (if (send == null) 0 else 2 + send.txid.length + 8))
+                val out = ByteArray(HEADER + 2 + words.size + 2 + passphrase.size)
                 MAGIC.copyInto(out)
                 out[2] = VERSION.toByte()
                 out[3] = NETWORK_BYTE.getValue(r.network)
-                out[4] = ((if (r.backupConfirmed) BACKUP else 0) or (if (r.imported) IMPORTED else 0) or (if (r.appLockEnabled) LOCK else 0) or
-                    (if (send != null) UNCONFIRMED else 0)).toByte()
+                out[4] = ((if (r.backupConfirmed) BACKUP else 0) or (if (r.imported) IMPORTED else 0) or (if (r.appLockEnabled) LOCK else 0)).toByte()
                 r.fingerprint.forEachIndexed { i, c -> out[5 + i] = c.code.toByte() }
-                val end = out.putField(out.putField(HEADER, words), passphrase)
-                if (send != null) {
-                    val at = out.putField(end, send.txid.encodeToByteArray())
-                    repeat(8) { out[at + it] = (send.sinceSeconds shr (56 - 8 * it)).toByte() }
-                }
+                out.putField(out.putField(HEADER, words), passphrase)
                 out
             }
         }
@@ -254,7 +248,8 @@ private object RecordCodec {
         val send = if (hasSend) (b.unconfirmedSendOrNull(passphraseEnd + 2, txidEnd) ?: return Decoded.Corrupt) else null
         val fingerprint = b.decodeToString(5, HEADER)
         return Decoded.Ok(
-            WalletRecord(words, passphrase, network, fingerprint, (flags and BACKUP) != 0, (flags and IMPORTED) != 0, (flags and LOCK) != 0, send),
+            WalletRecord(words, passphrase, network, fingerprint, (flags and BACKUP) != 0, (flags and IMPORTED) != 0, (flags and LOCK) != 0),
+            send,
         )
     }
 
@@ -300,7 +295,8 @@ private object RecordCodec {
 
 /** What decode made of the bytes. */
 private sealed interface Decoded {
-    class Ok(val record: WalletRecord) : Decoded
+    /** [oldGuard] is the payment of unknown outcome a record with flag 8 holds, or null. */
+    class Ok(val record: WalletRecord, val oldGuard: SingleSigWallet.UnconfirmedSend?) : Decoded
 
     data object Corrupt : Decoded
 

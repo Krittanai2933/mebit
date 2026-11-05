@@ -110,7 +110,7 @@ class OnboardingSessionSaveTest {
         session.markBackupConfirmed()
         session.markAppLockEnabled()
         session.recordUnconfirmedSend(TEST_TXID, SENT_AT)
-        session.clearUnconfirmedSend()
+        session.clearUnconfirmedSend(TEST_TXID)
         assertTrue(store.writes.isEmpty() && store.markerWrites.isEmpty(), "a session with no words wrote")
         assertEquals(SaveState.NotSaved, session.saved, "a wallet was inferred from a flag")
         assertTrue(session.words.isEmpty(), "words appeared")
@@ -208,12 +208,13 @@ class OnboardingSessionSaveTest {
         assertEquals(listOf("Create", "Replace", "Replace"), store.modes(), "the retry")
         assertFalse(session.lastSaveFailed, "cleared by the write that succeeded")
 
+        // The pay-twice guard lives in its own file, so a store that refuses neither stops it nor reports it.
         val guardStore = FakeSecureStore()
-        val guarded = session(guardStore)
+        val guarded = session(guardStore, guards = FakePlainFile())
         guarded.generateThisDevice()
         guardStore.write = WriteResult.Unavailable(Why.TryLater)
-        assertFalse(guarded.recordUnconfirmedSend(TEST_TXID, SENT_AT), "the guard the phone could not keep")
-        assertTrue(guarded.lastSaveFailed, "a failed Replace of the guard went unreported")
+        assertEquals(Claim.Written, guarded.recordUnconfirmedSend(TEST_TXID, SENT_AT), "the guard while the store refuses")
+        assertFalse(guarded.lastSaveFailed, "the guard went through the secure store")
 
         val created = session(FakeSecureStore(write = WriteResult.Unavailable(Why.NoScreenLock)))
         created.generateThisDevice()
@@ -289,18 +290,22 @@ class OnboardingSessionSaveTest {
         assertEquals(OTHER_CHECK, store.savedCopy().fingerprint, "Y after A's later write points")
     }
 
+    // Row 76. The payment of unknown outcome left the record for the guard file (N1), so a stale Replace cannot reach it at all.
     @Test
-    fun aStaleReplaceNeverOverwritesANewerCopyThatHoldsAPayment() {
+    fun aStaleReplaceNeverOverwritesANewerCopyAndNeverReachesAPayment() {
         val store = FakeSecureStore()
-        val a = session(store)
+        val guards = FakePlainFile()
+        val a = session(store, guards = guards)
         a.generateThisDevice()
-        val b = session(store)
+        val b = session(store, guards = guards)
         val gate = WalletGateState(SavedWallet(store), b)
         runBlocking { gate.unlock("test") }
         assertIs<Boot.Open>(gate.boot, "B's unlock")
-        b.recordUnconfirmedSend(TEST_TXID, SENT_AT)
+        b.markAppLockEnabled()
+        assertEquals(Claim.Written, b.recordUnconfirmedSend(TEST_TXID, SENT_AT), "B's guard")
         a.markBackupConfirmed()
-        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), store.savedCopy().unconfirmedSend, "the payment of unknown outcome was overwritten")
+        assertEquals(listOf(false, false, true), store.savedCopy().flags(), "B's newer copy was overwritten")
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), a.unconfirmedSend(), "B's payment of unknown outcome, as A reads it")
         assertEquals(SaveState.NotSaved, a.saved, "the session that lost")
         assertEquals(SaveState.Saved, b.saved, "the session that wrote last")
     }
@@ -329,16 +334,14 @@ class OnboardingSessionSaveTest {
         session.markBackupConfirmed()
         session.markAppLockEnabled()
         session.markBackupConfirmed()
-        session.recordUnconfirmedSend(TEST_TXID, SENT_AT)
-        session.clearUnconfirmedSend()
-        assertEquals(SaveState.Saved, session.saved, "saved after five Replaces")
+        assertEquals(SaveState.Saved, session.saved, "saved after three Replaces")
         assertNull(session.notSavedBecause, "a Replace of this session's own copy failed")
         val next = session(store)
         val gate = WalletGateState(SavedWallet(store), next)
         runBlocking { gate.unlock("test") }
         assertIs<Boot.Open>(gate.boot, "the next launch's unlock")
         next.markAppLockEnabled()
-        assertEquals(listOf("Create") + List(6) { "Replace" }, store.modes(), "write kinds")
+        assertEquals(listOf("Create") + List(4) { "Replace" }, store.modes(), "write kinds")
         assertEquals(SaveState.Saved, next.saved, "saved after the next launch's Replace")
         assertNull(next.notSavedBecause, "the next launch's Replace failed")
         assertEquals(listOf(true, false, true), store.savedCopy().flags(), "the copy at the end")
@@ -352,10 +355,10 @@ class OnboardingSessionSaveTest {
         val b = session(store)
         val gate = WalletGateState(SavedWallet(store), b)
         runBlocking { gate.unlock("test") }
-        b.recordUnconfirmedSend(TEST_TXID, SENT_AT)
-        assertEquals(UnlockResult.Verified, a.proveNow(), "A's read-back of the same key, now with B's payment")
+        b.markAppLockEnabled()
+        assertEquals(UnlockResult.Verified, a.proveNow(), "A's read-back of the same key, now with B's flag")
         a.markBackupConfirmed()
-        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), store.savedCopy().unconfirmedSend, "the read-back adopted B's version and A overwrote the payment")
+        assertEquals(listOf(false, false, true), store.savedCopy().flags(), "the read-back adopted B's version and A overwrote B's flag")
         assertEquals(SaveState.NotSaved, a.saved, "A after its stale Replace")
     }
 
@@ -383,12 +386,15 @@ class OnboardingSessionSaveTest {
     fun forgetSavedWalletErasesThenClears() {
         val store = FakeSecureStore()
         val keys = Keys()
-        val session = session(store, keys)
+        val guards = FakePlainFile()
+        val session = session(store, keys, guards)
         session.generateThisDevice()
         session.markBackupConfirmed()
+        assertEquals(Claim.Written, PendingPayments(guards).claim(TEST_CHECK, UnconfirmedSend(TEST_TXID, SENT_AT)), "a payment of unknown outcome")
         assertTrue(session.forgetSavedWallet(), "forget")
         assertEquals(1, store.erases, "erases")
         assertEquals(1, keys.scansForgotten, "the core's scan file went with the wallet")
+        assertNull(guards.text, "the guard file went with the wallet")
         assertTrue(session.words.isEmpty() && session.fingerprint.isEmpty() && session.passphrase.isEmpty(), "the key stayed in memory")
         assertEquals(listOf(false, false, false), session.flags(), "flags after forget")
         assertEquals(SaveState.NotSaved, session.saved, "saved after forget")
@@ -396,10 +402,13 @@ class OnboardingSessionSaveTest {
 
         val stuck = FakeSecureStore(erase = failedErase(Why.TryLater))
         val stuckKeys = Keys()
-        val kept = session(stuck, stuckKeys)
+        val stuckGuards = FakePlainFile()
+        val kept = session(stuck, stuckKeys, stuckGuards)
         kept.generateThisDevice()
+        assertEquals(Claim.Written, PendingPayments(stuckGuards).claim(TEST_CHECK, UnconfirmedSend(TEST_TXID, SENT_AT)), "a payment of unknown outcome")
         assertFalse(kept.forgetSavedWallet(), "a failed erase reported success")
         assertEquals(0, stuckKeys.scansForgotten, "the wallet is still on the phone, so its scan stays")
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), stuckGuards.guardOf(), "the wallet is still on the phone, so its guard stays")
         assertTrue(kept.words == PUBLIC_WORDS_24, "a failed erase cleared memory")
         assertEquals(SaveState.Saved, kept.saved, "saved after a failed erase")
     }
@@ -407,100 +416,119 @@ class OnboardingSessionSaveTest {
     @Test
     fun aFailedForgetLeavesTheSessionAbleToSaveItsPaymentGuard() {
         val store = FakeSecureStore(erase = failedErase(Why.TryLater))
-        val session = session(store)
+        val guards = FakePlainFile()
+        val session = session(store, guards = guards)
         session.generateThisDevice()
         assertFalse(session.forgetSavedWallet(), "the first forget")
         assertFalse(session.forgetSavedWallet(), "the second forget")
         session.markBackupConfirmed()
-        assertTrue(session.recordUnconfirmedSend(TEST_TXID, SENT_AT), "the guard reached the phone")
-        assertEquals(SaveState.Saved, session.saved, "saved after a failed erase and two saves")
+        assertEquals(Claim.Written, session.recordUnconfirmedSend(TEST_TXID, SENT_AT), "the guard reached the phone")
+        assertEquals(SaveState.Saved, session.saved, "saved after a failed erase and a save")
         assertNull(session.notSavedBecause, "a save after the failed erase was refused")
-        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), store.savedCopy().unconfirmedSend, "the copy after the guard")
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), guards.guardOf(), "the guard file after the guard")
         assertEquals(listOf(true, false, false), store.savedCopy().flags(), "the copy after backup")
     }
 
     @Test
     fun recordingAPaymentGuardReportsWhetherThePhoneHoldsIt() {
-        val store = FakeSecureStore()
-        val session = session(store)
+        val guards = FakePlainFile()
+        val session = session(FakeSecureStore(), guards = guards)
         session.generateThisDevice()
-        store.write = WriteResult.Unavailable(Why.TryLater)
-        assertFalse(session.recordUnconfirmedSend(TEST_TXID, SENT_AT), "a guard the phone could not keep")
-        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), session.unconfirmedSend, "kept in memory for the flush")
-        store.write = null
-        assertTrue(session.recordUnconfirmedSend(TEST_TXID, SENT_AT), "a guard the phone kept")
-        assertFalse(OnboardingSession().recordUnconfirmedSend(TEST_TXID, SENT_AT), "a session with no store")
-        val stale = session(store)
-        stale.generateThisDevice() // refused: a wallet is saved, so this session never holds a copy
-        assertFalse(stale.recordUnconfirmedSend(TEST_TXID, SENT_AT), "a session that holds no copy")
+        guards.failWrite = true
+        assertEquals(Claim.NotSaved, session.recordUnconfirmedSend(TEST_TXID, SENT_AT), "a guard the file could not take")
+        assertNull(session.unconfirmedSend(), "a guard that is not on the phone")
+        guards.failWrite = false
+        assertEquals(Claim.Written, session.recordUnconfirmedSend(TEST_TXID, SENT_AT), "a guard the file took")
+        val second = assertIs<Claim.Taken>(session.recordUnconfirmedSend("f".repeat(64), SENT_AT), "a second guard of the same wallet")
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), second.earlier, "the guard that stays")
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), guards.guardOf(), "the guard file after the second guard")
+        assertEquals(Claim.NotSaved, OnboardingSession().recordUnconfirmedSend(TEST_TXID, SENT_AT), "a session with no guard file")
+        assertEquals(Claim.NotSaved, session(FakeSecureStore(), guards = FakePlainFile()).recordUnconfirmedSend(TEST_TXID, SENT_AT), "a session with no key")
     }
 
     @Test
     fun aPaymentOfUnknownOutcomeIsSavedWhenRecordedAndRemovedWhenCleared() {
         val store = FakeSecureStore()
-        val session = session(store)
+        val guards = FakePlainFile()
+        val session = session(store, guards = guards)
         session.generateThisDevice()
         session.recordUnconfirmedSend(TEST_TXID, SENT_AT)
-        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), session.unconfirmedSend, "in memory after recording")
-        assertEquals(listOf("Create", "Replace"), store.modes(), "writes after recording")
-        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), store.savedCopy().unconfirmedSend, "the copy after recording")
-        assertEquals(listOf(false, false, false), store.savedCopy().flags(), "the flags beside it")
-        session.clearUnconfirmedSend()
-        assertNull(session.unconfirmedSend, "in memory after clearing")
-        assertEquals(listOf("Create", "Replace", "Replace"), store.modes(), "writes after clearing")
-        assertNull(store.savedCopy().unconfirmedSend, "the copy after clearing")
-        session.clearUnconfirmedSend()
-        assertEquals(3, store.writes.size, "a clear with nothing held wrote")
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), session.unconfirmedSend(), "the session after recording")
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), guards.guardOf(), "the guard file after recording")
+        assertEquals(listOf("Create"), store.modes(), "the secure store was written for the guard")
+        session.clearUnconfirmedSend("f".repeat(64))
+        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), guards.guardOf(), "a clear of another payment dropped this one")
+        session.clearUnconfirmedSend(TEST_TXID)
+        assertNull(session.unconfirmedSend(), "the session after clearing")
+        assertNull(guards.guardOf(), "the guard file after clearing")
+        assertEquals(listOf("Create"), store.modes(), "the secure store was written for the clear")
+        val writes = guards.writes
+        session.clearUnconfirmedSend(TEST_TXID)
+        assertEquals(writes, guards.writes, "a clear with nothing held wrote")
     }
 
+    // N1 of open item 79. Only builds before the guard file wrote flag 8, so the record here is made by hand.
     @Test
-    fun installRestoresAPaymentOfUnknownOutcomeAndClearDropsIt() {
-        val store = FakeSecureStore()
-        val session = session(store)
-        assertTrue(session.install(testRecord(unconfirmedSend = UnconfirmedSend(TEST_TXID, SENT_AT)), ANY_VERSION), "install")
-        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), session.unconfirmedSend, "after install")
+    fun installMovesAnOlderRecordsGuardToTheFileOnce() {
+        val pending = UnconfirmedSend(TEST_TXID, SENT_AT)
+        val store = storeHolding(oldRecordBytes(pending))
+        val guards = FakePlainFile()
+        val session = session(store, guards = guards)
+        val opened = store.opened()
+        assertEquals(pending, opened.oldGuard, "the older record's guard")
+        assertTrue(session.install(opened.record, opened.version, opened.oldGuard), "install")
+        assertEquals(pending, guards.guardOf(), "the guard file after install")
+        assertEquals(pending, session.unconfirmedSend(), "the guard the wallet takes at its bind")
+        assertNull(store.opened().oldGuard, "the record after install")
+        assertEquals(listOf("Create", "Replace"), store.modes(), "the older build's write, then the save without the guard")
+        assertEquals(SaveState.Saved, session.saved, "saved after the move")
         session.clear()
-        assertNull(session.unconfirmedSend, "after clear")
-        assertTrue(store.writes.isEmpty(), "install or clear wrote")
+        assertEquals(pending, guards.guardOf(), "the guard file after a clear of memory")
+        val again = session(store, guards = guards)
+        val reopened = store.opened()
+        assertTrue(again.install(reopened.record, reopened.version, reopened.oldGuard), "the next install")
+        assertEquals(1, guards.writes, "writes of the guard file over two installs")
+        assertEquals(listOf("Create", "Replace"), store.modes(), "the next install wrote")
     }
 
     @Test
-    fun aFailedSaveOfAPaymentOfUnknownOutcomeKeepsItAndAFlushSavesIt() {
-        val store = FakeSecureStore(failWrite = 2)
-        val session = session(store)
-        session.generateThisDevice()
-        session.recordUnconfirmedSend(TEST_TXID, SENT_AT) // write 2, a Replace, fails
-        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), session.unconfirmedSend, "in memory after a failed save")
-        assertEquals(SaveState.Saved, session.saved, "saved after a failed Replace")
-        assertNull(store.savedCopy().unconfirmedSend, "the copy before the flush")
+    fun anOlderRecordsGuardThatTheFileCannotTakeStaysOnThePhoneAndStillStopsPayments() {
+        val pending = UnconfirmedSend(TEST_TXID, SENT_AT)
+        val store = storeHolding(oldRecordBytes(pending))
+        val guards = FakePlainFile().apply { failWrite = true }
+        val session = session(store, guards = guards)
+        val opened = store.opened()
+        assertTrue(session.install(opened.record, opened.version, opened.oldGuard), "install")
+        assertEquals(pending, session.unconfirmedSend(), "the guard the wallet takes at its bind")
+        val payment = assertIs<Claim.Taken>(session.recordUnconfirmedSend("f".repeat(64), SENT_AT), "a new payment")
+        assertEquals(pending, payment.earlier, "the guard that stops it")
+        session.markBackupConfirmed()
+        assertEquals(listOf("Create"), store.modes(), "the record was saved without its guard before the file held it")
+        assertEquals(pending, store.opened().oldGuard, "the record while the file cannot take the guard")
+        guards.failWrite = false
         session.flushPendingSave()
-        assertEquals(listOf("Create", "Replace", "Replace"), store.modes(), "write modes")
-        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), store.savedCopy().unconfirmedSend, "the copy after the flush")
-        store.write = WriteResult.Unavailable(Why.TryLater)
-        session.clearUnconfirmedSend()
-        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), store.savedCopy().unconfirmedSend, "the copy while the clear is not saved")
-        store.write = null
-        session.flushPendingSave()
-        assertNull(store.savedCopy().unconfirmedSend, "the copy after the flush of the clear")
+        assertEquals(pending, guards.guardOf(), "the guard file after the flush")
+        assertNull(store.opened().oldGuard, "the record after the flush")
+        assertTrue(store.opened().record.backupConfirmed, "the flag the flush saved")
     }
 
     @Test
-    fun aSaveHeldInTheStoreDoesNotLetALaterSaveOfAPaymentBeOverwritten() = runBlocking {
+    fun aSaveHeldInTheStoreDoesNotLetALaterSaveBeOverwritten() = runBlocking {
         val store = HoldingStore(FakeSecureStore(), holdCall = 3, failCall = 2)
         val session = session(store)
         session.generateThisDevice() // write 1
         session.markBackupConfirmed() // write 2, a Replace, fails and leaves a save pending
 
-        val flush = async(Dispatchers.Default) { session.flushPendingSave() } // write 3, held, its record has no payment
+        val flush = async(Dispatchers.Default) { session.flushPendingSave() } // write 3, held, its record has no lock
         store.entered.await()
-        val payment = async(Dispatchers.Default) { session.recordUnconfirmedSend(TEST_TXID, SENT_AT) }
-        withTimeoutOrNull(300) { payment.await() } // done at once without the lock, waits for the held save with it
+        val later = async(Dispatchers.Default) { session.markAppLockEnabled() }
+        withTimeoutOrNull(300) { later.await() } // done at once without the lock, waits for the held save with it
         store.release.complete(Unit)
         flush.await()
-        payment.await()
+        later.await()
 
         assertEquals(1, store.maxInFlight.value, "writes in flight at once")
-        assertEquals(UnconfirmedSend(TEST_TXID, SENT_AT), store.inner.savedCopy().unconfirmedSend, "the copy after both saves")
+        assertEquals(listOf(true, false, true), store.inner.savedCopy().flags(), "the copy after both saves")
     }
 
     @Test
@@ -509,10 +537,6 @@ class OnboardingSessionSaveTest {
             generateThisDevice(TEST_PASSPHRASE)
             markBackupConfirmed()
             markAppLockEnabled()
-        }
-        roundTrip("generated, a payment of unknown outcome", listOf(false, false, false), UnconfirmedSend(TEST_TXID, SENT_AT)) {
-            generateThisDevice(TEST_PASSPHRASE)
-            recordUnconfirmedSend(TEST_TXID, SENT_AT)
         }
         roundTrip("imported, not locked", listOf(true, true, false)) {
             restoreFromWords(PUBLIC_WORDS_12, TEST_PASSPHRASE)
@@ -726,10 +750,11 @@ class OnboardingSessionSaveTest {
         assertEmpty(damaged, "a damaged passphrase")
     }
 
-    private fun session(store: SecureStore, keys: Keys = Keys()) = OnboardingSession(SavedWallet(store), keys.newKey, keys.restoreKey, keys.forgetScans)
+    private fun session(store: SecureStore, keys: Keys = Keys(), guards: FakePlainFile? = null) =
+        OnboardingSession(SavedWallet(store), keys.newKey, keys.restoreKey, keys.forgetScans, PendingPayments(guards))
 
     /** Saves through [make], loads the saved copy into a new session, and compares every record field with what was set. */
-    private fun roundTrip(case: String, flags: List<Boolean>, unconfirmedSend: UnconfirmedSend? = null, make: OnboardingSession.() -> Unit) {
+    private fun roundTrip(case: String, flags: List<Boolean>, make: OnboardingSession.() -> Unit) {
         val store = FakeSecureStore()
         val keys = Keys(words = PUBLIC_WORDS_12, fingerprint = OTHER_CHECK)
         session(store, keys).make()
@@ -740,7 +765,6 @@ class OnboardingSessionSaveTest {
         assertTrue(loaded.fingerprint == OTHER_CHECK, "fingerprint, $case")
         assertEquals(KeyNetwork.TEST, loaded.network, "network, $case")
         assertEquals(flags, loaded.flags(), "flags, $case")
-        assertEquals(unconfirmedSend, loaded.unconfirmedSend, "unconfirmed send, $case")
         assertEquals(SaveState.Saved, loaded.saved, "saved, $case")
     }
 
@@ -750,8 +774,10 @@ class OnboardingSessionSaveTest {
         assertEquals(SaveState.NotSaved, session.saved, "saved, $case")
     }
 
-    /** The record the store holds now, opened the way the app opens it. */
-    private fun FakeSecureStore.savedCopy(): WalletRecord = assertIs<UnlockResult.Opened>(SavedWallet(this).openNow(), "the saved copy").record
+    /** What the store holds now, opened the way the app opens it. */
+    private fun FakeSecureStore.opened(): UnlockResult.Opened = assertIs<UnlockResult.Opened>(SavedWallet(this).openNow(), "the saved copy")
+
+    private fun FakeSecureStore.savedCopy(): WalletRecord = opened().record
 
     private fun OnboardingSession.proveNow(): UnlockResult = runBlocking { proveSavedCopy("test") }
 

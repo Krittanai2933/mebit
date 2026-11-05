@@ -3,6 +3,7 @@ package com.mebit.app.data
 import com.mebit.app.CopyCounter
 import com.mebit.app.EraseResult
 import com.mebit.app.Marker
+import com.mebit.app.PlainFile
 import com.mebit.app.ReadResult
 import com.mebit.app.SecureStore
 import com.mebit.app.StoreProbe
@@ -105,8 +106,48 @@ internal fun testRecord(
     backupConfirmed: Boolean = false,
     imported: Boolean = false,
     appLockEnabled: Boolean = false,
-    unconfirmedSend: SingleSigWallet.UnconfirmedSend? = null,
-) = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled, unconfirmedSend)
+) = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled)
+
+/**
+ * An in-memory [PlainFile] for common tests. [text] is what the file holds, null for no file. [failWrite] makes each write fail
+ * and [unreadable] each read, as a full disk or a damaged file would. [onRead] runs after a read took the text and before it
+ * returns it, so a test can hold a reader between what it read and what it writes.
+ */
+internal class FakePlainFile : PlainFile {
+    var text: String? = null
+    var failWrite = false
+    var unreadable = false
+    var onRead: () -> Unit = {}
+    var writes = 0
+        private set
+
+    override fun read(): String? {
+        val read = if (unreadable) null else text.orEmpty()
+        onRead()
+        return read
+    }
+
+    override fun write(text: String): Boolean {
+        writes++
+        if (failWrite) return false
+        this.text = text
+        return true
+    }
+
+    override fun delete() {
+        text = null
+    }
+}
+
+/** The guard this file holds for the wallet [fingerprint], read the way a new session reads it. */
+internal fun FakePlainFile.guardOf(fingerprint: String = TEST_CHECK): SingleSigWallet.UnconfirmedSend? = PendingPayments(this).of(fingerprint)
+
+/** The bytes of a record that a build before the guard file saved with [pending] as its guard (flag 8). */
+internal fun oldRecordBytes(pending: SingleSigWallet.UnconfirmedSend, flags: Int = 0): ByteArray =
+    v1Bytes(flags = flags or 8) + sendSection(pending.txid.encodeToByteArray(), pending.sinceSeconds)
+
+/** A phone whose store holds [bytes] as the saved wallet, written the way an older build wrote it. */
+internal fun storeHolding(bytes: ByteArray) = FakeSecureStore().also { it.write(bytes, WriteMode.Create) }
 
 /**
  * Bytes laid out by hand as the codec's KDoc documents version 1, so a test can store what the encoder never writes:

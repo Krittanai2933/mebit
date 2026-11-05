@@ -7,6 +7,7 @@ import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.MobileSignerException
+import com.mebit.ffi.signer.SoftwareAccountKey
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.fail
@@ -38,8 +39,10 @@ private class DetailChain(var answer: () -> HotTxDetail?) {
             answer()
         },
     )
-    val session = sessionWithWords(DETAIL_WORDS, DETAIL_PASSPHRASE).also {
-        it.recordUnconfirmedSend(PENDING_TXID, 1_792_740_720L)
+    // Staged, because of the passphrase, so nothing is saved, and the guard needs the fingerprint the key gives.
+    val session = OnboardingSession(restoreKey = { w, _, _, _ -> SoftwareAccountKey(w, TEST_CHECK, "tpub-test", "m/84'/1'/0'") }, payments = PendingPayments(FakePlainFile())).also {
+        it.restoreFromWords(DETAIL_WORDS, DETAIL_PASSPHRASE)
+        assertEquals(Claim.Written, it.recordUnconfirmedSend(PENDING_TXID, 1_792_740_720L))
         wallet.bindSession(it)
     }
 }

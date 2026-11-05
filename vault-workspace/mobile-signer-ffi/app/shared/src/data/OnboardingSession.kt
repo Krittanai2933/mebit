@@ -19,16 +19,18 @@ import kotlinx.atomicfu.locks.synchronized
 enum class SaveState { NotSaved, Staged, Saved }
 
 /**
- * Onboarding state for Movie Page 00.* screens, plus the hot wallet's payment of unknown outcome, which is saved with the
- * key. Without a [wallet] it lives in memory only. With one, each committed change is saved through one write point, and
- * only [forgetSavedWallet] erases the saved copy. [newKey] and [restoreKey] make the key, and [forgetScans] drops the core's
- * scan of every wallet, and tests replace them because the host JVM has no native library.
+ * Onboarding state for Movie Page 00.* screens, plus the hot wallet's payment of unknown outcome, which [payments] keeps in a
+ * plain file beside the key, so a phone that cannot save the key keeps it too. Without a [wallet] the key lives in memory only.
+ * With one, each committed change is saved through one write point, and only [forgetSavedWallet] erases the saved copy, and the
+ * guards with it. [newKey] and [restoreKey] make the key, and [forgetScans] drops the core's scan of every wallet, and tests
+ * replace them because the host JVM has no native library.
  */
 class OnboardingSession(
     private val wallet: SavedWallet? = null,
     private val newKey: (String, KeyNetwork, UInt) -> SoftwareAccountKey = { p, n, a -> generateSoftwareMultisigKey(p, n, a) },
     private val restoreKey: (List<String>, String, KeyNetwork, UInt) -> SoftwareAccountKey = { w, p, n, a -> restoreSoftwareMultisigKey(w, p, n, a) },
     private val forgetScans: () -> Unit = { hotForgetScanState() },
+    private val payments: PendingPayments = PendingPayments(null),
 ) {
     var words: List<String> by mutableStateOf(emptyList())
         private set
@@ -87,18 +89,17 @@ class OnboardingSession(
         private set
 
     /**
-     * A Replace (a flag or the payment guard) failed and no write has succeeded since. The wallet stays Saved, because the earlier
-     * copy is on the phone, so [notSavedBecause] stays null and the notice reads this instead.
+     * A Replace failed and no write has succeeded since. The wallet stays Saved, because the earlier copy is on the phone, so
+     * [notSavedBecause] stays null and the notice reads this instead.
      */
     var lastSaveFailed: Boolean by mutableStateOf(false)
         private set
 
     /**
-     * The wallet's payment of unknown outcome ([SingleSigWallet.unconfirmedSend]), saved with the wallet so a restart cannot
-     * pay it twice. [install] restores it, and a wallet built after a restart takes it at its next bind. Null when there is none.
+     * A guard that a record from a build before the guard file held (flag 8), which [payments] has not taken yet. It stops this
+     * wallet's payments like a guard in the file, and the write point moves it to the file before any save can drop it from the record.
      */
-    var unconfirmedSend: SingleSigWallet.UnconfirmedSend? by mutableStateOf(null)
-        private set
+    private var unmoved: SingleSigWallet.UnconfirmedSend? = null
 
     /** A save that failed and has not been repeated yet. [flushPendingSave] and the next write point repeat it. */
     private var pendingSave = false
@@ -183,7 +184,7 @@ class OnboardingSession(
         appLockEnabled = false
         lastError = null
         network = KeyNetwork.TEST
-        unconfirmedSend = null
+        unmoved = null
         held = Held.Nothing
         notSavedBecause = null
         lastSaveFailed = false
@@ -201,25 +202,31 @@ class OnboardingSession(
     }
 
     /**
-     * The wallet is about to post a payment. Saved like a flag. True only when the copy on the phone now holds it, which is what
-     * lets the wallet post: a failed save keeps it here for the next write point or flush, and the wallet does not post.
+     * The wallet's payment of unknown outcome ([SingleSigWallet.unconfirmedSend]) as the phone keeps it, so a wallet built after a
+     * restart, or another live instance of it, takes it at its next bind. Null when there is none. Reads the guard file.
      */
-    fun recordUnconfirmedSend(txid: String, sinceSeconds: Long): Boolean {
-        unconfirmedSend = SingleSigWallet.UnconfirmedSend(txid, sinceSeconds)
-        return persist()
+    fun unconfirmedSend(): SingleSigWallet.UnconfirmedSend? = unmoved ?: payments.of(fingerprint)
+
+    /**
+     * The wallet is about to post [txid]. Writes its guard to the guard file, which is what lets the wallet post: [Claim.Written]
+     * only when the file now holds it. [Claim.Taken] when this wallet already has a guard on the phone, which stays.
+     */
+    fun recordUnconfirmedSend(txid: String, sinceSeconds: Long): Claim =
+        unmoved?.let { Claim.Taken(it) } ?: payments.claim(fingerprint, SingleSigWallet.UnconfirmedSend(txid, sinceSeconds))
+
+    /** The payment [txid] is out, refused, listed by the explorer, or cleared by the user, so its guard leaves the phone. */
+    fun clearUnconfirmedSend(txid: String) {
+        payments.settle(fingerprint, txid)
+        if (unmoved?.txid != txid) return
+        unmoved = null
+        persist() // the older record still holds it
     }
 
-    /** The payment is out, refused, listed by the explorer, or cleared by the user. Writes nothing when none is held. */
-    fun clearUnconfirmedSend() {
-        if (unconfirmedSend == null) return
-        unconfirmedSend = null
-        persist()
-    }
-
-    /** After the user confirmed. Erases the saved wallet and the core's scan files, then clears memory. A failed erase keeps all three and returns false. */
+    /** After the user confirmed. Erases the saved wallet, the core's scan files and the pay-twice guards, then clears memory. A failed erase keeps them all and returns false. */
     fun forgetSavedWallet(): Boolean = when (val r = wallet?.forget() ?: EraseResult.Erased) {
         EraseResult.Erased -> {
             forgetScans()
+            payments.erase()
             clear()
             true
         }
@@ -233,9 +240,10 @@ class OnboardingSession(
     /**
      * Puts a released record into the session, all or nothing: the key must derive and its fingerprint must equal the
      * record's. Derives once. Catches Exception only: a missing native library is a packaging bug and must crash, not
-     * offer to delete a good wallet.
+     * offer to delete a good wallet. [oldGuard], the guard a record from a build before the guard file held, moves to that
+     * file, and the save that follows writes the record without it, so it moves once.
      */
-    internal fun install(record: WalletRecord, version: StoreVersion): Boolean {
+    internal fun install(record: WalletRecord, version: StoreVersion, oldGuard: SingleSigWallet.UnconfirmedSend? = null): Boolean {
         val key = try {
             restoreKey(record.words, record.passphrase, record.network, 0u)
         } catch (e: Exception) {
@@ -246,8 +254,9 @@ class OnboardingSession(
         backupConfirmed = record.backupConfirmed // from the record, not from how the key was made, which forces these
         imported = record.imported
         appLockEnabled = record.appLockEnabled
-        unconfirmedSend = record.unconfirmedSend
         held = Held.Copy(version)
+        unmoved = oldGuard
+        if (oldGuard != null) persist()
         return true
     }
 
@@ -261,6 +270,13 @@ class OnboardingSession(
     private fun persist(fresh: Boolean = false): Boolean = synchronized(persistLock) {
         val w = wallet ?: return@synchronized false
         if (words.isEmpty()) return@synchronized false
+        unmoved?.let {
+            if (payments.claim(fingerprint, it) == Claim.NotSaved) {
+                pendingSave = true // the flush tries the move again, and no save drops the guard from the record before it
+                return@synchronized false
+            }
+            unmoved = null
+        }
         val mode = when (val h = held) {
             Held.Staged, Held.Stale -> return@synchronized false
             Held.Nothing -> WriteMode.Create
@@ -322,7 +338,7 @@ class OnboardingSession(
         return true
     }
 
-    private fun toRecord() = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled, unconfirmedSend)
+    private fun toRecord() = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled)
 
     private fun applyKey(key: SoftwareAccountKey, passphrase: String, network: KeyNetwork) {
         words = key.mnemonicWords

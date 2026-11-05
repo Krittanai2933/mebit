@@ -14,7 +14,8 @@ import platform.Foundation.NSUserDomainMask
 
 /**
  * Application Support/mebit/scan, marked to stay out of iCloud and computer backups, so a restored phone starts its scans
- * over from the chain. Null when the folder cannot be made or marked, and the core then keeps scans in memory only.
+ * over from the chain and carries no guard of this one. Null when the folder cannot be made or marked: the core then keeps
+ * scans in memory only, and no pay-twice guard can be kept, so no payment posts.
  */
 @Composable
 internal actual fun rememberScanStateDir(): String? = remember {

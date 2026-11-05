@@ -10,6 +10,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -83,29 +84,31 @@ class RecordCodecTest {
         }
     }
 
+    // N1 of open item 79 moved the guard to a plain file. Only builds before it wrote flag 8, so these records are made by hand.
     @Test
-    fun aPaymentOfUnknownOutcomeRoundTripsWithOrWithoutItsTxid() {
+    fun anOlderRecordsGuardOpensBesideTheRecordWithOrWithoutItsTxid() {
         val cases = listOf(
-            "none" to null,
             "no txid, at 0" to UnconfirmedSend("", 0),
             "a txid" to UnconfirmedSend(TEST_TXID, 1_798_000_000),
             "a txid, at the largest time" to UnconfirmedSend(TEST_TXID, Long.MAX_VALUE),
         )
         for ((case, pending) in cases) {
-            val back = roundTrip(testRecord(passphrase = "x y", appLockEnabled = true, unconfirmedSend = pending), case)
-            assertEquals(pending, back.unconfirmedSend, case)
-            assertTrue(back.words == PUBLIC_WORDS_24 && back.passphrase == "x y" && back.appLockEnabled, "the rest of the record, $case")
+            val bytes = v1Bytes(passphrase = "x y".encodeToByteArray(), flags = 4 or 8) + sendSection(pending.txid.encodeToByteArray(), pending.sinceSeconds)
+            val back = assertIs<UnlockResult.Opened>(opened(bytes), case)
+            assertEquals(pending, back.oldGuard, case)
+            assertTrue(back.record.words == PUBLIC_WORDS_24 && back.record.passphrase == "x y" && back.record.appLockEnabled, "the rest of the record, $case")
         }
+        assertNull(assertIs<UnlockResult.Opened>(opened(v1Bytes()), "a record without the section").oldGuard, "a guard from a record without the section")
     }
 
     @Test
-    fun writesAndReadsTheDocumentedLayoutOfAPaymentOfUnknownOutcome() {
-        val pending = UnconfirmedSend(TEST_TXID, 0x0102030405060708)
-        val store = FakeSecureStore()
-        SavedWallet(store).save(testRecord(passphrase = "x y", unconfirmedSend = pending), WriteMode.Create)
+    fun readsTheDocumentedLayoutOfAnOlderRecordsGuardAndSavesTheRecordWithoutIt() {
         val documented = v1Bytes(passphrase = "x y".encodeToByteArray(), flags = 8) + sendSection(TEST_TXID.encodeToByteArray(), 0x0102030405060708)
-        assertTrue(store.writes.single().bytes.contentEquals(documented), "encoder output")
-        assertEquals(pending, assertIs<UnlockResult.Opened>(opened(documented), "documented bytes").record.unconfirmedSend)
+        val back = assertIs<UnlockResult.Opened>(opened(documented), "documented bytes")
+        assertEquals(UnconfirmedSend(TEST_TXID, 0x0102030405060708), back.oldGuard)
+        val store = FakeSecureStore()
+        assertIs<SaveResult.Written>(SavedWallet(store).save(back.record, WriteMode.Create), "the save of the opened record")
+        assertTrue(store.writes.single().bytes.contentEquals(v1Bytes(passphrase = "x y".encodeToByteArray())), "the record saved again kept flag 8 or the section")
     }
 
     @Test
@@ -127,11 +130,9 @@ class RecordCodecTest {
     }
 
     @Test
-    fun everyByteChangeOfAPaymentOfUnknownOutcomeOpensExactlyOrIsRefused() {
+    fun everyByteChangeOfAnOlderRecordsGuardOpensExactlyOrIsRefused() {
         for (pending in listOf(UnconfirmedSend("", 0), UnconfirmedSend(TEST_TXID, 1_798_000_000))) {
-            val store = FakeSecureStore()
-            SavedWallet(store).save(testRecord(unconfirmedSend = pending), WriteMode.Create)
-            val good = store.writes.single().bytes
+            val good = oldRecordBytes(pending)
             assertEquals(v1Bytes().size + 2 + pending.txid.length + 8, good.size, "the size with the section, txid of ${pending.txid.length}")
             for (at in listOf(4) + (v1Bytes().size until good.size)) {
                 for (value in 0..255) {
@@ -139,17 +140,19 @@ class RecordCodecTest {
                     val bytes = good.copyOf().also { it[at] = value.toByte() }
                     val case = "txid of ${pending.txid.length}, byte $at set to $value"
                     when (val r = opened(bytes.copyOf())) {
-                        is UnlockResult.Opened -> {
-                            val again = FakeSecureStore()
-                            assertIs<SaveResult.Written>(SavedWallet(again).save(r.record, WriteMode.Create), case)
-                            assertTrue(again.writes.single().bytes.contentEquals(bytes), "opened, but writes back other bytes, $case")
-                        }
+                        is UnlockResult.Opened -> assertTrue(layout(r).contentEquals(bytes), "opened as other bytes than these, $case")
                         is UnlockResult.Broken -> assertTrue(r.cause == Cause.Corrupt || r.cause == Cause.NewerVersion, "${r.cause}, $case")
                         else -> fail("an answer no decode gives, $case")
                     }
                 }
             }
         }
+    }
+
+    /** An opened record of the public test words and its old guard, laid out by hand as the codec's KDoc documents version 1. */
+    private fun layout(r: UnlockResult.Opened): ByteArray {
+        val flags = (if (r.record.backupConfirmed) 1 else 0) or (if (r.record.imported) 2 else 0) or (if (r.record.appLockEnabled) 4 else 0)
+        return r.oldGuard?.let { oldRecordBytes(it, flags) } ?: v1Bytes(flags = flags)
     }
 
     @Test
@@ -232,10 +235,6 @@ class RecordCodecTest {
             "a fingerprint of 7" to testRecord(fingerprint = "0a1b2c3"),
             "a fingerprint of 9" to testRecord(fingerprint = "0a1b2c3d4"),
             "a fingerprint beyond ASCII" to testRecord(fingerprint = "0a1b2c3" + Char(0xE9)),
-            "a txid of 63" to testRecord(unconfirmedSend = UnconfirmedSend(TEST_TXID.drop(1), 1)),
-            "an uppercase txid" to testRecord(unconfirmedSend = UnconfirmedSend(TEST_TXID.uppercase(), 1)),
-            "a txid that is not hex" to testRecord(unconfirmedSend = UnconfirmedSend(TEST_TXID.dropLast(1) + "g", 1)),
-            "negative seconds" to testRecord(unconfirmedSend = UnconfirmedSend(TEST_TXID, -1)),
         )
         for ((case, record) in refused) {
             val store = FakeSecureStore()
@@ -247,7 +246,7 @@ class RecordCodecTest {
 
     @Test
     fun recordPrintsNoWord() {
-        val printed = testRecord(passphrase = "correct-horse-test", unconfirmedSend = UnconfirmedSend(TEST_TXID, 1)).toString()
+        val printed = testRecord(passphrase = "correct-horse-test").toString()
         assertFalse(PUBLIC_WORDS_24.any { it in printed }, "a word in toString")
         assertFalse("correct-horse-test" in printed, "the passphrase in toString")
         assertFalse(TEST_CHECK in printed, "the fingerprint in toString")

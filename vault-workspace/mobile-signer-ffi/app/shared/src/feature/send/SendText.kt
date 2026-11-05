@@ -21,7 +21,9 @@ internal fun slipFeeText(feeSats: Long, satPerVb: Long, quote: FiatQuote?): Stri
 
 /**
  * Why this phone cannot send at all, for Send to say before the user starts, or null. Only a real key the store refused for a
- * reason that lasts, because a payment posts only after its pay-twice guard is saved. A TryLater save may still pass at the post.
+ * reason that lasts: such a phone has no owner check, and since the pay-twice guard moved to a plain file (open item 79) nothing
+ * else stops it at the post, so this notice keeps it from sending until a Spending PIN gives it one. A TryLater refusal comes
+ * from a phone with a lock.
  */
 internal fun cannotSendText(words: Int, saved: SaveState, why: Why?): String? =
     if (words < 12 || saved != SaveState.NotSaved) null else when (why) {

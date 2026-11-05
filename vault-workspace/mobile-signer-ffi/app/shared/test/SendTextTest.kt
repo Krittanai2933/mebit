@@ -1,10 +1,22 @@
 package com.mebit.app.feature.send
 
 import com.mebit.app.Why
+import com.mebit.app.WriteResult
+import com.mebit.app.data.Claim
+import com.mebit.app.data.FakePlainFile
+import com.mebit.app.data.FakeSecureStore
 import com.mebit.app.data.FiatQuote
+import com.mebit.app.data.OnboardingSession
+import com.mebit.app.data.PUBLIC_WORDS_24
+import com.mebit.app.data.PendingPayments
 import com.mebit.app.data.SaveState
+import com.mebit.app.data.SavedWallet
+import com.mebit.app.data.TEST_CHECK
+import com.mebit.app.data.TEST_TXID
+import com.mebit.ffi.signer.SoftwareAccountKey
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 class SendTextTest {
@@ -94,6 +106,22 @@ class SendTextTest {
     @Test
     fun theDemoWalletSendsAsBefore() {
         assertNull(cannotSendText(0, SaveState.NotSaved, null))
+    }
+
+    // N1 of open item 79 keeps the pay-twice guard in a plain file that these phones keep too, so the guard no longer stops them at
+    // the post. Until the Spending PIN gives them an owner check, this notice is what keeps Send from opening review.
+    @Test
+    fun aPhoneWithNoOwnerCheckStillCannotStartASendNowThatItKeepsItsGuard() {
+        for (why in listOf(Why.NoScreenLock, Why.OsTooOld)) {
+            val session = OnboardingSession(
+                SavedWallet(FakeSecureStore(write = WriteResult.Unavailable(why))),
+                newKey = { _, _, _ -> SoftwareAccountKey(PUBLIC_WORDS_24, TEST_CHECK, "tpub-test", "m/48'/1'/0'/2'") },
+                payments = PendingPayments(FakePlainFile()),
+            )
+            session.generateThisDevice()
+            assertEquals(Claim.Written, session.recordUnconfirmedSend(TEST_TXID, 1), "the guard this phone keeps, $why")
+            assertNotNull(cannotSendText(session.words.size, session.saved, session.notSavedBecause), "the notice that keeps review off, $why")
+        }
     }
 
     @Test

@@ -14,6 +14,12 @@ import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.MobileSignerException
 import com.mebit.ffi.signer.PreparedSend
 import com.mebit.ffi.signer.SoftwareAccountKey
+import kotlinx.atomicfu.atomic
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -62,9 +68,10 @@ internal fun SingleSigWallet.broadcast(session: OnboardingSession, amountSats: L
 
 /**
  * Fakes for the hot_* calls. A test swaps [prepareResult], [postResult] or [snapshotResult] to change what the next call does.
- * The clock is [clock] and stands still unless a test moves it. [store] is the phone the live session is saved on.
+ * The clock is [clock] and stands still unless a test moves it. [store] is the phone the live session is saved on, [guards] its
+ * guard file, and [fingerprint] the wallet's.
  */
-private class FakeHot {
+private class FakeHot(val guards: FakePlainFile = FakePlainFile(), val fingerprint: String = TEST_CHECK) {
     var prepareResult: (feeRateSatVb: ULong) -> PreparedSend = { rate -> PreparedSend(TXID, "hex-1", rate * 141uL, 100_000uL) }
     var prepareAllResult: (feeRateSatVb: ULong) -> PreparedSend = { rate -> PreparedSend(TXID, "hex-all", rate * 178uL, 1_000_000uL - rate * 178uL) }
     var postResult: () -> HotSendResult = { HotSendResult(TXID) }
@@ -101,7 +108,8 @@ private class FakeHot {
 
     /** A 12-word session saved on [store] and bound through a working snapshot: the wallet is live with 1,000,000 sats. */
     fun goLive(): OnboardingSession {
-        val session = savedSession(store)
+        val session = importedSession(store, guards, fingerprint)
+        assertEquals(SaveState.Saved, session.saved, "the test session is saved on its phone")
         assertEquals(WORDS, session.words)
         wallet.bindSession(session)
         assertTrue(wallet.live, "bindSession went live")
@@ -110,12 +118,11 @@ private class FakeHot {
     }
 }
 
-/** A session of [WORDS] and [PASSPHRASE] saved on [store], made without the native library. */
-private fun savedSession(store: FakeSecureStore): OnboardingSession =
-    OnboardingSession(SavedWallet(store), restoreKey = { w, _, _, _ -> SoftwareAccountKey(w, TEST_CHECK, "tpub-test", "m/48'/1'/0'/2'") }).apply {
+/** A session of [WORDS] and [PASSPHRASE] imported on the phone of [store] and [guards], made without the native library. Saved when [store] keeps it. */
+private fun importedSession(store: FakeSecureStore, guards: FakePlainFile, fingerprint: String = TEST_CHECK): OnboardingSession =
+    OnboardingSession(SavedWallet(store), restoreKey = { w, _, _, _ -> SoftwareAccountKey(w, fingerprint, "tpub-test", "m/48'/1'/0'/2'") }, payments = PendingPayments(guards)).apply {
         restoreFromWords(WORDS, PASSPHRASE) // staged, because of the passphrase
         acceptStagedKey()
-        assertEquals(SaveState.Saved, saved, "the test session is saved on its phone")
     }
 
 /** A live wallet whose broadcast at [SENT_AT] ended in BroadcastUnknown for [TXID]. The post works again afterwards, so a payment that wrongly reaches it goes out. */
@@ -128,15 +135,20 @@ private fun FakeHot.unknownSend(): OnboardingSession {
     return session
 }
 
-/** A phone that saved the public test wallet with [pending]. */
-private fun phoneHolding(pending: UnconfirmedSend?) =
-    FakeSecureStore().also { assertIs<SaveResult.Written>(SavedWallet(it).save(testRecord(unconfirmedSend = pending), WriteMode.Create)) }
+/** A phone that saved the public test wallet and keeps [pending] as that wallet's guard. */
+private class Phone(pending: UnconfirmedSend?) {
+    val store = FakeSecureStore().also { assertIs<SaveResult.Written>(SavedWallet(it).save(testRecord(), WriteMode.Create)) }
+    val guards = FakePlainFile().also { if (pending != null) assertEquals(Claim.Written, PendingPayments(it).claim(TEST_CHECK, pending)) }
+}
 
-/** What the gate does at a cold start: opens the copy [store] holds and installs it into a new session that saves through [store]. The key is made without the native library. */
-private fun restart(store: FakeSecureStore): OnboardingSession {
+/**
+ * What the gate does at a cold start: opens the copy [store] holds and installs it into a new session that saves through [store]
+ * and keeps its guard in [guards]. The key is made without the native library.
+ */
+private fun restart(store: FakeSecureStore, guards: FakePlainFile): OnboardingSession {
     val opened = assertIs<UnlockResult.Opened>(SavedWallet(store).openNow(), "the saved copy")
-    val session = OnboardingSession(SavedWallet(store), restoreKey = { w, _, _, _ -> SoftwareAccountKey(w, opened.record.fingerprint, "tpub-test", "m/48'/1'/0'/2'") })
-    assertTrue(session.install(opened.record, opened.version), "install")
+    val session = OnboardingSession(SavedWallet(store), restoreKey = { w, _, _, _ -> SoftwareAccountKey(w, opened.record.fingerprint, "tpub-test", "m/48'/1'/0'/2'") }, payments = PendingPayments(guards))
+    assertTrue(session.install(opened.record, opened.version, opened.oldGuard), "install")
     return session
 }
 
@@ -267,7 +279,7 @@ class SingleSigWalletBroadcastTest {
         hot.postResult = { throw IllegalStateException("the bridge failed after the post") }
         assertFalse(hot.wallet.broadcast(session, 100_000, 8, DESTINATION))
         assertEquals(UnconfirmedSend(TXID, SENT_AT), hot.wallet.unconfirmedSend, "the wallet after an unexpected failure")
-        assertEquals(UnconfirmedSend(TXID, SENT_AT), restart(hot.store).unconfirmedSend, "the phone after an unexpected failure")
+        assertEquals(UnconfirmedSend(TXID, SENT_AT), restart(hot.store, hot.guards).unconfirmedSend(), "the phone after an unexpected failure")
         assertFalse(hot.wallet.broadcast(session, 100_000, 8, DESTINATION), "the retry reached the post")
         assertEquals(1, hot.posts.size)
     }
@@ -355,19 +367,23 @@ class SingleSigWalletBroadcastTest {
     fun theGuardIsOnThePhoneBeforeThePostStartsAndGoneOnceThePaymentIsOut() {
         val hot = FakeHot()
         val session = hot.goLive()
+        var inTheFile: UnconfirmedSend? = null
         var onThePhone: UnconfirmedSend? = null
         var inTheSession: UnconfirmedSend? = null
         hot.postResult = {
-            onThePhone = restart(hot.store).unconfirmedSend
-            inTheSession = session.unconfirmedSend
+            inTheFile = hot.guards.guardOf()
+            onThePhone = restart(hot.store, hot.guards).unconfirmedSend()
+            inTheSession = session.unconfirmedSend()
             HotSendResult(TXID)
         }
         assertTrue(hot.wallet.broadcast(session, 100_000, 8, DESTINATION))
+        assertEquals(UnconfirmedSend(TXID, SENT_AT), inTheFile, "the guard file when the post ran")
         assertEquals(UnconfirmedSend(TXID, SENT_AT), onThePhone, "what a cold start during the post would restore")
         assertEquals(UnconfirmedSend(TXID, SENT_AT), inTheSession, "the session during the post")
         assertNull(hot.wallet.unconfirmedSend, "the wallet's guard once the payment is out")
-        assertNull(session.unconfirmedSend, "the session's guard once the payment is out")
-        assertNull(restart(hot.store).unconfirmedSend, "the phone's copy once the payment is out")
+        assertNull(session.unconfirmedSend(), "the session's guard once the payment is out")
+        assertNull(hot.guards.guardOf(), "the guard file once the payment is out")
+        assertNull(restart(hot.store, hot.guards).unconfirmedSend(), "the phone's copy once the payment is out")
         assertEquals(TXID, hot.wallet.lastTxid)
     }
 
@@ -375,10 +391,10 @@ class SingleSigWalletBroadcastTest {
     fun aKillDuringThePostStillBlocksASecondSendFromTheRelaunchedApp() {
         val hot = FakeHot()
         val session = hot.goLive()
-        val relaunched = FakeHot()
+        val relaunched = FakeHot(hot.guards)
         hot.postResult = {
             // The first app is killed here. The relaunched one opens the same phone's copy and tries to pay.
-            val restarted = restart(hot.store)
+            val restarted = restart(hot.store, hot.guards)
             relaunched.wallet.bindSession(restarted)
             assertFalse(relaunched.wallet.broadcast(restarted, 50_000, 8, DESTINATION), "a payment from the relaunched app")
             assertEquals(EARLIER_UNSETTLED, relaunched.wallet.lastError)
@@ -397,11 +413,11 @@ class SingleSigWalletBroadcastTest {
         assertFalse(hot.wallet.broadcast(session, 100_000, 8, DESTINATION))
         assertEquals("ส่งไม่สำเร็จ", hot.wallet.lastError)
         assertNull(hot.wallet.unconfirmedSend, "the wallet after a refusal")
-        assertNull(restart(hot.store).unconfirmedSend, "the phone after a refusal")
+        assertNull(restart(hot.store, hot.guards).unconfirmedSend(), "the phone after a refusal")
         hot.postResult = { throw MobileSignerException.BroadcastUnknown(UNKNOWN_MESSAGE) }
         assertFalse(hot.wallet.broadcast(session, 100_000, 8, DESTINATION), "the retry after the refusal reached the post")
         assertEquals(UnconfirmedSend(TXID, SENT_AT), hot.wallet.unconfirmedSend, "the wallet after an unknown answer")
-        assertEquals(UnconfirmedSend(TXID, SENT_AT), restart(hot.store).unconfirmedSend, "the phone after an unknown answer")
+        assertEquals(UnconfirmedSend(TXID, SENT_AT), restart(hot.store, hot.guards).unconfirmedSend(), "the phone after an unknown answer")
         assertEquals(2, hot.posts.size)
     }
 
@@ -414,8 +430,9 @@ class SingleSigWalletBroadcastTest {
         assertFalse(hot.wallet.broadcast(session, 100, 8, DESTINATION))
         assertEquals("จำนวนน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)", hot.wallet.lastError)
         assertNull(hot.wallet.unconfirmedSend)
-        assertNull(session.unconfirmedSend)
+        assertNull(session.unconfirmedSend())
         assertEquals(writes, hot.store.writes.size, "the phone was written for a payment that was never signed")
+        assertEquals(0, hot.guards.writes, "the guard file was written for a payment that was never signed")
         assertEquals(emptyList<PostCall>(), hot.posts)
     }
 
@@ -423,18 +440,20 @@ class SingleSigWalletBroadcastTest {
     fun aGuardThePhoneCannotKeepStopsThePaymentBeforeThePost() {
         val hot = FakeHot()
         val session = hot.goLive()
-        hot.store.write = WriteResult.Unavailable(Why.TryLater)
+        hot.guards.failWrite = true
         val returned = hot.wallet.broadcast(session, 100_000, 8, DESTINATION)
         assertEquals(Seen(false, "", GUARD_NOT_SAVED, 1_000_000L, "tb1qbefore"), hot.wallet.seen(returned))
         assertEquals(emptyList<PostCall>(), hot.posts, "a post without a saved guard")
         assertNull(hot.wallet.unconfirmedSend, "a guard for a payment that was never posted")
-        assertNull(session.unconfirmedSend, "the session's guard for a payment that was never posted")
-        assertTrue(session.lastSaveFailed, "the failed Replace of the guard is what Home's notice reads")
-        hot.store.write = null
-        assertNull(restart(hot.store).unconfirmedSend, "what the next cold start restores")
+        assertNull(session.unconfirmedSend(), "the session's guard for a payment that was never posted")
+        hot.guards.failWrite = false
+        assertNull(restart(hot.store, hot.guards).unconfirmedSend(), "what the next cold start restores")
         assertTrue(hot.wallet.broadcast(session, 100_000, 8, DESTINATION), "the retry once the phone can save")
         assertEquals(1, hot.posts.size)
-        assertFalse(session.lastSaveFailed, "the retry's write cleared it")
+        hot.guards.unreadable = true
+        assertFalse(hot.wallet.broadcast(session, 100_000, 8, DESTINATION), "a payment while the guard file cannot be read")
+        assertEquals(GUARD_NOT_SAVED, hot.wallet.lastError)
+        assertEquals(1, hot.posts.size, "a post while the guard file cannot be read")
     }
 
     @Test
@@ -444,7 +463,7 @@ class SingleSigWalletBroadcastTest {
         hot.history = listOf(HotTx(TXID, -101_128L, 0u, null)) + hot.history
         hot.wallet.bindSession(session)
         assertNull(hot.wallet.unconfirmedSend, "the payment is out and Home lists it")
-        assertNull(restart(hot.store).unconfirmedSend, "what the next cold start restores")
+        assertNull(restart(hot.store, hot.guards).unconfirmedSend(), "what the next cold start restores")
         assertTrue(hot.wallet.broadcast(session, 50_000, 8, DESTINATION), "a new payment can start")
     }
 
@@ -459,7 +478,7 @@ class SingleSigWalletBroadcastTest {
             assertFalse(hot.wallet.broadcast(session, 50_000, 8, DESTINATION), "a payment $ahead s later")
         }
         assertEquals(1, hot.posts.size, "only the unknown payment was posted")
-        assertEquals(UnconfirmedSend(TXID, SENT_AT), restart(hot.store).unconfirmedSend, "what the next cold start restores")
+        assertEquals(UnconfirmedSend(TXID, SENT_AT), restart(hot.store, hot.guards).unconfirmedSend(), "what the next cold start restores")
     }
 
     @Test
@@ -521,8 +540,8 @@ class SingleSigWalletBroadcastTest {
         assertTrue(hot.wallet.unconfirmedClearOffered(), "the control with a negative age")
         hot.wallet.clearUnconfirmedSend(session)
         assertNull(hot.wallet.unconfirmedSend, "the wallet after the clear")
-        assertNull(session.unconfirmedSend, "the session after the clear")
-        assertNull(restart(hot.store).unconfirmedSend, "the phone after the clear")
+        assertNull(session.unconfirmedSend(), "the session after the clear")
+        assertNull(restart(hot.store, hot.guards).unconfirmedSend(), "the phone after the clear")
         assertTrue(hot.wallet.broadcast(session, 50_000, 8, DESTINATION), "a new payment after the clear")
         assertEquals(2, hot.posts.size)
     }
@@ -537,14 +556,14 @@ class SingleSigWalletBroadcastTest {
 
     @Test
     fun aPaymentOfUnknownOutcomeStillHoldsANewWalletAfterARestart() {
-        val store = phoneHolding(null)
-        val session = restart(store)
+        val phone = Phone(null)
+        val session = restart(phone.store, phone.guards)
         val before = FakeHot()
         before.wallet.bindSession(session)
         before.postResult = { throw MobileSignerException.BroadcastUnknown(UNKNOWN_MESSAGE) }
         assertFalse(before.wallet.broadcast(session, 100_000, 8, DESTINATION))
         val after = FakeHot()
-        val restarted = restart(store)
+        val restarted = restart(phone.store, phone.guards)
         after.wallet.bindSession(restarted)
         assertEquals(UnconfirmedSend(TXID, SENT_AT), after.wallet.unconfirmedSend, "the new wallet after the restart")
         assertFalse(after.wallet.broadcast(restarted, 100_000, 8, DESTINATION), "a payment after the restart")
@@ -554,22 +573,22 @@ class SingleSigWalletBroadcastTest {
 
     @Test
     fun aRestoredPaymentThatTheHistoryListsSettlesAndLeavesTheSavedWallet() {
-        val store = phoneHolding(UnconfirmedSend(TXID, SENT_AT))
-        val session = restart(store)
+        val phone = Phone(UnconfirmedSend(TXID, SENT_AT))
+        val session = restart(phone.store, phone.guards)
         val hot = FakeHot()
         hot.wallet.bindSession(session)
         assertEquals(UnconfirmedSend(TXID, SENT_AT), hot.wallet.unconfirmedSend, "before the history lists it")
         hot.history = listOf(HotTx(TXID, -101_128L, 0u, null)) + hot.history
         hot.wallet.bindSession(session)
         assertNull(hot.wallet.unconfirmedSend, "the payment is out and Home lists it")
-        assertNull(restart(store).unconfirmedSend, "what the next cold start restores")
+        assertNull(restart(phone.store, phone.guards).unconfirmedSend(), "what the next cold start restores")
         assertTrue(hot.wallet.broadcast(session, 50_000, 8, DESTINATION), "a new payment can start")
     }
 
     @Test
     fun aRestoredPaymentStaysUntilTheHistoryListsItHoweverOldItIs() {
-        val store = phoneHolding(UnconfirmedSend(TXID, SENT_AT))
-        val session = restart(store)
+        val phone = Phone(UnconfirmedSend(TXID, SENT_AT))
+        val session = restart(phone.store, phone.guards)
         val hot = FakeHot()
         hot.clock = SENT_AT + 120
         hot.wallet.bindSession(session)
@@ -577,19 +596,20 @@ class SingleSigWalletBroadcastTest {
         hot.clock = SENT_AT + 30L * 86_400
         hot.wallet.bindSession(session)
         assertEquals(UnconfirmedSend(TXID, SENT_AT), hot.wallet.unconfirmedSend, "a month later")
-        assertEquals(UnconfirmedSend(TXID, SENT_AT), restart(store).unconfirmedSend, "what the next cold start restores")
+        assertEquals(UnconfirmedSend(TXID, SENT_AT), restart(phone.store, phone.guards).unconfirmedSend(), "what the next cold start restores")
     }
 
     @Test
     fun theDemoFixtureNeverTouchesASavedPaymentOfUnknownOutcome() {
-        val store = phoneHolding(UnconfirmedSend(TXID, SENT_AT))
-        val session = restart(store)
+        val phone = Phone(UnconfirmedSend(TXID, SENT_AT))
+        val session = restart(phone.store, phone.guards)
         val hot = FakeHot()
         hot.wallet.bindSession(session)
         hot.wallet.useDemoFixture()
         assertNull(hot.wallet.unconfirmedSend, "the fixture's own clear")
-        assertEquals(1, store.writes.size, "the fixture wrote")
-        assertEquals(UnconfirmedSend(TXID, SENT_AT), restart(store).unconfirmedSend, "what the next cold start restores")
+        assertEquals(1, phone.store.writes.size, "the fixture wrote the wallet")
+        assertEquals(1, phone.guards.writes, "the fixture wrote the guard file")
+        assertEquals(UnconfirmedSend(TXID, SENT_AT), restart(phone.store, phone.guards).unconfirmedSend(), "what the next cold start restores")
         hot.wallet.bindSession(session)
         assertEquals(UnconfirmedSend(TXID, SENT_AT), hot.wallet.unconfirmedSend, "the next bind of the real key")
     }
@@ -701,13 +721,14 @@ class SingleSigWalletBroadcastTest {
         assertEquals(HeldSend(signed, KeyNetwork.TEST), hot.wallet.heldSend)
         assertTrue(feeNeedsConfirmation(2_760, 8 * TYPICAL_VSIZE, 10_000), "what the Review screen asks about")
         assertEquals(writes, hot.store.writes.size, "the phone was written before the user confirmed")
+        assertEquals(0, hot.guards.writes, "the guard file was written before the user confirmed")
         assertNull(hot.wallet.unconfirmedSend, "a guard before the user confirmed")
-        assertNull(session.unconfirmedSend, "the session's guard before the user confirmed")
+        assertNull(session.unconfirmedSend(), "the session's guard before the user confirmed")
         assertEquals(emptyList<PostCall>(), hot.posts, "a post before the user confirmed")
         assertEquals(Seen(true, "", null, 1_000_000L, "tb1qbefore"), hot.wallet.seen(true), "nothing reads as sent")
         var onThePhone: UnconfirmedSend? = null
         hot.postResult = {
-            onThePhone = restart(hot.store).unconfirmedSend
+            onThePhone = restart(hot.store, hot.guards).unconfirmedSend()
             HotSendResult(TXID)
         }
         assertTrue(hot.wallet.post(session))
@@ -731,6 +752,7 @@ class SingleSigWalletBroadcastTest {
         assertNull(hot.wallet.heldSend)
         assertNull(hot.wallet.lastError, "a cancel is not a failure")
         assertEquals(writes, hot.store.writes.size, "the phone was written for a payment the user let go")
+        assertEquals(0, hot.guards.writes, "the guard file was written for a payment the user let go")
         assertNull(hot.wallet.unconfirmedSend)
         assertEquals(emptyList<PostCall>(), hot.posts)
         assertFalse(hot.wallet.post(session), "a post with nothing held")
@@ -844,14 +866,14 @@ class SingleSigWalletBroadcastTest {
         hot.prepareResult = { PreparedSend(TXID, "hex-held", 2_760uL, 10_000uL) }
         assertTrue(hot.wallet.prepare(session, 10_000, 8, DESTINATION))
         val other = UnconfirmedSend("f".repeat(64), SENT_AT)
-        assertTrue(session.recordUnconfirmedSend(other.txid, other.sinceSeconds))
+        assertEquals(Claim.Written, session.recordUnconfirmedSend(other.txid, other.sinceSeconds))
         hot.wallet.bindSession(session)
         assertEquals(other, hot.wallet.unconfirmedSend, "the guard the bind brought in")
         assertFalse(hot.wallet.post(session), "a post while a guard is set")
         assertEquals(EARLIER_UNSETTLED, hot.wallet.lastError)
         assertEquals(emptyList<PostCall>(), hot.posts, "a post reached the node")
         assertEquals(other, hot.wallet.unconfirmedSend, "the other payment's guard on the wallet")
-        assertEquals(other, restart(hot.store).unconfirmedSend, "the other payment's guard on the phone")
+        assertEquals(other, restart(hot.store, hot.guards).unconfirmedSend(), "the other payment's guard on the phone")
     }
 
     // V7. A prepare that finished after dropHeldSend had run held its payment for the next Review. The screen is left while the
@@ -919,4 +941,130 @@ class SingleSigWalletBroadcastTest {
         hot.wallet.useDemoFixture()
         assertEquals(1_250_000L, hot.wallet.spendableSats, "the demo's")
     }
+
+    // N1 of open item 79. The guard is keyed by the wallet's fingerprint: one wallet's payment of unknown outcome stops that wallet in
+    // every live instance, one that bound before the guard was written included, and never stops another wallet.
+    @Test
+    fun aGuardStopsASecondPaymentFromItsWalletButNotFromAnotherWallet() {
+        val first = FakeHot()
+        val firstSession = first.goLive()
+        val second = FakeHot(first.guards)
+        val secondSession = restart(first.store, first.guards)
+        second.wallet.bindSession(secondSession)
+        first.postResult = { throw MobileSignerException.BroadcastUnknown(UNKNOWN_MESSAGE) }
+        assertFalse(first.wallet.broadcast(firstSession, 100_000, 8, DESTINATION))
+        assertFalse(second.wallet.broadcast(secondSession, 50_000, 8, DESTINATION), "a second payment from the same wallet")
+        assertEquals(EARLIER_UNSETTLED, second.wallet.lastError)
+        assertEquals(emptyList<PostCall>(), second.posts, "the second instance posted")
+        assertEquals(UnconfirmedSend(TXID, SENT_AT), second.wallet.unconfirmedSend, "the second instance after its refusal")
+        val other = FakeHot(first.guards, OTHER_CHECK)
+        val otherSession = other.goLive()
+        assertTrue(other.wallet.broadcast(otherSession, 50_000, 8, DESTINATION), "a payment from another wallet")
+        assertEquals(1, other.posts.size)
+        assertEquals(UnconfirmedSend(TXID, SENT_AT), first.guards.guardOf(TEST_CHECK), "the first wallet's guard after the other wallet's payment")
+        assertNull(first.guards.guardOf(OTHER_CHECK), "the other wallet's guard once its payment is out")
+    }
+
+    // N1. A phone with no screen lock keeps the wallet in memory only, but it keeps the guard: after the process ends and the user types
+    // the words again, the payment of unknown outcome still stops a second one.
+    @Test
+    fun aPhoneWithNoScreenLockKeepsTheGuardAcrossARestartAndANewImport() {
+        val noLock = FakeSecureStore(write = WriteResult.Unavailable(Why.NoScreenLock))
+        val before = FakeHot()
+        val first = importedSession(noLock, before.guards)
+        assertEquals(SaveState.NotSaved, first.saved, "a phone with no screen lock keeps no wallet")
+        before.wallet.bindSession(first)
+        before.postResult = { throw MobileSignerException.BroadcastUnknown(UNKNOWN_MESSAGE) }
+        assertFalse(before.wallet.broadcast(first, 100_000, 8, DESTINATION))
+        assertEquals(1, before.posts.size, "the payment posted with its guard in the plain file")
+        val after = FakeHot(before.guards)
+        val second = importedSession(noLock, before.guards)
+        after.wallet.bindSession(second)
+        assertEquals(UnconfirmedSend(TXID, SENT_AT), after.wallet.unconfirmedSend, "the new wallet after the restart")
+        assertFalse(after.wallet.broadcast(second, 100_000, 8, DESTINATION), "a payment after the restart")
+        assertEquals(EARLIER_UNSETTLED, after.wallet.lastError)
+        assertEquals(emptyList<PrepareCall>(), after.prepares, "a payment was prepared after the restart")
+    }
+
+    // N1. A record that a build before the guard file saved holds the guard (flag 8). The unlock moves it to the file and saves the record
+    // without it, once, so it still stops a second payment, and a guard the user cleared never comes back from the record.
+    @Test
+    fun anOlderRecordsGuardMovesToTheFileOnceAtTheUnlock() {
+        val store = storeHolding(oldRecordBytes(UnconfirmedSend(TXID, SENT_AT)))
+        val guards = FakePlainFile()
+        val session = restart(store, guards)
+        assertEquals(UnconfirmedSend(TXID, SENT_AT), guards.guardOf(), "the guard file after the unlock")
+        assertNull(assertIs<UnlockResult.Opened>(SavedWallet(store).openNow()).oldGuard, "the record on the phone after the unlock")
+        val hot = FakeHot(guards)
+        hot.wallet.bindSession(session)
+        assertFalse(hot.wallet.broadcast(session, 50_000, 8, DESTINATION), "a payment while the moved guard is set")
+        assertEquals(EARLIER_UNSETTLED, hot.wallet.lastError)
+        hot.wallet.clearUnconfirmedSend(session) // the user checked the explorer
+        assertNull(restart(store, guards).unconfirmedSend(), "the next cold start after the clear")
+        assertNull(guards.guardOf(), "the guard file after that cold start")
+        assertTrue(hot.wallet.broadcast(session, 50_000, 8, DESTINATION), "a new payment after the clear")
+    }
+
+    // N1. Rows 72 and 76 of the storage design: a Replace that met both Keychain accounts taken, or another instance's newer copy, failed
+    // the guard's save and so refused the payment. The guard no longer goes through the secure store.
+    @Test
+    fun aSecureStoreThatCannotSaveNoLongerStopsAPayment() {
+        val answers = listOf(
+            "both Keychain accounts taken" to WriteResult.Unavailable(Why.Other),
+            "another instance's newer copy" to WriteResult.Conflict,
+            "a Keystore key not ready" to WriteResult.Unavailable(Why.TryLater),
+        )
+        for ((case, answer) in answers) {
+            val hot = FakeHot()
+            val session = hot.goLive()
+            hot.store.write = answer
+            var inTheFile: UnconfirmedSend? = null
+            hot.postResult = {
+                inTheFile = hot.guards.guardOf()
+                HotSendResult(TXID)
+            }
+            assertTrue(hot.wallet.broadcast(session, 100_000, 8, DESTINATION), "a payment when the store answers $case")
+            assertEquals(1, hot.posts.size, case)
+            assertEquals(UnconfirmedSend(TXID, SENT_AT), inTheFile, "the guard file when the post ran, $case")
+            assertEquals(SaveState.Saved, session.saved, "the wallet after the payment, $case")
+        }
+    }
+
+    // N1. Two live instances of one wallet post at the same moment over one guard file. Each read of the file waits a moment for the
+    // other instance's, so without the lock across "no guard for this wallet, then write mine" both would find none and both post.
+    // The node answers only once both posts are past their guard. A payment that went out clears its guard, so without the hold the
+    // first instance could post and settle before the second one claimed, and that second post would rightly go.
+    @Test
+    fun twoInstancesOfOneWalletThatPostAtOnceSendOnePayment(): Unit = runBlocking {
+        val first = FakeHot()
+        val firstSession = first.goLive()
+        val second = FakeHot(first.guards)
+        val secondSession = restart(first.store, first.guards)
+        second.wallet.bindSession(secondSession)
+        assertTrue(first.wallet.prepare(firstSession, 100_000, 8, DESTINATION))
+        assertTrue(second.wallet.prepare(secondSession, 100_000, 8, DESTINATION))
+        val readers = atomic(0)
+        first.guards.onRead = {
+            readers.incrementAndGet()
+            runBlocking { withTimeoutOrNull(300) { while (readers.value < 2) delay(5) } }
+        }
+        val atTheNode = atomic(0)
+        val returned = atomic(0)
+        val node = {
+            atTheNode.incrementAndGet()
+            runBlocking { withTimeoutOrNull(10_000) { while (atTheNode.value + returned.value < 2) delay(5) } }
+            HotSendResult(TXID)
+        }
+        first.postResult = node
+        second.postResult = node
+        val firstPost = async(Dispatchers.Default) { first.wallet.post(firstSession).also { returned.incrementAndGet() } }
+        val secondPost = async(Dispatchers.Default) { second.wallet.post(secondSession).also { returned.incrementAndGet() } }
+        val sent = listOf(firstPost.await(), secondPost.await())
+        assertEquals(1, first.posts.size + second.posts.size, "payments that reached the node")
+        assertEquals(1, sent.count { it }, "posts that reported a payment out")
+        assertEquals(EARLIER_UNSETTLED, listOf(first, second).single { it.posts.isEmpty() }.wallet.lastError)
+    }
 }
+
+/** Another wallet's fingerprint, distinct from [TEST_CHECK]. */
+private const val OTHER_CHECK = "9f8e7d6c"
