@@ -8,7 +8,8 @@
 //! `1/i`, by the rule in `crate::scan`, which asks `GAP` indices past the highest index proven paid,
 //! so no host moves a scan by claiming use. What a scan learned (which indices are used, how far use is
 //! proven, no key and no amount) is kept in `SCAN_STORE`, in a file per wallet once the app names a
-//! folder, so the next call, after a restart too, asks only what can have changed; see `synced`.
+//! folder, so the next call, after a restart too, asks only what can have changed and proves each chain's
+//! proven index used again before it trusts the file; see `synced`.
 //!
 //! Every read and the broadcast go through `crate::chain::ChainSource`, so the wallet logic here never
 //! builds a URL, reads a JSON body or picks a host.
@@ -23,9 +24,9 @@ use crate::chain::{
     ChainSource, EsploraSource, Http, Operator, Summary, TxView, Txo, Utxo, WINDOW, check_network,
     history_error, throttled, tx_error,
 };
-use crate::proof::{Anchor, prove_use};
-use crate::scan::{ChainScan, Event, GAP, ScanStatus, Seen, Step, step};
-use crate::scan_store::{Last, ScanStore, WalletId, WalletScan};
+use crate::proof::{Anchor, NotProven, prove_use, verify};
+use crate::scan::{ChainScan, Event, GAP, Proof, ScanStatus, Seen, Step, step};
+use crate::scan_store::{FullPass, Last, ScanStore, WalletId, WalletScan};
 use crate::{KeyNetwork, MobileSignerError};
 use bip39::Mnemonic;
 use bitcoin::absolute::LockTime;
@@ -288,16 +289,19 @@ fn complete(wallet: Wallet) -> Result<Wallet, MobileSignerError> {
 ///
 /// - Shared: a sync of this wallet ended under `SHARE_TTL` ago and no payment went out or host was lost
 ///   since it started. Its answer is returned with no request, so the app's snapshot then history is one sync.
-/// - Routine: the funded and pending indices and the `LOOKAHEAD` indices after the last used one of each chain
-///   are asked again, so balances are fresh, and the proofs stand. A lookahead index that turned out used, a pass
-///   cut short, and a wallet never scanned go on by `crate::scan::step` from what is known.
-/// - Full: when the last full pass ended `full_pass_every` ago or longer, every index below each chain's
+/// - Routine: the funded and pending indices, the proven index and the `LOOKAHEAD` indices after the last used one
+///   of each chain are asked again, so balances are fresh, and the proofs stand while the host calls their indices
+///   used. A lookahead index that turned out used, a pass cut short, and a wallet never scanned go on by
+///   `crate::scan::step` from what is known. The index the file holds as proven for a chain is proven again first.
+/// - Full: when the last full pass started `full_pass_every` ago or longer, every index below each chain's
 ///   frontier plus `GAP` is asked again from 0, and the frontier stands, so nothing is proven twice.
 ///
 /// One sync of a wallet runs at a time, and a call that comes while one runs waits for it and shares its
 /// answer. A sync ends `Continuing` when a host refuses a read with its request limit, and the next one goes on
-/// from what it kept. Any other failed read fails the call. Either way what the sync learned is kept, and
-/// written to the wallet's file when the app named a folder. Freshness counts from when a sync ends.
+/// from what it kept, the routine part included, so a wallet with more funded addresses than a host serves in an
+/// hour still completes. Any other failed read fails the call. Either way what the sync learned is kept, the scan
+/// written to the wallet's file when the app named a folder and each balance in memory. Freshness counts from when
+/// a sync ends, and the period of full passes from when one starts.
 fn synced(
     source: &dyn ChainSource,
     words: &[String],
@@ -315,47 +319,65 @@ fn synced(
         && last.epoch == store.epoch()
         && elapsed(clock(), last.ended) < SHARE_TTL
     {
-        return wallet_of(&account, &entry.scan, last.clone());
+        return wallet_of(&account, &entry.scan, &entry.balances, last.status.clone());
     }
     let epoch = store.epoch();
     let started = clock();
+    let entry = &mut *entry;
     let scan = &mut entry.scan;
-    if let Some(at) = scan.full_at
-        && since_unix(started, at) >= full_pass_every(source.operator()?)
-    {
+    let start_full = match scan.full {
+        None => true,
+        Some(FullPass::Running(_)) => false,
+        Some(FullPass::Ended(at)) => since_unix(started, at) >= full_pass_every(source.operator()?),
+    };
+    if start_full {
         for chain in &mut scan.chains {
             chain.seen.clear();
         }
-        scan.full_at = None;
+        scan.full = Some(FullPass::Running(unix_seconds(started)));
+        entry.round = None;
     }
-    let pass = scan_chains(source, anchor_of(network), &account, &mut scan.chains);
+    if entry.round.is_none() {
+        entry.balances = scan
+            .chains
+            .each_ref()
+            .map(|chain| vec![0; chain.seen.len()]);
+    }
+    let routine = entry.round.get_or_insert([0, 0]);
+    let pass = scan_chains(
+        source,
+        anchor_of(network),
+        &account,
+        &mut scan.chains,
+        &mut entry.balances,
+        routine,
+    );
     match &pass {
-        Ok((ScanStatus::Complete, _)) if scan.full_at.is_none() => {
-            scan.full_at = Some(unix_seconds(clock()));
+        Ok(ScanStatus::Complete) => {
+            if let Some(FullPass::Running(at)) = scan.full {
+                scan.full = Some(FullPass::Ended(at));
+            }
+            entry.round = None;
         }
         // A host lied, so its claims go and the next sync asks every index again. Proofs do not depend on who served them.
-        Ok((ScanStatus::Unverified(_), _)) => {
+        Ok(ScanStatus::Unverified(_)) => {
             for chain in &mut scan.chains {
                 chain.seen.clear();
             }
-            scan.full_at = None;
+            scan.full = None;
+            entry.round = None;
         }
         _ => {}
     }
     store.save(&id, &held, scan);
     entry.last = None;
-    let (status, mut balances) = pass?;
-    for (found, chain) in balances.iter_mut().zip(&entry.scan.chains) {
-        found.resize(chain.seen.len(), 0);
-    }
     let last = Last {
         ended: clock(),
         epoch,
-        balances,
-        status,
+        status: pass?,
     };
     entry.last = Some(last.clone());
-    wallet_of(&account, &entry.scan, last)
+    wallet_of(&account, &entry.scan, &entry.balances, last.status)
 }
 
 /// How often a full pass runs on the host the next read goes to, by who runs it.
@@ -383,11 +405,12 @@ fn unix_seconds(at: SystemTime) -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
-/// `scan` and `last` as the wallet they describe, with every key derived again. No request.
+/// `scan`, `balances` and `status` as the wallet they describe, with every key derived again. No request.
 fn wallet_of(
     account: &Account,
     scan: &WalletScan,
-    last: Last,
+    balances: &[Vec<u64>; 2],
+    status: ScanStatus,
 ) -> Result<Wallet, MobileSignerError> {
     Ok(Wallet {
         keys: [
@@ -395,27 +418,36 @@ fn wallet_of(
             keys_of(account, Chain::Internal, &scan.chains[1])?,
         ],
         scans: scan.chains.clone(),
-        balances: last.balances,
-        status: last.status,
+        balances: balances.clone(),
+        status,
     })
 }
 
-/// Both chains brought up to date on `source`, each to the end of its pass, with each index's balance. A host
-/// caught lying is left for the next one, which is asked every index again from 0 while the proofs stand, since
-/// a proof does not depend on who served it. A chain that does not complete ends the sync, and the status names it.
+/// Both chains brought up to date on `source`, each to the end of its pass, with each index's balance in
+/// `balances` and the routine part's progress in `routine`. A host caught lying is left for the next one, which
+/// is asked every index again from 0 while the proofs stand, since a proof does not depend on who served it. A
+/// chain that does not complete ends the sync, and the status names it.
 fn scan_chains(
     source: &dyn ChainSource,
     anchor: Anchor,
     account: &Account,
     scans: &mut [ChainScan; 2],
-) -> Result<(ScanStatus, [Vec<u64>; 2]), MobileSignerError> {
+    balances: &mut [Vec<u64>; 2],
+    routine: &mut [usize; 2],
+) -> Result<ScanStatus, MobileSignerError> {
     loop {
-        let mut balances = [Vec::new(), Vec::new()];
         let mut ended = ScanStatus::Complete;
         for chain in [Chain::External, Chain::Internal] {
             let c = chain as usize;
-            let (status, found) = scan_chain(source, anchor, account, chain, &mut scans[c])?;
-            balances[c] = found;
+            let status = scan_chain(
+                source,
+                anchor,
+                account,
+                chain,
+                &mut scans[c],
+                &mut balances[c],
+                &mut routine[c],
+            )?;
             ended = match status {
                 ScanStatus::Complete => continue,
                 ScanStatus::Continuing(why) => {
@@ -428,37 +460,41 @@ fn scan_chains(
             break;
         }
         if !matches!(ended, ScanStatus::Unverified(_)) || !source.skip_host() {
-            return Ok((ended, balances));
+            return Ok(ended);
         }
         for scan in scans.iter_mut() {
             scan.seen.clear();
         }
+        *balances = [Vec::new(), Vec::new()];
+        *routine = [0, 0];
     }
 }
 
-/// `scan` of `chain` brought up to date on `source`, with each index's balance. It asks again the indices a
-/// routine sync asks, then runs `crate::scan::step` to the end of its pass, asking `WINDOW` indices at a time so
-/// a pass cut short keeps all but the last few it was told. A read the host throttles ends it `Continuing`, and
-/// any other failed read fails it, with `scan` holding what it learned either way.
+/// `scan` of `chain` brought up to date on `source`, with each index's balance in `balances`. The index the scan
+/// file holds as proven is proven again first, so nothing the file says is asked about again or trusted before.
+/// Then the routine part goes on from `routine`, and `crate::scan::step` runs to the end of its pass, asking
+/// `WINDOW` indices at a time, so a pass cut short keeps all but the last few it was told. A read the host throttles
+/// ends it `Continuing`, and any other failed read fails it, with `scan`, `balances` and `routine` holding what it
+/// learned either way.
 fn scan_chain(
     source: &dyn ChainSource,
     anchor: Anchor,
     account: &Account,
     chain: Chain,
     scan: &mut ChainScan,
-) -> Result<(ScanStatus, Vec<u64>), MobileSignerError> {
-    let mut balances = vec![0; scan.seen.len()];
-    if let Err(e) = refresh(source, account, chain, scan, &mut balances) {
-        return match throttled(&e).map(str::to_string) {
-            Some(why) => Ok((
-                ScanStatus::Continuing(format!("could not be asked again: {why}")),
-                balances,
-            )),
-            None => Err(e),
-        };
-    }
+    balances: &mut Vec<u64>,
+    routine: &mut usize,
+) -> Result<ScanStatus, MobileSignerError> {
+    let mut refreshed = false;
     let mut at = scan.next();
     loop {
+        if !refreshed && !matches!(scan.proof, Some(Proof::Stored(_))) {
+            refreshed = true;
+            if let Some(status) = refresh(source, account, chain, scan, balances, routine)? {
+                return Ok(status);
+            }
+            at = scan.next();
+        }
         let event = match &at {
             Step::Ask(indices) => {
                 let part = indices.start..indices.end.min(indices.start + WINDOW as u32);
@@ -473,27 +509,54 @@ fn scan_chain(
                     },
                 }
             }
-            Step::Prove(index) => {
+            Step::Reprove(index) => {
                 let address = account.key(chain, *index)?.address;
                 match prove_use(source, anchor, &address, *index) {
                     Ok(proven) => Event::Proven(proven),
                     Err(not) => Event::NotProven(not),
                 }
             }
-            Step::Done(status) => return Ok((status.clone(), balances)),
+            Step::Recheck(evidence) => {
+                let address = account.key(chain, evidence.index)?.address;
+                match verify(source, anchor, &address, *evidence) {
+                    Ok(proven) => Event::Proven(proven),
+                    Err(not) => Event::NotProven(not),
+                }
+            }
+            Step::Prove(index) => {
+                let address = account.key(chain, *index)?.address;
+                match prove_use(source, anchor, &address, *index) {
+                    Ok(proven) => Event::Proven(proven),
+                    Err(not) => {
+                        if let NotProven::Unconfirmed(summary) = &not {
+                            balances[*index as usize] = summary.balance;
+                        }
+                        Event::NotProven(not)
+                    }
+                }
+            }
+            Step::Done(status) => return Ok(status.clone()),
         };
         at = step(scan, at, event);
+        // A file's index that does not hold, or a payment shown again and gone, empties the chain.
+        balances.truncate(scan.seen.len());
+        *routine = match refreshed {
+            true => scan.seen.len(),
+            false => (*routine).min(scan.seen.len()),
+        };
     }
 }
 
-/// The key of every index `scan` has seen and of the one it hands out, which a pass cut short may not have
-/// reached, derived again. No request.
+/// The key of every index `scan` has seen below its frontier plus `GAP`, and of the one it hands out, which a
+/// pass cut short may not have reached, derived again. No request. The index the scan file holds moves no
+/// frontier before a source proves it used again, so a file never makes this derive keys a source did not prove.
 fn keys_of(
     account: &Account,
     chain: Chain,
     scan: &ChainScan,
 ) -> Result<Vec<OwnKey>, MobileSignerError> {
-    (0..(scan.seen.len() as u32).max(scan.issued() + 1))
+    let seen = (scan.seen.len() as u32).min(scan.frontier() + GAP);
+    (0..seen.max(scan.issued() + 1))
         .map(|index| account.key(chain, index))
         .collect()
 }
@@ -519,34 +582,53 @@ fn lookup(
     Ok(summaries)
 }
 
-/// The routine part of a sync. It asks again the funded and pending indices of `scan` and the `LOOKAHEAD`
-/// indices after the last used one, in one batch, each answer setting its index's balance in `balances`. Every other
-/// index keeps what it was, and holds nothing, because every index that held coins is asked. When a lookahead
-/// index turned out used the chain ends at the lookahead, so the pass asks the rest of the window again and
-/// proves from there. The frontier stands. A chain with nothing seen asks nothing here.
+/// The routine part of a sync. It asks again the funded and pending indices of `scan`, its proven index, so a host
+/// that no longer shows that payment has it shown again, and the `LOOKAHEAD` indices after the last used one, each
+/// answer setting its index's balance in `balances`. It asks `WINDOW` at a time from `routine`, the first index the
+/// round has not asked, and moves `routine` past each part answered, so a throttled part ends it `Continuing` and
+/// the next sync goes on from there. Every other index keeps what it was, and holds nothing, because every index
+/// that held coins is asked. When a lookahead index turned out used the chain ends at the lookahead, so the pass
+/// asks the rest of the window again and proves from there. The frontier stands. A chain with nothing seen asks
+/// nothing here.
 fn refresh(
     source: &dyn ChainSource,
     account: &Account,
     chain: Chain,
     scan: &mut ChainScan,
     balances: &mut Vec<u64>,
-) -> Result<(), MobileSignerError> {
+    routine: &mut usize,
+) -> Result<Option<ScanStatus>, MobileSignerError> {
     let after_last_used = scan
         .seen
         .iter()
         .rposition(|seen| seen.used)
         .map_or(0, |last| last + 1);
     let edge = (after_last_used + LOOKAHEAD).min(scan.seen.len());
-    let asked: Vec<usize> = (0..edge)
-        .filter(|&i| i >= after_last_used || scan.seen[i].funded || scan.seen[i].pending)
+    let proven = scan.frontier().checked_sub(1).map(|index| index as usize);
+    let asked: Vec<usize> = (*routine..edge)
+        .filter(|&i| {
+            let seen = scan.seen[i];
+            i >= after_last_used || seen.funded || seen.pending || Some(i) == proven
+        })
         .collect();
-    if asked.is_empty() {
-        return Ok(());
-    }
-    let fresh = lookup(source, account, chain, asked.iter().map(|&i| i as u32))?;
-    for (i, summary) in asked.into_iter().zip(&fresh) {
-        scan.seen[i] = Seen::from(summary);
-        balances[i] = summary.balance;
+    for part in asked.chunks(WINDOW) {
+        let fresh = match lookup(source, account, chain, part.iter().map(|&i| i as u32)) {
+            Ok(fresh) => fresh,
+            Err(e) => {
+                return match throttled(&e).map(str::to_string) {
+                    Some(why) => Ok(Some(ScanStatus::Continuing(format!(
+                        "index {} could not be asked again: {why}",
+                        part[0]
+                    )))),
+                    None => Err(e),
+                };
+            }
+        };
+        for (&i, summary) in part.iter().zip(&fresh) {
+            scan.seen[i] = Seen::from(summary);
+            balances[i] = summary.balance;
+        }
+        *routine = part[part.len() - 1] + 1;
     }
     if scan.seen[after_last_used..edge]
         .iter()
@@ -555,7 +637,8 @@ fn refresh(
         scan.seen.truncate(edge);
         balances.truncate(edge);
     }
-    Ok(())
+    *routine = scan.seen.len();
+    Ok(None)
 }
 
 // The `///` text on each export stays as committed: UniFFI hashes it into the checksum the committed
@@ -841,7 +924,8 @@ fn detail_of(
 }
 
 /// Every address a scan of this wallet reaches, with its chain. That is each index below its chain's `frontier + GAP`
-/// in the stored scan, which for a wallet never scanned is the first `GAP` of each chain.
+/// in the stored scan, which for a wallet never scanned, or one whose file no sync has proven again since the app
+/// started, is the first `GAP` of each chain.
 fn own_addresses(
     account: &Account,
     store: &ScanStore,
@@ -853,7 +937,7 @@ fn own_addresses(
         .scan
         .chains
         .each_ref()
-        .map(|scan| scan.frontier + GAP);
+        .map(|scan| scan.frontier() + GAP);
     let mut own = HashMap::new();
     for chain in [Chain::External, Chain::Internal] {
         for index in 0..reach[chain as usize] {
@@ -1680,10 +1764,9 @@ mod tests {
         assert_eq!(balance_and_used(UNUSED), (0, false));
     }
 
-    // A routine sync asks a pending address again until a block takes its transaction, and a history page is
-    // read again only once the token moved, so both must follow the stats and nothing else.
+    // A routine sync asks a pending address again until a block takes its transaction.
     #[test]
-    fn a_summary_says_whether_the_mempool_holds_a_transaction_and_its_token_follows_the_history() {
+    fn a_summary_says_whether_the_mempool_holds_a_transaction() {
         let stats = |chain: (u64, u64, u64), mempool: (u64, u64, u64)| {
             format!(
                 r#"{{"mempool_stats":{{"tx_count":{},"funded_txo_sum":{},"spent_txo_sum":{}}},"chain_stats":{{"funded_txo_sum":{},"spent_txo_sum":{},"tx_count":{}}}}}"#,
@@ -1699,16 +1782,6 @@ mod tests {
             [true, false, true]
         );
         assert!(!parse_address_stats(UNUSED).unwrap().pending);
-        let tokens = [arriving.token, arrived.token, spending.token];
-        assert!(
-            tokens[0] != tokens[1] && tokens[1] != tokens[2] && tokens[0] != tokens[2],
-            "{tokens:?}"
-        );
-        assert_eq!(
-            parse_address_stats(&used_stats(2_500)).unwrap().token,
-            arrived.token,
-            "the same stats in another field order"
-        );
     }
 
     #[test]
@@ -2464,7 +2537,8 @@ mod tests {
     /// Stands in for the private node of a build, so the tests read the same with or without one.
     const OWN_NODE_FIXTURE: &str = "http://node.internal:8889/api";
     /// The reads of one proof of use, which are the address's history page and the tip, then the raw
-    /// transaction, its merkle branch and its block's header.
+    /// transaction, its merkle branch and its block's header. After a restart each chain's proven index is proven
+    /// again once, because the scan file is outside data and names no payment to show again.
     const PROOF_READS: usize = 5;
 
     fn used_stats(balance: u64) -> String {
@@ -2484,16 +2558,19 @@ mod tests {
         own(chain, index).address.to_string()
     }
 
-    /// Esplora keyed by address. An address not set up answers as one nobody ever paid, and its
-    /// history is its payment in `PROOF` when that block pays it, so a claim of use proves like a
-    /// real one. Each Fake has its own scan cache and a clock that moves only by `tick`, so no test
-    /// sleeps and none sees another's cache.
+    /// Esplora keyed by address. An address not set up answers as one nobody ever paid, with no
+    /// history. One set up lists its payment in `PROOF` when that block pays it, so a claim of use
+    /// proves like a real one. Each Fake has its own scan cache and a clock that moves only by `tick`,
+    /// so no test sleeps and none sees another's cache.
     struct Fake {
         stats: HashMap<String, String>,
         txs: HashMap<String, String>,
         utxos: HashMap<String, String>,
         /// What `/tx/{txid}` answers. A transaction not set up is a stranger's: it spends none of the wallet's coins.
         parents: HashMap<String, String>,
+        /// Transactions this host does not know, so every read of one answers 404: a payment a reorg undid, or one
+        /// in a block the host never saw.
+        unknown: HashSet<String>,
         failing: HashSet<String>,
         tip: String,
         calls: Mutex<Vec<String>>,
@@ -2508,6 +2585,7 @@ mod tests {
                 txs: HashMap::new(),
                 utxos: HashMap::new(),
                 parents: HashMap::new(),
+                unknown: HashSet::new(),
                 failing: HashSet::new(),
                 tip: TIP.into(),
                 calls: Mutex::new(Vec::new()),
@@ -2577,6 +2655,15 @@ mod tests {
             if path == "/blocks/tip/height" {
                 return Ok(self.tip.clone());
             }
+            if let Some(rest) = path.strip_prefix("/tx/")
+                && self
+                    .unknown
+                    .contains(rest.split('/').next().unwrap_or(rest))
+            {
+                return Err(MobileSignerError::InvalidPsbtJson(format!(
+                    "esplora get: {url}: status code 404"
+                )));
+            }
             if let Some(answer) = proof_answer(path) {
                 return answer;
             }
@@ -2602,7 +2689,9 @@ mod tests {
                 other => panic!("unexpected Esplora path /address/{address}/{other}"),
             };
             Ok(table.get(address).cloned().unwrap_or_else(|| match what {
-                "txs" => PROOF.pages.get(address).cloned().unwrap_or(fresh.into()),
+                "txs" if self.stats.contains_key(address) => {
+                    PROOF.pages.get(address).cloned().unwrap_or(fresh.into())
+                }
                 _ => fresh.to_string(),
             }))
         }
@@ -3653,7 +3742,7 @@ mod tests {
     }
 
     #[test]
-    fn a_restart_reads_the_scan_file_and_makes_a_routine_sync_that_proves_nothing_again() {
+    fn a_restart_reads_the_scan_file_proves_each_chains_index_again_and_makes_a_routine_sync() {
         let fake = three_used();
         let folder = Folder::new("restart");
         let store = ScanStore::default();
@@ -3674,26 +3763,24 @@ mod tests {
         );
         assert_eq!(
             fake.requests(),
-            58 + 14 + 4,
-            "a routine sync and the coin lists"
+            58 + 2 * PROOF_READS + 14 + 4,
+            "each chain's proven index proven again, a routine sync and the coin lists"
         );
-        // The file holds flags and tokens. No address, amount or key.
+        // The file holds flags and each chain's proven index. No address, amount, key or txid.
         let [file] = folder.files().try_into().unwrap();
         let text = fs::read_to_string(folder.0.join(file)).unwrap();
         assert!(!text.contains("tb1"), "{text}");
         let json: Value = serde_json::from_str(&text).unwrap();
         let mut keys: Vec<&String> = json.as_object().unwrap().keys().collect();
         keys.sort();
-        assert_eq!(keys, ["chains", "full_at", "version", "wallet"]);
+        assert_eq!(keys, ["chains", "full", "version", "wallet"]);
         for chain in json["chains"].as_array().unwrap() {
             let mut keys: Vec<&String> = chain.as_object().unwrap().keys().collect();
             keys.sort();
-            assert_eq!(keys, ["frontier", "seen"]);
+            assert_eq!(keys, ["proof", "seen"]);
+            assert!(chain["proof"].is_u64(), "{chain}");
             for seen in chain["seen"].as_array().unwrap() {
-                let [flags, _token] = seen.as_array().unwrap().as_slice() else {
-                    panic!("{seen}")
-                };
-                assert!(flags.as_u64().unwrap() < 16, "{seen}");
+                assert!(seen.as_u64().is_some_and(|flags| flags < 16), "{seen}");
             }
         }
     }
@@ -3747,7 +3834,7 @@ mod tests {
             fs::read_to_string(folder.0.join(file)).unwrap()
         };
         let good = written("");
-        let newer = good.replace("\"version\":1", "\"version\":2");
+        let newer = good.replace("\"version\":2", "\"version\":3");
         assert_ne!(newer, good);
         for (case, text) in [
             ("unreadable", good[..good.len() - 3].to_string()),
@@ -3776,8 +3863,8 @@ mod tests {
             fake.snapshot_in(&restarted).unwrap();
             assert_eq!(
                 fake.requests() - before,
-                14 + 4,
-                "{case}: the file was written again, so the next restart is a routine sync"
+                2 * PROOF_READS + 14 + 4,
+                "{case}: the file was written again, so the next restart proves its indices again and is a routine sync"
             );
         }
     }
@@ -3794,12 +3881,12 @@ mod tests {
         let path = folder.0.join(file);
         let text = fs::read_to_string(&path).unwrap();
         let json: Value = serde_json::from_str(&text).unwrap();
-        let at = json["full_at"].as_u64().unwrap();
+        let at = json["full"]["started"].as_u64().unwrap();
         fs::write(
             &path,
             text.replace(
-                &format!("\"full_at\":{at}"),
-                &format!("\"full_at\":{}", u64::MAX),
+                &format!("\"started\":{at}"),
+                &format!("\"started\":{}", u64::MAX),
             ),
         )
         .unwrap();
@@ -3812,8 +3899,8 @@ mod tests {
         );
         assert_eq!(
             fake.requests() - before,
-            44 + 4,
-            "a full pass, which proves nothing again"
+            2 * PROOF_READS + 44 + 4,
+            "the proven indices proven again, then a full pass, which proves nothing else"
         );
     }
 
@@ -3952,7 +4039,7 @@ mod tests {
             assert_eq!(
                 fake.requests(),
                 124 + 18,
-                "{operator:?}: the period counts from when the full pass ended"
+                "{operator:?}: the period counts from when the full pass started"
             );
         }
     }
@@ -4044,6 +4131,14 @@ mod tests {
     fn spent(address: &str, value: u64) -> String {
         format!(
             r#"{{"is_coinbase":false,"prevout":{}}}"#,
+            txo(address, value)
+        )
+    }
+
+    /// An input that spends output `vout` of `txid`, which paid `address` `value` sats, as Esplora lists one.
+    fn spent_at(txid: &str, vout: u32, address: &str, value: u64) -> String {
+        format!(
+            r#"{{"txid":"{txid}","vout":{vout},"is_coinbase":false,"prevout":{}}}"#,
             txo(address, value)
         )
     }
@@ -5356,7 +5451,7 @@ mod tests {
             let flagged = |flag: fn(&Seen) -> bool| scan.seen.iter().filter(|s| flag(s)).count();
             println!(
                 "{name}: frontier {}, {} asked, {} used, {} funded, {} pending",
-                scan.frontier,
+                scan.frontier(),
                 scan.seen.len(),
                 flagged(|s| s.used),
                 flagged(|s| s.funded),
@@ -6182,6 +6277,8 @@ mod tests {
         header: bitcoin::block::Header,
         /// The history page of each paid address, which lists its payment as confirmed in this block.
         pages: HashMap<String, String>,
+        /// What `/tx/{txid}` answers for each payment, confirmed in this block.
+        views: HashMap<String, String>,
     }
 
     static PROOF: LazyLock<ProofBlock> = LazyLock::new(|| {
@@ -6232,24 +6329,23 @@ mod tests {
         let txids: Vec<Txid> = txs.iter().map(Transaction::compute_txid).collect();
         let header = proof_header(merkle(&txids, 0).0, MINED_TIME, MINED_NONCE);
         let status = in_proof_block(&header, PROOF_HEIGHT);
-        let pages = paid
-            .into_iter()
-            .zip(&txids)
-            .map(|(address, txid)| {
-                let payment = tx_of(
-                    &txid.to_string(),
-                    &[spent(SOMEONE, PAID_SATS + 1_000)],
-                    &[txo(&address, PAID_SATS)],
-                    &status,
-                );
-                (address, format!("[{payment}]"))
-            })
-            .collect();
+        let (mut pages, mut views) = (HashMap::new(), HashMap::new());
+        for (address, txid) in paid.into_iter().zip(&txids) {
+            let payment = tx_of(
+                &txid.to_string(),
+                &[spent(SOMEONE, PAID_SATS + 1_000)],
+                &[txo(&address, PAID_SATS)],
+                &status,
+            );
+            pages.insert(address, format!("[{payment}]"));
+            views.insert(txid.to_string(), payment);
+        }
         ProofBlock {
             txs,
             txids,
             header,
             pages,
+            views,
         }
     });
 
@@ -6293,7 +6389,7 @@ mod tests {
         }
     }
 
-    /// What a source answers for a proof read of the proof block, which is a transaction's raw bytes or
+    /// What a source answers for a read of the proof block, which is a payment, a transaction's raw bytes or
     /// merkle branch or the header, or None for any other path. Another transaction or block is a 404.
     fn proof_answer(path: &str) -> Option<Result<String, MobileSignerError>> {
         let not_found = || {
@@ -6303,6 +6399,9 @@ mod tests {
         };
         let at = |txid: &str| PROOF.txids.iter().position(|t| t.to_string() == txid);
         let tx = path.strip_prefix("/tx/");
+        if let Some(view) = tx.and_then(|txid| PROOF.views.get(txid)) {
+            return Some(Ok(view.clone()));
+        }
         if let Some(txid) = tx.and_then(|rest| rest.strip_suffix("/hex")) {
             return Some(at(txid).map_or_else(not_found, |pos| Ok(serialize_hex(&PROOF.txs[pos]))));
         }
@@ -6775,8 +6874,8 @@ mod tests {
             ),
             (
                 &empty_get,
-                HotScan::Continuing,
-                "esplora get: receive index 3 has confirmed history by the source's count, and its history lists no confirmed payment to it",
+                HotScan::Unverified,
+                "esplora scan: receive index 3: ",
             ),
             (
                 &lying,
@@ -6916,5 +7015,566 @@ mod tests {
                 );
             }
         }
+    }
+
+    // The 5 Nov 2026 interrogate of the scanning rebuild proved six root causes, R1 to R6, each with a reviewer's
+    // repro. Each test below is that repro, asserting what the wallet must do instead.
+
+    /// The flags a scan file keeps for an index: used, and used with confirmed history.
+    const CLAIMED_USED: u64 = 1;
+    const CLAIMED_PAID: u64 = 3;
+
+    /// The one scan file in `folder`, with its JSON.
+    fn scan_file(folder: &Folder) -> (PathBuf, Value) {
+        let [file] = folder.files().try_into().unwrap();
+        let path = folder.0.join(file);
+        let json = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        (path, json)
+    }
+
+    /// The scan file in `folder` edited the way someone with write access to the app's folder could, so that it
+    /// still parses: the receive chain's indices carry `flags`, and its proven index is `frontier - 1`, which no source
+    /// shows paid.
+    fn push_receive_frontier(folder: &Folder, frontier: u32, flags: &[u64]) {
+        let (path, mut json) = scan_file(folder);
+        json["chains"][0] = serde_json::json!({"proof": frontier - 1, "seen": flags});
+        fs::write(&path, json.to_string()).unwrap();
+        let read = ScanStore::default();
+        read.use_dir(folder.0.clone());
+        let id = Account::new(&abandon_about(), "", Network::Testnet4)
+            .unwrap()
+            .id();
+        assert_eq!(
+            read.wallet(&id).lock().unwrap().scan.chains[0].proof,
+            Some(Proof::Stored(frontier - 1)),
+            "the edited file still parses"
+        );
+    }
+
+    // R1 (sonnet 1 and 2, haiku B, opus F3a). A restart trusted a file's frontier: Complete with a receive address
+    // no gap-20 restore reaches and a wrong balance, or 20,000 requests and then Unverified.
+    #[test]
+    fn a_scan_file_whose_frontier_was_pushed_is_proven_again_and_the_wallet_found_as_it_is() {
+        let cases = [
+            (
+                "5,000 used then 20 unused",
+                three_used(),
+                5_000,
+                [vec![CLAIMED_USED; 5_000], vec![0; GAP as usize]].concat(),
+                3,
+                4_000,
+            ),
+            (
+                "index 39 claimed paid",
+                three_used(),
+                40,
+                (0..60)
+                    .map(|i| if i == 39 { CLAIMED_PAID } else { 0 })
+                    .collect(),
+                3,
+                4_000,
+            ),
+            (
+                "20,000 with nothing asked",
+                three_used(),
+                20_000,
+                Vec::new(),
+                3,
+                4_000,
+            ),
+            (
+                "index 99 claimed paid on a wallet nobody paid",
+                Fake::new(),
+                100,
+                (0..120)
+                    .map(|i| if i == 99 { CLAIMED_PAID } else { 0 })
+                    .collect(),
+                0,
+                0,
+            ),
+        ];
+        for (case, fake, frontier, flags, receive, balance) in cases {
+            let folder = Folder::new("pushed");
+            let store = ScanStore::default();
+            store.use_dir(folder.0.clone());
+            fake.snapshot_in(&store).unwrap();
+            push_receive_frontier(&folder, frontier, &flags);
+            let restarted = ScanStore::default();
+            restarted.use_dir(folder.0.clone());
+            let before = fake.requests();
+            let found = fake.snapshot_in(&restarted).unwrap();
+            assert_eq!(
+                (found.receive_address, found.balance_sats, found.scan),
+                (addr(Chain::External, receive), balance, HotScan::Complete),
+                "{case}"
+            );
+            let asked = fake.requests() - before;
+            assert!(asked < 100, "{case}: {asked} requests");
+            fake.tick(PUBLIC_FULL_PASS);
+            let later = fake.snapshot_in(&restarted).unwrap();
+            assert_eq!(
+                (later.receive_address, later.scan),
+                (addr(Chain::External, receive), HotScan::Complete),
+                "{case}: the next full pass"
+            );
+        }
+    }
+
+    // R1 (opus F3b). The largest frontier a file could hold, 2^31 - 20 with nothing asked, made the detail derive every
+    // key below it and a throttled snapshot every key up to it, about 409 hours of work.
+    #[test]
+    fn a_scan_file_with_the_largest_frontier_hangs_neither_the_detail_nor_a_throttled_snapshot() {
+        let fake = Fake::new();
+        let folder = Folder::new("largest");
+        let store = ScanStore::default();
+        store.use_dir(folder.0.clone());
+        fake.snapshot_in(&store).unwrap();
+        push_receive_frontier(&folder, (1 << 31) - GAP, &[]);
+        let (done, answers) = std::sync::mpsc::channel();
+        for call in ["detail", "snapshot"] {
+            let (done, dir) = (done.clone(), folder.0.clone());
+            std::thread::spawn(move || {
+                let fake = Fake::new();
+                let store = ScanStore::default();
+                store.use_dir(dir);
+                let throttled = |url: &str| match url.contains("/address/") {
+                    true => Err(MobileSignerError::InvalidPsbtJson(
+                        "esplora get: HTTP status 429, gave up after 3 attempts".into(),
+                    )),
+                    false => fake.get(url),
+                };
+                let source = EsploraSource(&Reads(&throttled));
+                let words = abandon_about();
+                let answered = match call {
+                    "detail" => {
+                        let _ = detail_of(&source, &words, "", KeyNetwork::Test, &id('1'), &store);
+                        true
+                    }
+                    _ => snapshot_from(
+                        &source,
+                        &words,
+                        "",
+                        KeyNetwork::Test,
+                        &|| fake.now(),
+                        &store,
+                    )
+                    .is_ok_and(|snapshot| snapshot.scan == HotScan::Continuing),
+                };
+                let _ = done.send((call, answered));
+            });
+        }
+        drop(done);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut answered = Vec::new();
+        while let Ok(answer) =
+            answers.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        {
+            answered.push(answer);
+        }
+        answered.sort();
+        assert_eq!(answered, [("detail", true), ("snapshot", true)]);
+    }
+
+    // R2 (opus F1, haiku A, sonnet 3). A host that counts confirmed history for an address and lists none on its first
+    // page, or lists a payment and 404s it, kept every pass Continuing on it, and the next host was never asked.
+    #[test]
+    fn a_host_that_cannot_show_the_payment_it_counts_is_unverified_and_left_for_the_next() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 3), 7_000, '3');
+        let to = own(Chain::External, GAP - 1).address;
+        let forgery = forged(&made_up(&to, 0), &to, 0x1d00ffff);
+        for empty_page in [true, false] {
+            let liar = |url: &str| -> Result<String, MobileSignerError> {
+                match url.strip_prefix(ESPLORA_TESTNET4).unwrap() {
+                    "/blocks/tip/height" => Ok(TIP.into()),
+                    p if p.ends_with("/txs") => Ok(match empty_page {
+                        true => "[]".into(),
+                        false => forgery.page.clone(),
+                    }),
+                    p if p.ends_with("/hex") => Err(MobileSignerError::InvalidPsbtJson(format!(
+                        "esplora get: {url}: status code 404"
+                    ))),
+                    p if p.starts_with("/address/") => Ok(used_stats(0)),
+                    other => panic!("the liar was asked {other}"),
+                }
+            };
+            let alone = snapshot_on(&Reads(&liar)).unwrap();
+            assert_eq!(alone.scan, HotScan::Unverified, "empty page {empty_page}");
+            let honest = |url: &str| fake.get(url);
+            let hosts = Hosts {
+                hosts: vec![&liar, &honest],
+                at: Mutex::new(0),
+            };
+            let snapshot = snapshot_on(&hosts).unwrap();
+            assert_eq!(
+                (
+                    snapshot.scan,
+                    snapshot.balance_sats,
+                    *hosts.at.lock().unwrap()
+                ),
+                (HotScan::Complete, 7_000, 1),
+                "empty page {empty_page}"
+            );
+        }
+        let mut wedged = Fake::new();
+        wedged.touch(&addr(Chain::External, 3));
+        wedged.txs.insert(addr(Chain::External, 3), "[]".into());
+        assert_eq!(wedged.snapshot("").unwrap().scan, HotScan::Unverified);
+    }
+
+    // R2 (opus F1b, haiku C). Receive 3 was paid 26 times and spent from in 25 later transactions, so its first history
+    // page, the 25 newest confirmed, lists no payment to it. It was never proven and the wallet never completed. A
+    // confirmed spend of it names the payment it spends, which is confirmed and paid it.
+    #[test]
+    fn an_address_whose_payment_is_off_its_first_page_is_proven_through_the_payment_a_spend_of_it_names()
+     {
+        let mut fake = Fake::new();
+        let reused = addr(Chain::External, 3);
+        fake.stats.insert(
+            reused.clone(),
+            r#"{"chain_stats":{"funded_txo_sum":260000,"spent_txo_sum":250000,"tx_count":51},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0,"tx_count":0}}"#.into(),
+        );
+        fake.utxos
+            .insert(reused.clone(), format!("[{}]", coin('7', 0, 10_000, true)));
+        // Each spends the proof block's payment to receive 3, the one payment to it this Fake can prove.
+        let paid = PROOF.txids[3].to_string();
+        let spends: Vec<String> = (0..25u32)
+            .map(|n| {
+                tx_of(
+                    &format!("{:064x}", 0xabc0 + n),
+                    &[spent_at(&paid, 0, &reused, 10_000)],
+                    &[txo(SOMEONE, 9_000)],
+                    &at(125 - n),
+                )
+            })
+            .collect();
+        fake.txs.insert(reused, format!("[{}]", spends.join(",")));
+        let snapshot = fake.snapshot("").unwrap();
+        assert_eq!(
+            (
+                snapshot.scan,
+                snapshot.balance_sats,
+                snapshot.receive_address
+            ),
+            (HotScan::Complete, 10_000, addr(Chain::External, 4))
+        );
+        assert!(fake.send(SOMEONE, 1_000, 1).is_ok());
+    }
+
+    // R3 (opus F2). A proven payment that a reorg undid made every honest host a liar on every sync, through restarts,
+    // until the wallet was forgotten. A host whose own data still proves the payment while it calls the address unused
+    // is a liar still.
+    #[test]
+    fn a_proven_payment_a_reorg_undid_is_dropped_and_the_wallet_found_again_while_a_host_its_own_data_contradicts_is_unverified()
+     {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 3), 7_000, '3');
+        assert_eq!(fake.snapshot("").unwrap().scan, HotScan::Complete);
+        fake.stats.remove(&addr(Chain::External, 3));
+        fake.tick(SHARE_TTL);
+        assert_eq!(
+            fake.snapshot("").unwrap().scan,
+            HotScan::Unverified,
+            "the host still proves the payment it calls unpaid"
+        );
+
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 3), 7_000, '3');
+        let folder = Folder::new("reorg");
+        let store = ScanStore::default();
+        store.use_dir(folder.0.clone());
+        assert_eq!(
+            receive_and_balance(fake.snapshot_in(&store).unwrap()),
+            (addr(Chain::External, 4), 7_000)
+        );
+        // A reorg undid the payment and a double spend took its coin, so no host knows it any more.
+        fake.stats.remove(&addr(Chain::External, 3));
+        fake.utxos.remove(&addr(Chain::External, 3));
+        fake.txs.insert(addr(Chain::External, 3), "[]".into());
+        fake.unknown.insert(PROOF.txids[3].to_string());
+        fake.tick(SHARE_TTL);
+        let restarted = ScanStore::default();
+        restarted.use_dir(folder.0.clone());
+        let before = fake.requests();
+        let read_back = fake.snapshot_in(&restarted).unwrap();
+        assert_eq!(
+            (
+                read_back.scan,
+                read_back.balance_sats,
+                read_back.receive_address
+            ),
+            (HotScan::Complete, 0, addr(Chain::External, 0)),
+            "a restart whose file names the index the reorg left unpaid"
+        );
+        assert_eq!(
+            fake.requests() - before,
+            3 + GAP as usize + LOOKAHEAD,
+            "its page, the tip and its summary, then the receive chain from 0 and the change lookahead"
+        );
+        let (a, b) = (|url: &str| fake.get(url), |url: &str| fake.get(url));
+        let hosts = Hosts {
+            hosts: vec![&a, &b],
+            at: Mutex::new(0),
+        };
+        let after = snapshot_from(
+            &EsploraSource(&hosts),
+            &abandon_about(),
+            "",
+            KeyNetwork::Test,
+            &|| fake.now(),
+            &store,
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                after.scan,
+                after.balance_sats,
+                after.receive_address,
+                *hosts.at.lock().unwrap()
+            ),
+            (HotScan::Complete, 0, addr(Chain::External, 0), 0)
+        );
+        fake.tick(PUBLIC_FULL_PASS);
+        let restarted = ScanStore::default();
+        restarted.use_dir(folder.0.clone());
+        let later = fake.snapshot_in(&restarted).unwrap();
+        assert_eq!(
+            (later.scan, later.receive_address),
+            (HotScan::Complete, addr(Chain::External, 0)),
+            "after a restart and a full pass"
+        );
+    }
+
+    // R3 (opus F2b). A testnet4 host that backs its claims with a block it mined at minimum difficulty moved the frontier
+    // to 60 in one pass, and the honest host's syncs kept handing out receive 60, which a gap-20 restore never reaches.
+    // The forgery is the risk the user accepted for testnet4. It must end once an honest host answers.
+    #[test]
+    fn a_forged_testnet4_proof_leaves_no_address_past_a_restore_once_an_honest_host_answers() {
+        let mut liar = Fake::new();
+        for i in [19, 39, 59] {
+            liar.stats.insert(addr(Chain::External, i), used_stats(0));
+        }
+        let mut honest = Fake::new();
+        honest
+            .unknown
+            .extend(PROOF.txids.iter().map(|txid| txid.to_string()));
+        let folder = Folder::new("forged");
+        let store = ScanStore::default();
+        store.use_dir(folder.0.clone());
+        let sync = |fake: &Fake, store: &ScanStore| {
+            snapshot_from(
+                &EsploraSource(&Reads(&|url| fake.get(url))),
+                &abandon_about(),
+                "",
+                KeyNetwork::Test,
+                &|| honest.now(),
+                store,
+            )
+            .unwrap()
+        };
+        let forged = sync(&liar, &store);
+        assert_eq!(
+            (forged.scan, forged.receive_address),
+            (HotScan::Complete, addr(Chain::External, 60)),
+            "the accepted testnet4 risk"
+        );
+        honest.tick(SHARE_TTL);
+        let restarted = ScanStore::default();
+        restarted.use_dir(folder.0.clone());
+        let read_back = sync(&honest, &restarted);
+        assert_eq!(
+            (read_back.scan, read_back.receive_address),
+            (HotScan::Complete, addr(Chain::External, 0)),
+            "a restart whose file names the forged index, on an honest host"
+        );
+        assert_eq!(
+            honest.requests(),
+            3 + GAP as usize + LOOKAHEAD,
+            "its page, the tip and its summary, then the receive chain from 0 and the change lookahead"
+        );
+        let next = sync(&honest, &store);
+        assert_eq!(
+            (next.scan, next.receive_address),
+            (HotScan::Complete, addr(Chain::External, 0)),
+            "the next sync, on an honest host"
+        );
+    }
+
+    // R4 (opus F4). The period of full passes counted from when one ended, so a full pass cut short by a 429 and finished
+    // hours later left a payment to an index it had already asked unseen for longer than a period.
+    #[test]
+    fn the_period_of_full_passes_counts_from_when_one_started() {
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 1_000, '1');
+        fake.touch(&addr(Chain::External, 1));
+        fake.fund(&addr(Chain::External, 2), 1_000, '2');
+        let throttle = AtomicBool::new(false);
+        let late: Vec<String> = (10..40)
+            .map(|i| format!("/address/{}", addr(Chain::External, i)))
+            .collect();
+        let sync = |fake: &Fake| {
+            let source = |url: &str| {
+                if throttle.load(SeqCst) && late.iter().any(|path| url.ends_with(path.as_str())) {
+                    return Err(MobileSignerError::InvalidPsbtJson(
+                        "esplora get: HTTP status 429, gave up after 3 attempts".into(),
+                    ));
+                }
+                fake.get(url)
+            };
+            snapshot_from(
+                &EsploraSource(&Reads(&source)),
+                &abandon_about(),
+                "",
+                KeyNetwork::Test,
+                &|| fake.now(),
+                &fake.store,
+            )
+            .unwrap()
+        };
+        assert_eq!(sync(&fake).balance_sats, 2_000);
+        fake.tick(PUBLIC_FULL_PASS);
+        throttle.store(true, SeqCst);
+        let pass_started = fake.now();
+        assert_eq!(
+            sync(&fake).scan,
+            HotScan::Continuing,
+            "a full pass, cut short at index 10"
+        );
+        fake.tick(Duration::from_secs(60));
+        fake.fund(&addr(Chain::External, 1), 50_000, '9');
+        fake.tick(Duration::from_secs(3 * 60 * 60));
+        throttle.store(false, SeqCst);
+        let ended = sync(&fake);
+        assert_eq!(
+            (ended.scan, ended.balance_sats),
+            (HotScan::Complete, 2_000),
+            "the pass ends, having asked receive 1 before it was paid"
+        );
+        let due = (pass_started + PUBLIC_FULL_PASS)
+            .duration_since(fake.now())
+            .unwrap();
+        fake.tick(due + Duration::from_secs(1));
+        assert_eq!(
+            sync(&fake).balance_sats,
+            52_000,
+            "the next full pass, one period after the last one started"
+        );
+    }
+
+    // R5 (opus F5). The file kept for each index 8 bytes of an unsalted SHA-256 of the address's Esplora counts and sums,
+    // and trying amounts gave back 1,234,567 sats in 2.2 s. Nothing read it.
+    #[test]
+    fn the_scan_file_keeps_no_number_an_amount_comes_back_from() {
+        let mut fake = Fake::new();
+        let secret = 1_234_567u64;
+        fake.fund(&addr(Chain::External, 0), secret, '1');
+        let folder = Folder::new("amount");
+        let store = ScanStore::default();
+        store.use_dir(folder.0.clone());
+        fake.snapshot_in(&store).unwrap();
+        let (_, json) = scan_file(&folder);
+        let hash = sha256::Hash::hash(format!("1,{secret},0,0,0,0").as_bytes()).to_byte_array();
+        let token = u64::from_le_bytes(hash[..8].try_into().unwrap());
+        let text = json.to_string();
+        assert!(!text.contains(&token.to_string()), "{text}");
+        assert!(!text.contains(&secret.to_string()), "{text}");
+        for chain in json["chains"].as_array().unwrap() {
+            for seen in chain["seen"].as_array().unwrap() {
+                assert!(
+                    seen.as_u64().is_some_and(|flags| flags < 16),
+                    "an index keeps its flags and nothing else: {seen}"
+                );
+            }
+        }
+    }
+
+    // The user approved the scan file on the condition that it holds no key, address or amount. A txid or a block
+    // hash breaks that condition too, because any explorer turns either into the address, the amount and the
+    // wallet's history.
+    #[test]
+    fn the_scan_file_names_no_payment_address_or_amount_the_source_served() {
+        let fake = three_used();
+        let folder = Folder::new("private");
+        let store = ScanStore::default();
+        store.use_dir(folder.0.clone());
+        fake.snapshot_in(&store).unwrap();
+        let asked = fake.calls.lock().unwrap().clone();
+        let block = PROOF.header.block_hash().to_string();
+        assert!(
+            asked.iter().any(|url| url.contains(&block)),
+            "a payment was proven"
+        );
+        let (path, json) = scan_file(&folder);
+        let text = fs::read_to_string(path).unwrap();
+        for part in asked.iter().flat_map(|url| url.split('/')) {
+            if part.parse::<Txid>().is_ok() || part.parse::<Address<_>>().is_ok() {
+                assert!(!text.contains(part), "the file names {part}: {text}");
+            }
+        }
+        fn numbers(value: &Value) -> Vec<u64> {
+            match value {
+                Value::Array(items) => items.iter().flat_map(numbers).collect(),
+                Value::Object(fields) => fields.values().flat_map(numbers).collect(),
+                other => other.as_u64().into_iter().collect(),
+            }
+        }
+        for amount in [1_000, PAID_SATS] {
+            assert!(
+                !numbers(&json).contains(&amount),
+                "the file holds {amount}: {text}"
+            );
+        }
+    }
+
+    // R6 (opus F6). The routine part of a sync asked every funded index of a chain in one batch that failed whole on a
+    // 429, so a wallet with more funded addresses than a host serves between two syncs never completed: 300 requests an
+    // hour against 320 funded stayed short for 22 hours. The scan is asked through `synced`, because a snapshot also asks
+    // one coin list per funded address.
+    #[test]
+    fn a_wallet_with_more_funded_addresses_than_a_host_serves_an_hour_completes_its_scan() {
+        let mut fake = Fake::new();
+        for i in 0..320 {
+            fake.fund(&addr(Chain::External, i), 10_000, '5');
+        }
+        let quota = 300;
+        let spent = Mutex::new((u64::MAX, 0));
+        let limited = |url: &str| {
+            let hour = unix_seconds(fake.now()) / 3600;
+            let mut spent = spent.lock().unwrap();
+            if spent.0 != hour {
+                *spent = (hour, 0);
+            }
+            if spent.1 >= quota {
+                return Err(MobileSignerError::InvalidPsbtJson(
+                    "esplora get: HTTP status 429, gave up after 3 attempts".into(),
+                ));
+            }
+            spent.1 += 1;
+            fake.get(url)
+        };
+        let mut completed = Vec::new();
+        for hour in 0..24 {
+            let wallet = synced(
+                &EsploraSource(&Reads(&limited)),
+                &abandon_about(),
+                "",
+                KeyNetwork::Test,
+                &|| fake.now(),
+                &fake.store,
+            )
+            .unwrap();
+            if wallet.status == ScanStatus::Complete {
+                assert_eq!(wallet.balance().unwrap(), 3_200_000, "hour {hour}");
+                completed.push(hour);
+            }
+            fake.tick(Duration::from_secs(3600));
+        }
+        assert!(
+            completed.first().is_some_and(|&first| first <= 2)
+                && completed.last().is_some_and(|&last| last >= 21)
+                && completed.windows(2).all(|pair| pair[1] - pair[0] <= 2),
+            "complete at hours {completed:?}"
+        );
     }
 }

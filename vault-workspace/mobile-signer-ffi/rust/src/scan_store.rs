@@ -1,9 +1,10 @@
 //! Where each wallet's scan lives between calls. It lives in memory, and once the app names a folder, in one file
-//! per wallet there too, so a restart asks only what can have changed. A file holds the frontier of each chain, the flags
-//! and change token of each index asked, and when the last full pass ended. It holds no key, address or amount, all
-//! of which the chain and the words give back. A file that cannot be read, names another wallet, comes from a
-//! newer build or holds what no scan writes is ignored, which costs requests and never coins. The rules of a scan
-//! are in `crate::scan`.
+//! per wallet there too, so a restart asks only what can have changed. A file holds, per chain, the index whose
+//! payment proved its frontier and the flags of each index asked, and when the last full pass started and whether it
+//! ended. It holds no key, address, amount or txid, so nothing in it points at a payment, and the chain and the words
+//! give each of them back. A file that cannot be read, names another wallet, comes from another build or holds what
+//! no scan writes is ignored, which costs requests and never coins. A file that parses is still outside data, so its
+//! indices back nothing until a source proves them used again. The rules of a scan are in `crate::scan`.
 
 use std::collections::HashMap;
 use std::fs;
@@ -14,7 +15,7 @@ use std::time::SystemTime;
 
 use serde_json::{Value, json};
 
-use crate::scan::{ChainScan, GAP, ScanStatus, Seen};
+use crate::scan::{ChainScan, GAP, Proof, ScanStatus, Seen};
 
 /// SHA-256 of the account's two chain xpubs, which is public and differs for other words, passphrase or network.
 pub(crate) type WalletId = [u8; 32];
@@ -24,16 +25,31 @@ pub(crate) type WalletId = [u8; 32];
 pub(crate) struct WalletScan {
     /// The receive chain, then the change chain.
     pub(crate) chains: [ChainScan; 2],
-    /// Unix seconds when the last full pass ended. None while discovery, or a full pass started since, has not
-    /// ended, so the next sync goes on with it.
-    pub(crate) full_at: Option<u64>,
+    /// The last full pass, which asks every index again from 0. None before the first sync, whose discovery is
+    /// the first full pass, and after a host lied, so the next sync starts one.
+    pub(crate) full: Option<FullPass>,
+}
+
+/// When the last full pass started, in Unix seconds, and whether it ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FullPass {
+    /// It has not ended, so the next sync goes on with it.
+    Running(u64),
+    /// The next one is due a period after this one started, so a pass a throttle stretched out does not push it back.
+    Ended(u64),
 }
 
 /// One wallet in memory. Its lock is held through a whole sync, so a second call for the wallet waits for the
-/// first and then shares its answer.
+/// first and then shares its answer. Nothing here but `scan` goes to a file.
 #[derive(Default)]
 pub(crate) struct Entry {
     pub(crate) scan: WalletScan,
+    /// Each index's balance in sats as the round of syncs in progress found it, beside `seen` of the same chain.
+    pub(crate) balances: [Vec<u64>; 2],
+    /// How far the routine part of each chain got in the round in progress, which runs from a sync that starts
+    /// one to the sync that ends Complete or Unverified: every index below it that the routine part asks was
+    /// asked in the round. None when no round is in progress, so the next sync starts one.
+    pub(crate) round: Option<[usize; 2]>,
     /// What the last sync found, while a call may still share it.
     pub(crate) last: Option<Last>,
 }
@@ -44,8 +60,6 @@ pub(crate) struct Last {
     pub(crate) ended: SystemTime,
     /// The store's epoch when the sync started. A payment or a lost host since then makes it stale.
     pub(crate) epoch: u64,
-    /// Each index's balance in sats as that sync found it, beside `seen` of the same chain.
-    pub(crate) balances: [Vec<u64>; 2],
     pub(crate) status: ScanStatus,
 }
 
@@ -85,7 +99,10 @@ impl ScanStore {
                     .and_then(|dir| fs::read_to_string(dir.join(file_name(id))).ok())
                     .and_then(|text| decode(id, &text))
                     .unwrap_or_default();
-                Arc::new(Mutex::new(Entry { scan, last: None }))
+                Arc::new(Mutex::new(Entry {
+                    scan,
+                    ..Entry::default()
+                }))
             })
             .clone()
     }
@@ -144,9 +161,9 @@ fn hex(id: &WalletId) -> String {
 }
 
 /// The file's format. A file of any other version is a fresh start.
-const VERSION: u64 = 1;
+const VERSION: u64 = 2;
 
-/// Each index's flags as one number, its token beside it.
+/// Each index's flags as one number.
 const USED: u64 = 1;
 const CONFIRMED: u64 = 2;
 const PENDING: u64 = 4;
@@ -165,15 +182,19 @@ fn encode(id: &WalletId, scan: &WalletScan) -> String {
                     (seen.funded, FUNDED),
                 ];
                 let flags: u64 = flags.iter().filter(|(on, _)| *on).map(|(_, bit)| bit).sum();
-                json!([flags, seen.token])
+                json!(flags)
             })
             .collect();
-        json!({"frontier": chain.frontier, "seen": seen})
+        json!({"proof": chain.proof.map(|proof| proof.index()), "seen": seen})
     };
+    let full = scan.full.map(|full| match full {
+        FullPass::Running(started) => json!({"started": started, "ended": false}),
+        FullPass::Ended(started) => json!({"started": started, "ended": true}),
+    });
     json!({
         "version": VERSION,
         "wallet": hex(id),
-        "full_at": scan.full_at,
+        "full": full,
         "chains": [chain(&scan.chains[0]), chain(&scan.chains[1])],
     })
     .to_string()
@@ -185,42 +206,48 @@ fn decode(id: &WalletId, text: &str) -> Option<WalletScan> {
     if file["version"].as_u64() != Some(VERSION) || file["wallet"].as_str() != Some(&hex(id)) {
         return None;
     }
-    let full_at = match &file["full_at"] {
+    let full = match &file["full"] {
         Value::Null => None,
-        at => Some(at.as_u64()?),
+        full => {
+            let started = full["started"].as_u64()?;
+            Some(match full["ended"].as_bool()? {
+                true => FullPass::Ended(started),
+                false => FullPass::Running(started),
+            })
+        }
     };
     let chain = |chain: &Value| -> Option<ChainScan> {
-        let frontier = u32::try_from(chain["frontier"].as_u64()?).ok()?;
+        let proof = match &chain["proof"] {
+            Value::Null => None,
+            index => Some(u32::try_from(index.as_u64()?).ok()?),
+        };
         let seen = chain["seen"]
             .as_array()?
             .iter()
             .map(|seen| {
-                let [flags, token] = seen.as_array()?.as_slice() else {
-                    return None;
-                };
-                let (flags, token) = (flags.as_u64()?, token.as_u64()?);
-                (flags < 2 * FUNDED).then_some(Seen {
+                let flags = seen.as_u64().filter(|flags| *flags < 2 * FUNDED)?;
+                Some(Seen {
                     used: flags & USED != 0,
                     confirmed: flags & CONFIRMED != 0,
                     pending: flags & PENDING != 0,
                     funded: flags & FUNDED != 0,
-                    token,
                 })
             })
             .collect::<Option<Vec<_>>>()?;
-        // A scan writes a window that BIP-32 normal indices reach, no index past it, and its proven index as used.
+        // A scan writes a window that BIP-32 normal indices reach, and no index past it.
+        let frontier = proof.map_or(Some(0), |index| index.checked_add(1))?;
         let end = frontier.checked_add(GAP).filter(|end| *end <= 1 << 31)?;
-        let proven_used = frontier
-            .checked_sub(1)
-            .is_none_or(|proven| seen.get(proven as usize).is_none_or(|seen| seen.used));
-        (seen.len() <= end as usize && proven_used).then_some(ChainScan { frontier, seen })
+        (seen.len() <= end as usize).then_some(ChainScan {
+            proof: proof.map(Proof::Stored),
+            seen,
+        })
     };
     let [receive, change] = file["chains"].as_array()?.as_slice() else {
         return None;
     };
     Some(WalletScan {
         chains: [chain(receive)?, chain(change)?],
-        full_at,
+        full,
     })
 }
 
@@ -229,6 +256,7 @@ pub(crate) mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use super::*;
+    use crate::proof::ProvenUse;
 
     /// A folder of its own under the system's temp folder, removed when dropped.
     pub(crate) struct Folder(pub(crate) PathBuf);
@@ -266,30 +294,26 @@ pub(crate) mod tests {
     const ID: WalletId = [7; 32];
 
     fn scan() -> WalletScan {
-        let seen = |used, confirmed, pending, funded, token| Seen {
+        let seen = |used, confirmed, pending, funded| Seen {
             used,
             confirmed,
             pending,
             funded,
-            token,
         };
         WalletScan {
             chains: [
                 ChainScan {
-                    frontier: 3,
+                    proof: Some(Proof::Stored(2)),
                     seen: vec![
-                        seen(true, true, false, false, 1),
-                        seen(false, false, false, false, 2),
-                        seen(true, true, true, true, u64::MAX),
-                        seen(true, false, true, true, 0),
+                        seen(true, true, false, false),
+                        seen(false, false, false, false),
+                        seen(true, true, true, true),
+                        seen(true, false, true, true),
                     ],
                 },
-                ChainScan {
-                    frontier: 0,
-                    seen: Vec::new(),
-                },
+                ChainScan::default(),
             ],
-            full_at: Some(1_762_300_000),
+            full: Some(FullPass::Ended(1_762_300_000)),
         }
     }
 
@@ -297,7 +321,7 @@ pub(crate) mod tests {
     fn a_scan_reads_back_from_its_file_as_it_was_written() {
         assert_eq!(decode(&ID, &encode(&ID, &scan())), Some(scan()));
         let far_future = WalletScan {
-            full_at: Some(u64::MAX),
+            full: Some(FullPass::Ended(u64::MAX)),
             ..scan()
         };
         assert_eq!(
@@ -305,11 +329,21 @@ pub(crate) mod tests {
             Some(far_future),
             "any time reads back, and a sync takes one it cannot place as a full pass due"
         );
-        let started = WalletScan {
-            full_at: None,
-            ..scan()
-        };
-        assert_eq!(decode(&ID, &encode(&ID, &started)), Some(started));
+        for full in [Some(FullPass::Running(1_762_300_000)), None] {
+            let scan = WalletScan { full, ..scan() };
+            assert_eq!(decode(&ID, &encode(&ID, &scan)), Some(scan));
+        }
+    }
+
+    // R1 of the 5 Nov interrogate. A payment a source showed is written as its index alone and reads back as that
+    // index, so after a restart it backs nothing until a source proves the index used again.
+    #[test]
+    fn a_payment_a_source_showed_reads_back_as_its_index_alone() {
+        let mut scan = scan();
+        scan.chains[1].proof = Some(Proof::Shown(ProvenUse::modelled(7)));
+        let read = decode(&ID, &encode(&ID, &scan)).unwrap();
+        assert_eq!(read.chains[1].proof, Some(Proof::Stored(7)));
+        assert_eq!(read.chains[1].frontier(), 0);
     }
 
     #[test]
@@ -323,32 +357,42 @@ pub(crate) mod tests {
             ("empty", String::new()),
             ("cut short", good[..good.len() / 2].to_string()),
             ("not an object", "[1,2]".into()),
-            ("a newer version", edit("\"version\":1", "\"version\":2")),
+            ("a newer version", edit("\"version\":2", "\"version\":3")),
             ("another wallet", encode(&[8; 32], &scan())),
             (
-                "a frontier past u32",
-                edit("\"frontier\":3", "\"frontier\":4294967296"),
+                "a proven index past u32",
+                edit("\"proof\":2", "\"proof\":4294967296"),
             ),
             // No BIP-32 normal index reaches it, and a scan would walk toward it address by address.
             (
-                "a frontier past the normal indices",
-                edit("\"frontier\":3", "\"frontier\":2147483629"),
+                "a proven index past the normal indices",
+                edit("\"proof\":2", "\"proof\":2147483628"),
+            ),
+            (
+                "a proof that is no index",
+                edit("\"proof\":2", "\"proof\":-1"),
+            ),
+            (
+                "a proof that names its payment",
+                edit("\"proof\":2", "\"proof\":{\"index\":2,\"txid\":\"c5c5\"}"),
             ),
             (
                 "more indices than the window past the frontier holds",
                 edit(
-                    ",{\"frontier\":0,\"seen\":[]}",
-                    &format!(",{{\"frontier\":0,\"seen\":[{}]}}", ["[0,0]"; 21].join(",")),
+                    ",{\"proof\":null,\"seen\":[]}",
+                    &format!(",{{\"proof\":null,\"seen\":[{}]}}", ["0"; 21].join(",")),
                 ),
             ),
-            // Index 1 is unused in the file, so a frontier of 2 claims a proof of it, which no scan writes.
+            ("an unknown flag", edit("[3,0,15,", "[3,0,16,")),
             (
-                "a proven index the file calls unused",
-                edit("\"frontier\":3", "\"frontier\":2"),
+                "flags that are not a number",
+                edit("[3,0,15,", "[3,\"0\",15,"),
             ),
-            ("an unknown flag", edit("[15,", "[16,")),
-            ("a token that is not a number", edit("[0,2]", "[0,\"2\"]")),
-            ("one chain", edit(",{\"frontier\":0,\"seen\":[]}", "")),
+            (
+                "flags with a token beside them",
+                edit("[3,0,15,", "[[3,1],0,15,"),
+            ),
+            ("one chain", edit(",{\"proof\":null,\"seen\":[]}", "")),
         ] {
             assert_eq!(decode(&ID, &text), None, "{case}: {text}");
         }

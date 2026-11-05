@@ -3,29 +3,57 @@
 //! no source can push the scan with claims alone. The address the wallet hands out stays below `frontier + GAP`,
 //! where a restore with a gap of `GAP` over the real chain finds it.
 //!
+//! The payment that proved the frontier is kept in memory, so it can be shown again. The scan file keeps only that
+//! payment's index, which backs nothing until a source proves the index used again, because the file is outside data
+//! and a txid in it would point any explorer at the wallet's payments. A source that calls the proven index
+//! unused has the payment checked again on its own data: a payment it still shows makes it a liar, and one it
+//! does not, which a reorg or a forged proof leaves, sends the chain back to index 0 to be found again.
+//!
 //! Why a scan ends without a cap. Let H be the highest index of a chain that was really paid in a block with
 //! valid work. The frontier rises only to one past a proven index, so it never passes H + 1. At one frontier a
-//! scan asks the rest of the window, in parts when the source answers a few indices at a time, and proves once,
-//! then the frontier rises or the scan ends. So one source's scan of a chain asks at most H + 1 + GAP summaries
-//! and makes at most one proof per window it moves.
+//! scan asks the rest of the window, in parts when the source answers a few indices at a time, and proves, then
+//! the frontier rises, or the source withdraws the claim it was proving, or the scan ends. A window holds at most
+//! `GAP` claims to withdraw. So one source's scan of a chain asks at most H + 1 + GAP summaries and makes at most
+//! one proof per window it moves plus one per claim withdrawn. A file's index that does not hold, or a payment
+//! shown again and gone, empties the chain once at most. An empty chain holds no index from the file and no payment
+//! to show again until a proof, and the index a proof proves is one the scan saw used, which it does not ask again.
 
 use std::ops::Range;
 
 use crate::chain::Summary;
-use crate::proof::{NotProven, ProvenUse};
+use crate::proof::{Evidence, NotProven, ProvenUse};
 
 /// BIP-44's gap limit, for scanning and for issuing, on both chains.
 pub(crate) const GAP: u32 = 20;
 
-/// One chain's scan. `frontier` is one past the highest index proven used, 0 before any proof. `seen[i]` is what
-/// the source said about index i, for every index asked so far, never past `frontier + GAP`.
+/// One chain's scan. `proof` is the payment to its highest proven index, and `frontier` is one past that index.
+/// `seen[i]` is what the source said about index i, for every index asked so far, never past the proof's index
+/// plus 1 + `GAP`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ChainScan {
-    pub(crate) frontier: u32,
+    pub(crate) proof: Option<Proof>,
     pub(crate) seen: Vec<Seen>,
 }
 
-/// What a scan keeps of a source's summary of one index, which is its flags and change token and never its amount.
+/// A chain's highest proven index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Proof {
+    /// The index alone, as the scan file holds it. It backs no frontier until a source proves it used again.
+    Stored(u32),
+    /// The payment to it, shown by a source since the app started.
+    Shown(ProvenUse),
+}
+
+impl Proof {
+    pub(crate) fn index(&self) -> u32 {
+        match self {
+            Proof::Stored(index) => *index,
+            Proof::Shown(proven) => proven.index(),
+        }
+    }
+}
+
+/// What a scan keeps of a source's summary of one index, which is its flags and never its amount.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Seen {
     pub(crate) used: bool,
@@ -33,7 +61,6 @@ pub(crate) struct Seen {
     pub(crate) pending: bool,
     /// It held coins, so a routine sync asks it again for its balance.
     pub(crate) funded: bool,
-    pub(crate) token: u64,
 }
 
 impl From<&Summary> for Seen {
@@ -43,7 +70,6 @@ impl From<&Summary> for Seen {
             confirmed: summary.confirmed,
             pending: summary.pending,
             funded: summary.balance > 0,
-            token: summary.token,
         }
     }
 }
@@ -53,6 +79,10 @@ impl From<&Summary> for Seen {
 pub(crate) enum Step {
     /// Ask the source about these indices, the rest of the window.
     Ask(Range<u32>),
+    /// Prove the index the scan file holds used again, by its address as any proof is made.
+    Reprove(u32),
+    /// Show this payment to the proven index again on the source, because the source calls its index unused.
+    Recheck(Evidence),
     /// Prove this index used, the highest in the window that the source says has confirmed history.
     Prove(u32),
     Done(ScanStatus),
@@ -74,33 +104,41 @@ pub(crate) enum ScanStatus {
     /// The window past the frontier was asked and nothing in it claims confirmed use, so the scan reached as far
     /// as a restore with a gap of `GAP` reaches.
     Complete,
-    /// The scan stopped short, because a proof's read got no answer or a claim could not be proven yet.
-    /// Asking later may finish it. The text says where.
+    /// The scan stopped short, because a read got no answer. Asking later may finish it. The text says where.
     Continuing(String),
-    /// The source lied in a proof, or called a proven index unused. The text says what it claimed.
+    /// The source lied in a proof, or contradicted itself or a proof. The text says what it claimed.
     Unverified(String),
 }
 
 impl ChainScan {
+    /// One past the highest index proven used, or 0 before any proof and while the file's index waits to be proven.
+    pub(crate) fn frontier(&self) -> u32 {
+        match self.proof {
+            Some(Proof::Shown(proven)) => proven.index() + 1,
+            Some(Proof::Stored(_)) | None => 0,
+        }
+    }
+
     /// The step that follows from what is known.
     pub(crate) fn next(&self) -> Step {
-        let end = self.frontier + GAP;
-        // Proven facts only grow. A source that calls the proven index unused contradicts a block.
-        if let Some(proven) = self.frontier.checked_sub(1)
-            && self
-                .seen
-                .get(proven as usize)
-                .is_some_and(|seen| !seen.used)
-        {
-            return Step::Done(ScanStatus::Unverified(format!(
-                "index {proven} was proven used, and the source calls it unused"
-            )));
+        match self.proof {
+            Some(Proof::Stored(index)) => return Step::Reprove(index),
+            Some(Proof::Shown(proven))
+                if self
+                    .seen
+                    .get(proven.index() as usize)
+                    .is_some_and(|seen| !seen.used) =>
+            {
+                return Step::Recheck(proven.evidence());
+            }
+            _ => {}
         }
+        let (frontier, end) = (self.frontier(), self.frontier() + GAP);
         let asked = self.seen.len() as u32;
         if asked < end {
             return Step::Ask(asked..end);
         }
-        match (self.frontier..end)
+        match (frontier..end)
             .rev()
             .find(|&i| self.seen[i as usize].confirmed)
         {
@@ -119,15 +157,18 @@ impl ChainScan {
             .rposition(|seen| seen.used)
             .map_or(0, |last| last as u32 + 1);
         after_last_use
-            .max(self.frontier)
-            .min(self.frontier + GAP - 1)
+            .max(self.frontier())
+            .min(self.frontier() + GAP - 1)
     }
 }
 
 /// The one transition, `event` being the answer to `at`. Every call raises the frontier, or moves to a later
-/// step at the same frontier (Ask, then Prove, then Done), or asks more indices in the same step.
+/// step at the same frontier (Ask, then Reprove or Recheck, then Prove, then Done), or asks more indices in the
+/// same step, or withdraws a claim, except a file's index that does not hold or a payment shown again and gone,
+/// which empties the chain.
 pub(crate) fn step(scan: &mut ChainScan, at: Step, event: Event) -> Step {
     let before = standing(scan, &at);
+    let mut emptied = false;
     let next = match (at, event) {
         (Step::Ask(asked), Event::Asked(summaries)) => {
             debug_assert!(
@@ -142,26 +183,57 @@ pub(crate) fn step(scan: &mut ChainScan, at: Step, event: Event) -> Step {
             "index {} could not be asked: {why}",
             asked.start
         ))),
-        (Step::Prove(index), Event::Proven(proven)) => {
-            debug_assert_eq!(proven.index(), index, "the proof is of the index asked");
-            scan.frontier = proven.index() + 1;
-            scan.next()
-        }
-        (Step::Prove(index), Event::NotProven(NotProven::Lie(why))) => {
-            Step::Done(ScanStatus::Unverified(format!("index {index}: {why}")))
-        }
-        (Step::Prove(index), Event::NotProven(NotProven::NoConfirmedPayment)) => {
-            Step::Done(ScanStatus::Continuing(format!(
-                "index {index} has confirmed history by the source's count, and its history lists no confirmed payment to it"
+        (Step::Recheck(evidence), Event::Proven(proven)) => {
+            debug_assert_eq!(
+                proven.evidence(),
+                evidence,
+                "the payment shown is the one asked"
+            );
+            Step::Done(ScanStatus::Unverified(format!(
+                "index {}: the source shows its payment {} and calls it unused",
+                evidence.index, evidence.txid
             )))
         }
-        (Step::Prove(index), Event::NotProven(NotProven::Unreachable(why))) => Step::Done(
-            ScanStatus::Continuing(format!("index {index} could not be proven: {why}")),
+        // A reorg undid the payment, or it never was, so the chain is found again from index 0.
+        (Step::Recheck(_), Event::NotProven(NotProven::Gone(_)))
+        | (Step::Reprove(_), Event::NotProven(NotProven::Unconfirmed(_))) => {
+            *scan = ChainScan::default();
+            emptied = true;
+            scan.next()
+        }
+        (Step::Recheck(evidence), Event::NotProven(NotProven::Lie(why))) => Step::Done(
+            ScanStatus::Unverified(format!("index {}: {why}", evidence.index)),
         ),
+        (Step::Recheck(evidence), Event::NotProven(NotProven::Unreachable(why))) => {
+            Step::Done(ScanStatus::Continuing(format!(
+                "index {} could not be shown again: {why}",
+                evidence.index
+            )))
+        }
+        (Step::Prove(index) | Step::Reprove(index), Event::Proven(proven)) => {
+            debug_assert_eq!(proven.index(), index, "the proof is of the index asked");
+            scan.proof = Some(Proof::Shown(proven));
+            scan.next()
+        }
+        // The source no longer counts confirmed history for the index, so its claim goes and the window is read again.
+        (Step::Prove(index), Event::NotProven(NotProven::Unconfirmed(summary))) => {
+            scan.seen[index as usize] = Seen::from(&summary);
+            scan.next()
+        }
+        (
+            Step::Prove(index) | Step::Reprove(index),
+            Event::NotProven(NotProven::Lie(why) | NotProven::Gone(why)),
+        ) => Step::Done(ScanStatus::Unverified(format!("index {index}: {why}"))),
+        (
+            Step::Prove(index) | Step::Reprove(index),
+            Event::NotProven(NotProven::Unreachable(why)),
+        ) => Step::Done(ScanStatus::Continuing(format!(
+            "index {index} could not be proven: {why}"
+        ))),
         (at, _) => unreachable!("{at:?} got the answer to another step"),
     };
     debug_assert!(
-        standing(scan, &next) > before,
+        emptied || standing(scan, &next) > before,
         "a step must raise (frontier, phase), it went from {before:?} to {:?}",
         standing(scan, &next)
     );
@@ -169,14 +241,16 @@ pub(crate) fn step(scan: &mut ChainScan, at: Step, event: Event) -> Step {
 }
 
 /// Where a scan stands, by its frontier, then by how far along the window it is, then by how many indices it
-/// was told about.
-fn standing(scan: &ChainScan, at: &Step) -> (u32, u8, usize) {
+/// was told about, then by how many of them claim no confirmed history.
+fn standing(scan: &ChainScan, at: &Step) -> (u32, u8, usize, usize) {
     let phase = match at {
         Step::Ask(_) => 0,
-        Step::Prove(_) => 1,
-        Step::Done(_) => 2,
+        Step::Reprove(_) | Step::Recheck(_) => 1,
+        Step::Prove(_) => 2,
+        Step::Done(_) => 3,
     };
-    (scan.frontier, phase, scan.seen.len())
+    let unconfirmed = scan.seen.iter().filter(|seen| !seen.confirmed).count();
+    (scan.frontier(), phase, scan.seen.len(), unconfirmed)
 }
 
 #[cfg(test)]
@@ -200,14 +274,56 @@ mod tests {
     }
 
     /// Where a scan stands, ordered as the invariant says it must rise. The frontier counts first, then Ask,
-    /// Prove and Done, then how many indices were asked.
-    fn rank(scan: &ChainScan, at: &Step) -> (u32, u8, usize) {
+    /// Reprove or Recheck, Prove and Done, then how many indices were asked, then how many claim no confirmed history.
+    fn rank(scan: &ChainScan, at: &Step) -> (u32, u8, usize, usize) {
         let phase = match at {
             Step::Ask(_) => 0,
-            Step::Prove(_) => 1,
-            Step::Done(_) => 2,
+            Step::Reprove(_) | Step::Recheck(_) => 1,
+            Step::Prove(_) => 2,
+            Step::Done(_) => 3,
         };
-        (scan.frontier, phase, scan.seen.len())
+        let unconfirmed = scan.seen.iter().filter(|seen| !seen.confirmed).count();
+        (scan.frontier(), phase, scan.seen.len(), unconfirmed)
+    }
+
+    /// `step`, checking that it raised the scan's rank or emptied the chain after the file's index did not hold or a
+    /// payment shown again was gone.
+    #[track_caller]
+    fn checked_step(scan: &mut ChainScan, at: Step, event: Event) -> Step {
+        let (before, recheck) = (
+            rank(scan, &at),
+            matches!(at, Step::Reprove(_) | Step::Recheck(_)),
+        );
+        let next = step(scan, at, event);
+        let after = rank(scan, &next);
+        let emptied = recheck && *scan == ChainScan::default();
+        assert!(
+            after > before || emptied,
+            "the scan went from {before:?} to {after:?}"
+        );
+        next
+    }
+
+    /// A chain whose payment to `index` was proven, by a scan that saw nothing else.
+    fn proven(index: u32) -> ChainScan {
+        ChainScan {
+            proof: Some(Proof::Shown(ProvenUse::modelled(index))),
+            seen: Vec::new(),
+        }
+    }
+
+    /// A chain whose proven index a scan file holds as `index`, with `seen` as the file holds it.
+    fn stored(index: u32, seen: Vec<Seen>) -> ChainScan {
+        ChainScan {
+            proof: Some(Proof::Stored(index)),
+            seen,
+        }
+    }
+
+    fn gone() -> Event {
+        Event::NotProven(NotProven::Gone(
+            "the source does not know transaction 00..00".into(),
+        ))
     }
 
     /// `answer` with every ask answered for its first `k` indices only, as a source read a window at a time does.
@@ -230,7 +346,6 @@ mod tests {
             confirmed,
             pending: used && !confirmed,
             balance: 0,
-            token: 0,
         }
     }
 
@@ -239,24 +354,22 @@ mod tests {
     }
 
     /// A scan of `scan` to its end against `answer`, checking at every step that the scan's standing rose, with
-    /// the status it ended in, the summaries it was given and the proofs it tried.
+    /// the status it ended in, the summaries it was given and the proofs it tried, the file's index included.
     fn run(scan: &mut ChainScan, mut answer: impl FnMut(&Step) -> Event) -> (ScanStatus, u32, u32) {
         let (mut asked, mut proofs) = (0, 0);
         let mut at = scan.next();
         loop {
             match &at {
                 Step::Ask(_) => {}
-                Step::Prove(_) => proofs += 1,
+                Step::Prove(_) | Step::Reprove(_) => proofs += 1,
                 Step::Done(status) => return (status.clone(), asked, proofs),
+                Step::Recheck(_) => {}
             }
-            let before = rank(scan, &at);
             let event = answer(&at);
             if let Event::Asked(summaries) = &event {
                 asked += summaries.len() as u32;
             }
-            at = step(scan, at, event);
-            let after = rank(scan, &at);
-            assert!(after > before, "the scan went from {before:?} to {after:?}");
+            at = checked_step(scan, at, event);
         }
     }
 
@@ -269,8 +382,16 @@ mod tests {
                     .map(|i| claim(paid.contains(&i), paid.contains(&i)))
                     .collect(),
             ),
-            Step::Prove(i) if paid.contains(i) => Event::Proven(ProvenUse::modelled(*i)),
-            Step::Prove(_) => Event::NotProven(NotProven::NoConfirmedPayment),
+            Step::Prove(i) | Step::Reprove(i) if paid.contains(i) => {
+                Event::Proven(ProvenUse::modelled(*i))
+            }
+            Step::Prove(_) | Step::Reprove(_) => {
+                Event::NotProven(NotProven::Unconfirmed(claim(false, false)))
+            }
+            Step::Recheck(paid_to) if paid.contains(&paid_to.index) => {
+                Event::Proven(ProvenUse::modelled(paid_to.index))
+            }
+            Step::Recheck(_) => gone(),
             Step::Done(_) => unreachable!("a finished scan asks nothing"),
         }
     }
@@ -290,8 +411,10 @@ mod tests {
     }
 
     /// A source whose answers are drawn from `rng`. Each ask may be throttled or answered for its first few
-    /// indices only, each summary may tell the truth about `paid`, invent a use or omit one, and each proof may
-    /// be lost or refused. It never proves an index that was not paid, which is what proof of work buys.
+    /// indices only, each summary may tell the truth about `paid`, invent a use or omit one, each proof may be
+    /// lost, refused or the claim withdrawn, a file's index proven again may be lost, lied about or called unpaid,
+    /// and a payment shown again may be lost, lied about or gone as after a reorg. It never proves or shows a payment
+    /// to an index that was not paid, which is what proof of work buys.
     fn random_source<'a>(rng: &'a mut Rng, paid: &'a [u32]) -> impl FnMut(&Step) -> Event + 'a {
         move |at| match at {
             Step::Ask(_) if rng.below(1_000) < 5 => {
@@ -315,12 +438,43 @@ mod tests {
             }
             Step::Prove(i) => match rng.below(10) {
                 0 => Event::NotProven(NotProven::Unreachable("esplora get: timed out".into())),
-                1 => Event::NotProven(NotProven::NoConfirmedPayment),
+                1 => Event::NotProven(NotProven::Unconfirmed(claim(rng.chance(50), false))),
                 _ if paid.contains(i) => Event::Proven(ProvenUse::modelled(*i)),
                 _ => lie(),
             },
+            Step::Reprove(i) => match rng.below(10) {
+                0 => Event::NotProven(NotProven::Unreachable("esplora get: timed out".into())),
+                1 => lie(),
+                _ if paid.contains(i) && rng.chance(80) => Event::Proven(ProvenUse::modelled(*i)),
+                _ => Event::NotProven(NotProven::Unconfirmed(claim(rng.chance(50), false))),
+            },
+            Step::Recheck(paid_to) => match rng.below(10) {
+                0 => Event::NotProven(NotProven::Unreachable("esplora get: timed out".into())),
+                1 => lie(),
+                _ if paid.contains(&paid_to.index) && rng.chance(80) => {
+                    Event::Proven(ProvenUse::modelled(paid_to.index))
+                }
+                _ => gone(),
+            },
             Step::Done(_) => unreachable!("a finished scan asks nothing"),
         }
+    }
+
+    /// A chain as a scan file may hand it over: nothing, or a paid index or one past H, which only an edited file or a
+    /// forged or reorged proof names, with some claims seen below the window it opens.
+    fn random_file(rng: &mut Rng, h: u32, paid: &[u32]) -> ChainScan {
+        let index = match rng.below(3) {
+            0 => return ChainScan::default(),
+            1 => paid[rng.below(paid.len() as u64) as usize],
+            _ => h + 1 + rng.below(1_000) as u32,
+        };
+        let seen = (0..rng.below(u64::from(index + 1 + GAP)))
+            .map(|i| {
+                let used = paid.contains(&(i as u32)) != rng.chance(15);
+                Seen::from(&claim(used, used && rng.chance(80)))
+            })
+            .collect();
+        stored(index, seen)
     }
 
     /// The highest paid index H and the paid indices of a random chain, each index below H paid by chance.
@@ -331,39 +485,33 @@ mod tests {
         (h, paid)
     }
 
-    // The termination argument as a property. Whatever a source answers, every step raises (frontier, phase,
-    // indices asked), and the frontier never passes H + 1, so a scan asks at most H + 1 + GAP indices, proves at
-    // most H + 1 times and ends within as many steps plus one.
+    // The termination argument as a property. Whatever a source answers and whatever index a file held, every
+    // step raises (frontier, phase, indices asked, claims withdrawn) or empties the chain once, and the frontier
+    // never passes H + 1. So a scan asks at most H + 1 + GAP indices twice, proves and withdraws at most as often,
+    // proves the file's index or shows a payment again at most twice, and ends.
     #[test]
     fn every_step_raises_the_frontier_or_the_phase_or_the_indices_asked_whatever_the_source_answers()
      {
         for seed in 1..=3_000 {
             let mut rng = Rng(seed);
             let (h, paid) = random_chain(&mut rng);
-            let mut scan = ChainScan::default();
+            let mut scan = random_file(&mut rng, h, &paid);
             let mut steps = 0;
             let mut at = scan.next();
             while !matches!(at, Step::Done(_)) {
-                let before = rank(&scan, &at);
                 let event = random_source(&mut rng, &paid)(&at);
-                at = step(&mut scan, at, event);
-                let after = rank(&scan, &at);
+                at = checked_step(&mut scan, at, event);
                 assert!(
-                    after > before,
-                    "seed {seed}: went from {before:?} to {after:?}"
-                );
-                assert!(
-                    scan.frontier <= h + 1,
+                    scan.frontier() <= h + 1,
                     "seed {seed}: frontier {}",
-                    scan.frontier
+                    scan.frontier()
                 );
                 steps += 1;
             }
             assert!(
-                steps <= (h + 1 + GAP) + (h + 1) + 1,
+                steps <= 4 * (h + 1 + GAP) + 2,
                 "seed {seed}: {steps} steps for H {h}"
             );
-            assert!(scan.seen.len() as u32 <= h + 1 + GAP, "seed {seed}");
         }
     }
 
@@ -382,10 +530,10 @@ mod tests {
                     Event::Asked(range.clone().map(|_| claim(true, true)).collect())
                 }
                 Step::Prove(_) => lie.take().expect("one proof attempt"),
-                Step::Done(_) => unreachable!(),
+                other => unreachable!("{other:?}"),
             });
             assert!(matches!(status, ScanStatus::Unverified(_)), "{status:?}");
-            assert_eq!((scan.frontier, asked, proofs), (0, GAP, 1));
+            assert_eq!((scan.frontier(), asked, proofs), (0, GAP, 1));
         }
     }
 
@@ -397,7 +545,7 @@ mod tests {
         let mut scan = ChainScan::default();
         let (status, asked, proofs) = run(&mut scan, honest(&paid));
         assert_eq!(status, ScanStatus::Complete);
-        assert_eq!(scan.frontier, h + 1);
+        assert_eq!(scan.frontier(), h + 1);
         assert_eq!(asked, h + 1 + GAP);
         assert_eq!(proofs, (h + 1).div_ceil(GAP));
         assert_eq!(scan.issued(), h + 1);
@@ -419,7 +567,7 @@ mod tests {
             _ => unreachable!("nothing is confirmed, so nothing is proven"),
         });
         assert_eq!(
-            (status, asked, scan.frontier),
+            (status, asked, scan.frontier()),
             (ScanStatus::Complete, GAP, 0)
         );
         assert_eq!(scan.issued(), 8);
@@ -435,8 +583,8 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         });
         assert_eq!(status, ScanStatus::Complete);
-        assert_eq!(scan.frontier, 11);
-        assert_eq!(scan.issued(), scan.frontier + GAP - 1);
+        assert_eq!(scan.frontier(), 11);
+        assert_eq!(scan.issued(), scan.frontier() + GAP - 1);
     }
 
     #[test]
@@ -453,7 +601,7 @@ mod tests {
             }
             completed += 1;
             let issued = scan.issued();
-            let window = scan.frontier + GAP;
+            let window = scan.frontier() + GAP;
             assert!(
                 issued < window,
                 "seed {seed}: issued {issued}, window ends at {window}"
@@ -479,11 +627,11 @@ mod tests {
             let (status, ..) = run(&mut scan, honest(&paid));
             assert_eq!(status, ScanStatus::Complete, "block {block}");
             assert!(
-                scan.frontier <= frontier + GAP,
+                scan.frontier() <= frontier + GAP,
                 "block {block}: {frontier} to {}",
-                scan.frontier
+                scan.frontier()
             );
-            (seen, frontier) = (scan.seen.len() as u32, scan.frontier);
+            (seen, frontier) = (scan.seen.len() as u32, scan.frontier());
         }
         assert_eq!(
             frontier,
@@ -492,42 +640,125 @@ mod tests {
         );
     }
 
+    // R3 of the 5 Nov interrogate. Index 4 was proven on another host, which the scan left, and this one calls it
+    // unused. Its payment is shown again on this host's own data. Still there, the host contradicts itself.
     #[test]
-    fn a_source_that_calls_a_proven_index_unused_is_unverified() {
-        // Index 4 was proven on another host, which the scan left; this one omits it.
-        let mut scan = ChainScan {
-            frontier: 5,
-            seen: Vec::new(),
-        };
+    fn a_source_that_calls_a_proven_index_unused_and_still_shows_its_payment_is_unverified() {
+        let mut scan = proven(4);
         let (status, asked, proofs) = run(&mut scan, |at| match at {
             Step::Ask(range) => Event::Asked(range.clone().map(|_| claim(false, false)).collect()),
+            Step::Recheck(paid) => Event::Proven(ProvenUse::modelled(paid.index)),
             other => panic!("unexpected {other:?}"),
         });
         assert!(
             matches!(&status, ScanStatus::Unverified(why) if why.contains("index 4")),
             "{status:?}"
         );
-        assert_eq!((asked, proofs, scan.frontier), (5 + GAP, 0, 5));
+        assert_eq!((asked, proofs, scan.frontier()), (5 + GAP, 0, 5));
+    }
+
+    // R3. A reorg undid index 4's payment, or a lying host forged it, so the honest host calls index 4 unused and
+    // does not know the payment. The chain is found again from index 0, which hands out an index a restore reaches.
+    #[test]
+    fn a_proven_payment_the_source_no_longer_shows_sends_the_chain_back_to_index_0() {
+        let mut scan = proven(4);
+        let (status, asked, proofs) = run(&mut scan, honest(&[1]));
+        assert_eq!(
+            (status, asked, proofs),
+            (ScanStatus::Complete, (5 + GAP) + (2 + GAP), 1)
+        );
+        assert_eq!((scan.frontier(), scan.issued()), (2, 2));
+    }
+
+    // R1. The file is outside data. Its index backs no frontier, and none of its claims widens what the wallet hands
+    // out, until a source proves that index used again. Proven, the file's scan stands. Unpaid, the chain is found
+    // again from index 0.
+    #[test]
+    fn a_stored_index_backs_nothing_until_a_source_proves_it_used_again() {
+        let claims = |used: u32| -> Vec<Seen> {
+            (0..used + GAP)
+                .map(|i| Seen::from(&claim(i < used, i < used)))
+                .collect()
+        };
+        let file = stored(29, claims(30));
+        assert_eq!((file.frontier(), file.issued()), (0, GAP - 1));
+        assert_eq!(file.next(), Step::Reprove(29));
+        let paid: Vec<u32> = (0..30).collect();
+        let mut shown = file.clone();
+        assert_eq!(
+            run(&mut shown, honest(&paid)),
+            (ScanStatus::Complete, 0, 1),
+            "proven again, nothing is asked and nothing else is proven"
+        );
+        assert_eq!((shown.frontier(), shown.issued()), (30, 30));
+        let mut pushed = stored(4_999, claims(5_000));
+        let (status, asked, proofs) = run(&mut pushed, honest(&[2]));
+        assert_eq!((status, asked, proofs), (ScanStatus::Complete, 3 + GAP, 2));
+        assert_eq!((pushed.frontier(), pushed.issued()), (3, 3));
+    }
+
+    // The file's index can cost requests and never move the wallet. A source that lies about it is unverified and one
+    // that gets no answer continues later, and after either the index and the claims of the file back nothing.
+    #[test]
+    fn a_stored_index_a_source_lies_about_or_cannot_prove_backs_nothing() {
+        let claims: Vec<Seen> = (0..50)
+            .map(|i| Seen::from(&claim(i < 30, i < 30)))
+            .collect();
+        let throttled = || {
+            Event::NotProven(NotProven::Unreachable(
+                "esplora get: HTTP status 429".into(),
+            ))
+        };
+        for (answer, ended) in [
+            (lie(), ScanStatus::Unverified(String::new())),
+            (throttled(), ScanStatus::Continuing(String::new())),
+        ] {
+            let mut scan = stored(29, claims.clone());
+            let mut answer = Some(answer);
+            let (status, asked, proofs) = run(&mut scan, |_| answer.take().expect("one answer"));
+            assert_eq!(
+                std::mem::discriminant(&status),
+                std::mem::discriminant(&ended),
+                "{status:?}"
+            );
+            assert_eq!((asked, proofs), (0, 1));
+            assert_eq!((scan.frontier(), scan.issued()), (0, GAP - 1));
+        }
     }
 
     #[test]
-    fn a_proof_that_got_no_answer_or_found_no_confirmed_payment_continues_later() {
-        for not in [
-            NotProven::Unreachable("esplora get: HTTP status 429, gave up after 3 attempts".into()),
-            NotProven::NoConfirmedPayment,
-        ] {
-            let mut not = Some(not);
-            let mut scan = ChainScan::default();
-            let (status, ..) = run(&mut scan, |at| match at {
-                Step::Ask(range) => {
-                    Event::Asked(range.clone().map(|i| claim(i == 3, i == 3)).collect())
-                }
-                Step::Prove(3) => Event::NotProven(not.take().unwrap()),
-                other => panic!("unexpected {other:?}"),
-            });
-            assert!(matches!(status, ScanStatus::Continuing(_)), "{status:?}");
-            assert_eq!(scan.frontier, 0);
-        }
+    fn a_proof_that_got_no_answer_continues_later() {
+        let mut scan = ChainScan::default();
+        let (status, ..) = run(&mut scan, |at| match at {
+            Step::Ask(range) => {
+                Event::Asked(range.clone().map(|i| claim(i == 3, i == 3)).collect())
+            }
+            Step::Prove(3) => Event::NotProven(NotProven::Unreachable(
+                "esplora get: HTTP status 429, gave up after 3 attempts".into(),
+            )),
+            other => panic!("unexpected {other:?}"),
+        });
+        assert!(matches!(status, ScanStatus::Continuing(_)), "{status:?}");
+        assert_eq!(scan.frontier(), 0);
+    }
+
+    // The claims came from an earlier pass, or a reorg undid the payment since. Index 3's summary, read again during
+    // its proof, counts it in the mempool only, so the next claim of the window is proven instead.
+    #[test]
+    fn a_claim_the_source_withdraws_during_its_proof_gives_way_to_the_next_claim_of_the_window() {
+        let mut scan = ChainScan::default();
+        let (status, asked, proofs) = run(&mut scan, |at| match at {
+            Step::Ask(range) => {
+                Event::Asked(range.clone().map(|i| claim(i <= 3, i <= 3)).collect())
+            }
+            Step::Prove(3) => Event::NotProven(NotProven::Unconfirmed(claim(true, false))),
+            Step::Prove(2) => Event::Proven(ProvenUse::modelled(2)),
+            other => panic!("unexpected {other:?}"),
+        });
+        assert_eq!((status, asked, proofs), (ScanStatus::Complete, 3 + GAP, 2));
+        assert_eq!(scan.frontier(), 3);
+        assert!(scan.seen[3].used && scan.seen[3].pending && !scan.seen[3].confirmed);
+        assert_eq!(scan.issued(), 4);
     }
 
     #[test]
@@ -569,7 +800,7 @@ mod tests {
             "{status:?}"
         );
         assert!(
-            scan.frontier > 0 && scan.frontier < whole.frontier,
+            scan.frontier() > 0 && scan.frontier() < whole.frontier(),
             "{scan:?}"
         );
         let (status, rest_asked, rest_proofs) = run(&mut scan, a_few_at_a_time(10, honest(&paid)));
@@ -587,10 +818,7 @@ mod tests {
     // below it are unknown. One of them is the last proven used, and the ones before it most likely are too.
     #[test]
     fn a_scan_cut_short_below_its_frontier_hands_out_no_index_below_the_frontier() {
-        let mut scan = ChainScan {
-            frontier: 30,
-            seen: Vec::new(),
-        };
+        let mut scan = proven(29);
         assert_eq!(scan.issued(), 30);
         let mut answered = false;
         let (status, ..) = run(&mut scan, |at| match at {

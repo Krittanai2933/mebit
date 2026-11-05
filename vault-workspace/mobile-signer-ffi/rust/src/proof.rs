@@ -8,10 +8,10 @@ use bitcoin::consensus::encode::deserialize;
 use bitcoin::consensus::params::Params;
 use bitcoin::hashes::Hash;
 use bitcoin::pow::{CompactTarget, Target};
-use bitcoin::{Address, Transaction, TxMerkleNode, Txid};
+use bitcoin::{Address, BlockHash, Transaction, TxMerkleNode, Txid};
 
 use crate::MobileSignerError;
-use crate::chain::{ChainSource, MerkleBranch};
+use crate::chain::{ChainSource, Confirmed, MerkleBranch, Summary, TxView, Txo};
 
 /// What a proof's header must carry beyond meeting its own target.
 #[derive(Clone, Copy, Debug)]
@@ -24,22 +24,31 @@ pub(crate) enum Anchor {
     Mainnet,
 }
 
-/// A payment to the wallet's address at `index` that `prove_use` checked. Only `prove_use` builds one.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ProvenUse {
-    index: u32,
-    txid: Txid,
-    height: u64,
+/// A payment to the wallet's address at `index`: the transaction, and the block and height the source
+/// named for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Evidence {
+    pub(crate) index: u32,
+    pub(crate) txid: Txid,
+    pub(crate) block: BlockHash,
+    pub(crate) height: u64,
 }
+
+/// `Evidence` that this module checked on a source. Only this module builds one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProvenUse(Evidence);
 
 /// Why an address's use is not proven.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum NotProven {
-    /// The source lists no confirmed transaction that pays the address. It is unused, or paid only
-    /// in the mempool so far.
-    NoConfirmedPayment,
+    /// No confirmed transaction on the source's first page involves the address, and its summary of the
+    /// address, read again, counts no confirmed history either. It is unused, or paid only in the mempool.
+    Unconfirmed(Summary),
     /// A read got no usable answer. Asking later may prove it.
     Unreachable(String),
+    /// The source answered, and the payment is not there: it does not know the transaction or the
+    /// block, or they show no payment to the address in that block.
+    Gone(String),
     /// The source lied or contradicted itself.
     Lie(String),
 }
@@ -47,17 +56,22 @@ pub(crate) enum NotProven {
 impl ProvenUse {
     /// The wallet index whose payment this proves.
     pub(crate) fn index(&self) -> u32 {
-        self.index
+        self.0.index
+    }
+
+    pub(crate) fn evidence(&self) -> Evidence {
+        self.0
     }
 
     /// A proof of a payment to `index` that a test models instead of checking, so a scan runs without a source.
     #[cfg(test)]
     pub(crate) fn modelled(index: u32) -> Self {
-        ProvenUse {
+        ProvenUse(Evidence {
             index,
             txid: Txid::all_zeros(),
+            block: BlockHash::all_zeros(),
             height: 0,
-        }
+        })
     }
 }
 
@@ -74,42 +88,110 @@ impl From<MobileSignerError> for NotProven {
 }
 
 /// Proves that `address`, the wallet's address at `index`, was paid, from the newest confirmed
-/// transaction the source lists as paying it. The transaction must hash to its id, not be 64 bytes
-/// without its witness, and pay the address's script. Its branch must climb to the merkle root of
-/// the block the source names, through no inner node that reads as a transaction. That block's
-/// header must hash to the block's id and meet its own target, within the network's limit and the
-/// `anchor`. Five reads: the history and tip, then the raw transaction, the branch and the header.
+/// transaction the source lists as paying it. Past 25 newer confirmed spends from the address no payment
+/// to it is on the first page, so then the payment a confirmed spend of it names is proven, which is
+/// confirmed and paid the address too. Five reads, the history and tip and `verify`'s three, and two more
+/// to look up the payment a spend names. With no confirmed transaction of the address on the page, the
+/// summary is read again. A source that counts confirmed history it does not list contradicts itself, and
+/// so does one that names a payment it then does not know.
 pub(crate) fn prove_use(
     source: &dyn ChainSource,
     anchor: Anchor,
     address: &Address,
     index: u32,
 ) -> Result<ProvenUse, NotProven> {
-    // shortcut: the first history page only, so an address whose 25 newest confirmed transactions all
-    // spend from it stays unproven, read further pages if a wallet ever hits that
     let (pages, _tip) = source.history(&[address])?;
     let shown = address.to_string();
-    let Some((txid, block)) = pages.iter().flatten().find_map(|tx| {
-        let block = tx.confirmed.as_ref()?;
-        let pays = tx
-            .outputs
-            .iter()
-            .any(|output| output.address.as_deref() == Some(shown.as_str()));
-        pays.then_some((tx.txid.as_str(), block))
-    }) else {
-        return Err(NotProven::NoConfirmedPayment);
-    };
+    let ours = |txo: &Txo| txo.address.as_deref() == Some(shown.as_str());
     let lie = |what: String| NotProven::Lie(format!("{address}: {what}"));
-    let txid: Txid = txid
-        .parse()
-        .map_err(|e| lie(format!("the history lists {txid:?}, which is no txid: {e}")))?;
-    let block_hash = block.block_hash.ok_or_else(|| {
+    let confirmed: Vec<(&TxView, &Confirmed)> = pages
+        .iter()
+        .flatten()
+        .filter_map(|tx| Some((tx, tx.confirmed.as_ref()?)))
+        .collect();
+    let spent = confirmed
+        .iter()
+        .flat_map(|(tx, _)| &tx.inputs)
+        .find_map(|input| {
+            input
+                .prevout
+                .as_ref()
+                .filter(|coin| ours(coin))
+                .and(input.prev_txid)
+        });
+    let (txid, block, height) = match confirmed.iter().find(|(tx, _)| tx.outputs.iter().any(ours)) {
+        Some((tx, block)) => {
+            let txid = tx.txid.parse().map_err(|e| {
+                lie(format!(
+                    "the history lists {:?}, which is no txid: {e}",
+                    tx.txid
+                ))
+            })?;
+            (txid, block.block_hash, block.height)
+        }
+        None => match spent {
+            Some(paid) => {
+                let (tx, _tip) = source.tx(&paid)?.ok_or_else(|| {
+                    lie(format!(
+                        "it lists a confirmed spend of {paid}, and does not know {paid}"
+                    ))
+                })?;
+                let block = tx.confirmed.ok_or_else(|| {
+                    lie(format!(
+                        "it lists a confirmed spend of {paid}, and {paid} as unconfirmed"
+                    ))
+                })?;
+                (paid, block.block_hash, block.height)
+            }
+            None => {
+                let summaries = source.summaries(&[address])?;
+                return Err(match summaries.as_slice() {
+                    [summary] if !summary.confirmed => NotProven::Unconfirmed(*summary),
+                    _ => lie("it counts confirmed history, and its first page lists no confirmed transaction of it".into()),
+                });
+            }
+        },
+    };
+    let block = block.ok_or_else(|| {
         lie(format!(
             "transaction {txid} is confirmed in no block the source names"
         ))
     })?;
-    let height = block.height;
+    let evidence = Evidence {
+        index,
+        txid,
+        block,
+        height,
+    };
+    // The source picked this payment from its own lists, so one that does not hold is its lie.
+    verify(source, anchor, address, evidence).map_err(|not| match not {
+        NotProven::Gone(why) => NotProven::Lie(why),
+        other => other,
+    })
+}
 
+/// Checks `evidence` of a payment to `address` against the source's answers for it, which is how a
+/// payment a scan kept is shown again: is the transaction still confirmed in the same block? The
+/// transaction must hash to its id, not be 64 bytes without its witness, and pay the address's script.
+/// Its branch must climb to the merkle root of the block, through no inner node that reads as a
+/// transaction. That block's header must hash to the block's id and meet its own target, within the
+/// network's limit and the `anchor`. Three reads: the raw transaction, the branch and the header. An
+/// answer that is not the thing asked is a `Lie`, and answers that show no payment to `address` in that
+/// block are `Gone`, as after a reorg undid it or for a proof that was forged.
+pub(crate) fn verify(
+    source: &dyn ChainSource,
+    anchor: Anchor,
+    address: &Address,
+    evidence: Evidence,
+) -> Result<ProvenUse, NotProven> {
+    let Evidence {
+        txid,
+        block,
+        height,
+        ..
+    } = evidence;
+    let lie = |what: String| NotProven::Lie(format!("{address}: {what}"));
+    let gone = |what: String| NotProven::Gone(format!("{address}: {what}"));
     let tx = source.raw_tx(&txid)?;
     if tx.compute_txid() != txid {
         return Err(lie(format!(
@@ -118,7 +200,7 @@ pub(crate) fn prove_use(
         )));
     }
     if tx.base_size() == 64 {
-        return Err(lie(format!(
+        return Err(gone(format!(
             "transaction {txid} is 64 bytes without its witness, a merkle node's size (CVE-2017-12842)"
         )));
     }
@@ -127,29 +209,25 @@ pub(crate) fn prove_use(
         .iter()
         .any(|output| output.script_pubkey == address.script_pubkey())
     {
-        return Err(lie(format!("transaction {txid} does not pay it")));
+        return Err(gone(format!("transaction {txid} does not pay it")));
     }
     let root = merkle_root(txid, &source.merkle_branch(&txid)?).map_err(lie)?;
 
-    let header = source.header(&block_hash)?;
-    if header.block_hash() != block_hash {
+    let header = source.header(&block)?;
+    if header.block_hash() != block {
         return Err(lie(format!(
-            "the header of block {block_hash} is block {}",
+            "the header of block {block} is block {}",
             header.block_hash()
         )));
     }
     if header.merkle_root != root {
-        return Err(lie(format!(
-            "transaction {txid}'s branch does not reach the merkle root of block {block_hash}"
+        return Err(gone(format!(
+            "transaction {txid}'s branch does not reach the merkle root of block {block}"
         )));
     }
     has_work(&header, height, anchor)
-        .map_err(|what| lie(format!("block {block_hash} at height {height}: {what}")))?;
-    Ok(ProvenUse {
-        index,
-        txid,
-        height,
-    })
+        .map_err(|what| gone(format!("block {block} at height {height}: {what}")))?;
+    Ok(ProvenUse(evidence))
 }
 
 /// The root that `branch` climbs to from `txid`. A position with bits past the branch is refused,
@@ -331,9 +409,11 @@ const MAINNET_BITS: [u32; 479] = [
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    use serde_json::Value;
 
     use bitcoin::absolute::LockTime;
     use bitcoin::block::Version;
@@ -376,16 +456,22 @@ mod tests {
     const FORGED_TIME: u32 = 1_762_300_800;
     const FORGED_NONCE: u32 = 0x1d18_7bb5;
 
-    /// A source that answers each URL in `bodies` with its body and any other URL as a 404, and
-    /// keeps the URLs it was asked.
+    /// A source that answers each URL in `bodies` with its body, gives no answer for a URL in `lost`
+    /// and answers any other URL with a 404, and keeps the URLs it was asked.
     struct Answers {
         bodies: HashMap<String, String>,
+        lost: HashSet<String>,
         asked: Mutex<Vec<String>>,
     }
 
     impl Transport for Answers {
         fn get(&self, url: &str) -> Result<String, MobileSignerError> {
             self.asked.lock().unwrap().push(url.to_string());
+            if self.lost.contains(url) {
+                return Err(MobileSignerError::InvalidPsbtJson(format!(
+                    "esplora get: {url}: timed out, gave up after 2 attempts"
+                )));
+            }
             self.bodies.get(url).cloned().ok_or_else(|| {
                 MobileSignerError::InvalidPsbtJson(format!("{url}: status code 404"))
             })
@@ -424,6 +510,7 @@ mod tests {
                     ),
                     (format!("{base}/block/{block}/header"), self.header.clone()),
                 ]),
+                lost: HashSet::new(),
                 asked: Mutex::new(Vec::new()),
             }
         }
@@ -676,11 +763,12 @@ mod tests {
         let txid = proof.txid;
         assert_eq!(
             proved,
-            Ok(ProvenUse {
+            Ok(ProvenUse(Evidence {
                 index: INDEX,
                 txid,
+                block: proof.block,
                 height: 156_696
-            })
+            }))
         );
         let base = ESPLORA_TESTNET4;
         assert_eq!(
@@ -698,14 +786,14 @@ mod tests {
     #[test]
     fn a_real_mainnet_payment_is_proven_at_its_periods_target() {
         let proof = real_mainnet();
-        let txid = proof.txid;
         assert_eq!(
             proof.prove(Anchor::Mainnet),
-            Ok(ProvenUse {
+            Ok(ProvenUse(Evidence {
                 index: INDEX,
-                txid,
+                txid: proof.txid,
+                block: proof.block,
                 height: 800_000
-            })
+            }))
         );
     }
 
@@ -713,31 +801,145 @@ mod tests {
     /// payment that never happened.
     #[test]
     fn a_forged_testnet4_block_proves_use() {
-        let txid = paid().compute_txid();
         assert_eq!(
             forged_payment(address(TESTNET4_ADDRESS), 100).prove(Anchor::Testnet4),
-            Ok(ProvenUse {
+            Ok(ProvenUse(Evidence {
                 index: INDEX,
-                txid,
+                txid: paid().compute_txid(),
+                block: forged_block().block_hash(),
                 height: 100
-            })
+            }))
         );
     }
 
+    // R2 of the 5 Nov interrogate. With no confirmed transaction of the address on its first page, the source's
+    // summary is read again. One that counts no confirmed history either proves nothing, and one that counts some
+    // contradicts its own page, since that page lists the 25 newest confirmed transactions.
     #[test]
-    fn no_confirmed_payment_proves_nothing() {
-        let mut proof = real_testnet4();
-        proof.page = "[]".into();
-        assert_eq!(
-            proof.prove(Anchor::Testnet4),
-            Err(NotProven::NoConfirmedPayment)
-        );
-        proof.page = fixture!("testnet4_address_txs_real.json")
+    fn no_confirmed_transaction_proves_nothing_and_a_count_of_confirmed_history_beside_it_is_a_lie()
+    {
+        let stats = |chain: u64, mempool: u64| {
+            format!(
+                r#"{{"chain_stats":{{"funded_txo_sum":{chain},"spent_txo_sum":0,"tx_count":{chain}}},"mempool_stats":{{"funded_txo_sum":{mempool},"spent_txo_sum":0,"tx_count":{mempool}}}}}"#
+            )
+        };
+        let in_the_mempool = fixture!("testnet4_address_txs_real.json")
             .replace(r#""confirmed":true"#, r#""confirmed":false"#);
+        for (page, stats, unconfirmed) in [
+            ("[]", stats(0, 0), Some((false, false))),
+            (in_the_mempool.as_str(), stats(0, 13), Some((true, true))),
+            ("[]", stats(2, 0), None),
+            (in_the_mempool.as_str(), stats(13, 0), None),
+        ] {
+            let mut proof = real_testnet4();
+            proof.page = page.into();
+            let mut answers = proof.answers();
+            answers.bodies.insert(
+                format!("{ESPLORA_TESTNET4}/address/{}", proof.address),
+                stats,
+            );
+            let proved = prove_use(
+                &EsploraSource(&answers),
+                Anchor::Testnet4,
+                &proof.address,
+                INDEX,
+            );
+            match unconfirmed {
+                Some(flags) => assert!(
+                    matches!(&proved, Err(NotProven::Unconfirmed(s)) if (s.used, s.pending, s.confirmed) == (flags.0, flags.1, false)),
+                    "{proved:?}"
+                ),
+                None => assert_lie(proved, "lists no confirmed transaction"),
+            }
+        }
+    }
+
+    // R2. Past 25 newer confirmed spends from an address no payment to it is on its first page. The newest confirmed
+    // transaction of the real page spends c5ed075e..., so with the page cut to that spend the payment it names is
+    // proven. A source that does not know that payment, or calls it unconfirmed, contradicts its own page.
+    #[test]
+    fn a_payment_off_the_first_page_is_proven_through_the_one_a_confirmed_spend_of_it_names() {
+        let proof = real_testnet4();
+        let real: Value = serde_json::from_str(fixture!("testnet4_address_txs_real.json")).unwrap();
+        let base = ESPLORA_TESTNET4;
+        let (address, txid) = (&proof.address, proof.txid);
+        let answers = |payment: Option<String>| {
+            let mut answers = proof.answers();
+            answers.bodies.insert(
+                format!("{base}/address/{address}/txs"),
+                format!("[{}]", real[0]),
+            );
+            if let Some(payment) = payment {
+                answers.bodies.insert(format!("{base}/tx/{txid}"), payment);
+            }
+            answers
+        };
+        let found = answers(Some(real[1].to_string()));
         assert_eq!(
-            proof.prove(Anchor::Testnet4),
-            Err(NotProven::NoConfirmedPayment)
+            prove_use(&EsploraSource(&found), Anchor::Testnet4, address, INDEX),
+            Ok(ProvenUse(Evidence {
+                index: INDEX,
+                txid,
+                block: proof.block,
+                height: 156_696
+            }))
         );
+        assert_eq!(
+            *found.asked.lock().unwrap(),
+            [
+                format!("{base}/address/{address}/txs"),
+                format!("{base}/blocks/tip/height"),
+                format!("{base}/tx/{txid}"),
+                format!("{base}/blocks/tip/height"),
+                format!("{base}/tx/{txid}/hex"),
+                format!("{base}/tx/{txid}/merkle-proof"),
+                format!("{base}/block/{TESTNET4_BLOCK}/header"),
+            ]
+        );
+        let unconfirmed = real[1]
+            .to_string()
+            .replace(r#""confirmed":true"#, r#""confirmed":false"#);
+        for (payment, why) in [
+            (None, "does not know"),
+            (Some(unconfirmed), "as unconfirmed"),
+        ] {
+            let answers = answers(payment);
+            assert_lie(
+                prove_use(&EsploraSource(&answers), Anchor::Testnet4, address, INDEX),
+                why,
+            );
+        }
+    }
+
+    // R2. The page lists the payment and names its block, so a 404 for either is the source contradicting itself.
+    #[test]
+    fn a_404_for_the_payment_or_the_block_the_page_names_is_a_lie() {
+        let proof = real_testnet4();
+        let base = ESPLORA_TESTNET4;
+        for (url, why) in [
+            (
+                format!("{base}/tx/{TESTNET4_TXID}/hex"),
+                "does not know transaction",
+            ),
+            (
+                format!("{base}/tx/{TESTNET4_TXID}/merkle-proof"),
+                "knows no block that holds",
+            ),
+            (
+                format!("{base}/block/{TESTNET4_BLOCK}/header"),
+                "does not know block",
+            ),
+        ] {
+            let mut answers = proof.answers();
+            answers.bodies.remove(&url);
+            let proved = prove_use(
+                &EsploraSource(&answers),
+                Anchor::Testnet4,
+                &proof.address,
+                INDEX,
+            );
+            assert_lie(proved, why);
+        }
     }
 
     #[test]
@@ -745,7 +947,7 @@ mod tests {
         let proof = real_testnet4();
         for url in proof.answers().bodies.keys() {
             let mut answers = proof.answers();
-            answers.bodies.remove(url);
+            answers.lost.insert(url.clone());
             let proved = prove_use(
                 &EsploraSource(&answers),
                 Anchor::Testnet4,

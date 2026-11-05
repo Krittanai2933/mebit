@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 
 use bitcoin::block::Header;
 use bitcoin::consensus::encode::deserialize_hex;
-use bitcoin::hashes::{Hash, sha256};
 use bitcoin::{Address, BlockHash, Transaction, TxMerkleNode, Txid};
 use serde_json::Value;
 
@@ -41,8 +40,9 @@ pub(crate) trait ChainSource {
     fn broadcast(&self, hex: &str, txid: &str) -> Result<String, MobileSignerError>;
     /// Slow, normal and fast rates in sat/vB, or None when the source gives no usable estimate.
     fn fee_tiers(&self) -> Option<FeeTiers>;
-    /// `txid` from the source's raw bytes, unchecked. `prove_use` checks it and the next two answers.
-    /// Each fails `Unreachable` when no answer came and `Lie` when the answer is not the thing asked.
+    /// `txid` from the source's raw bytes, unchecked. `crate::proof` checks it and the next two answers.
+    /// Each fails `Unreachable` when no answer came, `Gone` when the source answered that it does not know
+    /// the thing asked, and `Lie` when the answer is not the thing asked.
     fn raw_tx(&self, txid: &Txid) -> Result<Transaction, NotProven>;
     /// Where `txid` sits in the merkle tree of the block that holds it.
     fn merkle_branch(&self, txid: &Txid) -> Result<MerkleBranch, NotProven>;
@@ -64,9 +64,6 @@ pub(crate) struct Summary {
     /// The mempool holds a transaction of it, so its picture changes once a block takes that one.
     pub(crate) pending: bool,
     pub(crate) balance: u64,
-    /// Changes whenever the address's history does, so a page read while it was the same is still the page.
-    /// Esplora's is a hash of the counts and sums it reports.
-    pub(crate) token: u64,
 }
 
 /// A transaction as a source reports it, read as far as every reader needs and no further. Each value
@@ -85,6 +82,9 @@ pub(crate) struct TxView {
 pub(crate) struct Input {
     /// None for a coinbase, which spends no coin.
     pub(crate) prevout: Option<Txo>,
+    /// The transaction that created the coin it spends, or None when the source gave none that reads as a
+    /// txid. Only a proof needs it.
+    pub(crate) prev_txid: Option<Txid>,
     /// As the source gave it, since only the detail reads it.
     pub(crate) sequence: Option<u64>,
 }
@@ -147,6 +147,20 @@ pub(crate) const WINDOW: usize = 10;
 pub(crate) struct EsploraSource<'a>(pub(crate) &'a dyn Transport);
 
 impl EsploraSource<'_> {
+    /// The body at `path` for a proof, or `Gone` saying `unknown` when the source answers 404.
+    fn proof_read(
+        &self,
+        path: &str,
+        unknown: impl FnOnce() -> String,
+    ) -> Result<String, NotProven> {
+        self.0
+            .get(&format!("{ESPLORA_TESTNET4}{path}"))
+            .map_err(|error| match answered_404(&error, path) {
+                true => NotProven::Gone(unknown()),
+                false => NotProven::from(error),
+            })
+    }
+
     /// Every URL's body, in the order given, `WINDOW` requests in flight at a time. One failure fails
     /// the whole batch, so a caller never works from a partial picture of the wallet.
     fn get_all(&self, urls: &[String]) -> Result<Vec<String>, MobileSignerError> {
@@ -262,7 +276,9 @@ impl ChainSource for EsploraSource<'_> {
     }
 
     fn raw_tx(&self, txid: &Txid) -> Result<Transaction, NotProven> {
-        let hex = self.0.get(&format!("{ESPLORA_TESTNET4}/tx/{txid}/hex"))?;
+        let hex = self.proof_read(&format!("/tx/{txid}/hex"), || {
+            format!("the source does not know transaction {txid}")
+        })?;
         deserialize_hex(hex.trim()).map_err(|e| {
             NotProven::Lie(format!(
                 "transaction {txid}: the raw answer is not a transaction: {e}"
@@ -271,17 +287,18 @@ impl ChainSource for EsploraSource<'_> {
     }
 
     fn merkle_branch(&self, txid: &Txid) -> Result<MerkleBranch, NotProven> {
-        let json = self
-            .0
-            .get(&format!("{ESPLORA_TESTNET4}/tx/{txid}/merkle-proof"))?;
+        // Esplora answers 404 for a transaction no block holds.
+        let json = self.proof_read(&format!("/tx/{txid}/merkle-proof"), || {
+            format!("the source knows no block that holds transaction {txid}")
+        })?;
         read_merkle_branch(&json)
             .map_err(|what| NotProven::Lie(format!("transaction {txid}: merkle proof {what}")))
     }
 
     fn header(&self, hash: &BlockHash) -> Result<Header, NotProven> {
-        let hex = self
-            .0
-            .get(&format!("{ESPLORA_TESTNET4}/block/{hash}/header"))?;
+        let hex = self.proof_read(&format!("/block/{hash}/header"), || {
+            format!("the source does not know block {hash}")
+        })?;
         deserialize_hex(hex.trim()).map_err(|e| {
             NotProven::Lie(format!(
                 "block {hash}: the header answer is not a header: {e}"
@@ -346,20 +363,11 @@ fn parse_address_stats(json: &str) -> Result<Summary, MobileSignerError> {
             "tx_count is 0 but funded {funded} and spent {spent}, the answer contradicts itself"
         )));
     }
-    let mut stats = Vec::with_capacity(6);
-    for section in ["chain_stats", "mempool_stats"] {
-        for field in ["tx_count", "funded_txo_sum", "spent_txo_sum"] {
-            stats.push(sum(section, field)?.to_string());
-        }
-    }
-    let [a, b, c, d, e, f, g, h, ..] =
-        sha256::Hash::hash(stats.join(",").as_bytes()).to_byte_array();
     Ok(Summary {
         used: txs > 0,
         confirmed: confirmed > 0,
         pending: pending > 0,
         balance,
-        token: u64::from_le_bytes([a, b, c, d, e, f, g, h]),
     })
 }
 
@@ -421,6 +429,7 @@ fn tx_view(tx: &Value) -> Result<TxView, String> {
             };
             Ok(Input {
                 prevout,
+                prev_txid: input["txid"].as_str().and_then(|txid| txid.parse().ok()),
                 sequence: input["sequence"].as_u64(),
             })
         })
@@ -472,7 +481,12 @@ fn read_tx(tx_json: &str, tip_text: &str, txid: &Txid) -> Result<(TxView, u64), 
 /// then maybe " (redirected from ...)"). The status is gone past the `Transport` boundary, so a test pins this to `classify`.
 /// A probe's 404 that `pick_host` quotes in its own error names `/block-height/0`, so it is a failure.
 pub(crate) fn is_not_found(error: &MobileSignerError, txid: &Txid) -> bool {
-    matches!(error, MobileSignerError::InvalidPsbtJson(t) if t.contains(&format!("/tx/{txid}: status code 404")))
+    answered_404(error, &format!("/tx/{txid}"))
+}
+
+/// Whether `error` is `classify`'s text for an HTTP 404 of `path` past the base, as `is_not_found` reads it.
+fn answered_404(error: &MobileSignerError, path: &str) -> bool {
+    matches!(error, MobileSignerError::InvalidPsbtJson(t) if t.contains(&format!("{path}: status code 404")))
 }
 
 /// The text of a read the host refused with HTTP 429, its request limit, after the retries, or of a probe
