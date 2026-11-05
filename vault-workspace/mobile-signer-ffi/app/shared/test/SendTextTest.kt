@@ -1,6 +1,8 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.Why
 import com.mebit.app.data.FiatQuote
+import com.mebit.app.data.SaveState
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -70,5 +72,33 @@ class SendTextTest {
         assertEquals("≈ 0 sat · ฿0", reviewFeeText(0, boardPrice))
         assertEquals("฿0 · 8 sat/vB", slipFeeText(0, 8, null))
         assertEquals("฿0 · 8 sat/vB", slipFeeText(0, 8, boardPrice))
+    }
+
+    @Test
+    fun aRealKeyOnAPhoneWithNoScreenLockCannotStartASend() {
+        assertEquals("เครื่องนี้ไม่มีรหัสล็อกหน้าจอ จึงยังส่งเงินไม่ได้", cannotSendText(24, SaveState.NotSaved, Why.NoScreenLock))
+    }
+
+    @Test
+    fun aRealKeyOnAPhoneThatCannotKeepKeysCannotStartASend() {
+        for (why in listOf(Why.OsTooOld, Why.NotWired)) {
+            assertEquals("เครื่องนี้ยังส่งเงินไม่ได้ เพราะบันทึกกุญแจในเครื่องไม่ได้", cannotSendText(12, SaveState.NotSaved, why), "$why")
+        }
+    }
+
+    @Test
+    fun aSavedWalletSendsAsBefore() {
+        assertNull(cannotSendText(24, SaveState.Saved, null))
+    }
+
+    @Test
+    fun theDemoWalletSendsAsBefore() {
+        assertNull(cannotSendText(0, SaveState.NotSaved, null))
+    }
+
+    @Test
+    fun aSaveThatMayStillPassDoesNotStopASend() {
+        // A TryLater save is tried again when the app comes back and at the post's own save, which may then pass.
+        assertNull(cannotSendText(24, SaveState.NotSaved, Why.TryLater))
     }
 }

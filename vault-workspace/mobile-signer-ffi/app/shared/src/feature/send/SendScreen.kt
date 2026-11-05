@@ -89,7 +89,8 @@ private val SelectedFee = Color(0xFFFFF8EF)
  * 4.4.6 (insufficient funds) and 4.4.7 (invalid address) as states of it. The scan chip opens [QrScanSheet], which has
  * no board (open item 59), and hides on a device without a camera. The ฿ unit toggle, the baht lines and the fee
  * prices in baht need a price from [quotes]. Without one the screen is BTC and sats only. A balance that could not be
- * fetched closes review with a panel of its own, which has no board.
+ * fetched closes review with a panel of its own, which has no board. A real key this phone could not save closes review too,
+ * with a line at the top that has no board either ([cannotSendText]).
  */
 @Composable
 fun S4SendScreen(
@@ -109,6 +110,7 @@ fun S4SendScreen(
     val addressOk = if (draft.destination.isEmpty()) null else isValidAddress(draft.destination, KeyNetwork.TEST)
     // The spendable balance, not the whole one: a receive still in the mempool cannot pay, and send all pays the spendable figure less the fee.
     val issue = sendIssue(addressOk, draft.amountSats, draft.feeSats, wallet.spendableSats, wallet.balanceKnown, wallet.unconfirmedSend != null)
+    val cannotSend = cannotSendText(session.words.size, session.saved, session.notSavedBecause)
     val enter = { text: String -> draft.enterDestination(text) { isValidAddress(it, KeyNetwork.TEST) } }
     val cameraAvailable = rememberCameraAvailable()
     var scanning by remember { mutableStateOf(false) }
@@ -131,13 +133,17 @@ fun S4SendScreen(
             tag = "screen_send/s4",
             bottom = {
                 Spacer(modifier = Modifier.height(12.dp))
-                PrimaryCta("ตรวจสอบ", "cta_s4_review", onContinue, enabled = addressOk == true && draft.amountSats > 0 && issue == null)
+                PrimaryCta("ตรวจสอบ", "cta_s4_review", onContinue, enabled = cannotSend == null && addressOk == true && draft.amountSats > 0 && issue == null)
                 // The boards put a link under this button. Keep its room so the button sits where they put it.
                 Spacer(modifier = Modifier.height(38.dp))
             },
         ) {
             ReceiveSendSwitch(sendSelected = true, onReceive = onReceive, onSend = {})
             Spacer(modifier = Modifier.height(20.dp))
+            cannotSend?.let {
+                Text(it, color = MbEyebrow, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, modifier = Modifier.testTag("send_no_lock"))
+                Spacer(modifier = Modifier.height(14.dp))
+            }
             DestinationField(draft, invalid = issue == SendIssue.InvalidAddress, enter, onScan = if (cameraAvailable) ({ scanning = true }) else null)
             Spacer(modifier = Modifier.height(14.dp))
             AmountCard(wallet, entry, quote, short = issue is SendIssue.Insufficient)
