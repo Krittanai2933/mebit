@@ -39,8 +39,8 @@ class ScanStatusTest {
         }
     }
 
-    // A host that refused with its request limit answers each ask of a ten-address window three times over, so Home asks a
-    // minute later, then waits twice as long each time, and never longer than a quarter of an hour.
+    // A host that refused with its request limit is left alone for the wait it asked for, or a minute, so Home asks a minute
+    // later, then waits twice as long each time, and never longer than a quarter of an hour.
     @Test
     fun homeAsksAgainAfterAMinuteThenWaitsTwiceAsLongUpToAQuarterOfAnHour() {
         assertEquals(listOf(60L, 120L, 240L, 480L, 900L, 900L), (0..5).map { scanContinueDelayMillis(it) / 1_000 })
