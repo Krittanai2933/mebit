@@ -971,7 +971,13 @@ const MAX_EXTRA_WAIT: Duration = Duration::from_secs(8);
 /// Why one attempt at a GET failed, which decides whether it is asked again, with the text the caller
 /// gets when it is the last attempt.
 pub(crate) enum GetError {
-    /// Throttled or a brief server error, answered quickly.
+    /// HTTP 429, the host's request limit. Never asked again. `attempt_unless_limited` limits the host
+    /// and puts the limit in `what`.
+    Throttled {
+        retry_after: Option<Duration>,
+        what: String,
+    },
+    /// A brief server error, 502, 503 or 504, answered quickly.
     Retryable {
         retry_after: Option<Duration>,
         what: String,
@@ -987,7 +993,7 @@ pub(crate) enum GetError {
 impl GetError {
     fn text(&mut self) -> &mut String {
         match self {
-            GetError::Retryable { what, .. } => what,
+            GetError::Throttled { what, .. } | GetError::Retryable { what, .. } => what,
             GetError::Unreachable(text) | GetError::TimedOut(text) | GetError::Fatal(text) => text,
         }
     }
@@ -999,10 +1005,11 @@ impl From<GetError> for MobileSignerError {
     }
 }
 
-/// Asks until an attempt gets a 200 or a `Fatal` answer, or the attempts run out: `RETRIES + 1`, or
-/// two once one timed out, because a timeout has already held the call up to `REQUEST_TIMEOUT`. A GET
-/// is a read, so asking again after a lost connection is safe. The waits add up to at most
-/// `MAX_EXTRA_WAIT`. The error is the last attempt's, so the caller sees whether the host answered.
+/// Asks until an attempt gets a 200, or the attempts run out: `RETRIES + 1`, or two once one timed
+/// out, because a timeout has already held the call up to `REQUEST_TIMEOUT`. A 429 is never asked
+/// again, and neither is a `Fatal` answer. A GET is a read, so asking again after a lost connection is
+/// safe. The waits add up to at most `MAX_EXTRA_WAIT`. The error is the last attempt's, so the caller
+/// sees whether the host answered.
 /// shortcut: Retry-After in HTTP-date form is ignored, upgrade if the host is seen sending it.
 pub(crate) fn get_with_retry(
     attempt: &dyn Fn() -> Result<String, GetError>,
@@ -1016,7 +1023,7 @@ pub(crate) fn get_with_retry(
             Err(failure) => failure,
         };
         let retry_after = match &failure {
-            GetError::Fatal(_) => return Err(failure),
+            GetError::Fatal(_) | GetError::Throttled { .. } => return Err(failure),
             GetError::Retryable { retry_after, .. } => *retry_after,
             GetError::Unreachable(_) => None,
             GetError::TimedOut(_) => {
@@ -1066,9 +1073,10 @@ pub(crate) fn classify(answer: Result<ureq::Response, ureq::Error>) -> Result<St
                 .header("Retry-After")
                 .and_then(|v| v.trim().parse::<u64>().ok())
                 .map(Duration::from_secs);
-            Err(GetError::Retryable {
-                retry_after,
-                what: format!("esplora get: HTTP status {code}"),
+            let what = format!("esplora get: HTTP status {code}");
+            Err(match code {
+                429 => GetError::Throttled { retry_after, what },
+                _ => GetError::Retryable { retry_after, what },
             })
         }
         Err(e @ ureq::Error::Transport(_)) => {

@@ -4988,9 +4988,16 @@ mod tests {
     }
 
     fn throttled() -> GetError {
+        GetError::Throttled {
+            retry_after: None,
+            what: "esplora get: HTTP status 429".into(),
+        }
+    }
+
+    fn outage() -> GetError {
         GetError::Retryable {
             retry_after: None,
-            what: "HTTP status 429".into(),
+            what: "esplora get: HTTP status 503".into(),
         }
     }
 
@@ -5051,8 +5058,8 @@ mod tests {
     }
 
     #[test]
-    fn a_throttled_answer_then_a_200_returns_that_body() {
-        let (result, attempts, sleeps) = retried(vec![Err(throttled()), Ok("body".into())]);
+    fn a_brief_outage_then_a_200_returns_that_body() {
+        let (result, attempts, sleeps) = retried(vec![Err(outage()), Ok("body".into())]);
         assert_eq!(result.unwrap(), "body");
         assert_eq!((attempts, sleeps), (2, secs(&[1])));
     }
@@ -5065,14 +5072,13 @@ mod tests {
     }
 
     #[test]
-    fn three_throttled_answers_fail_naming_the_status_and_the_attempts() {
-        let (result, attempts, sleeps) =
-            retried(vec![Err(throttled()), Err(throttled()), Err(throttled())]);
+    fn three_outages_fail_naming_the_status_and_the_attempts() {
+        let (result, attempts, sleeps) = retried(vec![Err(outage()), Err(outage()), Err(outage())]);
         let MobileSignerError::InvalidPsbtJson(message) = result.unwrap_err() else {
             panic!("wrong error kind");
         };
         assert!(
-            message.contains("429") && message.contains("3 attempts"),
+            message.contains("503") && message.contains("3 attempts"),
             "{message}"
         );
         assert_eq!((attempts, sleeps), (3, secs(&[1, 2])));
@@ -5124,8 +5130,10 @@ mod tests {
     }
 
     #[test]
-    fn classify_retries_only_429_502_503_504() {
-        for status in [429, 502, 503, 504] {
+    fn classify_limits_on_a_429_and_retries_only_502_503_504() {
+        let got = classified("HTTP/1.1 429 -\r\nContent-Length: 0\r\n\r\n");
+        assert!(matches!(got, Err(GetError::Throttled { .. })));
+        for status in [502, 503, 504] {
             let got = classified(&format!("HTTP/1.1 {status} -\r\nContent-Length: 0\r\n\r\n"));
             assert!(matches!(got, Err(GetError::Retryable { .. })), "{status}");
         }
@@ -5166,8 +5174,8 @@ mod tests {
         let wait = |value: &str| match classified(&format!(
             "HTTP/1.1 429 -\r\nRetry-After: {value}\r\nContent-Length: 0\r\n\r\n"
         )) {
-            Err(GetError::Retryable { retry_after, .. }) => retry_after,
-            _ => panic!("not retryable"),
+            Err(GetError::Throttled { retry_after, .. }) => retry_after,
+            _ => panic!("not throttled"),
         };
         assert_eq!(wait("2"), Some(Duration::from_secs(2)));
         assert_eq!(wait("Wed, 21 Oct 2026 07:28:00 GMT"), None);
@@ -5177,7 +5185,7 @@ mod tests {
 
     #[test]
     fn a_retried_200_still_goes_through_the_strict_parser() {
-        let (result, _, _) = retried(vec![Err(throttled()), Ok(r#"{"chain_stats":{}}"#.into())]);
+        let (result, _, _) = retried(vec![Err(outage()), Ok(r#"{"chain_stats":{}}"#.into())]);
         assert!(parse_address_stats(&result.unwrap()).is_err());
     }
 
@@ -5343,11 +5351,8 @@ mod tests {
                 vec![lost(), classify(answer(404, ""))],
                 false,
             ),
-            (
-                "three throttles",
-                vec![Err(throttled()), Err(throttled()), Err(throttled())],
-                false,
-            ),
+            ("a 429", vec![Err(throttled())], false),
+            ("a loss, then a 429", vec![lost(), Err(throttled())], false),
             ("three losses", vec![lost(), lost(), lost()], true),
             ("two timeouts", vec![stalled(), stalled()], true),
         ];
