@@ -14,7 +14,9 @@ class SendErrorThaiTest {
         "the whole balance 451 less the fee 122 is below the network's 330 sat dust floor" to "ยอดทั้งหมดหลังหักค่าธรรมเนียมต่ำกว่า 330 sat ซึ่งเครือข่ายไม่รับสำหรับที่อยู่ปลายทางนี้",
         "the whole balance 650 less the fee 111 is below the network's 540 sat dust floor" to "ยอดทั้งหมดหลังหักค่าธรรมเนียมต่ำกว่า 540 sat ซึ่งเครือข่ายไม่รับสำหรับที่อยู่ปลายทางนี้",
         "fee rate 0 is below 1 sat/vB" to "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น",
-        "fee rate 2001 is above 2000 sat/vB" to "ค่าธรรมเนียมสูงผิดปกติ ตรวจจำนวนอีกครั้ง",
+        // The network's limit, on the rate asked and on the signed bytes.
+        "fee rate 10001 is above the network's 10000 sat/vB limit" to "เครือข่ายไม่รับค่าธรรมเนียมเกิน 10,000 sat/vB เลือกระดับที่ต่ำลง",
+        "fee 1128100 for 110 vB is above the network's 10000 sat/vB limit" to "เครือข่ายไม่รับค่าธรรมเนียมเกิน 10,000 sat/vB เลือกระดับที่ต่ำลง",
         "fee did not settle in 4 passes, send a smaller amount" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
         // A host lied in a proof, and no other host was left.
         "esplora scan: receive index 19: tb1qexample: transaction 1111111111111111111111111111111111111111111111111111111111111111 does not pay it" to "ประวัติของกระเป๋านี้ผิดปกติ ตรวจกับ explorer ก่อนส่ง",
@@ -40,7 +42,8 @@ class SendErrorThaiTest {
         "replace: coins spent: 1111111111111111111111111111111111111111111111111111111111111111:0 is not a coin this wallet can spend" to "เหรียญของรายการเดิมถูกใช้ไปแล้ว รายการเดิมอาจออกไปแล้ว ตรวจประวัติในหน้าแรกก่อน",
         "replace: not this wallet's payment: its second output is not this wallet's change" to "รายการเดิมไม่ใช่รายการที่กระเป๋านี้แทนที่ได้",
         "replace: not this wallet's payment: not one transaction" to "รายการเดิมไม่ใช่รายการที่กระเป๋านี้แทนที่ได้",
-        "replace: rate 2001 is above 2000 sat/vB" to "ค่าธรรมเนียมที่ต้องใช้สูงเกินเพดาน 2,000 sat/vB",
+        "replace: rate 10001 is above the network's 10000 sat/vB limit" to "รายการใหม่ต้องใช้ค่าธรรมเนียมเกิน 10,000 sat/vB ซึ่งเครือข่ายไม่รับ",
+        "replace: fee 1100110 for 110 vB is above the network's 10000 sat/vB limit" to "รายการใหม่ต้องใช้ค่าธรรมเนียมเกิน 10,000 sat/vB ซึ่งเครือข่ายไม่รับ",
         "replace: what is left, 843 less the fee 550, is below the network's 294 sat dust floor" to "ยอดที่เหลือหลังหักค่าธรรมเนียมใหม่ต่ำกว่า 294 sat ซึ่งเครือข่ายไม่รับ",
         "replace: check failed: its rate is above the earlier rate" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
         "missing witness slot" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",

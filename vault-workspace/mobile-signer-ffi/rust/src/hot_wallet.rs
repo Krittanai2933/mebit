@@ -1089,14 +1089,15 @@ pub struct PreparedSend {
 /// The fee is the size of the transaction as built times the rate, so a payment that needs more
 /// coins pays more, never a fixed sum that falls under the rate. The answer's `fee_sats` is that
 /// fee, and the app compares it with the estimate its screens showed and asks the user when it is
-/// much higher. Refuses, before signing, a rate outside 1 to 2,000 sat/vB, an amount below the dust
-/// floor of the destination's script (294 sats for P2WPKH up to 546 for P2PKH, the outputs the
-/// network refuses) and an amount that overflows u64 with its fee. Change below the change address's
-/// floor (294 sats) would be refused by the network too, so it goes into the fee and the answer's
-/// `dust_change_sats` names it. A fee above the amount is signed, because the fee is paid on top and
-/// the destination still gets the amount, so the app asks the user before it posts. Only confirmed
-/// coins of receive addresses are spent; the wallet's own unconfirmed change is spent too. About
-/// 40 Esplora calls for a fresh wallet, so call it off the main thread.
+/// much higher. Refuses, before signing, a rate outside 1 to 10,000 sat/vB (the network's limit),
+/// an amount below the dust floor of the destination's script (294 sats for P2WPKH up to 546 for
+/// P2PKH, the outputs the network refuses) and an amount that overflows u64 with its fee, and after
+/// signing a fee above 10,000 sat/vB times the signed transaction's virtual size. Change below the
+/// change address's floor (294 sats) would be refused by the network too, so it goes into the fee
+/// and the answer's `dust_change_sats` names it. A fee above the amount is signed, because the fee is
+/// paid on top and the destination still gets the amount, so the app asks the user before it posts.
+/// Only confirmed coins of receive addresses are spent; the wallet's own unconfirmed change is spent
+/// too. About 40 Esplora calls for a fresh wallet, so call it off the main thread.
 #[uniffi::export]
 pub fn hot_prepare_send_at_rate(
     mnemonic_words: Vec<String>,
@@ -1142,8 +1143,9 @@ fn prepared(signed: Signed) -> PreparedSend {
 /// `destination` the whole balance less the fee, with no change, and post nothing. The fee is the
 /// size of that transaction times `fee_rate_sat_vb`, so it and the amount are only known once the
 /// coins are: the answer's `amount_sats` is what leaves. Refuses, before signing, a rate outside
-/// 1 to 2,000 sat/vB, a wallet with nothing confirmed to spend, and a
-/// balance that would leave less than the destination's dust floor after the fee. The same scan as
+/// 1 to 10,000 sat/vB, a wallet with nothing confirmed to spend, and a balance that would leave
+/// less than the destination's dust floor after the fee, and after signing what
+/// `hot_prepare_send_at_rate` refuses past the network's limit. The same scan as
 /// `hot_prepare_send_at_rate`, so call it off the main thread.
 #[uniffi::export]
 pub fn hot_prepare_send_all(
@@ -1206,7 +1208,21 @@ fn dust_floor(script: &Script) -> u64 {
 }
 
 const MIN_FEE_RATE: u64 = 1;
-pub(crate) const MAX_FEE_RATE: u64 = 2_000;
+/// Bitcoin Core's default `maxfeerate` for `sendrawtransaction`, 0.1 BTC/kvB. Esplora's `POST /tx`
+/// sends the hex alone, so both testnet4 hosts refuse a fee above this rate times the virtual size.
+pub(crate) const MAX_FEE_RATE: u64 = 10_000;
+
+/// The node's test on the signed bytes: `fee_sats` at most `MAX_FEE_RATE` times `vsize`, the signed
+/// transaction's virtual size. The size a fee is built for is an upper bound, and change put into the
+/// fee raises it, so the real rate can sit above the rate asked.
+fn check_node_rate(fee_sats: u64, vsize: u64) -> Result<(), String> {
+    if fee_sats > MAX_FEE_RATE * vsize {
+        return Err(format!(
+            "fee {fee_sats} for {vsize} vB is above the network's {MAX_FEE_RATE} sat/vB limit"
+        ));
+    }
+    Ok(())
+}
 
 /// Virtual size, rounded up, of a transaction spending `inputs` P2WPKH coins to outputs whose
 /// scripts are `output_scripts` bytes long: 10.5 vB overhead (version, locktime, counts, segwit
@@ -1234,7 +1250,7 @@ fn check_rate(rate_sat_vb: u64) -> Result<(), MobileSignerError> {
     }
     if rate_sat_vb > MAX_FEE_RATE {
         return Err(MobileSignerError::InvalidPsbtJson(format!(
-            "fee rate {rate_sat_vb} is above {MAX_FEE_RATE} sat/vB"
+            "fee rate {rate_sat_vb} is above the network's {MAX_FEE_RATE} sat/vB limit"
         )));
     }
     Ok(())
@@ -1394,7 +1410,7 @@ fn signed_payment(
     check_rate(rate_sat_vb)?;
     // The destination first, then change; the slice to one output drops the change.
     let outputs = [dest.script_pubkey().len(), P2WPKH_SCRIPT];
-    // The rate is at most 2,000 and the size a few thousand vB, so the product fits u64.
+    // The rate is at most 10,000 and the size a few thousand vB, so the product fits u64.
     let fee_for = |inputs: usize, change: bool| {
         rate_sat_vb * vsize(inputs, &outputs[..if change { 2 } else { 1 }])
     };
@@ -1467,9 +1483,12 @@ fn signed_payment(
         });
     }
     let dust_change_sats = if kept { 0 } else { change };
+    let tx = signed(&selected, outputs)?;
+    let fee_sats = fee_sats + dust_change_sats;
+    check_node_rate(fee_sats, tx.vsize() as u64).map_err(MobileSignerError::InvalidPsbtJson)?;
     Ok(Signed {
-        tx: signed(&selected, outputs)?,
-        fee_sats: fee_sats + dust_change_sats,
+        tx,
+        fee_sats,
         dust_change_sats,
     })
 }
@@ -1519,8 +1538,10 @@ fn signed_send_all(
         value: Amount::from_sat(amount_sats),
         script_pubkey: dest.script_pubkey(),
     };
+    let tx = signed(&selected, vec![output])?;
+    check_node_rate(fee_sats, tx.vsize() as u64).map_err(MobileSignerError::InvalidPsbtJson)?;
     Ok(Signed {
-        tx: signed(&selected, vec![output])?,
+        tx,
         fee_sats,
         dust_change_sats: 0,
     })
@@ -1544,11 +1565,12 @@ enum Replacement {
 /// so `amount_sats` is lower. The fee meets BIP-125 rules 3, 4 and 6 against that payment. It is at
 /// least that payment's fee plus the new size at 1 sat/vB, at a rate strictly above its rate, so the
 /// rate can be above `fee_rate_sat_vb`. Refuses, before any lookup, bytes that are not one transaction with inputs and one
-/// or two outputs whose first is at least its dust floor, and a rate outside 1 to 2,000 sat/vB. After the scan
+/// or two outputs whose first is at least its dust floor, and a rate outside 1 to 10,000 sat/vB. After the scan
 /// it refuses, after `replace: `, a second output that is not this wallet's change, inputs that are not
 /// all coins this wallet can spend now (`coins spent:`, most likely because that payment is out), an
-/// input without this wallet's own SIGHASH_ALL signature for its coin, a rate that would pass 2,000
-/// sat/vB, and what is left below the dust floor of its output. The same scan as
+/// input without this wallet's own SIGHASH_ALL signature for its coin, a rate that would pass 10,000
+/// sat/vB, on the rate asked or on the signed bytes, and what is left below the dust floor of its
+/// output. The same scan as
 /// `hot_prepare_send_at_rate`, so call it off the main thread.
 #[uniffi::export]
 pub fn hot_prepare_fee_bump(
@@ -1673,7 +1695,9 @@ fn signed_replacement(
     // BIP-125 rule 6 asks a rate strictly above the earlier one, here in whole sat/vB.
     let rate = rate_sat_vb.max(old_fee / old_vsize + 1);
     if rate > MAX_FEE_RATE {
-        return Err(fail(format!("rate {rate} is above {MAX_FEE_RATE} sat/vB")));
+        return Err(fail(format!(
+            "rate {rate} is above the network's {MAX_FEE_RATE} sat/vB limit"
+        )));
     }
     // Rules 3 and 4 ask at least the earlier fee plus the new size at the 1 sat/vB incremental relay
     // rate. The size is an upper bound, so the real rate is at least `rate`.
@@ -1794,6 +1818,7 @@ fn signed_replacement(
     if let Some((what, _)) = checks.iter().find(|(_, holds)| !holds) {
         return Err(fail(format!("check failed: {what}")));
     }
+    check_node_rate(fee, tx.vsize() as u64).map_err(fail)?;
     Ok(Signed {
         tx,
         fee_sats: fee,
@@ -3509,8 +3534,8 @@ mod tests {
         );
         assert_refused(fake.send(SOMEONE, 1_000, 0), "fee rate 0 is below 1 sat/vB");
         assert_refused(
-            fake.send(SOMEONE, 1_000, 2_001),
-            "fee rate 2001 is above 2000 sat/vB",
+            fake.send(SOMEONE, 1_000, 10_001),
+            "fee rate 10001 is above the network's 10000 sat/vB limit",
         );
         assert!(fake.calls.lock().unwrap().is_empty());
     }
@@ -3776,8 +3801,8 @@ mod tests {
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
         assert_refused(fake.send_all_at(SOMEONE, 0), "fee rate 0 is below 1 sat/vB");
         assert_refused(
-            fake.send_all_at(SOMEONE, 2_001),
-            "fee rate 2001 is above 2000 sat/vB",
+            fake.send_all_at(SOMEONE, 10_001),
+            "fee rate 10001 is above the network's 10000 sat/vB limit",
         );
         assert!(
             fake.send_all_at("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", 1)
@@ -4210,7 +4235,7 @@ mod tests {
         assert_eq!((with_change.output.len(), without.output.len()), (2, 1));
         for earlier in [&with_change, &without] {
             let old_rate = fee_paid(&fake, earlier) / earlier.vsize() as u64;
-            for rate in [1, 5, 9, 10, 11, 12, 50, 300, 1_999, 2_000] {
+            for rate in [1, 5, 9, 10, 11, 12, 50, 300, 1_999, 2_000, 2_001, 3_000] {
                 for kind in KINDS {
                     let case = format!("{kind:?} of {} outputs at {rate}", earlier.output.len());
                     let (next, fee) = fake.replace(earlier, rate, kind).expect(&case);
@@ -4240,16 +4265,67 @@ mod tests {
         assert_replaces(&small, &earlier, &cancel);
     }
 
+    // BIP-125 rule 6 asks a rate above the earlier one, so a payment at the network's 10,000 sat/vB can
+    // never be replaced, and one at 2,000, which was the old cap, can be now.
     #[test]
-    fn a_replacement_whose_rate_would_pass_2000_sat_vb_is_refused() {
+    fn a_replacement_whose_rate_would_pass_10000_sat_vb_is_refused() {
         let mut fake = Fake::new();
-        fake.fund(&addr(Chain::External, 0), 1_000_000, '1');
-        let earlier = fake.send(SOMEONE, 600_000, 2_000).unwrap();
+        fake.fund(&addr(Chain::External, 0), 3_000_000, '1');
+        let earlier = fake.send(SOMEONE, 1_000_000, 10_000).unwrap();
         for kind in KINDS {
             assert_refused(
                 fake.replace(&earlier, 1, kind),
-                "replace: rate 2001 is above 2000 sat/vB",
+                "replace: rate 10001 is above the network's 10000 sat/vB limit",
             );
+        }
+        let earlier = fake.send(SOMEONE, 600_000, 2_000).unwrap();
+        for kind in KINDS {
+            let (next, fee) = fake.replace(&earlier, 1, kind).unwrap();
+            assert_replaces(&fake, &earlier, &next);
+            assert!(fee >= 2_001 * next.vsize() as u64, "{kind:?}: {fee}");
+        }
+    }
+
+    // Bitcoin Core refuses a fee above 10,000 sat/vB times the signed transaction's own size, which can be
+    // smaller than the size the fee was built for, and change put into the fee raises the fee. One coin
+    // and one output is 110 vB signed: change of 100 sats folded at 7,000 sat/vB pays 987,100, under
+    // 1,100,000, and at 8,000 sat/vB pays 1,128,100, over it.
+    #[test]
+    fn the_networks_rate_limit_holds_on_the_rate_asked_and_on_the_signed_bytes() {
+        assert!(check_rate(10_000).is_ok());
+        assert_eq!(check_node_rate(1_410_000, 141), Ok(()));
+        assert_eq!(
+            check_node_rate(1_410_001, 141),
+            Err("fee 1410001 for 141 vB is above the network's 10000 sat/vB limit".into())
+        );
+        assert_eq!(
+            check_node_rate(1_410_000, 140),
+            Err("fee 1410000 for 140 vB is above the network's 10000 sat/vB limit".into())
+        );
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 2_000_000, '1');
+        let signed = fake.ready(SOMEONE, 2_000_000 - 141 * 7_000 - 100, 7_000);
+        assert_eq!((signed.fee_sats, signed.dust_change_sats), (987_100, 100));
+        let refused = fake.send(SOMEONE, 2_000_000 - 141 * 8_000 - 100, 8_000);
+        match refused {
+            Err(MobileSignerError::InvalidPsbtJson(m)) => assert!(
+                m.starts_with("fee 1128100 for ")
+                    && m.ends_with(" vB is above the network's 10000 sat/vB limit"),
+                "{m}"
+            ),
+            other => panic!("expected the node's limit, got {other:?}"),
+        }
+        // A fee bump at 9,000 sat/vB that folds 100 sats of change pays 1,269,100 on 110 vB.
+        let mut bumped = Fake::new();
+        bumped.fund(&addr(Chain::External, 0), 1_369_100, '1');
+        let earlier = bumped.send(SOMEONE, 100_000, 1).unwrap();
+        match bumped.replace(&earlier, 9_000, Replacement::FeeBump) {
+            Err(MobileSignerError::InvalidPsbtJson(m)) => assert!(
+                m.starts_with("replace: fee 1269100 for ")
+                    && m.ends_with(" vB is above the network's 10000 sat/vB limit"),
+                "{m}"
+            ),
+            other => panic!("expected the node's limit, got {other:?}"),
         }
     }
 
@@ -4270,8 +4346,8 @@ mod tests {
                 "fee rate 0 is below 1 sat/vB",
             );
             assert_refused(
-                fresh.replace_hex(&hex, 2_001, kind),
-                "fee rate 2001 is above 2000 sat/vB",
+                fresh.replace_hex(&hex, 10_001, kind),
+                "fee rate 10001 is above the network's 10000 sat/vB limit",
             );
         }
         assert_eq!(fresh.requests(), 0);
@@ -7189,14 +7265,14 @@ mod tests {
     }
 
     #[test]
-    fn rates_above_the_cores_limit_are_capped_at_2000() {
+    fn rates_above_the_networks_limit_are_capped_at_10000() {
         let host = FeeHost::new(
-            Ok(r#"{"fastestFee":5000,"halfHourFee":2000.5,"hourFee":100}"#),
+            Ok(r#"{"fastestFee":20000,"halfHourFee":10000.5,"hourFee":5000}"#),
             NOT_FOUND,
         );
-        assert_eq!(host.tiers(), live(100, 2000, 2000));
-        let host = FeeHost::new(NOT_FOUND, Ok(r#"{"1":1e30,"3":2000,"6":1999.1}"#));
-        assert_eq!(host.tiers(), live(2000, 2000, 2000));
+        assert_eq!(host.tiers(), live(5000, 10000, 10000));
+        let host = FeeHost::new(NOT_FOUND, Ok(r#"{"1":1e30,"3":10000,"6":9999.1}"#));
+        assert_eq!(host.tiers(), live(10000, 10000, 10000));
     }
 
     #[test]

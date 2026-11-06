@@ -92,8 +92,8 @@ class SingleSigWallet(
     /** A payment the core signed that nothing has posted: what [prepare] holds until [post] sends it or [dropHeldSend] lets it go. [network] is the one it was signed for, so [post] cannot send it anywhere else. */
     data class HeldSend(val prepared: PreparedSend, val network: KeyNetwork)
 
-    /** A [kind] replacement of the guard [replaces] that the core signed and nothing has posted. [prepareReplacement] holds it until [postReplacement] sends it or [dropHeldReplacement] lets it go. [network] is the one it was signed for. */
-    data class HeldReplacement(val prepared: PreparedSend, val network: KeyNetwork, val replaces: UnconfirmedSend, val kind: Replacement)
+    /** A [kind] replacement of the guard [replaces] that the core signed and nothing has posted. [prepareReplacement] holds it until [postReplacement] sends it or [dropHeldReplacement] lets it go. [network] is the one it was signed for, and [rateSatVb] the rate it was asked for. */
+    data class HeldReplacement(val prepared: PreparedSend, val network: KeyNetwork, val replaces: UnconfirmedSend, val kind: Replacement, val rateSatVb: Long)
 
     /** The [WalletMode] the last [bindSession] left. [WalletMode.Demo] until the first bind. */
     var mode: WalletMode by mutableStateOf(WalletMode.Demo)
@@ -452,7 +452,7 @@ class SingleSigWallet(
             return false
         }
         if (epoch != replacementEpoch) return false
-        heldReplacement = HeldReplacement(prepared, network, pending, kind)
+        heldReplacement = HeldReplacement(prepared, network, pending, kind, feeRateSatVb)
         return true
     }
 
@@ -574,11 +574,12 @@ fun sendErrorThai(message: String?): String {
         // hot_prepare_send_all: the balance less the real fee would be below the destination's floor.
         m.startsWith("the whole balance ") && floor != null -> "ยอดทั้งหมดหลังหักค่าธรรมเนียมต่ำกว่า $floor sat ซึ่งเครือข่ายไม่รับสำหรับที่อยู่ปลายทางนี้"
         m.startsWith("fee ") && " is below " in m -> "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น"
-        m.startsWith("fee ") && " is above " in m -> "ค่าธรรมเนียมสูงผิดปกติ ตรวจจำนวนอีกครั้ง"
+        // The rate asked, or the fee on the signed bytes, above the 10,000 sat/vB the node takes.
+        m.startsWith("fee ") && " is above " in m -> "เครือข่ายไม่รับค่าธรรมเนียมเกิน 10,000 sat/vB เลือกระดับที่ต่ำลง"
         // hot_prepare_fee_bump and hot_prepare_cancel. A spent coin most likely means the earlier payment is out.
         m.startsWith("replace: coins spent:") -> "เหรียญของรายการเดิมถูกใช้ไปแล้ว รายการเดิมอาจออกไปแล้ว ตรวจประวัติในหน้าแรกก่อน"
         m.startsWith("replace: not this wallet's payment:") -> "รายการเดิมไม่ใช่รายการที่กระเป๋านี้แทนที่ได้"
-        m.startsWith("replace: rate ") -> "ค่าธรรมเนียมที่ต้องใช้สูงเกินเพดาน 2,000 sat/vB"
+        m.startsWith("replace: rate ") || m.startsWith("replace: fee ") -> "รายการใหม่ต้องใช้ค่าธรรมเนียมเกิน 10,000 sat/vB ซึ่งเครือข่ายไม่รับ"
         m.startsWith("replace: what is left") && floor != null -> "ยอดที่เหลือหลังหักค่าธรรมเนียมใหม่ต่ำกว่า $floor sat ซึ่งเครือข่ายไม่รับ"
         m.startsWith("esplora scan:") -> ABNORMAL_HISTORY
         m.startsWith("esplora utxo:") || m.startsWith("esplora balance:") -> "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง"
@@ -639,11 +640,17 @@ const val FEE_SURPRISE_SATS = 1_000L
 fun feeNeedsConfirmation(feeSats: Long, shownFeeSats: Long, amountSats: Long): Boolean =
     feeSats > 2 * shownFeeSats && (feeSats * 10 > amountSats || feeSats - shownFeeSats >= FEE_SURPRISE_SATS)
 
+/** Review asks above this rate. The core refuses only above the network's 10,000 sat/vB. */
+const val HIGH_FEE_RATE = 2_000L
+
 /**
  * One reason the Review screen asks before posting the payment the core signed. Declared in title order, the most money at stake
  * first, because the first reason that holds titles the card. Draft copy awaiting design review (open items 77, 85 and 86).
  */
 enum class FeeReason(val title: String) {
+    /** The tier's rate is above [HIGH_FEE_RATE]. The network takes up to 10,000 sat/vB. */
+    HighRate("อัตราค่าธรรมเนียมสูงกว่า 2,000 sat/vB"),
+
     /** A fixed amount whose fee is more than the amount. The fee is paid on top, so the destination still gets all of it. */
     AboveAmount("ค่าธรรมเนียมสูงกว่าจำนวนที่ส่ง"),
 
@@ -659,15 +666,16 @@ enum class FeeReason(val title: String) {
 
 /**
  * The one card Review shows for [reasons], never empty: titled by the first, with one line per reason and one closing line, so any
- * combination reads true. [dustChangeSats] is the change that went into the fee, and [sendAll] names the amount as what leaves for
- * real. The rows and tags of the card are the same for every reason.
+ * combination reads true. [rateSatVb] is the rate asked, [dustChangeSats] the change that went into the fee, and [sendAll] names the
+ * amount as what leaves for real. The rows and tags of the card are the same for every reason.
  */
-data class FeeQuestion(val reasons: List<FeeReason>, val dustChangeSats: Long, val sendAll: Boolean) {
+data class FeeQuestion(val reasons: List<FeeReason>, val rateSatVb: Long, val dustChangeSats: Long, val sendAll: Boolean) {
     val title: String get() = reasons.first().title
     val message: String get() = (reasons.map { line(it) } + "ตรวจค่าธรรมเนียมก่อนส่ง").joinToString(" ")
     val amountLabel: String get() = if (sendAll) "ส่งจริง" else "ส่ง"
 
     private fun line(reason: FeeReason): String = when (reason) {
+        FeeReason.HighRate -> "อัตรา ${thousands(rateSatVb)} sat/vB สูงกว่าปกติมาก ค่าธรรมเนียมจึงสูง"
         FeeReason.AboveAmount -> "ผู้รับได้ครบตามจำนวน แต่ค่าธรรมเนียมเครือข่ายมากกว่าเงินที่ส่ง"
         FeeReason.AboveEstimate -> "กระเป๋านี้ต้องรวมหลายเหรียญ ธุรกรรมจึงใหญ่กว่าปกติ"
         FeeReason.SendAllBelowShown -> "กระเป๋านี้ต้องรวมหลายเหรียญ ธุรกรรมจึงใหญ่กว่าปกติ จำนวนที่ส่งลดลงจากที่แสดงเพราะหักค่าธรรมเนียมจริงแล้ว"
@@ -688,19 +696,21 @@ fun feeQuestion(held: PreparedSend, draft: SendDraft): FeeQuestion? {
     val dustSats = held.dustChangeSats.toLong()
     val aboveEstimate = feeNeedsConfirmation(feeSats - dustSats, draft.feeSats, amountSats)
     val reasons = listOfNotNull(
+        FeeReason.HighRate.takeIf { draft.rateSatVb > HIGH_FEE_RATE },
         FeeReason.AboveAmount.takeIf { !draft.isSendAll && feeSats > amountSats },
         FeeReason.AboveEstimate.takeIf { !draft.isSendAll && aboveEstimate },
         FeeReason.SendAllBelowShown.takeIf { draft.isSendAll && (aboveEstimate || draft.amountSats - amountSats >= FEE_SURPRISE_SATS) },
         FeeReason.ChangeToFee.takeIf { dustSats > 0 },
     )
-    return if (reasons.isEmpty()) null else FeeQuestion(reasons, dustSats, draft.isSendAll)
+    return if (reasons.isEmpty()) null else FeeQuestion(reasons, draft.rateSatVb, dustSats, draft.isSendAll)
 }
 
-/** What the card of a signed fee bump or cancel says about its fee beyond the fee row, or null: the change it put into the fee. */
+/** What the card of a signed fee bump or cancel says about its fee beyond the fee row, or null: a rate above [HIGH_FEE_RATE] and the change it put into the fee. */
 fun replacementQuestion(held: SingleSigWallet.HeldReplacement): FeeQuestion? {
     val dustSats = held.prepared.dustChangeSats.toLong()
-    val reasons = listOfNotNull(FeeReason.ChangeToFee.takeIf { dustSats > 0 })
-    return if (reasons.isEmpty()) null else FeeQuestion(reasons, dustSats, sendAll = false)
+    // shortcut: the line follows the rate asked (the fast tier), so a rate that BIP-125 rule 6 raised past 2,000 shows no line. Upgrade if PreparedSend ever carries the rate paid.
+    val reasons = listOfNotNull(FeeReason.HighRate.takeIf { held.rateSatVb > HIGH_FEE_RATE }, FeeReason.ChangeToFee.takeIf { dustSats > 0 })
+    return if (reasons.isEmpty()) null else FeeQuestion(reasons, held.rateSatVb, dustSats, sendAll = false)
 }
 
 /** The three tiers of board 4.4. [satPerVb] is the board's fixed rate, which [LiveFeeTiers.DEFAULT] uses until the live rates arrive or when they cannot be fetched. */
@@ -730,7 +740,7 @@ data class LiveFeeTiers(val slow: Long, val normal: Long, val fast: Long, val li
     companion object {
         val DEFAULT = LiveFeeTiers(FeeTier.Slow.satPerVb, FeeTier.Normal.satPerVb, FeeTier.Fast.satPerVb, live = false)
 
-        /** The Rust answer as the screens use it. Rust already caps a rate at 2,000 and never answers 0. */
+        /** The Rust answer as the screens use it. Rust already caps a rate at the network's 10,000 and never answers 0. */
         fun of(tiers: FeeTiers) = LiveFeeTiers(tiers.slowSatVb.toLong(), tiers.normalSatVb.toLong(), tiers.fastSatVb.toLong(), tiers.live)
     }
 }

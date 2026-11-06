@@ -4082,11 +4082,12 @@ public actual fun `hotPrepareCancel`(`mnemonicWords`: List<kotlin.String>, `pass
  * so `amount_sats` is lower. The fee meets BIP-125 rules 3, 4 and 6 against that payment. It is at
  * least that payment's fee plus the new size at 1 sat/vB, at a rate strictly above its rate, so the
  * rate can be above `fee_rate_sat_vb`. Refuses, before any lookup, bytes that are not one transaction with inputs and one
- * or two outputs whose first is at least its dust floor, and a rate outside 1 to 2,000 sat/vB. After the scan
+ * or two outputs whose first is at least its dust floor, and a rate outside 1 to 10,000 sat/vB. After the scan
  * it refuses, after `replace: `, a second output that is not this wallet's change, inputs that are not
  * all coins this wallet can spend now (`coins spent:`, most likely because that payment is out), an
- * input without this wallet's own SIGHASH_ALL signature for its coin, a rate that would pass 2,000
- * sat/vB, and what is left below the dust floor of its output. The same scan as
+ * input without this wallet's own SIGHASH_ALL signature for its coin, a rate that would pass 10,000
+ * sat/vB, on the rate asked or on the signed bytes, and what is left below the dust floor of its
+ * output. The same scan as
  * `hot_prepare_send_at_rate`, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
@@ -4108,8 +4109,9 @@ public actual fun `hotPrepareFeeBump`(`mnemonicWords`: List<kotlin.String>, `pas
  * `destination` the whole balance less the fee, with no change, and post nothing. The fee is the
  * size of that transaction times `fee_rate_sat_vb`, so it and the amount are only known once the
  * coins are: the answer's `amount_sats` is what leaves. Refuses, before signing, a rate outside
- * 1 to 2,000 sat/vB, a wallet with nothing confirmed to spend, and a
- * balance that would leave less than the destination's dust floor after the fee. The same scan as
+ * 1 to 10,000 sat/vB, a wallet with nothing confirmed to spend, and a balance that would leave
+ * less than the destination's dust floor after the fee, and after signing what
+ * `hot_prepare_send_at_rate` refuses past the network's limit. The same scan as
  * `hot_prepare_send_at_rate`, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
@@ -4134,14 +4136,15 @@ public actual fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `pas
  * The fee is the size of the transaction as built times the rate, so a payment that needs more
  * coins pays more, never a fixed sum that falls under the rate. The answer's `fee_sats` is that
  * fee, and the app compares it with the estimate its screens showed and asks the user when it is
- * much higher. Refuses, before signing, a rate outside 1 to 2,000 sat/vB, an amount below the dust
- * floor of the destination's script (294 sats for P2WPKH up to 546 for P2PKH, the outputs the
- * network refuses) and an amount that overflows u64 with its fee. Change below the change address's
- * floor (294 sats) would be refused by the network too, so it goes into the fee and the answer's
- * `dust_change_sats` names it. A fee above the amount is signed, because the fee is paid on top and
- * the destination still gets the amount, so the app asks the user before it posts. Only confirmed
- * coins of receive addresses are spent; the wallet's own unconfirmed change is spent too. About
- * 40 Esplora calls for a fresh wallet, so call it off the main thread.
+ * much higher. Refuses, before signing, a rate outside 1 to 10,000 sat/vB (the network's limit),
+ * an amount below the dust floor of the destination's script (294 sats for P2WPKH up to 546 for
+ * P2PKH, the outputs the network refuses) and an amount that overflows u64 with its fee, and after
+ * signing a fee above 10,000 sat/vB times the signed transaction's virtual size. Change below the
+ * change address's floor (294 sats) would be refused by the network too, so it goes into the fee
+ * and the answer's `dust_change_sats` names it. A fee above the amount is signed, because the fee is
+ * paid on top and the destination still gets the amount, so the app asks the user before it posts.
+ * Only confirmed coins of receive addresses are spent; the wallet's own unconfirmed change is spent
+ * too. About 40 Esplora calls for a fresh wallet, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
 public actual fun `hotPrepareSendAtRate`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeRateSatVb`: kotlin.ULong): PreparedSend {

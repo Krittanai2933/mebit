@@ -317,6 +317,7 @@ private fun held(kind: Replacement) = SingleSigWallet.HeldReplacement(
     KeyNetwork.TEST,
     SingleSigWallet.UnconfirmedSend(TXID, 1_792_740_720L, SIGNED_HEX),
     kind,
+    15,
 )
 
 /**

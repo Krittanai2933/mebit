@@ -975,7 +975,7 @@ class SingleSigWalletBroadcastTest {
     // The card is worded by its reasons. Parts are asserted, not whole strings, so design review can edit the words.
     @Test
     fun eachFeeQuestionIsTitledByItsReasonAndNamesManyCoinsOnlyWhenTheFeeWasFarAboveWhatWasShown() {
-        fun card(vararg reasons: FeeReason) = FeeQuestion(reasons.toList(), dustChangeSats = 0, sendAll = FeeReason.SendAllBelowShown in reasons)
+        fun card(vararg reasons: FeeReason) = FeeQuestion(reasons.toList(), rateSatVb = 8, dustChangeSats = 0, sendAll = FeeReason.SendAllBelowShown in reasons)
         val aboveAmount = card(FeeReason.AboveAmount)
         val both = card(FeeReason.AboveAmount, FeeReason.AboveEstimate)
         for (q in listOf(aboveAmount, both)) assertTrue("จำนวนที่ส่ง" in q.title, "$q is titled by the fee against the amount")
@@ -1025,21 +1025,46 @@ class SingleSigWalletBroadcastTest {
         assertEquals(listOf(FeeReason.AboveAmount, FeeReason.AboveEstimate, FeeReason.ChangeToFee), question?.reasons)
         assertEquals("ค่าธรรมเนียมสูงกว่าจำนวนที่ส่ง", question?.title)
         assertEquals(1, Regex("ตรวจค่าธรรมเนียมก่อนส่ง").findAll(question?.message.orEmpty()).count(), "one closing line")
+        // A tier above 2,000 sat/vB on a payment whose fee is above its amount, with change in the fee: the rate titles the card.
+        val high = SendDraft().apply {
+            takeTiers(LiveFeeTiers(2_001, 2_001, 2_001, live = true))
+            setAmountInSats(100_000)
+        }
+        val all = feeQuestion(PreparedSend(TXID, "h", 282_341uL, 100_000uL, 200uL), high)
+        assertEquals(listOf(FeeReason.HighRate, FeeReason.AboveAmount, FeeReason.ChangeToFee), all?.reasons)
+        assertEquals("อัตราค่าธรรมเนียมสูงกว่า 2,000 sat/vB", all?.title)
+        assertTrue("2,001 sat/vB" in all?.message.orEmpty(), "the line names the rate: ${all?.message}")
     }
 
-    // A fee bump that folds its change says so on its card, and one that keeps it says nothing more than the fee.
+    // Item 86. The core refused a rate above 2,000 sat/vB, which the network takes up to 10,000. It signs it now, and Review asks
+    // once above 2,000. A tier of exactly 2,000 asks nothing.
     @Test
-    fun replacementCardNamesTheChangeInTheFee() {
-        fun held(dustSats: ULong) = SingleSigWallet.HeldReplacement(
+    fun aRateAbove2000AsksAndOneAtItDoesNot() {
+        fun at(rateSatVb: Long) = SendDraft().apply {
+            takeTiers(LiveFeeTiers(rateSatVb, rateSatVb, rateSatVb, live = true))
+            setAmountInSats(1_000_000)
+        }
+        assertEquals(listOf(FeeReason.HighRate), feeQuestion(PreparedSend(TXID, "h", (2_001L * TYPICAL_VSIZE).toULong(), 1_000_000uL), at(2_001))?.reasons)
+        assertNull(feeQuestion(PreparedSend(TXID, "h", (2_000L * TYPICAL_VSIZE).toULong(), 1_000_000uL), at(2_000)))
+    }
+
+    // A fee bump that folds its change, or one asked above 2,000 sat/vB, says so on its card. One that keeps its change at an ordinary
+    // rate says nothing more than the fee.
+    @Test
+    fun replacementCardNamesTheChangeInTheFeeAndAHighRate() {
+        fun held(dustSats: ULong, rateSatVb: Long = 15) = SingleSigWallet.HeldReplacement(
             PreparedSend(TXID, "h", 998uL, 9_002uL, dustSats),
             KeyNetwork.TEST,
             UnconfirmedSend(TXID, SENT_AT),
             Replacement.FeeBump,
+            rateSatVb,
         )
         val folded = replacementQuestion(held(293uL))
         assertEquals(listOf(FeeReason.ChangeToFee), folded?.reasons)
         assertTrue("293 sat" in folded?.message.orEmpty())
         assertNull(replacementQuestion(held(0uL)))
+        assertEquals(listOf(FeeReason.HighRate), replacementQuestion(held(0uL, rateSatVb = 2_001))?.reasons)
+        assertNull(replacementQuestion(held(0uL, rateSatVb = 2_000)))
     }
 
     // V4. The Send screen quoted send all and the available line from the balance with the mempool in it, so a send all posted a
