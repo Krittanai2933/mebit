@@ -7369,14 +7369,45 @@ mod tests {
     }
 
     #[test]
-    fn rates_above_the_networks_limit_are_capped_at_10000() {
+    fn rates_near_the_networks_limit_are_capped_1_percent_under_it() {
         let host = FeeHost::new(
             Ok(r#"{"fastestFee":20000,"halfHourFee":10000.5,"hourFee":5000}"#),
             NOT_FOUND,
         );
-        assert_eq!(host.tiers(), live(5000, 10000, 10000));
-        let host = FeeHost::new(NOT_FOUND, Ok(r#"{"1":1e30,"3":10000,"6":9999.1}"#));
-        assert_eq!(host.tiers(), live(10000, 10000, 10000));
+        assert_eq!(host.tiers(), live(5000, 9900, 9900));
+        let host = FeeHost::new(NOT_FOUND, Ok(r#"{"1":1e30,"3":10000,"6":9900.1}"#));
+        assert_eq!(host.tiers(), live(9900, 9900, 9900));
+    }
+
+    // The fee is the rate times the size estimate, and signing does not grind for a short signature, so two
+    // inputs and one output, 178 vB estimated, sign at 177 when both signatures come out short. The app asks
+    // a replacement at the fast tier, so a cancel at the highest one must pass the node's 10,000 sat/vB on
+    // its signed size whatever the signatures, over 20 values of the second coin.
+    #[test]
+    fn a_two_coin_cancel_at_the_highest_fast_tier_signs_whatever_its_signed_size() {
+        let fast = FeeHost::new(
+            Ok(r#"{"fastestFee":20000,"halfHourFee":1,"hourFee":1}"#),
+            NOT_FOUND,
+        )
+        .tiers()
+        .fast_sat_vb;
+        let estimate = vsize(2, &[P2WPKH_SCRIPT]) as usize;
+        let mut under_estimate = 0;
+        for second in 0..20 {
+            let mut fake = Fake::new();
+            fake.fund(&addr(Chain::External, 0), 10_000_000, '1');
+            fake.fund(&addr(Chain::External, 1), 6_000_000 + second, '2');
+            let earlier = fake.send(SOMEONE, 15_000_000, 1).unwrap();
+            assert_eq!(earlier.input.len(), 2);
+            let (cancel, _) = fake
+                .replace(&earlier, fast, Replacement::Cancel)
+                .unwrap_or_else(|e| panic!("second coin {second}: {e:?}"));
+            under_estimate += usize::from(cancel.vsize() < estimate);
+        }
+        assert!(
+            under_estimate > 0,
+            "no cancel signed under its estimate, so none tested the edge"
+        );
     }
 
     #[test]

@@ -747,7 +747,7 @@ data class LiveFeeTiers(val slow: Long, val normal: Long, val fast: Long, val li
     companion object {
         val DEFAULT = LiveFeeTiers(FeeTier.Slow.satPerVb, FeeTier.Normal.satPerVb, FeeTier.Fast.satPerVb, live = false)
 
-        /** The Rust answer as the screens use it. Rust already caps a rate at the network's 10,000 and never answers 0. */
+        /** The Rust answer as the screens use it. Rust already caps a rate at 9,900, 1% under the network's 10,000, and never answers 0. */
         fun of(tiers: FeeTiers) = LiveFeeTiers(tiers.slowSatVb.toLong(), tiers.normalSatVb.toLong(), tiers.fastSatVb.toLong(), tiers.live)
     }
 }

@@ -589,12 +589,17 @@ fn esplora_estimates(json: &Value) -> Vec<(u32, &Value)> {
         .collect()
 }
 
+/// The highest tier, 1% under `MAX_FEE_RATE`. The fee is the rate times the size estimate, and a
+/// signed transaction can be up to 1 vB under that estimate (about 1% of the smallest payment) because
+/// signing does not grind for a short signature, so a fee at the limit itself can be refused.
+const MAX_TIER_RATE: u64 = MAX_FEE_RATE - MAX_FEE_RATE / 100;
+
 /// A rate as the Send screen can use it: a finite positive number rounded up to whole sat/vB and
-/// capped at `MAX_FEE_RATE`, above which `hot_prepare_send_at_rate` refuses the payment. Anything else
-/// (zero, negative, NaN, a string, a missing field) is no estimate.
+/// capped at `MAX_TIER_RATE`, under the network's limit that `hot_prepare_send_at_rate` refuses above.
+/// Anything else (zero, negative, NaN, a string, a missing field) is no estimate.
 fn whole_sat_vb(rate: &Value) -> Option<u64> {
     let rate = rate.as_f64().filter(|r| r.is_finite() && *r > 0.0)?;
-    Some((rate.ceil() as u64).min(MAX_FEE_RATE))
+    Some((rate.ceil() as u64).min(MAX_TIER_RATE))
 }
 
 /// Slow, normal and fast from whatever targets a host gave. Each tier takes the rate at the nearest
