@@ -25,8 +25,7 @@ class SendErrorThaiTest {
         "esplora post: https://mempool.space/testnet/api/tx: status code 400: bad-txns-inputs-missingorspent" to "ส่งไม่สำเร็จ",
         "esplora get: https://mempool.space/testnet/api/address/tb1q/utxo: Network Error: connection refused" to "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง",
         "esplora get: lookup thread panicked" to "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง",
-        "esplora get: HTTP status 429, the host is limiting requests" to "explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่",
-        "esplora get: no testnet4 host is reachable (https://blockstream.info/testnet4/api: HTTP status 429, limited for 42 s more; https://mempool.space/testnet4/api: HTTP status 429, limited for 42 s more)" to "explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่",
+        "esplora get: HTTP status 429, gave up after 3 attempts" to "explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่",
         "esplora get: no testnet4 host is reachable (https://blockstream.info/testnet4/api: esplora get: status code 429; https://mempool.space/testnet4/api: Connection Failed)" to "explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่",
         // Seen on an iPhone 15 over 5G on 3 Nov 2026, as the bindings print it.
         "esplora get: https://mempool.space/testnet4/api/address/tb1q5squ69zn40x44ewqgl6dsaqgwjj38pc7f7j9hp: Connection Failed: tls connection init failed: Resource temporarily unavailable (os error 35)" to "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง",
@@ -48,7 +47,7 @@ class SendErrorThaiTest {
         assertEquals("ดึงข้อมูลกระเป๋าไม่สำเร็จ ลองใหม่ภายหลัง", readErrorThai("missing witness slot"))
         assertEquals("ดึงข้อมูลกระเป๋าไม่สำเร็จ ลองใหม่ภายหลัง", readErrorThai(null))
         assertEquals("ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง", readErrorThai("invalid PSBT json: esplora get: lookup thread panicked"))
-        assertEquals("explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่", readErrorThai("invalid PSBT json: esplora get: HTTP status 429, the host is limiting requests"))
+        assertEquals("explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่", readErrorThai("invalid PSBT json: esplora get: HTTP status 429, gave up after 3 attempts"))
     }
 
     @Test

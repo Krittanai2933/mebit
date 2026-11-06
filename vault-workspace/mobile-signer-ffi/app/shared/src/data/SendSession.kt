@@ -262,7 +262,7 @@ fun sendErrorThai(message: String?): String {
         m.startsWith("esplora utxo:") || m.startsWith("esplora balance:") -> "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง"
         m == "amount plus fee does not fit u64" -> "จำนวนผิดปกติ"
         m.startsWith("broadcast:") || m.startsWith("esplora post:") -> "ส่งไม่สำเร็จ"
-        // A host answered 429, or every host is limiting us. Blockstream's own reply gave 700 requests an hour per IP (docs/04-open-items.md item 49).
+        // The host throttles unauthenticated clients (Blockstream: 700 requests an hour per IP), after the retries or while probing hosts.
         m.startsWith("esplora get") && "429" in m -> "explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่"
         m.startsWith("esplora get") -> "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง"
         else -> SEND_FALLBACK
