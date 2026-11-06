@@ -709,10 +709,14 @@ fn snapshot_from(
     store: &ScanStore,
 ) -> Result<HotWalletSnapshot, MobileSignerError> {
     let wallet = synced(source, words, passphrase, network, clock, store)?;
-    let scan = HotScan::from(&wallet.status);
-    let spendable_sats = match scan {
-        HotScan::Complete => spendable_coins(source, &wallet)?.1,
-        HotScan::Continuing | HotScan::Unverified => 0,
+    let (scan, spendable_sats) = match HotScan::from(&wallet.status) {
+        HotScan::Complete => match spendable_coins(source, &wallet) {
+            Ok((_, have)) => (HotScan::Complete, have),
+            // The request limit a read of the sync can meet, so the snapshot goes on later the same way.
+            Err(e) if throttled(&e).is_some() => (HotScan::Continuing, 0),
+            Err(e) => return Err(e),
+        },
+        scan @ (HotScan::Continuing | HotScan::Unverified) => (scan, 0),
     };
     Ok(HotWalletSnapshot {
         receive_address: wallet.next_unused(Chain::External).address.to_string(),
@@ -4575,6 +4579,80 @@ mod tests {
                 &fake.store,
             )
             .is_err()
+        );
+    }
+
+    // The coin lists a complete sync asks next meet the same request limit as its reads, so Home retries that snapshot
+    // by itself too.
+    #[test]
+    fn a_429_on_the_coin_list_ends_the_snapshot_continuing_and_any_other_failure_still_throws() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        let coin_list_fails = |text: &str| {
+            snapshot_from(
+                &EsploraSource(&Reads(&|url| {
+                    if url.ends_with("/utxo") {
+                        Err(MobileSignerError::InvalidPsbtJson(text.into()))
+                    } else {
+                        fake.get(url)
+                    }
+                })),
+                &abandon_about(),
+                "",
+                KeyNetwork::Test,
+                &|| fake.now(),
+                &fake.store,
+            )
+        };
+        let limited = coin_list_fails(
+            "esplora get: https://blockstream.info/testnet4/api: HTTP status 429, limited for 60 s more",
+        )
+        .unwrap();
+        assert_eq!(
+            (limited.scan, limited.spendable_sats),
+            (HotScan::Continuing, 0)
+        );
+        assert_eq!(limited.receive_address, addr(Chain::External, 1));
+        assert!(coin_list_fails("esplora get: HTTP status 503, gave up after 3 attempts").is_err());
+        let free = fake.snapshot("").unwrap();
+        assert_eq!(
+            (free.scan, free.spendable_sats),
+            (HotScan::Complete, 10_000)
+        );
+    }
+
+    // Inside the share window the sync is shared, so the coin lists are the snapshot's only reads.
+    #[test]
+    fn every_host_limited_inside_the_share_window_ends_the_snapshot_continuing() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        assert_eq!(fake.snapshot("").unwrap().scan, HotScan::Complete);
+        let refused = |text: &'static str| {
+            snapshot_from(
+                &EsploraSource(&Refusing(text)),
+                &abandon_about(),
+                "",
+                KeyNetwork::Test,
+                &|| fake.now(),
+                &fake.store,
+            )
+        };
+        let limited = refused(EVERY_HOST_LIMITED).unwrap();
+        assert_eq!(
+            (limited.scan, limited.spendable_sats),
+            (HotScan::Continuing, 0)
+        );
+        assert_eq!(limited.receive_address, addr(Chain::External, 1));
+        assert!(
+            refused(
+                "esplora get: no testnet4 host is reachable (a: Connection Failed; b: timed out)"
+            )
+            .is_err()
+        );
+        let free = fake.snapshot("").unwrap();
+        assert_eq!(
+            (free.scan, free.spendable_sats),
+            (HotScan::Complete, 10_000)
         );
     }
 
