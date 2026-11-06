@@ -6246,11 +6246,109 @@ mod tests {
             [HOSTS[0], HOSTS[1]],
             "no probe while the cached host serves"
         );
-        assert_eq!(pick(30), 0);
+        // The limit counts from the probe's answer, a moment after t0.
+        assert_eq!(pick(31), 0);
         assert_eq!(
             *asked.lock().unwrap(),
             [HOSTS[0], HOSTS[1], HOSTS[0]],
             "exactly one more probe, of host 0"
+        );
+    }
+
+    /// Whether a GET of `base` at `at` reaches the host, or `limits` refuses it unasked.
+    fn asked_at(base: &'static str, limits: &Limits, at: Instant) -> bool {
+        let asked = Cell::new(false);
+        let _ = attempt_unless_limited(
+            base,
+            &|| {
+                asked.set(true);
+                Ok(String::new())
+            },
+            limits,
+            &|| at,
+        );
+        asked.get()
+    }
+
+    // With the own node down, its probe takes its whole 3 s before the next host answers. That host's Retry-After
+    // counts from its answer, as a GET's does, not from the start of the round.
+    #[test]
+    fn a_probe_429_after_a_slow_probe_of_an_earlier_host_limits_for_the_whole_retry_after() {
+        let answered = Cell::new(None);
+        let limits = Limits::default();
+        let probe = |host: &HostSpec| {
+            if host.base == HOSTS[0] {
+                std::thread::sleep(Duration::from_secs(3));
+                return Err(GetError::TimedOut("esplora get: timed out".into()));
+            }
+            answered.set(Some(Instant::now()));
+            Err(throttled_after(60))
+        };
+        no_host_message(pick_host(
+            &SPECS,
+            &probe,
+            Instant::now(),
+            &Mutex::new(None),
+            &[],
+            &limits,
+        ));
+        let answered = answered.get().expect("the second host was probed");
+        let after = |secs| answered + Duration::from_secs(secs);
+        assert!(!asked_at(HOSTS[1], &limits, after(59)));
+        assert!(asked_at(HOSTS[1], &limits, after(61)));
+    }
+
+    #[test]
+    fn a_probe_429_counts_its_retry_after_from_the_answer_not_from_the_start_of_the_round() {
+        let answered = Cell::new(None);
+        let limits = Limits::default();
+        let probe = |host: &HostSpec| {
+            if host.base == HOSTS[0] {
+                std::thread::sleep(Duration::from_millis(1500));
+                answered.set(Some(Instant::now()));
+                Err(throttled_after(5))
+            } else {
+                Ok(TESTNET4_GENESIS.to_string())
+            }
+        };
+        let start = Instant::now();
+        let picked = pick_host(&SPECS, &probe, start, &Mutex::new(None), &[], &limits);
+        assert_eq!(picked.unwrap(), 1);
+        let answered = answered.get().expect("the first host was probed");
+        let after = |secs| answered + Duration::from_secs(secs);
+        assert!(!asked_at(HOSTS[0], &limits, after(4)));
+        assert!(asked_at(HOSTS[0], &limits, after(6)));
+    }
+
+    // An earlier host's slow probe can outlast a later host's short Retry-After. Counted from the start of the round,
+    // that limit would be over before it was recorded, and the next pick would ask the host again at once.
+    #[test]
+    fn a_retry_after_shorter_than_the_probes_before_it_keeps_the_next_pick_off_that_host() {
+        let second_probed = Cell::new(0);
+        let probe = |host: &HostSpec| {
+            if host.base == HOSTS[0] {
+                std::thread::sleep(Duration::from_millis(1500));
+                return Err(GetError::TimedOut("esplora get: timed out".into()));
+            }
+            second_probed.set(second_probed.get() + 1);
+            Err(throttled_after(1))
+        };
+        let limits = Limits::default();
+        let cache = Mutex::new(None);
+        for _ in 0..2 {
+            no_host_message(pick_host(
+                &SPECS,
+                &probe,
+                Instant::now(),
+                &cache,
+                &[],
+                &limits,
+            ));
+        }
+        assert_eq!(
+            second_probed.get(),
+            1,
+            "the next pick does not ask that host again"
         );
     }
 

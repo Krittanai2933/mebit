@@ -1126,7 +1126,7 @@ pub(crate) fn classify(answer: Result<ureq::Response, ureq::Error>) -> Result<St
 /// Three rules for `limits`, the hosts that answered 429. A host under a limit is never used and never
 /// probed, the cached host included. An earlier host that came out of a limit after the cached verdict
 /// was made wins back: the verdict is dropped and the list is probed from the top, so the own node
-/// returns at the cost of one probe. A probe's 429 limits its host like a GET's.
+/// returns at the cost of one probe. A probe's 429 limits its host like a GET's, from when it answered.
 pub(crate) fn pick_host(
     hosts: &[HostSpec],
     probe: &dyn Fn(&HostSpec) -> Result<String, GetError>,
@@ -1176,6 +1176,7 @@ pub(crate) fn pick_host(
         _ => {}
     }
     let mut failures = Vec::with_capacity(hosts.len());
+    let began = Instant::now();
     for (index, host) in hosts.iter().enumerate() {
         if skipped.contains(&index) {
             failures.push(format!("{}: skipped, it lied", host.base));
@@ -1195,8 +1196,10 @@ pub(crate) fn pick_host(
                 failures.push(format!("{}: block 0 is {shown:?}, not testnet4", host.base));
             }
             Err(GetError::Throttled { retry_after, .. }) => {
-                let end = limit_host(limits, host.base, retry_after, now);
-                failures.push(limited_text(host.base, end, now));
+                // This probe and the ones before it may have taken seconds.
+                let answered = now + began.elapsed();
+                let end = limit_host(limits, host.base, retry_after, answered);
+                failures.push(limited_text(host.base, end, answered));
             }
             Err(mut failure) => failures.push(format!("{}: {}", host.base, failure.text())),
         }
