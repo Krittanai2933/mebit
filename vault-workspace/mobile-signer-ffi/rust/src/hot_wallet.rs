@@ -297,9 +297,9 @@ fn complete(wallet: Wallet) -> Result<Wallet, MobileSignerError> {
 ///   frontier plus `GAP` is asked again from 0, and the frontier stands, so nothing is proven twice.
 ///
 /// One sync of a wallet runs at a time, and a call that comes while one runs waits for it and shares its
-/// answer. A sync ends `Continuing` when a host refuses a read with its request limit, and the next one goes on
-/// from what it kept, the routine part included, so a wallet with more funded addresses than a host serves in an
-/// hour still completes. Any other failed read fails the call. Either way what the sync learned is kept, the scan
+/// answer. A sync ends `Continuing` when a host refuses a read with its request limit, or when every host is
+/// under a request limit, before any read, and the next one goes on from what it kept, the routine part
+/// included, so a wallet with more funded addresses than a host serves in an hour still completes. Any other failed read fails the call. Either way what the sync learned is kept, the scan
 /// written to the wallet's file when the app named a folder and each balance in memory. Freshness counts from when
 /// a sync ends, and the period of full passes from when one starts.
 fn synced(
@@ -328,7 +328,12 @@ fn synced(
     let start_full = match scan.full {
         None => true,
         Some(FullPass::Running(_)) => false,
-        Some(FullPass::Ended(at)) => since_unix(started, at) >= full_pass_every(source.operator()?),
+        Some(FullPass::Ended(at)) => match source.operator() {
+            Ok(operator) => since_unix(started, at) >= full_pass_every(operator),
+            // Every host is limited. No full pass starts, and the routine reads below end the sync `Continuing` on the same limit.
+            Err(e) if throttled(&e).is_some() => false,
+            Err(e) => return Err(e),
+        },
     };
     if start_full {
         for chain in &mut scan.chains {
@@ -1886,6 +1891,24 @@ mod tests {
 
         fn broadcast(&self, _: &str, _: &str) -> Result<String, MobileSignerError> {
             unreachable!("a test that only reads posts nothing")
+        }
+    }
+
+    /// A transport whose every read and host choice fails with `text`, as `Http` does while every host is
+    /// under a request limit or down.
+    struct Refusing(&'static str);
+
+    impl Transport for Refusing {
+        fn get(&self, _: &str) -> Result<String, MobileSignerError> {
+            Err(MobileSignerError::InvalidPsbtJson(self.0.into()))
+        }
+
+        fn broadcast(&self, _: &str, _: &str) -> Result<String, MobileSignerError> {
+            unreachable!("a test that only reads posts nothing")
+        }
+
+        fn operator(&self) -> Result<Operator, MobileSignerError> {
+            Err(MobileSignerError::InvalidPsbtJson(self.0.into()))
         }
     }
 
@@ -4499,6 +4522,59 @@ mod tests {
             fake.requests(),
             full + 2 * routine + 4 * coins,
             "unclear: the next call is a routine sync"
+        );
+    }
+
+    const EVERY_HOST_LIMITED: &str = "esplora get: no testnet4 host is reachable (https://blockstream.info/testnet4/api: HTTP status 429, limited for 42 s more; https://mempool.space/testnet4/api: HTTP status 429, limited for 42 s more)";
+
+    // Home retries a `Continuing` snapshot by itself and shows the address the stored scan hands out, where a
+    // thrown one shows a dash and index 0 and never retries. Any other failure of the host choice still throws.
+    #[test]
+    fn a_sync_with_every_host_limited_goes_on_later_and_starts_no_full_pass() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        assert_eq!(fake.snapshot("").unwrap().scan, HotScan::Complete);
+        fake.tick(SHARE_TTL);
+        let before = fake.requests();
+        let limited = snapshot_from(
+            &EsploraSource(&Refusing(EVERY_HOST_LIMITED)),
+            &abandon_about(),
+            "",
+            KeyNetwork::Test,
+            &|| fake.now(),
+            &fake.store,
+        )
+        .unwrap();
+        assert_eq!(limited.scan, HotScan::Continuing);
+        assert_eq!(limited.receive_address, addr(Chain::External, 1));
+        assert_eq!(
+            fake.requests(),
+            before,
+            "no request while every host is limited"
+        );
+        fake.tick(SHARE_TTL);
+        let recovered = fake.snapshot("").unwrap();
+        assert_eq!(
+            (recovered.scan, recovered.balance_sats),
+            (HotScan::Complete, 10_000)
+        );
+        assert_eq!(
+            fake.requests(),
+            before + 6 + 5 + 1,
+            "a routine sync, receive 0 and the five after it, the first five of change, and the coin list"
+        );
+        let down =
+            "esplora get: no testnet4 host is reachable (a: Connection Failed; b: timed out)";
+        assert!(
+            snapshot_from(
+                &EsploraSource(&Refusing(down)),
+                &abandon_about(),
+                "",
+                KeyNetwork::Test,
+                &|| fake.now(),
+                &fake.store,
+            )
+            .is_err()
         );
     }
 
