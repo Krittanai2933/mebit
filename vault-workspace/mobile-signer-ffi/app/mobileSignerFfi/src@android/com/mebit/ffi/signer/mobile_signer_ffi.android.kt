@@ -1143,7 +1143,7 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_all() != 59801.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate() != 37856.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate() != 45032.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_receive_address() != 37856.toShort()) {
@@ -2888,6 +2888,7 @@ public object FfiConverterTypePreparedSend: FfiConverterRustBuffer<PreparedSend>
             FfiConverterString.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
         )
     }
 
@@ -2895,7 +2896,8 @@ public object FfiConverterTypePreparedSend: FfiConverterRustBuffer<PreparedSend>
             FfiConverterString.allocationSize(value.`txid`) +
             FfiConverterString.allocationSize(value.`hex`) +
             FfiConverterULong.allocationSize(value.`feeSats`) +
-            FfiConverterULong.allocationSize(value.`amountSats`)
+            FfiConverterULong.allocationSize(value.`amountSats`) +
+            FfiConverterULong.allocationSize(value.`dustChangeSats`)
     )
 
     override fun write(value: PreparedSend, buf: ByteBuffer) {
@@ -2903,6 +2905,7 @@ public object FfiConverterTypePreparedSend: FfiConverterRustBuffer<PreparedSend>
         FfiConverterString.write(value.`hex`, buf)
         FfiConverterULong.write(value.`feeSats`, buf)
         FfiConverterULong.write(value.`amountSats`, buf)
+        FfiConverterULong.write(value.`dustChangeSats`, buf)
     }
 }
 
@@ -3808,10 +3811,10 @@ public actual fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `pas
  * fee, and the app compares it with the estimate its screens showed and asks the user when it is
  * much higher. Refuses, before signing, a rate outside 1 to 2,000 sat/vB, an amount below the dust
  * floor of the destination's script (294 sats for P2WPKH up to 546 for P2PKH, the outputs the
- * network refuses), an amount that overflows u64 with its fee, and change that would be dust (above 0
- * and below the change address's floor, 294 sats). A fee above the amount is signed, because the fee
- * is paid on top and the destination still gets the amount, so the app asks the user before it
- * posts. Only confirmed
+ * network refuses) and an amount that overflows u64 with its fee. Change below the change address's
+ * floor (294 sats) would be refused by the network too, so it goes into the fee and the answer's
+ * `dust_change_sats` names it. A fee above the amount is signed, because the fee is paid on top and
+ * the destination still gets the amount, so the app asks the user before it posts. Only confirmed
  * coins of receive addresses are spent; the wallet's own unconfirmed change is spent too. About
  * 40 Esplora calls for a fresh wallet, so call it off the main thread.
  */

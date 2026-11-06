@@ -24,6 +24,7 @@ import com.mebit.ffi.signer.hotReceiveAddress
 import com.mebit.ffi.signer.hotTxDetail
 import com.mebit.ffi.signer.hotWalletHistory
 import com.mebit.ffi.signer.hotWalletSnapshot
+import com.mebit.app.feature.send.thousands
 import kotlin.time.Clock
 
 /**
@@ -570,7 +571,6 @@ fun sendErrorThai(message: String?): String {
     return when {
         m.startsWith("amount ") && floor != null -> "เครือข่ายไม่รับยอดส่งที่ต่ำกว่า $floor sat สำหรับที่อยู่ปลายทางนี้"
         m.startsWith("insufficient funds") -> "ยอดที่ยืนยันแล้วไม่พอ รอให้เงินที่เพิ่งได้รับยืนยันก่อน"
-        m.startsWith("change ") && floor != null -> "เงินทอนต่ำกว่า $floor sat ซึ่งเครือข่ายไม่รับ ส่งทั้งหมดหรือเปลี่ยนจำนวน"
         // hot_prepare_send_all: the balance less the real fee would be below the destination's floor.
         m.startsWith("the whole balance ") && floor != null -> "ยอดทั้งหมดหลังหักค่าธรรมเนียมต่ำกว่า $floor sat ซึ่งเครือข่ายไม่รับสำหรับที่อยู่ปลายทางนี้"
         m.startsWith("fee ") && " is below " in m -> "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น"
@@ -640,21 +640,39 @@ fun feeNeedsConfirmation(feeSats: Long, shownFeeSats: Long, amountSats: Long): B
     feeSats > 2 * shownFeeSats && (feeSats * 10 > amountSats || feeSats - shownFeeSats >= FEE_SURPRISE_SATS)
 
 /**
- * Why the Review screen asks before posting the payment the core signed, one value per card the user can see, each with that card's
- * words. The rows and tags of the card are the same for all four. Draft copy awaiting design review (open items 77 and 85).
+ * One reason the Review screen asks before posting the payment the core signed. Declared in title order, the most money at stake
+ * first, because the first reason that holds titles the card. Draft copy awaiting design review (open items 77, 85 and 86).
  */
-enum class FeeQuestion(val title: String, val message: String, val amountLabel: String) {
+enum class FeeReason(val title: String) {
+    /** A fixed amount whose fee is more than the amount. The fee is paid on top, so the destination still gets all of it. */
+    AboveAmount("ค่าธรรมเนียมสูงกว่าจำนวนที่ส่ง"),
+
     /** A fixed amount whose real fee is far above the estimate Review showed ([feeNeedsConfirmation]). */
-    AboveEstimate("ค่าธรรมเนียมจริงสูงกว่าที่แสดง", "กระเป๋านี้ต้องรวมหลายเหรียญ ธุรกรรมจึงใหญ่กว่าปกติ ตรวจค่าธรรมเนียมก่อนส่ง", "ส่ง"),
+    AboveEstimate("ค่าธรรมเนียมจริงสูงกว่าที่แสดง"),
 
     /** Send all whose real fee is far above the estimate, or whose amount is [FEE_SURPRISE_SATS] or more under what Review showed. */
-    SendAllBelowShown("ค่าธรรมเนียมจริงสูงกว่าที่แสดง", "กระเป๋านี้ต้องรวมหลายเหรียญ ธุรกรรมจึงใหญ่กว่าปกติ จำนวนที่ส่งลดลงจากที่แสดงเพราะหักค่าธรรมเนียมจริงแล้ว", "ส่งจริง"),
+    SendAllBelowShown("ค่าธรรมเนียมจริงสูงกว่าที่แสดง"),
 
-    /** A fixed amount whose fee is more than the amount. The fee is paid on top, so the destination still gets all of it. */
-    AboveAmount("ค่าธรรมเนียมสูงกว่าจำนวนที่ส่ง", "ผู้รับได้ครบตามจำนวน แต่ค่าธรรมเนียมเครือข่ายมากกว่าเงินที่ส่ง ตรวจค่าธรรมเนียมก่อนส่ง", "ส่ง"),
+    /** Change below its dust floor, which the network refuses as an output, went into the fee ([PreparedSend.dustChangeSats]). */
+    ChangeToFee("เงินทอนรวมเข้าค่าธรรมเนียม"),
+}
 
-    /** Both fixed-amount reasons in one card, titled by the fee against the amount. */
-    AboveEstimateAndAmount("ค่าธรรมเนียมสูงกว่าจำนวนที่ส่ง", "กระเป๋านี้ต้องรวมหลายเหรียญ ค่าธรรมเนียมจริงจึงสูงกว่าที่แสดง และยังมากกว่าเงินที่ส่ง ผู้รับได้ครบตามจำนวน", "ส่ง"),
+/**
+ * The one card Review shows for [reasons], never empty: titled by the first, with one line per reason and one closing line, so any
+ * combination reads true. [dustChangeSats] is the change that went into the fee, and [sendAll] names the amount as what leaves for
+ * real. The rows and tags of the card are the same for every reason.
+ */
+data class FeeQuestion(val reasons: List<FeeReason>, val dustChangeSats: Long, val sendAll: Boolean) {
+    val title: String get() = reasons.first().title
+    val message: String get() = (reasons.map { line(it) } + "ตรวจค่าธรรมเนียมก่อนส่ง").joinToString(" ")
+    val amountLabel: String get() = if (sendAll) "ส่งจริง" else "ส่ง"
+
+    private fun line(reason: FeeReason): String = when (reason) {
+        FeeReason.AboveAmount -> "ผู้รับได้ครบตามจำนวน แต่ค่าธรรมเนียมเครือข่ายมากกว่าเงินที่ส่ง"
+        FeeReason.AboveEstimate -> "กระเป๋านี้ต้องรวมหลายเหรียญ ธุรกรรมจึงใหญ่กว่าปกติ"
+        FeeReason.SendAllBelowShown -> "กระเป๋านี้ต้องรวมหลายเหรียญ ธุรกรรมจึงใหญ่กว่าปกติ จำนวนที่ส่งลดลงจากที่แสดงเพราะหักค่าธรรมเนียมจริงแล้ว"
+        FeeReason.ChangeToFee -> "เงินทอน ${thousands(dustChangeSats)} sat ต่ำกว่าขั้นต่ำที่เครือข่ายรับ จึงรวมเข้าในค่าธรรมเนียมแทนการทอนกลับเข้ากระเป๋า"
+    }
 }
 
 /**
@@ -662,19 +680,27 @@ enum class FeeQuestion(val title: String, val message: String, val amountLabel: 
  * amount asks when [feeNeedsConfirmation] holds against the estimate Review showed and when the fee is more than the amount. Send all
  * asks on the first, and when what leaves is [FEE_SURPRISE_SATS] or more under the amount it showed, because the amount absorbs the fee
  * and the spendable balance can have moved since the snapshot. Send all never asks about the fee against the amount, which the core never refused.
+ * Change that went into the fee asks with its own reason, and the estimate rule judges the fee without it, so it never reads as several coins.
  */
 fun feeQuestion(held: PreparedSend, draft: SendDraft): FeeQuestion? {
     val feeSats = held.feeSats.toLong()
     val amountSats = held.amountSats.toLong()
-    val aboveEstimate = feeNeedsConfirmation(feeSats, draft.feeSats, amountSats)
-    val aboveAmount = feeSats > amountSats
-    return when {
-        draft.isSendAll -> FeeQuestion.SendAllBelowShown.takeIf { aboveEstimate || draft.amountSats - amountSats >= FEE_SURPRISE_SATS }
-        aboveEstimate && aboveAmount -> FeeQuestion.AboveEstimateAndAmount
-        aboveAmount -> FeeQuestion.AboveAmount
-        aboveEstimate -> FeeQuestion.AboveEstimate
-        else -> null
-    }
+    val dustSats = held.dustChangeSats.toLong()
+    val aboveEstimate = feeNeedsConfirmation(feeSats - dustSats, draft.feeSats, amountSats)
+    val reasons = listOfNotNull(
+        FeeReason.AboveAmount.takeIf { !draft.isSendAll && feeSats > amountSats },
+        FeeReason.AboveEstimate.takeIf { !draft.isSendAll && aboveEstimate },
+        FeeReason.SendAllBelowShown.takeIf { draft.isSendAll && (aboveEstimate || draft.amountSats - amountSats >= FEE_SURPRISE_SATS) },
+        FeeReason.ChangeToFee.takeIf { dustSats > 0 },
+    )
+    return if (reasons.isEmpty()) null else FeeQuestion(reasons, dustSats, draft.isSendAll)
+}
+
+/** What the card of a signed fee bump or cancel says about its fee beyond the fee row, or null: the change it put into the fee. */
+fun replacementQuestion(held: SingleSigWallet.HeldReplacement): FeeQuestion? {
+    val dustSats = held.prepared.dustChangeSats.toLong()
+    val reasons = listOfNotNull(FeeReason.ChangeToFee.takeIf { dustSats > 0 })
+    return if (reasons.isEmpty()) null else FeeQuestion(reasons, dustSats, sendAll = false)
 }
 
 /** The three tiers of board 4.4. [satPerVb] is the board's fixed rate, which [LiveFeeTiers.DEFAULT] uses until the live rates arrive or when they cannot be fetched. */

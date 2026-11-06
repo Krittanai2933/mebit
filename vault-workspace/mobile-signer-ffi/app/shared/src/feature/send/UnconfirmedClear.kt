@@ -32,6 +32,7 @@ import com.mebit.app.data.Repost
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.formatBtcCompact
+import com.mebit.app.data.replacementQuestion
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
@@ -224,6 +225,10 @@ private fun ReplacementCard(held: SingleSigWallet.HeldReplacement, quote: FiatQu
         }
         ReviewDivider()
         ReviewRow("ค่าธรรมเนียมใหม่", realFeeText(held.prepared.feeSats.toLong(), quote), tag = "replacement_fee")
+        replacementQuestion(held)?.let {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(it.message, color = MbNavyInk, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.testTag("replacement_reason"))
+        }
         Spacer(modifier = Modifier.height(6.dp))
         Text(copy.warning, color = MbNavyInk, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.testTag("replacement_warning"))
         Spacer(modifier = Modifier.height(12.dp))

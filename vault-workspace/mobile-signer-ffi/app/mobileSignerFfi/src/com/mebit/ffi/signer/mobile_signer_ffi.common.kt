@@ -538,9 +538,9 @@ public data class PreparedSend (
      */
     var `hex`: kotlin.String, 
     /**
-     * The fee the transaction pays, in sats: its virtual size times the rate asked for, rounded up.
-     * A payment whose change would be dust is refused instead of folding the change into the fee.
-     * A fee bump or a cancel pays what `hot_prepare_fee_bump` says, change below its dust floor included.
+     * The fee the transaction pays, in sats, its inputs less its outputs: its virtual size times the
+     * rate asked for, rounded up, plus `dust_change_sats`. A fee bump or a cancel pays what
+     * `hot_prepare_fee_bump` says.
      */
     var `feeSats`: kotlin.ULong, 
     /**
@@ -548,7 +548,12 @@ public data class PreparedSend (
      * the whole balance less `fee_sats`, which is only known once the coins are. For a fee bump it
      * is what the earlier payment's destination gets, and for a cancel what comes back to this wallet.
      */
-    var `amountSats`: kotlin.ULong
+    var `amountSats`: kotlin.ULong, 
+    /**
+     * Change below the change address's dust floor, which the network would refuse as an output, so
+     * it is part of `fee_sats` instead, in sats. 0 when there was none.
+     */
+    var `dustChangeSats`: kotlin.ULong = 0uL
 ) {
     public companion object
 }
@@ -1135,10 +1140,10 @@ public expect fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `pas
  * fee, and the app compares it with the estimate its screens showed and asks the user when it is
  * much higher. Refuses, before signing, a rate outside 1 to 2,000 sat/vB, an amount below the dust
  * floor of the destination's script (294 sats for P2WPKH up to 546 for P2PKH, the outputs the
- * network refuses), an amount that overflows u64 with its fee, and change that would be dust (above 0
- * and below the change address's floor, 294 sats). A fee above the amount is signed, because the fee
- * is paid on top and the destination still gets the amount, so the app asks the user before it
- * posts. Only confirmed
+ * network refuses) and an amount that overflows u64 with its fee. Change below the change address's
+ * floor (294 sats) would be refused by the network too, so it goes into the fee and the answer's
+ * `dust_change_sats` names it. A fee above the amount is signed, because the fee is paid on top and
+ * the destination still gets the amount, so the app asks the user before it posts. Only confirmed
  * coins of receive addresses are spent; the wallet's own unconfirmed change is spent too. About
  * 40 Esplora calls for a fresh wallet, so call it off the main thread.
  */

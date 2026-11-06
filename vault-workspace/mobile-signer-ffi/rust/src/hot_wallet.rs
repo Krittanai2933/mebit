@@ -1068,14 +1068,18 @@ pub struct PreparedSend {
     pub txid: String,
     /// The signed transaction, consensus-encoded, for `hot_broadcast`.
     pub hex: String,
-    /// The fee the transaction pays, in sats: its virtual size times the rate asked for, rounded up.
-    /// A payment whose change would be dust is refused instead of folding the change into the fee.
-    /// A fee bump or a cancel pays what `hot_prepare_fee_bump` says, change below its dust floor included.
+    /// The fee the transaction pays, in sats, its inputs less its outputs: its virtual size times the
+    /// rate asked for, rounded up, plus `dust_change_sats`. A fee bump or a cancel pays what
+    /// `hot_prepare_fee_bump` says.
     pub fee_sats: u64,
     /// What `destination` is paid, in sats: the amount asked for, or for `hot_prepare_send_all`
     /// the whole balance less `fee_sats`, which is only known once the coins are. For a fee bump it
     /// is what the earlier payment's destination gets, and for a cancel what comes back to this wallet.
     pub amount_sats: u64,
+    /// Change below the change address's dust floor, which the network would refuse as an output, so
+    /// it is part of `fee_sats` instead, in sats. 0 when there was none.
+    #[uniffi(default = 0)]
+    pub dust_change_sats: u64,
 }
 
 /// Scan, select coins, check and sign a payment at `fee_rate_sat_vb`, and post nothing. The only
@@ -1087,10 +1091,10 @@ pub struct PreparedSend {
 /// fee, and the app compares it with the estimate its screens showed and asks the user when it is
 /// much higher. Refuses, before signing, a rate outside 1 to 2,000 sat/vB, an amount below the dust
 /// floor of the destination's script (294 sats for P2WPKH up to 546 for P2PKH, the outputs the
-/// network refuses), an amount that overflows u64 with its fee, and change that would be dust (above 0
-/// and below the change address's floor, 294 sats). A fee above the amount is signed, because the fee
-/// is paid on top and the destination still gets the amount, so the app asks the user before it
-/// posts. Only confirmed
+/// network refuses) and an amount that overflows u64 with its fee. Change below the change address's
+/// floor (294 sats) would be refused by the network too, so it goes into the fee and the answer's
+/// `dust_change_sats` names it. A fee above the amount is signed, because the fee is paid on top and
+/// the destination still gets the amount, so the app asks the user before it posts. Only confirmed
 /// coins of receive addresses are spent; the wallet's own unconfirmed change is spent too. About
 /// 40 Esplora calls for a fresh wallet, so call it off the main thread.
 #[uniffi::export]
@@ -1102,7 +1106,7 @@ pub fn hot_prepare_send_at_rate(
     amount_sats: u64,
     fee_rate_sat_vb: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
-    let (signed, fee_sats) = signed_payment(
+    Ok(prepared(signed_payment(
         &EsploraSource(&testnet4()),
         &mnemonic_words,
         &passphrase,
@@ -1112,17 +1116,25 @@ pub fn hot_prepare_send_at_rate(
         fee_rate_sat_vb,
         &SystemTime::now,
         &SCAN_STORE,
-    )?;
-    Ok(prepared(&signed, fee_sats))
+    )?))
 }
 
-fn prepared(signed: &Transaction, fee_sats: u64) -> PreparedSend {
+/// A transaction a builder signed, with the fee it pays and the change below its floor that went into
+/// that fee. Named fields, because the two sums side by side would swap silently.
+struct Signed {
+    tx: Transaction,
+    fee_sats: u64,
+    dust_change_sats: u64,
+}
+
+fn prepared(signed: Signed) -> PreparedSend {
     PreparedSend {
-        txid: signed.compute_txid().to_string(),
-        hex: serialize_hex(signed),
-        fee_sats,
+        txid: signed.tx.compute_txid().to_string(),
+        hex: serialize_hex(&signed.tx),
+        fee_sats: signed.fee_sats,
         // Every builder puts the destination first and change, if any, second. A cancel's one output is what comes back.
-        amount_sats: signed.output[0].value.to_sat(),
+        amount_sats: signed.tx.output[0].value.to_sat(),
+        dust_change_sats: signed.dust_change_sats,
     }
 }
 
@@ -1141,7 +1153,7 @@ pub fn hot_prepare_send_all(
     destination: String,
     fee_rate_sat_vb: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
-    let (signed, fee_sats) = signed_send_all(
+    Ok(prepared(signed_send_all(
         &EsploraSource(&testnet4()),
         &mnemonic_words,
         &passphrase,
@@ -1150,8 +1162,7 @@ pub fn hot_prepare_send_all(
         fee_rate_sat_vb,
         &SystemTime::now,
         &SCAN_STORE,
-    )?;
-    Ok(prepared(&signed, fee_sats))
+    )?))
 }
 
 /// Post a transaction from `hot_prepare_send_at_rate` once. `txid` must be the id of the transaction in
@@ -1356,8 +1367,8 @@ fn signed(
 /// A payment from the coins of every used address, each input signed with its own key, any change
 /// paid to the first unused internal (change) address, not yet broadcast, with the fee it pays.
 /// The amount, the rate, the destination and the sum of the amount and the smallest payment's fee
-/// (which must fit u64) are checked before any network call; the change after the coins are
-/// chosen. A fee above the amount is signed, because the fee is paid on top and the destination
+/// (which must fit u64) are checked before any network call. Change below its floor goes into the
+/// fee. A fee above the amount is signed, because the fee is paid on top and the destination
 /// still gets the amount. Every refusal is an error, never a changed payment. The used-address set
 /// may come from a sync `synced` shares.
 #[allow(clippy::too_many_arguments)]
@@ -1371,7 +1382,7 @@ fn signed_payment(
     rate_sat_vb: u64,
     clock: &dyn Fn() -> SystemTime,
     store: &ScanStore,
-) -> Result<(Transaction, u64), MobileSignerError> {
+) -> Result<Signed, MobileSignerError> {
     let refuse = |what: String| Err(MobileSignerError::InvalidPsbtJson(what));
     let dest = destination_on(destination, network)?;
     let floor = dust_floor(&dest.script_pubkey());
@@ -1441,24 +1452,26 @@ fn signed_payment(
         }
         fee_sats = real;
     };
+    // The network refuses change below its floor as an output, so it goes into the fee, as Bitcoin
+    // Core's wallet does, and the answer names it for Review.
     let change_script = wallet.next_unused(Chain::Internal).address.script_pubkey();
-    let change_floor = dust_floor(&change_script);
-    if change > 0 && change < change_floor {
-        return refuse(format!(
-            "change {change} is below the network's {change_floor} sat dust floor, send the whole balance or change the amount"
-        ));
-    }
+    let kept = change >= dust_floor(&change_script);
     let mut outputs = vec![TxOut {
         value: Amount::from_sat(amount_sats),
         script_pubkey: dest.script_pubkey(),
     }];
-    if change > 0 {
+    if kept {
         outputs.push(TxOut {
             value: Amount::from_sat(change),
             script_pubkey: change_script,
         });
     }
-    Ok((signed(&selected, outputs)?, fee_sats))
+    let dust_change_sats = if kept { 0 } else { change };
+    Ok(Signed {
+        tx: signed(&selected, outputs)?,
+        fee_sats: fee_sats + dust_change_sats,
+        dust_change_sats,
+    })
 }
 
 /// The whole balance to `destination` in one output and no change: every coin `signed_payment`
@@ -1476,7 +1489,7 @@ fn signed_send_all(
     rate_sat_vb: u64,
     clock: &dyn Fn() -> SystemTime,
     store: &ScanStore,
-) -> Result<(Transaction, u64), MobileSignerError> {
+) -> Result<Signed, MobileSignerError> {
     let refuse = |what: String| Err(MobileSignerError::InvalidPsbtJson(what));
     check_rate(rate_sat_vb)?;
     let dest = destination_on(destination, network)?;
@@ -1506,7 +1519,11 @@ fn signed_send_all(
         value: Amount::from_sat(amount_sats),
         script_pubkey: dest.script_pubkey(),
     };
-    Ok((signed(&selected, vec![output])?, fee_sats))
+    Ok(Signed {
+        tx: signed(&selected, vec![output])?,
+        fee_sats,
+        dust_change_sats: 0,
+    })
 }
 
 /// What replaces a signed payment of unknown outcome. Both spend every coin of that payment, so at most
@@ -1541,7 +1558,7 @@ pub fn hot_prepare_fee_bump(
     earlier_hex: String,
     fee_rate_sat_vb: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
-    let (signed, fee_sats) = signed_replacement(
+    Ok(prepared(signed_replacement(
         &EsploraSource(&testnet4()),
         &mnemonic_words,
         &passphrase,
@@ -1551,8 +1568,7 @@ pub fn hot_prepare_fee_bump(
         Replacement::FeeBump,
         &SystemTime::now,
         &SCAN_STORE,
-    )?;
-    Ok(prepared(&signed, fee_sats))
+    )?))
 }
 
 /// Scan, then sign a cancel of `earlier_hex`, the signed payment the app's guard keeps, and post
@@ -1569,7 +1585,7 @@ pub fn hot_prepare_cancel(
     earlier_hex: String,
     fee_rate_sat_vb: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
-    let (signed, fee_sats) = signed_replacement(
+    Ok(prepared(signed_replacement(
         &EsploraSource(&testnet4()),
         &mnemonic_words,
         &passphrase,
@@ -1579,8 +1595,7 @@ pub fn hot_prepare_cancel(
         Replacement::Cancel,
         &SystemTime::now,
         &SCAN_STORE,
-    )?;
-    Ok(prepared(&signed, fee_sats))
+    )?))
 }
 
 /// A `kind` replacement of `earlier_hex`, signed and not yet broadcast, with the fee it pays. The bytes,
@@ -1598,7 +1613,7 @@ fn signed_replacement(
     kind: Replacement,
     clock: &dyn Fn() -> SystemTime,
     store: &ScanStore,
-) -> Result<(Transaction, u64), MobileSignerError> {
+) -> Result<Signed, MobileSignerError> {
     let fail = |what: String| MobileSignerError::InvalidPsbtJson(format!("replace: {what}"));
     let not_ours = |why: &str| fail(format!("not this wallet's payment: {why}"));
     let earlier: Transaction =
@@ -1681,15 +1696,16 @@ fn signed_replacement(
         }
     };
     let destination = &earlier.output[0];
-    let (outputs, have) = match (kind, change) {
+    let (outputs, have, dust_change_sats) = match (kind, change) {
         (Replacement::Cancel, change) => {
             let back = change
                 .unwrap_or_else(|| wallet.next_unused(Chain::Internal).address.script_pubkey());
-            (one(selected.len(), total, back)?, total)
+            (one(selected.len(), total, back)?, total, 0)
         }
         (Replacement::FeeBump, None) => (
             one(selected.len(), total, destination.script_pubkey.clone())?,
             total,
+            0,
         ),
         (Replacement::FeeBump, Some(change)) => {
             let amount = destination.value.to_sat();
@@ -1722,11 +1738,12 @@ fn signed_replacement(
                         value: Amount::from_sat(rest),
                         script_pubkey: change,
                     };
-                    break (vec![destination.clone(), back], have);
+                    break (vec![destination.clone(), back], have, 0);
                 }
-                // Change below its dust floor goes into the fee, as Bitcoin Core's bumpfee does.
+                // Change below its dust floor goes into the fee, as Bitcoin Core's bumpfee does. None
+                // is reported when even a change output could not be paid for.
                 if have >= amount.saturating_add(fee_for(selected.len(), &scripts[..1])) {
-                    break (vec![destination.clone()], have);
+                    break (vec![destination.clone()], have, have.saturating_sub(need));
                 }
                 let Some((utxo, owner)) = more.next() else {
                     return Err(MobileSignerError::InvalidPsbtJson(format!(
@@ -1777,7 +1794,11 @@ fn signed_replacement(
     if let Some((what, _)) = checks.iter().find(|(_, holds)| !holds) {
         return Err(fail(format!("check failed: {what}")));
     }
-    Ok((tx, fee))
+    Ok(Signed {
+        tx,
+        fee_sats: fee,
+        dust_change_sats,
+    })
 }
 
 fn inputs_of(tx: &Transaction) -> Vec<OutPoint> {
@@ -3117,6 +3138,11 @@ mod tests {
             amount: u64,
             rate: u64,
         ) -> Result<(Transaction, u64), MobileSignerError> {
+            self.payment(to, amount, rate).map(|s| (s.tx, s.fee_sats))
+        }
+
+        /// `send_at` with the change that went into the fee.
+        fn payment(&self, to: &str, amount: u64, rate: u64) -> Result<Signed, MobileSignerError> {
             let words = abandon_about();
             signed_payment(
                 &EsploraSource(&Reads(&|url| self.get(url))),
@@ -3152,6 +3178,7 @@ mod tests {
                 &|| self.now(),
                 &self.store,
             )
+            .map(|s| (s.tx, s.fee_sats))
         }
 
         /// A `kind` replacement of `earlier` at `rate` sat/vB, as `hot_prepare_fee_bump` and
@@ -3171,6 +3198,17 @@ mod tests {
             rate: u64,
             kind: Replacement,
         ) -> Result<(Transaction, u64), MobileSignerError> {
+            self.replacement(hex, rate, kind)
+                .map(|s| (s.tx, s.fee_sats))
+        }
+
+        /// `replace_hex` with the change that went into the fee.
+        fn replacement(
+            &self,
+            hex: &str,
+            rate: u64,
+            kind: Replacement,
+        ) -> Result<Signed, MobileSignerError> {
             signed_replacement(
                 &EsploraSource(&Reads(&|url| self.get(url))),
                 &abandon_about(),
@@ -3186,8 +3224,7 @@ mod tests {
 
         /// `hot_prepare_send_at_rate` as the app would reach it, against this Fake.
         fn ready(&self, to: &str, amount: u64, rate: u64) -> PreparedSend {
-            let (tx, fee) = self.send_at(to, amount, rate).unwrap();
-            prepared(&tx, fee)
+            prepared(self.payment(to, amount, rate).unwrap())
         }
 
         /// `hot_broadcast` as the app would reach it, against this Fake's scan cache.
@@ -3421,36 +3458,44 @@ mod tests {
         spent - tx.output.iter().map(|o| o.value.to_sat()).sum::<u64>()
     }
 
-    // Finding 6. Before, change of 1 to 546 sats was quietly added to the fee. The floor is the change
-    // address's own, 294 sats for P2WPKH, so change of 294 to 546 sats is kept now.
+    // Finding 6, settled by the network's rule. Both testnet4 hosts refuse a payment with change below
+    // the change address's floor (294 sats, P2WPKH), so that change goes into the fee, as Bitcoin Core's
+    // wallet does, and the answer names it for Review. Change at the floor is ordinary change.
     #[test]
-    fn change_below_its_floor_is_refused_and_change_at_it_or_0_is_fine() {
+    fn change_below_its_floor_goes_into_the_fee_and_is_named() {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
-        // At 1 sat/vB the fee is 141: 9,565 leaves exactly 294 and 9,566 leaves 293.
+        // At 1 sat/vB the fee is 141: 9,565 leaves exactly 294, 9,566 leaves 293 and 9,858 leaves 1.
         assert_outputs(
             &fake.send(SOMEONE, 9_565, 1).unwrap(),
             &[(SOMEONE, 9_565), (&addr(Chain::Internal, 0), 294)],
         );
-        assert_refused(
-            fake.send(SOMEONE, 9_566, 1),
-            "change 293 is below the network's 294 sat dust floor, send the whole balance or change the amount",
-        );
-        // 10,000 less 9,000 less 141 x 4 (436) is change; less 141 x 7 (13) is not.
+        let kept = fake.ready(SOMEONE, 9_565, 1);
+        assert_eq!((kept.fee_sats, kept.dust_change_sats), (141, 0));
+        for (amount, dust) in [(9_566, 293), (9_858, 1)] {
+            let (tx, fee) = fake.send_at(SOMEONE, amount, 1).unwrap();
+            assert_outputs(&tx, &[(SOMEONE, amount)]);
+            assert_eq!(fee, 141 + dust, "{amount}");
+            assert_eq!(fee_paid(&fake, &tx), fee, "{amount}");
+            let ready = fake.ready(SOMEONE, amount, 1);
+            assert_eq!(
+                (ready.amount_sats, ready.fee_sats, ready.dust_change_sats),
+                (amount, 141 + dust, dust)
+            );
+        }
+        // 10,000 less 9,000 less 141 x 4 (436) is change; less 141 x 7 (13) goes into the fee.
         assert_outputs(
             &fake.send(SOMEONE, 9_000, 4).unwrap(),
             &[(SOMEONE, 9_000), (&addr(Chain::Internal, 0), 436)],
         );
-        assert_refused(
-            fake.send(SOMEONE, 9_000, 7),
-            "change 13 is below the network's 294 sat dust floor, send the whole balance or change the amount",
-        );
+        assert_eq!(fake.ready(SOMEONE, 9_000, 7).dust_change_sats, 13);
         // Send all, as the app computes it: the balance less the 141 vB estimate. One output, and
-        // the estimate is kept as the fee rather than shrunk into dust change.
+        // the estimate is kept as the fee with no change to fold.
         let (all, fee) = fake.send_at(SOMEONE, 10_000 - 141, 1).unwrap();
         assert_outputs(&all, &[(SOMEONE, 9_859)]);
         assert_eq!(fee, 141);
         assert_eq!(fee_paid(&fake, &all), 141);
+        assert_eq!(fake.ready(SOMEONE, 9_859, 1).dust_change_sats, 0);
     }
 
     // Finding 5. Each guard is a distinct error before any signing.
@@ -3609,7 +3654,11 @@ mod tests {
         assert_eq!(fee, 178);
         assert_outputs(&tx, &[(SOMEONE, 10_000 - 178)]);
         assert_eq!(fee_paid(&fake, &tx), 178);
-        let ready = prepared(&tx, fee);
+        let ready = prepared(Signed {
+            tx,
+            fee_sats: fee,
+            dust_change_sats: 0,
+        });
         assert_eq!((ready.amount_sats, ready.fee_sats), (9_822, 178));
         assert_eq!(fake.ready(SOMEONE, 6_000, 1).amount_sats, 6_000);
     }
@@ -3880,7 +3929,11 @@ mod tests {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
         let (signed, fee) = fake.send_at(SOMEONE, 5_000, 2).unwrap();
-        let ready = prepared(&signed, fee);
+        let ready = prepared(Signed {
+            tx: signed.clone(),
+            fee_sats: fee,
+            dust_change_sats: 0,
+        });
         // The fake panics on any path that is not a lookup, so a POST could not have gone through it.
         assert!(
             fake.calls
@@ -3967,7 +4020,11 @@ mod tests {
         assert!(signed_by(&bump, 0, 10_000, &own(Chain::External, 0)));
         assert_eq!(fee_paid(&fake, &bump), fee);
         assert_replaces(&fake, &earlier, &bump);
-        let ready = prepared(&bump, fee);
+        let ready = prepared(Signed {
+            tx: bump,
+            fee_sats: fee,
+            dust_change_sats: 0,
+        });
         assert_eq!((ready.amount_sats, ready.fee_sats), (5_000, 1_410));
     }
 
@@ -4017,7 +4074,15 @@ mod tests {
         assert_eq!(inputs_of(&bump), inputs_of(&earlier));
         assert!(signed_by(&bump, 0, 10_000, &own(Chain::External, 0)));
         assert_replaces(&fake, &earlier, &bump);
-        assert_eq!(prepared(&bump, fee).amount_sats, 9_450);
+        assert_eq!(
+            prepared(Signed {
+                tx: bump,
+                fee_sats: fee,
+                dust_change_sats: 0,
+            })
+            .amount_sats,
+            9_450
+        );
     }
 
     // Change below its dust floor, 294 sats for the P2WPKH change address, goes into the fee, as Bitcoin
@@ -4032,13 +4097,22 @@ mod tests {
         assert_eq!(fee, 705);
         assert_outputs(&kept, &[(SOMEONE, 9_001), (&addr(Chain::Internal, 0), 294)]);
         assert_replaces(&fake, &earlier, &kept);
-        // One sat more to the destination leaves 293, so the whole 998 is the fee.
+        let kept = fake
+            .replacement(&serialize_hex(&earlier), 5, Replacement::FeeBump)
+            .unwrap();
+        assert_eq!(kept.dust_change_sats, 0);
+        // One sat more to the destination leaves 293, so the whole 998 is the fee, and the answer names
+        // the 293.
         let earlier = fake.send(SOMEONE, 9_002, 1).unwrap();
         let (folded, fee) = fake.replace(&earlier, 5, Replacement::FeeBump).unwrap();
         assert_eq!(fee, 998);
         assert_outputs(&folded, &[(SOMEONE, 9_002)]);
         assert_eq!(fee_paid(&fake, &folded), 998);
         assert_replaces(&fake, &earlier, &folded);
+        let named = fake
+            .replacement(&serialize_hex(&earlier), 5, Replacement::FeeBump)
+            .unwrap();
+        assert_eq!((named.fee_sats, named.dust_change_sats), (998, 293));
     }
 
     // A1. The cancel spends exactly the earlier coins and pays them back to the earlier change address.
@@ -4061,7 +4135,11 @@ mod tests {
         assert!(signed_by(&cancel, 0, 30_000, &own(Chain::External, 0)));
         assert_eq!(fee_paid(&fake, &cancel), fee);
         assert_replaces(&fake, &earlier, &cancel);
-        let ready = prepared(&cancel, fee);
+        let ready = prepared(Signed {
+            tx: cancel,
+            fee_sats: fee,
+            dust_change_sats: 0,
+        });
         assert_eq!((ready.amount_sats, ready.fee_sats), (29_450, 550));
     }
 
@@ -4834,7 +4912,11 @@ mod tests {
             cancel.output[0].script_pubkey,
             earlier.output[1].script_pubkey
         );
-        let ready = prepared(&cancel, fee);
+        let ready = prepared(Signed {
+            tx: cancel,
+            fee_sats: fee,
+            dust_change_sats: 0,
+        });
         fake.broadcast(&ready, answer(200, &ready.txid)).unwrap();
         let (snapshot, asked) = synced_after_payment(
             &mut fake,
@@ -4857,7 +4939,11 @@ mod tests {
         fake.fund(&addr(Chain::External, 1), 4_000, '2');
         let (earlier, _) = fake.send_all_at(SOMEONE, 1).unwrap();
         let (cancel, fee) = fake.replace(&earlier, 3, Replacement::Cancel).unwrap();
-        let ready = prepared(&cancel, fee);
+        let ready = prepared(Signed {
+            tx: cancel,
+            fee_sats: fee,
+            dust_change_sats: 0,
+        });
         fake.broadcast(&ready, answer(200, &ready.txid)).unwrap();
         let (snapshot, asked) = synced_after_payment(
             &mut fake,
@@ -4889,7 +4975,11 @@ mod tests {
             earlier.output[1].script_pubkey
         );
         let change = bump.output[1].value.to_sat();
-        let ready = prepared(&bump, fee);
+        let ready = prepared(Signed {
+            tx: bump,
+            fee_sats: fee,
+            dust_change_sats: 0,
+        });
         fake.broadcast(&ready, answer(200, &ready.txid)).unwrap();
         let (snapshot, asked) = synced_after_payment(
             &mut fake,

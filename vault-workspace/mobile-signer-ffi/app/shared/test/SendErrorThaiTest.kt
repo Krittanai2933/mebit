@@ -11,7 +11,6 @@ class SendErrorThaiTest {
         "amount 293 is below the network's 294 sat dust floor" to "เครือข่ายไม่รับยอดส่งที่ต่ำกว่า 294 sat สำหรับที่อยู่ปลายทางนี้",
         "amount 545 is below the network's 546 sat dust floor" to "เครือข่ายไม่รับยอดส่งที่ต่ำกว่า 546 sat สำหรับที่อยู่ปลายทางนี้",
         "insufficient funds: have 0 confirmed, need 1100" to "ยอดที่ยืนยันแล้วไม่พอ รอให้เงินที่เพิ่งได้รับยืนยันก่อน",
-        "change 293 is below the network's 294 sat dust floor, send the whole balance or change the amount" to "เงินทอนต่ำกว่า 294 sat ซึ่งเครือข่ายไม่รับ ส่งทั้งหมดหรือเปลี่ยนจำนวน",
         "the whole balance 451 less the fee 122 is below the network's 330 sat dust floor" to "ยอดทั้งหมดหลังหักค่าธรรมเนียมต่ำกว่า 330 sat ซึ่งเครือข่ายไม่รับสำหรับที่อยู่ปลายทางนี้",
         "the whole balance 650 less the fee 111 is below the network's 540 sat dust floor" to "ยอดทั้งหมดหลังหักค่าธรรมเนียมต่ำกว่า 540 sat ซึ่งเครือข่ายไม่รับสำหรับที่อยู่ปลายทางนี้",
         "fee rate 0 is below 1 sat/vB" to "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น",
