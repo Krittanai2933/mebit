@@ -56,6 +56,21 @@ class ReviewIssueTest {
         assertEquals(ReviewIssue.BroadcastUnknown, reviewIssue(refused = false, failed = true, unconfirmedSend = true, failure = GUARD_NOT_SAVED))
     }
 
+    // A block only the network would make says so. Before, every refused sign showed the failed-post banner, which named no reason
+    // and asked the user to check the balance before sending again, though nothing was signed or posted.
+    @Test
+    fun aSignTheCoreRefusedNamesItsReasonAndAFailedPostStaysAFailedBroadcast() {
+        val line = "ยอดที่ยืนยันแล้วไม่พอ รอให้เงินที่เพิ่งได้รับยืนยันก่อน"
+        val issue = reviewIssue(refused = false, failed = false, failure = line, notSigned = true)
+        assertEquals("ยังไม่ได้ส่ง", issue?.title)
+        assertEquals(line, issue?.message)
+        assertEquals("not_signed", issue?.tag)
+        assertEquals(ReviewIssue.BroadcastFailed, reviewIssue(refused = false, failed = true, failure = "ส่งไม่สำเร็จ"), "a failed post")
+        assertNull(reviewIssue(refused = false, failed = false, failure = null, notSigned = true), "a sign let go because the user left")
+        assertEquals(ReviewIssue.SignRefused, reviewIssue(refused = true, failed = false, failure = line, notSigned = true))
+        assertEquals(ReviewIssue.BroadcastUnknown, reviewIssue(refused = false, failed = false, unconfirmedSend = true, failure = line, notSigned = true))
+    }
+
     @Test
     fun anUnknownOutcomeIsNeverHeadlinedAsAFailureBecauseThePaymentMayBeOut() {
         assertEquals("ส่งไม่สำเร็จ", ReviewIssue.BroadcastFailed.title)

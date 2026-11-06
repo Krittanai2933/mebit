@@ -80,6 +80,8 @@ fun S5ReviewSignScreen(
     var refused by remember { mutableStateOf(false) }
     // Kept local because Home sets wallet.lastError when its balance fetch fails, so it is stale when this screen opens.
     var failed by remember { mutableStateOf(false) }
+    // The core refused to sign, so nothing was signed or posted, and wallet.lastError says why.
+    var notSigned by remember { mutableStateOf(false) }
     val attempt = remember { SignAttempt() }
     val repost = remember { RepostAttempt() }
     // A repost or a replacement that runs, or put a transaction out, settles this draft. Signing it again could pay twice, and its first
@@ -103,6 +105,7 @@ fun S5ReviewSignScreen(
         if (!attempt.begin()) return
         scope.launch {
             failed = false
+            notSigned = false
             val out = step()
             if (out) onSigned()
             attempt.end(paid = out)
@@ -129,8 +132,8 @@ fun S5ReviewSignScreen(
                         // Face ID first when the app lock is on; nothing is signed on a refusal.
                         refused = !confirm()
                         if (refused) return@attemptTo false
-                        failed = !withContext(Dispatchers.Default) { wallet.prepare(session, draft.amountSats, draft.rateSatVb, draft.destination, sendAll = draft.isSendAll) }
-                        if (failed) return@attemptTo false
+                        notSigned = !withContext(Dispatchers.Default) { wallet.prepare(session, draft.amountSats, draft.rateSatVb, draft.destination, sendAll = draft.isSendAll) }
+                        if (notSigned) return@attemptTo false
                         // A payment Review asks about waits for the card below, which posts or lets the payment go. The demo mock held nothing and is out.
                         if (wallet.heldQuestion(draft) != null) return@attemptTo false
                         if (wallet.heldSend == null) return@attemptTo true
@@ -176,7 +179,7 @@ fun S5ReviewSignScreen(
                 onCancel = { wallet.dropHeldSend() },
             )
         }
-        reviewIssue(refused, failed && !reposted, wallet.unconfirmedSend != null, wallet.lastError)?.let {
+        reviewIssue(refused, failed && !reposted, wallet.unconfirmedSend != null, wallet.lastError, notSigned && !reposted)?.let {
             Spacer(modifier = Modifier.height(20.dp))
             IssueBanner(it.title, it.message, it.tag)
         }
@@ -190,13 +193,18 @@ fun S5ReviewSignScreen(
     }
 }
 
-internal enum class ReviewIssue(val title: String, val message: String, val tag: String) {
-    SignRefused("ส่งไม่สำเร็จ", "ยืนยันตัวตนไม่สำเร็จ ลองอีกครั้ง · ยังไม่มีอะไรถูกเซ็นหรือส่ง", "sign_refused"),
-    BroadcastFailed("ส่งไม่สำเร็จ", "ลองอีกครั้ง · ตรวจยอดคงเหลือก่อนส่งซ้ำ", "error"),
-    // The phone could not keep the payment's guard, so nothing was posted and a later try is safe.
-    GuardNotSaved("ยังไม่ได้ส่ง", GUARD_NOT_SAVED, "guard_not_saved"),
-    // Not "failed", because the payment may be out.
-    BroadcastUnknown("ยังไม่ทราบผลการส่ง", "ไม่ทราบว่าการส่งล่าสุดออกไปแล้วหรือยัง อย่าส่งซ้ำ · เปิดหน้าแรกเพื่อตรวจยอดคงเหลือและรายการ", "send_unknown"),
+internal data class ReviewIssue(val title: String, val message: String, val tag: String) {
+    companion object {
+        val SignRefused = ReviewIssue("ส่งไม่สำเร็จ", "ยืนยันตัวตนไม่สำเร็จ ลองอีกครั้ง · ยังไม่มีอะไรถูกเซ็นหรือส่ง", "sign_refused")
+        val BroadcastFailed = ReviewIssue("ส่งไม่สำเร็จ", "ลองอีกครั้ง · ตรวจยอดคงเหลือก่อนส่งซ้ำ", "error")
+        // The phone could not keep the payment's guard, so nothing was posted and a later try is safe.
+        val GuardNotSaved = ReviewIssue("ยังไม่ได้ส่ง", GUARD_NOT_SAVED, "guard_not_saved")
+        // Not "failed", because the payment may be out.
+        val BroadcastUnknown = ReviewIssue("ยังไม่ทราบผลการส่ง", "ไม่ทราบว่าการส่งล่าสุดออกไปแล้วหรือยัง อย่าส่งซ้ำ · เปิดหน้าแรกเพื่อตรวจยอดคงเหลือและรายการ", "send_unknown")
+
+        /** A sign the core or the wallet refused, nothing signed or posted, with the wallet's [line] for why, a limit of the network included. */
+        fun notSigned(line: String) = ReviewIssue("ยังไม่ได้ส่ง", line, "not_signed")
+    }
 }
 
 /**
@@ -260,11 +268,13 @@ private fun HighFeeConfirm(held: PreparedSend, question: FeeQuestion, quote: Fia
 /**
  * A payment that may be out ([unconfirmedSend]) wins over everything, because sending again could pay twice. A refusal wins over a
  * failed broadcast, because nothing was signed. [failure] is the wallet's line for the failed attempt, so a guard the phone could not
- * keep ([GUARD_NOT_SAVED]) names its own reason.
+ * keep ([GUARD_NOT_SAVED]) names its own reason, and so does a sign that [notSigned] refused. That one has no line when the user left
+ * while it ran, and then there is nothing to say.
  */
-internal fun reviewIssue(refused: Boolean, failed: Boolean, unconfirmedSend: Boolean = false, failure: String? = null): ReviewIssue? = when {
+internal fun reviewIssue(refused: Boolean, failed: Boolean, unconfirmedSend: Boolean = false, failure: String? = null, notSigned: Boolean = false): ReviewIssue? = when {
     unconfirmedSend -> ReviewIssue.BroadcastUnknown
     refused -> ReviewIssue.SignRefused
+    notSigned && failure != null -> ReviewIssue.notSigned(failure)
     failed && failure == GUARD_NOT_SAVED -> ReviewIssue.GuardNotSaved
     failed -> ReviewIssue.BroadcastFailed
     else -> null
