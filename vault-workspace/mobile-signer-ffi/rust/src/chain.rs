@@ -489,14 +489,13 @@ fn answered_404(error: &MobileSignerError, path: &str) -> bool {
     matches!(error, MobileSignerError::InvalidPsbtJson(t) if t.contains(&format!("{path}: status code 404")))
 }
 
-/// The text of a read the host refused with HTTP 429, its request limit, after the retries, or of a probe
-/// round where a host did, or None for any other failure. `classify` writes the first form and ureq the
-/// second ("{url}: status code 429"), which `pick_host` quotes, and a test pins both.
+/// The text of a read refused with HTTP 429, a host's request limit, or not made because its host is
+/// under one, or of a round in which a host was, or None for any other failure. `limited_text` writes
+/// every such text, and a test pins each producer's against it.
 pub(crate) fn throttled(error: &MobileSignerError) -> Option<&str> {
     match error {
         MobileSignerError::InvalidPsbtJson(text)
-            if text.starts_with("esplora get: ")
-                && (text.contains("HTTP status 429") || text.contains("status code 429")) =>
+            if text.starts_with("esplora get: ") && text.contains("HTTP status 429") =>
         {
             Some(text)
         }
@@ -792,6 +791,7 @@ impl Http {
             Instant::now(),
             &CHOSEN_HOST,
             &skipped,
+            &LIMITS,
         )?;
         self.skips().last = Some(index);
         Ok(&hosts[index])
@@ -849,6 +849,7 @@ impl Transport for Http {
             Instant::now(),
             &CHOSEN_HOST,
             &skipped,
+            &LIMITS,
         )
         .is_ok()
     }
@@ -1119,24 +1120,55 @@ pub(crate) fn classify(answer: Result<ureq::Response, ureq::Error>) -> Result<St
 /// scan caught it lying) is neither used nor probed. No host passing fails with `esplora get: no
 /// testnet4 host is reachable`, naming each host's failure, and that round is remembered for
 /// `PROBE_FAILURE_TTL`: a caller inside it gets the same error with no probe.
+///
+/// Three rules for `limits`, the hosts that answered 429. A host under a limit is never used and never
+/// probed, the cached host included. An earlier host that came out of a limit after the cached verdict
+/// was made wins back: the verdict is dropped and the list is probed from the top, so the own node
+/// returns at the cost of one probe. A probe's 429 limits its host like a GET's.
 pub(crate) fn pick_host(
     hosts: &[HostSpec],
-    probe: &dyn Fn(&HostSpec) -> Result<String, MobileSignerError>,
+    probe: &dyn Fn(&HostSpec) -> Result<String, GetError>,
     now: Instant,
     cache: &HostChoice,
     skipped: &[usize],
+    limits: &Limits,
 ) -> Result<usize, MobileSignerError> {
     let mut verdict = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // One copy of the table per pick, so a pick never sees two states of it.
+    let ends: Vec<Option<Instant>> = {
+        let table = limits.lock().unwrap_or_else(|p| p.into_inner());
+        hosts
+            .iter()
+            .map(|host| {
+                table
+                    .iter()
+                    .find(|(base, _)| *base == host.base)
+                    .map(|(_, end)| *end)
+            })
+            .collect()
+    };
     let age = |at: &Instant| now.saturating_duration_since(*at);
+    let limited = |index: usize| ends[index].filter(|end| now < *end);
+    // A verdict made at `at` stands only while no host before `before` came out of a limit since then.
+    let freed_since = |at: Instant, before: usize| {
+        ends[..before]
+            .iter()
+            .any(|end| end.is_some_and(|end| at < end && end <= now))
+    };
     match &*verdict {
         Some(HostVerdict::Chosen(index, verified))
-            if age(verified) < HOST_TRUST && !skipped.contains(index) =>
+            if age(verified) < HOST_TRUST
+                && !skipped.contains(index)
+                && limited(*index).is_none()
+                && !freed_since(*verified, *index) =>
         {
             return Ok(*index);
         }
-        Some(HostVerdict::NoneReachable(at, error)) if age(at) < PROBE_FAILURE_TTL => {
+        Some(HostVerdict::NoneReachable(at, error))
+            if age(at) < PROBE_FAILURE_TTL && !freed_since(*at, hosts.len()) =>
+        {
             return Err(MobileSignerError::InvalidPsbtJson(error.clone()));
         }
         _ => {}
@@ -1145,6 +1177,10 @@ pub(crate) fn pick_host(
     for (index, host) in hosts.iter().enumerate() {
         if skipped.contains(&index) {
             failures.push(format!("{}: skipped, it lied", host.base));
+            continue;
+        }
+        if let Some(end) = limited(index) {
+            failures.push(limited_text(host.base, end, now));
             continue;
         }
         match probe(host) {
@@ -1156,7 +1192,11 @@ pub(crate) fn pick_host(
                 let shown: String = body.trim().chars().take(24).collect();
                 failures.push(format!("{}: block 0 is {shown:?}, not testnet4", host.base));
             }
-            Err(e) => failures.push(format!("{}: {e}", host.base)),
+            Err(GetError::Throttled { retry_after, .. }) => {
+                let end = limit_host(limits, host.base, retry_after, now);
+                failures.push(limited_text(host.base, end, now));
+            }
+            Err(mut failure) => failures.push(format!("{}: {}", host.base, failure.text())),
         }
     }
     let error = format!(
@@ -1192,14 +1232,15 @@ pub(crate) fn on_host(url: &str, base: &str) -> String {
 }
 
 // The connect and each read get the host's whole-probe limit too: a host that cannot say its block 0
-// hash in time is skipped for the next one instead of holding the scan.
-pub(crate) fn probe_genesis(host: &HostSpec) -> Result<String, MobileSignerError> {
+// hash in time is skipped for the next one instead of holding the scan. The answer goes through
+// `classify`, so a probe's 429 arrives as `Throttled` with its Retry-After.
+pub(crate) fn probe_genesis(host: &HostSpec) -> Result<String, GetError> {
     let limit = host.probe_timeout();
-    agent(limit, limit, limit)
-        .get(&format!("{}/block-height/0", host.base))
-        .call()
-        .and_then(|response| response.into_string().map_err(ureq::Error::from))
-        .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))
+    classify(
+        agent(limit, limit, limit)
+            .get(&format!("{}/block-height/0", host.base))
+            .call(),
+    )
 }
 
 /// One attempt at a GET on `base`, made only while `base` is under no limit. A 429 limits `base` and

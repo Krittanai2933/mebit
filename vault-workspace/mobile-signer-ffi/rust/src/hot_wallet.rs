@@ -5037,31 +5037,81 @@ mod tests {
     }
 
     // A host's request limit ends a sync `Continuing`, to go on later, where any other failed read fails it.
+    // One formatter writes every 429 text, so each producer's text is pinned here against the detector
+    // and against the exact string the app's Kotlin rows copy.
     #[test]
-    fn only_a_429_after_the_retries_or_in_a_probe_round_reads_as_the_host_limiting_requests() {
-        let limited = |e: MobileSignerError| crate::chain::throttled(&e).is_some();
-        let after_retries = |code| {
-            let attempt = || classify(answer(code, ""));
-            retried(vec![attempt(), attempt(), attempt()])
-                .0
-                .unwrap_err()
+    fn only_a_429_or_a_host_under_a_limit_reads_as_the_host_limiting_requests() {
+        let limited = |e: &MobileSignerError| crate::chain::throttled(e).is_some();
+        let text = |e: MobileSignerError| match e {
+            MobileSignerError::InvalidPsbtJson(t) => t,
+            other => panic!("{other:?}"),
         };
-        assert!(limited(after_retries(429)));
-        assert!(!limited(after_retries(503)));
+        let t0 = Instant::now();
+        let half = Duration::from_millis(500);
+        // classify's raw 429, which only a test that skips the wrapper sees, asked once.
+        let (raw, attempts, _) = retried(vec![classify(answer(429, ""))]);
+        let raw = raw.unwrap_err();
+        assert!(limited(&raw) && attempts == 1);
+        assert_eq!(text(raw), "esplora get: HTTP status 429");
+        let outages = (0..3).map(|_| classify(answer(503, ""))).collect();
+        assert!(!limited(&retried(outages).0.unwrap_err()));
+        // A GET answered 429, and one not made because its host is under that limit. The seconds round up.
+        let limits = Limits::default();
+        let answered = attempt_unless_limited(HOSTS[0], &|| Err(throttled()), &limits, &|| t0);
+        let answered = text(MobileSignerError::from(answered.unwrap_err()));
+        assert!(limited(&MobileSignerError::InvalidPsbtJson(
+            answered.clone()
+        )));
+        assert_eq!(
+            answered,
+            "esplora get: https://first.example/api: HTTP status 429, limited for 60 s more"
+        );
+        let unasked = |after: Duration| {
+            let refused =
+                attempt_unless_limited(HOSTS[0], &|| unreachable!(), &limits, &|| t0 + after);
+            text(MobileSignerError::from(refused.unwrap_err()))
+        };
+        assert_eq!(
+            unasked(half),
+            "esplora get: https://first.example/api: HTTP status 429, limited for 60 s more"
+        );
+        assert_eq!(
+            unasked(Duration::from_secs(59) + half),
+            "esplora get: https://first.example/api: HTTP status 429, limited for 1 s more"
+        );
+        // A probe round in which every host answered 429, one with a 404, and one with a host under a
+        // limit beside a host that is down.
         let probed = |status: u16| {
-            let probe = |_: &HostSpec| {
-                Err(MobileSignerError::InvalidPsbtJson(
-                    answer(status, "").unwrap_err().to_string(),
-                ))
-            };
-            pick_host(&SPECS, &probe, Instant::now(), &Mutex::new(None), &[]).unwrap_err()
+            let probe = |_: &HostSpec| classify(answer(status, ""));
+            pick_host(
+                &SPECS,
+                &probe,
+                t0,
+                &Mutex::new(None),
+                &[],
+                &Limits::default(),
+            )
+            .unwrap_err()
         };
-        assert!(limited(probed(429)));
-        assert!(!limited(probed(404)));
+        let round = probed(429);
+        assert!(limited(&round));
+        assert_eq!(
+            text(round),
+            "esplora get: no testnet4 host is reachable (https://first.example/api: HTTP status 429, limited for 60 s more; https://second.example/api: HTTP status 429, limited for 60 s more)"
+        );
+        assert!(!limited(&probed(404)));
+        let probe = Probe::new(&[(HOSTS[1], Err("down"))]);
+        let _ = attempt_unless_limited(HOSTS[0], &|| Err(throttled()), &probe.limits, &|| t0);
+        let mixed = probe.pick(t0 + half, &Mutex::new(None)).unwrap_err();
+        assert!(limited(&mixed));
+        assert_eq!(
+            text(mixed),
+            "esplora get: no testnet4 host is reachable (https://first.example/api: HTTP status 429, limited for 60 s more; https://second.example/api: down)"
+        );
         assert!(!limited(
-            retried(vec![lost(), lost(), lost()]).0.unwrap_err()
+            &retried(vec![lost(), lost(), lost()]).0.unwrap_err()
         ));
-        assert!(!limited(MobileSignerError::InvalidPsbtJson(
+        assert!(!limited(&MobileSignerError::InvalidPsbtJson(
             "esplora get: https://blockstream.info/testnet4/api/address/tb1q4290: Connection Failed"
                 .into()
         )));
@@ -5639,10 +5689,11 @@ mod tests {
     const MAINNET_GENESIS: &str =
         "000000000019d6689c085ae165831e9934ff763ae46a2a6c172b3f1b60a8ce26";
 
-    /// A probe scripted per host, counting the hosts it was asked about.
+    /// A probe scripted per host, counting the hosts it was asked about, with its own limit table.
     struct Probe {
         answers: HashMap<&'static str, Result<&'static str, &'static str>>,
         asked: Mutex<Vec<String>>,
+        limits: Limits,
     }
 
     impl Probe {
@@ -5650,14 +5701,15 @@ mod tests {
             Self {
                 answers: answers.iter().copied().collect(),
                 asked: Mutex::new(Vec::new()),
+                limits: Limits::default(),
             }
         }
 
-        fn run(&self, host: &str) -> Result<String, MobileSignerError> {
+        fn run(&self, host: &str) -> Result<String, GetError> {
             self.asked.lock().unwrap().push(host.to_string());
             match self.answers.get(host).copied() {
                 Some(Ok(body)) => Ok(body.to_string()),
-                Some(Err(why)) => Err(MobileSignerError::InvalidPsbtJson(why.to_string())),
+                Some(Err(why)) => Err(GetError::Unreachable(why.to_string())),
                 None => panic!("unexpected probe of {host}"),
             }
         }
@@ -5667,8 +5719,268 @@ mod tests {
         }
 
         fn pick(&self, now: Instant, cache: &HostChoice) -> Result<usize, MobileSignerError> {
-            pick_host(&SPECS, &|host| self.run(host.base), now, cache, &[])
+            pick_host(
+                &SPECS,
+                &|host| self.run(host.base),
+                now,
+                cache,
+                &[],
+                &self.limits,
+            )
         }
+    }
+
+    /// `Http::get` with the network swapped out: the real host choice, limit and retry over `SPECS`,
+    /// with its own clock, choice and limits (the probe's). `answer(base, path)` is the network. Every
+    /// request that reached a host is logged, and the `lost` calls are counted.
+    struct World<'a> {
+        probe: Probe,
+        choice: HostChoice,
+        answer: &'a (dyn Fn(&str, &str) -> Result<String, GetError> + Sync),
+        at: Mutex<Instant>,
+        requests: Mutex<Vec<(&'static str, String)>>,
+        lost: Mutex<usize>,
+    }
+
+    impl<'a> World<'a> {
+        fn new(answer: &'a (dyn Fn(&str, &str) -> Result<String, GetError> + Sync)) -> Self {
+            Self {
+                probe: Probe::new(&[
+                    (HOSTS[0], Ok(TESTNET4_GENESIS)),
+                    (HOSTS[1], Ok(TESTNET4_GENESIS)),
+                ]),
+                choice: Mutex::new(None),
+                answer,
+                at: Mutex::new(Instant::now()),
+                requests: Mutex::new(Vec::new()),
+                lost: Mutex::new(0),
+            }
+        }
+
+        fn get_at(&self, at: Instant, path: &str) -> Result<String, MobileSignerError> {
+            *self.at.lock().unwrap() = at;
+            self.get(&format!("{ESPLORA_TESTNET4}{path}"))
+        }
+
+        fn hosts_asked(&self) -> Vec<&'static str> {
+            self.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(base, _)| *base)
+                .collect()
+        }
+    }
+
+    impl Transport for World<'_> {
+        fn get(&self, url: &str) -> Result<String, MobileSignerError> {
+            let at = *self.at.lock().unwrap();
+            let index = pick_host(
+                &SPECS,
+                &|host| self.probe.run(host.base),
+                at,
+                &self.choice,
+                &[],
+                &self.probe.limits,
+            )?;
+            let base = SPECS[index].base;
+            let path = url.strip_prefix(ESPLORA_TESTNET4).expect("a testnet4 URL");
+            get_forgetting(
+                &|| {
+                    attempt_unless_limited(
+                        base,
+                        &|| {
+                            self.requests.lock().unwrap().push((base, path.to_string()));
+                            (self.answer)(base, path)
+                        },
+                        &self.probe.limits,
+                        &|| at,
+                    )
+                },
+                &|_| {},
+                &self.choice,
+                &|| *self.lost.lock().unwrap() += 1,
+            )
+        }
+
+        fn broadcast(&self, _: &str, _: &str) -> Result<String, MobileSignerError> {
+            unreachable!("a test that only reads posts nothing")
+        }
+    }
+
+    /// The first host answers its first request 429 with a Retry-After of 30 s, and everything after that
+    /// with its own base. The second host always answers with its base.
+    fn first_refuses_once(
+        refused: &std::sync::atomic::AtomicBool,
+    ) -> impl Fn(&str, &str) -> Result<String, GetError> + Sync + '_ {
+        use std::sync::atomic::Ordering::SeqCst;
+        move |base, _| {
+            if base == HOSTS[0] && !refused.swap(true, SeqCst) {
+                classified("HTTP/1.1 429 -\r\nRetry-After: 30\r\nContent-Length: 0\r\n\r\n")
+            } else {
+                Ok(base.to_string())
+            }
+        }
+    }
+
+    const TIP_PATH: &str = "/blocks/tip/height";
+
+    #[test]
+    fn a_429_is_not_asked_again_and_the_next_call_goes_to_the_second_host() {
+        let refused = std::sync::atomic::AtomicBool::new(false);
+        let answer = first_refuses_once(&refused);
+        let world = World::new(&answer);
+        let t0 = Instant::now();
+        let error = world.get_at(t0, TIP_PATH).unwrap_err();
+        let text = crate::chain::throttled(&error).expect("reads as the limit");
+        assert!(text.contains(HOSTS[0]), "{text}");
+        assert_eq!(
+            world.hosts_asked(),
+            [HOSTS[0]],
+            "no retry against the host refusing us"
+        );
+        let second = Duration::from_secs(1);
+        assert_eq!(world.get_at(t0 + second, TIP_PATH).unwrap(), HOSTS[1]);
+        assert_eq!(world.get_at(t0 + 2 * second, TIP_PATH).unwrap(), HOSTS[1]);
+        assert_eq!(world.hosts_asked(), [HOSTS[0], HOSTS[1], HOSTS[1]]);
+        assert_eq!(
+            world.probe.asked(),
+            HOSTS,
+            "the limited host is not probed either"
+        );
+        assert_eq!(*world.lost.lock().unwrap(), 0, "a 429 forgets nothing");
+    }
+
+    #[test]
+    fn the_first_host_is_used_again_once_its_limit_is_over() {
+        let refused = std::sync::atomic::AtomicBool::new(false);
+        let answer = first_refuses_once(&refused);
+        let world = World::new(&answer);
+        let t0 = Instant::now();
+        assert!(world.get_at(t0, TIP_PATH).is_err());
+        assert_eq!(
+            world
+                .get_at(t0 + Duration::from_secs(29), TIP_PATH)
+                .unwrap(),
+            HOSTS[1]
+        );
+        // The second host is cached for HOST_TRUST, but the own node, or any earlier host, wins back.
+        assert_eq!(
+            world
+                .get_at(t0 + Duration::from_secs(30), TIP_PATH)
+                .unwrap(),
+            HOSTS[0]
+        );
+        assert_eq!(
+            world.probe.asked(),
+            [HOSTS[0], HOSTS[1], HOSTS[0]],
+            "exactly one probe brought it back"
+        );
+        assert_eq!(chosen(&world.choice), Some(0));
+    }
+
+    #[test]
+    fn every_host_limited_names_the_429_and_probes_nothing() {
+        let probe = Probe::new(&[
+            (HOSTS[0], Ok(TESTNET4_GENESIS)),
+            (HOSTS[1], Ok(TESTNET4_GENESIS)),
+        ]);
+        let t0 = Instant::now();
+        for host in HOSTS {
+            let _ = attempt_unless_limited(host, &|| Err(throttled()), &probe.limits, &|| t0);
+        }
+        let cache = Mutex::new(None);
+        let message = no_host_message(probe.pick(t0, &cache));
+        assert!(
+            message.starts_with("esplora get: no testnet4 host is reachable ("),
+            "{message}"
+        );
+        for host in HOSTS {
+            let entry = format!("{host}: HTTP status 429, limited for 60 s more");
+            assert!(message.contains(&entry), "{message}");
+        }
+        assert!(crate::chain::throttled(&MobileSignerError::InvalidPsbtJson(message)).is_some());
+        assert!(probe.asked().is_empty());
+        no_host_message(probe.pick(t0 + Duration::from_secs(1), &cache));
+        no_host_message(probe.pick(t0 + Duration::from_secs(59), &cache));
+        assert!(
+            probe.asked().is_empty(),
+            "no probe while every host is limited"
+        );
+        assert_eq!(probe.pick(t0 + Duration::from_secs(60), &cache).unwrap(), 0);
+        assert_eq!(probe.asked(), [HOSTS[0]]);
+    }
+
+    #[test]
+    fn a_429_in_a_probe_round_limits_that_host_until_its_retry_after() {
+        let asked = Mutex::new(Vec::new());
+        let refused = Cell::new(false);
+        let probe = |host: &HostSpec| {
+            asked.lock().unwrap().push(host.base);
+            if host.base == HOSTS[0] && !refused.replace(true) {
+                Err(throttled_after(30))
+            } else {
+                Ok(TESTNET4_GENESIS.to_string())
+            }
+        };
+        let limits = Limits::default();
+        let cache = Mutex::new(None);
+        let t0 = Instant::now();
+        let pick = |after: u64| {
+            let at = t0 + Duration::from_secs(after);
+            pick_host(&SPECS, &probe, at, &cache, &[], &limits).unwrap()
+        };
+        assert_eq!(pick(0), 1);
+        assert_eq!(pick(29), 1);
+        assert_eq!(
+            *asked.lock().unwrap(),
+            [HOSTS[0], HOSTS[1]],
+            "no probe while the cached host serves"
+        );
+        assert_eq!(pick(30), 0);
+        assert_eq!(
+            *asked.lock().unwrap(),
+            [HOSTS[0], HOSTS[1], HOSTS[0]],
+            "exactly one more probe, of host 0"
+        );
+    }
+
+    // A liar whose only sibling is limited leaves nothing to read from, so the scan ends `Unverified`, as
+    // with a sibling that is down. A `Hosts` transport pins that a false `skip_host` ends it so.
+    #[test]
+    fn a_lie_with_the_only_other_host_limited_leaves_no_host_to_skip_to() {
+        let probes = Cell::new(0);
+        let probe = |host: &HostSpec| {
+            probes.set(probes.get() + 1);
+            assert_eq!(host.base, HOSTS[1], "a skipped host is never probed");
+            Ok(TESTNET4_GENESIS.to_string())
+        };
+        let t0 = Instant::now();
+        let limits = Limits::default();
+        let _ = attempt_unless_limited(HOSTS[1], &|| Err(throttled()), &limits, &|| t0);
+        let message = no_host_message(pick_host(
+            &SPECS,
+            &probe,
+            t0,
+            &Mutex::new(None),
+            &[0],
+            &limits,
+        ));
+        assert!(
+            message.contains("skipped, it lied") && message.contains("limited for"),
+            "{message}"
+        );
+        assert_eq!(probes.get(), 0, "a limited host is never probed");
+        let free = pick_host(
+            &SPECS,
+            &probe,
+            t0 + LIMIT_DEFAULT,
+            &Mutex::new(None),
+            &[0],
+            &limits,
+        );
+        assert_eq!(free.unwrap(), 1);
+        assert_eq!(probes.get(), 1);
     }
 
     fn no_host_message(result: Result<usize, MobileSignerError>) -> String {
@@ -5727,7 +6039,14 @@ mod tests {
             let probe_timeout = host.probe_timeout();
             let cache = Mutex::new(None);
             let start = Instant::now();
-            let result = pick_host(&[host], &probe_genesis, start, &cache, &[]);
+            let result = pick_host(
+                &[host],
+                &probe_genesis,
+                start,
+                &cache,
+                &[],
+                &Limits::default(),
+            );
             let took = start.elapsed();
             let message = no_host_message(result);
             assert!(message.contains("timed out"), "{message}");
@@ -5748,7 +6067,7 @@ mod tests {
                 .unwrap()
                 .push((host.base, host.probe_timeout()));
             if host.base.starts_with("http://") {
-                Err(MobileSignerError::InvalidPsbtJson(format!(
+                Err(GetError::TimedOut(format!(
                     "timed out after {:?}",
                     host.probe_timeout()
                 )))
@@ -5758,7 +6077,15 @@ mod tests {
         };
         let cache = Mutex::new(None);
         let hosts = hosts_with(Some(OWN_NODE_FIXTURE));
-        let picked = pick_host(&hosts, &probe, Instant::now(), &cache, &[]).unwrap();
+        let picked = pick_host(
+            &hosts,
+            &probe,
+            Instant::now(),
+            &cache,
+            &[],
+            &Limits::default(),
+        )
+        .unwrap();
         assert_eq!(hosts[picked].base, "https://blockstream.info/testnet4/api");
         assert_eq!(
             *asked.lock().unwrap(),
@@ -5915,6 +6242,7 @@ mod tests {
             Instant::now(),
             &cache,
             &[],
+            &probe.limits,
         );
         let message = no_host_message(result);
         assert!(
@@ -7169,13 +7497,19 @@ mod tests {
                 base: answers_404,
                 ..*host
             }),
-            _ => Err(MobileSignerError::InvalidPsbtJson(
-                no_answer().unwrap_err().to_string(),
-            )),
+            _ => classify(no_answer()),
         };
         let chosen = Mutex::new(None);
+        let limits = Limits::default();
         let esplora = |url: &str| -> Result<String, MobileSignerError> {
-            let index = pick_host(&PUBLIC_TESTNET4_HOSTS, &probe, Instant::now(), &chosen, &[])?;
+            let index = pick_host(
+                &PUBLIC_TESTNET4_HOSTS,
+                &probe,
+                Instant::now(),
+                &chosen,
+                &[],
+                &limits,
+            )?;
             unreachable!("no host passed its probe, yet {url} went to host {index}")
         };
         match detail_of(
