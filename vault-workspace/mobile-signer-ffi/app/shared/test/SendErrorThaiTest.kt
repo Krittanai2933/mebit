@@ -8,7 +8,6 @@ import kotlin.test.assertFalse
 class SendErrorThaiTest {
     private val rows = listOf(
         "amount 100 is below the 546 sat dust limit" to "จำนวนน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)",
-        "fee 2115 is more than the amount 1000" to "ค่าธรรมเนียมสูงกว่าจำนวนที่ส่ง เลือกระดับที่ต่ำลง",
         "insufficient funds: have 0 confirmed, need 1100" to "ยอดที่ยืนยันแล้วไม่พอ รอให้เงินที่เพิ่งได้รับยืนยันก่อน",
         "change below dust, send the whole balance or change the amount" to "เงินทอนน้อยเกินไป ส่งทั้งหมดหรือเปลี่ยนจำนวน",
         "the whole balance 655 less the fee 110 is below the 546 sat dust limit" to "ยอดทั้งหมดหลังหักค่าธรรมเนียมน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)",

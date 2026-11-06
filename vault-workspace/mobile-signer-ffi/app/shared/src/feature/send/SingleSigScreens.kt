@@ -25,7 +25,8 @@ import com.mebit.app.data.Replacement
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
-import com.mebit.app.data.needsConfirmation
+import com.mebit.app.data.FeeQuestion
+import com.mebit.app.data.feeQuestion
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.ffi.signer.PreparedSend
 import com.mebit.app.ui.components.MebitScreen
@@ -95,7 +96,7 @@ fun S5ReviewSignScreen(
         }
     }
     val total = draft.amountSats + draft.feeSats
-    val question = wallet.feeQuestion(draft)
+    val question = wallet.heldQuestion(draft)
 
     /** One attempt: [step] signs or posts and answers whether the payment is out. A payment held for the fee question is neither out nor failed. */
     fun attemptTo(step: suspend () -> Boolean) {
@@ -130,8 +131,8 @@ fun S5ReviewSignScreen(
                         if (refused) return@attemptTo false
                         failed = !withContext(Dispatchers.Default) { wallet.prepare(session, draft.amountSats, draft.rateSatVb, draft.destination, sendAll = draft.isSendAll) }
                         if (failed) return@attemptTo false
-                        // A fee far above the estimate waits for the card below, which posts or lets the payment go. The demo mock held nothing and is out.
-                        if (wallet.feeQuestion(draft) != null) return@attemptTo false
+                        // A payment Review asks about waits for the card below, which posts or lets the payment go. The demo mock held nothing and is out.
+                        if (wallet.heldQuestion(draft) != null) return@attemptTo false
                         if (wallet.heldSend == null) return@attemptTo true
                         failed = !withContext(Dispatchers.Default) { wallet.post(session) }
                         !failed
@@ -161,10 +162,10 @@ fun S5ReviewSignScreen(
             // A scan that has not found the whole wallet leaves no balance to take the payment from.
             ReviewRow("คงเหลือ", if (wallet.balanceKnown) "${formatBtcCompact((wallet.balanceSats - total).coerceAtLeast(0))} BTC" else "—")
         }
-        if (question != null) {
+        question?.let { (held, why) ->
             HighFeeConfirm(
-                question,
-                sendAll = draft.isSendAll,
+                held,
+                why,
                 quote = quote,
                 onConfirm = {
                     attemptTo {
@@ -219,26 +220,26 @@ internal class SignAttempt {
     }
 }
 
-/** The held payment when it needs the user's word before the post ([needsConfirmation] against what the screen showed), else null. */
-private fun SingleSigWallet.feeQuestion(draft: SendDraft): PreparedSend? =
-    heldSend?.prepared?.takeIf { needsConfirmation(it, draft) }
+/** The held payment and why Review asks before posting it ([feeQuestion] against what the screen showed), or null when it posts at once. */
+private fun SingleSigWallet.heldQuestion(draft: SendDraft): Pair<PreparedSend, FeeQuestion>? =
+    heldSend?.prepared?.let { held -> feeQuestion(held, draft)?.let { held to it } }
 
 /**
- * The question the Review screen asks when the signed payment's fee is far above the estimate it showed: the real fee, what leaves and
- * the total, a confirm that posts and a cancel that lets the payment go, nothing posted and no guard written until the confirm. The
- * shape of the clear control in UnconfirmedClear.kt. There is no board; the copy is a default awaiting design review (docs/04-open-items.md item 77).
+ * The question the Review screen asks about the signed payment, worded by [question]: the real fee, what leaves and the total, a
+ * confirm that posts and a cancel that lets the payment go, nothing posted and no guard written until the confirm. The shape of the
+ * clear control in UnconfirmedClear.kt. There is no board; the copy is a default awaiting design review (docs/04-open-items.md items 77 and 85).
  */
 @Composable
-private fun HighFeeConfirm(held: PreparedSend, sendAll: Boolean, quote: FiatQuote?, onConfirm: () -> Unit, onCancel: () -> Unit) {
+private fun HighFeeConfirm(held: PreparedSend, question: FeeQuestion, quote: FiatQuote?, onConfirm: () -> Unit, onCancel: () -> Unit) {
     val feeSats = held.feeSats.toLong()
     val amountSats = held.amountSats.toLong()
     Spacer(modifier = Modifier.height(12.dp))
     val shape = RoundedCornerShape(16.dp)
     Column(modifier = Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(16.dp).testTag("high_fee")) {
-        Text("ค่าธรรมเนียมจริงสูงกว่าที่แสดง", color = MbNavyInk, fontSize = 13.5.sp, fontWeight = FontWeight.Bold, lineHeight = 18.sp)
+        Text(question.title, color = MbNavyInk, fontSize = 13.5.sp, fontWeight = FontWeight.Bold, lineHeight = 18.sp)
         Spacer(modifier = Modifier.height(6.dp))
         Text(
-            if (sendAll) "กระเป๋านี้ต้องรวมหลายเหรียญ ธุรกรรมจึงใหญ่กว่าปกติ จำนวนที่ส่งลดลงจากที่แสดงเพราะหักค่าธรรมเนียมจริงแล้ว" else "กระเป๋านี้ต้องรวมหลายเหรียญ ธุรกรรมจึงใหญ่กว่าปกติ ตรวจค่าธรรมเนียมก่อนส่ง",
+            question.message,
             color = MbNavyInk,
             fontSize = 14.sp,
             lineHeight = 20.sp,
@@ -246,7 +247,7 @@ private fun HighFeeConfirm(held: PreparedSend, sendAll: Boolean, quote: FiatQuot
         Spacer(modifier = Modifier.height(6.dp))
         ReviewRow("ค่าธรรมเนียมจริง", realFeeText(feeSats, quote), tag = "high_fee_fee")
         ReviewDivider()
-        ReviewRow(if (sendAll) "ส่งจริง" else "ส่ง", "${formatBtcCompact(amountSats)} BTC", tag = "high_fee_amount")
+        ReviewRow(question.amountLabel, "${formatBtcCompact(amountSats)} BTC", tag = "high_fee_amount")
         ReviewDivider()
         ReviewRow("หักจากกระเป๋ารวม", "${formatBtcCompact(amountSats + feeSats)} BTC", bold = true, tag = "high_fee_total")
         Spacer(modifier = Modifier.height(12.dp))

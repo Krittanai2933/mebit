@@ -1085,9 +1085,11 @@ pub struct PreparedSend {
 /// coins pays more, never a fixed sum that falls under the rate. The answer's `fee_sats` is that
 /// fee, and the app compares it with the estimate its screens showed and asks the user when it is
 /// much higher. Refuses, before signing, a rate outside 1 to 2,000 sat/vB, an amount below the 546
-/// sat dust limit, a fee above the amount, and change that would be dust (above 0 and at most 546
-/// sats). Only confirmed coins of receive addresses are spent; the wallet's own unconfirmed change
-/// is spent too. About 40 Esplora calls for a fresh wallet, so call it off the main thread.
+/// sat dust limit, an amount that overflows u64 with its fee, and change that would be dust (above 0
+/// and at most 546 sats). A fee above the amount is signed, because the fee is paid on top and the
+/// destination still gets the amount, so the app asks the user before it posts. Only confirmed
+/// coins of receive addresses are spent; the wallet's own unconfirmed change is spent too. About
+/// 40 Esplora calls for a fresh wallet, so call it off the main thread.
 #[uniffi::export]
 pub fn hot_prepare_send_at_rate(
     mnemonic_words: Vec<String>,
@@ -1345,9 +1347,11 @@ fn signed(
 
 /// A payment from the coins of every used address, each input signed with its own key, any change
 /// paid to the first unused internal (change) address, not yet broadcast, with the fee it pays.
-/// The amount, the rate, the destination and the fee of the smallest payment are checked before
-/// any network call; the change and the real fee after the coins are chosen. Every refusal is an
-/// error, never a changed payment. The used-address set may come from a sync `synced` shares.
+/// The amount, the rate, the destination and the sum of the amount and the smallest payment's fee
+/// (which must fit u64) are checked before any network call; the change after the coins are
+/// chosen. A fee above the amount is signed, because the fee is paid on top and the destination
+/// still gets the amount. Every refusal is an error, never a changed payment. The used-address set
+/// may come from a sync `synced` shares.
 #[allow(clippy::too_many_arguments)]
 fn signed_payment(
     source: &dyn ChainSource,
@@ -1375,16 +1379,12 @@ fn signed_payment(
         rate_sat_vb * vsize(inputs, &outputs[..if change { 2 } else { 1 }])
     };
     let fee_checked = |fee_sats: u64| -> Result<u64, MobileSignerError> {
-        if fee_sats > amount_sats {
-            return Err(MobileSignerError::InvalidPsbtJson(format!(
-                "fee {fee_sats} is more than the amount {amount_sats}"
-            )));
-        }
         amount_sats.checked_add(fee_sats).ok_or_else(|| {
             MobileSignerError::InvalidPsbtJson("amount plus fee does not fit u64".into())
         })
     };
-    // The smallest payment is one input and change. A fee the rules refuse there is refused before any lookup.
+    // The smallest payment is one input and change. An amount that overflows u64 with that fee is
+    // refused before any lookup.
     let mut fee_sats = fee_for(1, true);
     fee_checked(fee_sats)?;
 
@@ -1401,7 +1401,7 @@ fn signed_payment(
     });
     // The fee depends on how many coins pay it, and the coins on the fee, so the selection is
     // redone until the fee covers the coins it chose. A fee the coins over-cover (the change
-    // vanished and the transaction shrank) is kept: it is at least the rate and under the amount.
+    // vanished and the transaction shrank) is kept: it is at least the rate.
     let mut passes = 0;
     let (selected, change) = loop {
         let need = fee_checked(fee_sats)?;
@@ -3433,7 +3433,7 @@ mod tests {
 
     // Finding 5. Each guard is a distinct error before any signing.
     #[test]
-    fn a_dust_amount_a_rate_out_of_range_or_a_fee_above_the_amount_is_refused_before_any_lookup() {
+    fn a_dust_amount_or_a_rate_out_of_range_is_refused_before_any_lookup() {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
         assert_refused(
@@ -3449,15 +3449,53 @@ mod tests {
             fake.send(SOMEONE, 1_000, 2_001),
             "fee rate 2001 is above 2000 sat/vB",
         );
-        assert_refused(
-            fake.send(SOMEONE, 1_000, 8),
-            "fee 1128 is more than the amount 1000",
-        );
         assert!(fake.calls.lock().unwrap().is_empty());
         assert_outputs(
             &fake.send(SOMEONE, 546, 3).unwrap(),
             &[(SOMEONE, 546), (&addr(Chain::Internal, 0), 9_031)],
         );
+    }
+
+    // The fee is paid on top of the amount, so a fee above the amount still pays the destination in
+    // full. The app asks the user before it posts; the core only signs. 1,000 sat at 101 sat/vB was
+    // the payment an iPhone refused.
+    #[test]
+    fn a_fee_above_the_amount_is_signed_and_the_destination_gets_the_whole_amount() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 100_000, '1');
+        // One coin and change is 141 vB, so the fee is 14,241, first above the amount, then equal to it,
+        // then below it.
+        for amount in [1_000, 14_240, 14_241, 14_242] {
+            let (tx, fee) = fake.send_at(SOMEONE, amount, 101).unwrap();
+            assert_eq!(fee, 14_241, "amount {amount}");
+            assert_outputs(
+                &tx,
+                &[
+                    (SOMEONE, amount),
+                    (&addr(Chain::Internal, 0), 100_000 - amount - 14_241),
+                ],
+            );
+            assert_eq!(fee_paid(&fake, &tx), 14_241, "amount {amount}");
+        }
+        // The payment the old rule refused at 8 sat/vB, a fee of 1,128 on 1,000 sat.
+        let mut small = Fake::new();
+        small.fund(&addr(Chain::External, 0), 10_000, '1');
+        assert_outputs(
+            &small.send(SOMEONE, 1_000, 8).unwrap(),
+            &[(SOMEONE, 1_000), (&addr(Chain::Internal, 0), 7_872)],
+        );
+    }
+
+    // What is left of the fee check: an amount that cannot add the fee in u64 is refused before any
+    // lookup.
+    #[test]
+    fn an_amount_that_overflows_u64_with_the_fee_is_refused_before_any_lookup() {
+        let fake = Fake::new();
+        assert_refused(
+            fake.send(SOMEONE, u64::MAX, 1),
+            "amount plus fee does not fit u64",
+        );
+        assert!(fake.calls.lock().unwrap().is_empty());
     }
 
     // Findings 5 and 7. One P2WPKH input and two outputs is 141 vB; one output is 110 vB.

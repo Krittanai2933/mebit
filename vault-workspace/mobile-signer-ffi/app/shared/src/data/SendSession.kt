@@ -567,7 +567,6 @@ fun sendErrorThai(message: String?): String {
     val m = message.orEmpty().removePrefix("invalid PSBT json: ")
     return when {
         m.startsWith("amount ") && m.endsWith("dust limit") -> "จำนวนน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)"
-        m.startsWith("fee ") && " is more than the amount " in m -> "ค่าธรรมเนียมสูงกว่าจำนวนที่ส่ง เลือกระดับที่ต่ำลง"
         m.startsWith("insufficient funds") -> "ยอดที่ยืนยันแล้วไม่พอ รอให้เงินที่เพิ่งได้รับยืนยันก่อน"
         m.startsWith("change below dust") -> "เงินทอนน้อยเกินไป ส่งทั้งหมดหรือเปลี่ยนจำนวน"
         // hot_prepare_send_all: the balance less the real fee would be dust.
@@ -639,13 +638,42 @@ fun feeNeedsConfirmation(feeSats: Long, shownFeeSats: Long, amountSats: Long): B
     feeSats > 2 * shownFeeSats && (feeSats * 10 > amountSats || feeSats - shownFeeSats >= FEE_SURPRISE_SATS)
 
 /**
- * Whether the Review screen asks before posting [held], the payment the core signed for [draft]: [feeNeedsConfirmation] against the
- * estimate it showed, and for send all also when what leaves is [FEE_SURPRISE_SATS] or more under the amount it showed, because the
- * amount absorbs the fee and the spendable balance can have moved since the snapshot.
+ * Why the Review screen asks before posting the payment the core signed, one value per card the user can see, each with that card's
+ * words. The rows and tags of the card are the same for all four. Draft copy awaiting design review (open items 77 and 85).
  */
-fun needsConfirmation(held: PreparedSend, draft: SendDraft): Boolean =
-    feeNeedsConfirmation(held.feeSats.toLong(), draft.feeSats, held.amountSats.toLong()) ||
-        (draft.isSendAll && draft.amountSats - held.amountSats.toLong() >= FEE_SURPRISE_SATS)
+enum class FeeQuestion(val title: String, val message: String, val amountLabel: String) {
+    /** A fixed amount whose real fee is far above the estimate Review showed ([feeNeedsConfirmation]). */
+    AboveEstimate("ค่าธรรมเนียมจริงสูงกว่าที่แสดง", "กระเป๋านี้ต้องรวมหลายเหรียญ ธุรกรรมจึงใหญ่กว่าปกติ ตรวจค่าธรรมเนียมก่อนส่ง", "ส่ง"),
+
+    /** Send all whose real fee is far above the estimate, or whose amount is [FEE_SURPRISE_SATS] or more under what Review showed. */
+    SendAllBelowShown("ค่าธรรมเนียมจริงสูงกว่าที่แสดง", "กระเป๋านี้ต้องรวมหลายเหรียญ ธุรกรรมจึงใหญ่กว่าปกติ จำนวนที่ส่งลดลงจากที่แสดงเพราะหักค่าธรรมเนียมจริงแล้ว", "ส่งจริง"),
+
+    /** A fixed amount whose fee is more than the amount. The fee is paid on top, so the destination still gets all of it. */
+    AboveAmount("ค่าธรรมเนียมสูงกว่าจำนวนที่ส่ง", "ผู้รับได้ครบตามจำนวน แต่ค่าธรรมเนียมเครือข่ายมากกว่าเงินที่ส่ง ตรวจค่าธรรมเนียมก่อนส่ง", "ส่ง"),
+
+    /** Both fixed-amount reasons in one card, titled by the fee against the amount. */
+    AboveEstimateAndAmount("ค่าธรรมเนียมสูงกว่าจำนวนที่ส่ง", "กระเป๋านี้ต้องรวมหลายเหรียญ ค่าธรรมเนียมจริงจึงสูงกว่าที่แสดง และยังมากกว่าเงินที่ส่ง ผู้รับได้ครบตามจำนวน", "ส่ง"),
+}
+
+/**
+ * Why the Review screen asks before posting [held], the payment the core signed for [draft], or null when it posts at once. A fixed
+ * amount asks when [feeNeedsConfirmation] holds against the estimate Review showed and when the fee is more than the amount. Send all
+ * asks on the first, and when what leaves is [FEE_SURPRISE_SATS] or more under the amount it showed, because the amount absorbs the fee
+ * and the spendable balance can have moved since the snapshot. Send all never asks about the fee against the amount, which the core never refused.
+ */
+fun feeQuestion(held: PreparedSend, draft: SendDraft): FeeQuestion? {
+    val feeSats = held.feeSats.toLong()
+    val amountSats = held.amountSats.toLong()
+    val aboveEstimate = feeNeedsConfirmation(feeSats, draft.feeSats, amountSats)
+    val aboveAmount = feeSats > amountSats
+    return when {
+        draft.isSendAll -> FeeQuestion.SendAllBelowShown.takeIf { aboveEstimate || draft.amountSats - amountSats >= FEE_SURPRISE_SATS }
+        aboveEstimate && aboveAmount -> FeeQuestion.AboveEstimateAndAmount
+        aboveAmount -> FeeQuestion.AboveAmount
+        aboveEstimate -> FeeQuestion.AboveEstimate
+        else -> null
+    }
+}
 
 /** The three tiers of board 4.4. [satPerVb] is the board's fixed rate, which [LiveFeeTiers.DEFAULT] uses until the live rates arrive or when they cannot be fetched. */
 enum class FeeTier(val label: String, val eta: String, val satPerVb: Long) {

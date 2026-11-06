@@ -66,7 +66,7 @@ private data class Seen(val returned: Boolean, val txid: String, val error: Stri
 
 private fun SingleSigWallet.seen(returned: Boolean) = Seen(returned, lastTxid, lastError, balanceSats, receiveAddress)
 
-/** Prepare, then post with no question between, as the Review screen does when the fee needs none ([feeNeedsConfirmation]). The demo mock holds nothing to post. */
+/** Prepare, then post with no question between, as the Review screen does when the fee needs none ([feeQuestion]). The demo mock holds nothing to post. */
 internal fun SingleSigWallet.broadcast(session: OnboardingSession, amountSats: Long, feeRateSatVb: Long, destination: String, network: KeyNetwork = KeyNetwork.TEST, sendAll: Boolean = false): Boolean =
     prepare(session, amountSats, feeRateSatVb, destination, network, sendAll) && (heldSend == null || post(session))
 
@@ -935,15 +935,50 @@ class SingleSigWalletBroadcastTest {
         val draft = SendDraft()
         AmountEntry(draft).sendAll(1_000_000)
         assertEquals(998_872L, draft.amountSats, "what Review shows at the normal tier")
-        assertFalse(needsConfirmation(PreparedSend(TXID, "h", 1_128uL, 998_872uL), draft), "exactly what was shown")
-        assertFalse(needsConfirmation(PreparedSend(TXID, "h", 1_128uL, 997_873uL), draft), "999 sat under")
-        assertTrue(needsConfirmation(PreparedSend(TXID, "h", 1_128uL, 997_872uL), draft), "1,000 sat under")
-        assertTrue(needsConfirmation(PreparedSend(TXID, "h", 1_021_650uL, 99_524_350uL), draft), "the fee rule through the same door")
-        // A fixed amount is paid as asked, so only the fee rule speaks.
+        assertNull(feeQuestion(PreparedSend(TXID, "h", 1_128uL, 998_872uL), draft), "exactly what was shown")
+        assertNull(feeQuestion(PreparedSend(TXID, "h", 1_128uL, 997_873uL), draft), "999 sat under")
+        assertEquals(FeeQuestion.SendAllBelowShown, feeQuestion(PreparedSend(TXID, "h", 1_128uL, 997_872uL), draft), "1,000 sat under")
+        assertEquals(FeeQuestion.SendAllBelowShown, feeQuestion(PreparedSend(TXID, "h", 1_021_650uL, 99_524_350uL), draft), "the fee rule through the same door")
+        // A fixed amount is paid as asked, so only the fee rules speak.
         val fixed = SendDraft()
         fixed.setAmountInSats(100_000)
-        assertFalse(needsConfirmation(PreparedSend(TXID, "h", 1_128uL, 99_000uL), fixed))
-        assertTrue(needsConfirmation(PreparedSend(TXID, "h", 2_760uL, 100_000uL), fixed))
+        assertNull(feeQuestion(PreparedSend(TXID, "h", 1_128uL, 99_000uL), fixed))
+        assertEquals(FeeQuestion.AboveEstimate, feeQuestion(PreparedSend(TXID, "h", 2_760uL, 100_000uL), fixed))
+    }
+
+    // Item 85. The core used to refuse a fixed amount whose fee was more than the amount, with a generic banner. It signs it now, the fee
+    // being paid on top, and Review asks once on the same card. Each row is the draft Review showed and the payment the core signed.
+    @Test
+    fun aFeeAboveTheAmountAsksOnceInsteadOfBeingRefused() {
+        fun fixed(amountSats: Long, ratesSatVb: Long = 8) = SendDraft().apply {
+            takeTiers(LiveFeeTiers(ratesSatVb, ratesSatVb, ratesSatVb, live = true))
+            setAmountInSats(amountSats)
+        }
+        assertEquals(FeeQuestion.AboveAmount, feeQuestion(PreparedSend(TXID, "h", 14_241uL, 1_000uL), fixed(1_000, 101)), "1,000 sat at 101 sat/vB, the iPhone payment")
+        assertNull(feeQuestion(PreparedSend(TXID, "h", 1_128uL, 1_128uL), fixed(1_128)), "a fee equal to the amount")
+        assertEquals(FeeQuestion.AboveAmount, feeQuestion(PreparedSend(TXID, "h", 1_128uL, 1_127uL), fixed(1_127)), "a fee one sat over the amount")
+        assertEquals(FeeQuestion.AboveAmount, feeQuestion(PreparedSend(TXID, "h", 1_128uL, 546uL), fixed(546)), "a dust-limit amount, where the estimate rule is quiet")
+        assertEquals(FeeQuestion.AboveEstimateAndAmount, feeQuestion(PreparedSend(TXID, "h", 2_760uL, 1_000uL), fixed(1_000)), "four coins on a small amount, one card")
+        assertEquals(FeeQuestion.AboveEstimate, feeQuestion(PreparedSend(TXID, "h", 2_760uL, 10_000uL), fixed(10_000)), "four coins, the fee still under the amount")
+    }
+
+    // Send all takes the fee out of the balance and the core never refused it for the fee, so a fee above what leaves asks nothing new.
+    @Test
+    fun sendAllNeverAsksForAFeeAboveWhatLeaves() {
+        val draft = SendDraft()
+        draft.takeTiers(LiveFeeTiers(20, 20, 20, live = true))
+        AmountEntry(draft).sendAll(4_000)
+        assertEquals(1_180L, draft.amountSats, "what Review shows at 20 sat/vB over the typical size")
+        assertNull(feeQuestion(PreparedSend(TXID, "h", 2_200uL, 1_800uL), draft), "one coin and one output, the fee above what leaves")
+    }
+
+    // The card is worded by its value. Parts are asserted, not whole strings, so design review can edit the words.
+    @Test
+    fun eachFeeQuestionIsTitledByItsReasonAndNamesManyCoinsOnlyWhenTheFeeWasFarAboveWhatWasShown() {
+        for (q in listOf(FeeQuestion.AboveAmount, FeeQuestion.AboveEstimateAndAmount)) assertTrue("จำนวนที่ส่ง" in q.title, "$q is titled by the fee against the amount")
+        for (q in listOf(FeeQuestion.AboveEstimate, FeeQuestion.SendAllBelowShown)) assertFalse("จำนวนที่ส่ง" in q.title, "$q is titled by the fee against the estimate")
+        for (q in listOf(FeeQuestion.AboveEstimate, FeeQuestion.SendAllBelowShown, FeeQuestion.AboveEstimateAndAmount)) assertTrue("หลายเหรียญ" in q.message, "$q names the coins")
+        assertFalse("หลายเหรียญ" in FeeQuestion.AboveAmount.message, "a one-coin payment pays the fee Review showed")
     }
 
     // V4. The Send screen quoted send all and the available line from the balance with the mempool in it, so a send all posted a
