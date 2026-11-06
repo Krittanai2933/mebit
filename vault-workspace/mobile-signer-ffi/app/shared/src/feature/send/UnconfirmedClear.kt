@@ -47,14 +47,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * The ways out of a payment guard that nothing settles. First ส่งรายการเดิมอีกครั้ง, offered at once when the guard keeps the signed
- * bytes, which posts the same payment again behind [confirmRepost] and says how the last one ended ([repost]). Then the replacements
+ * The ways out of a payment guard that nothing settles. First the retry ([retryCopy]), offered at once when the guard keeps the signed
+ * bytes, which posts those bytes again behind [confirmRepost] and says how the last one ended ([repost]). Then the replacements
  * of [ReplacementControls]. Then a text link, offered
  * once the guard is old enough by the phone clock, or at once for a damaged guard file ([SingleSigWallet.unconfirmedClearOffered]),
- * that opens an inline confirm naming the txid, or saying the record is damaged, whose confirm clears the guard in memory and on the
- * phone. While a repost or a replacement runs the link waits. Nothing here, so no screen that shows the guard is left showing it. A
- * clear the phone could not finish keeps the guard and says so under the confirm. Every post runs in the screen's [scope], so its
- * result outlives the guard it settled. The copy is a default awaiting design review (docs/04-open-items.md).
+ * that opens an inline confirm naming every txid of the guard's chain, or saying the record is damaged ([clearConfirm]), whose confirm
+ * clears that guard in memory and on the phone. While a repost or a replacement runs the link waits. Nothing here, so no screen that
+ * shows the guard is left showing it. A clear the phone could not finish keeps the guard and says so under the confirm. Every post
+ * runs in the screen's [scope], so its result outlives the guard it settled. The copy is a default awaiting design review
+ * (docs/04-open-items.md).
  */
 @Composable
 internal fun UnconfirmedClearControl(
@@ -77,21 +78,21 @@ internal fun UnconfirmedClearControl(
         }
     }
     if (pending is SingleSigWallet.UnconfirmedSend && pending.hex != null) {
+        val copy = retryCopy(pending)
         Spacer(modifier = Modifier.height(12.dp))
         PrimaryCta(
-            if (repost.step == Step.Retry) "กำลังส่งรายการเดิม…" else "ส่งรายการเดิมอีกครั้ง",
+            if (repost.step == Step.Retry) copy.running else copy.label,
             "unconfirmed_repost",
             { repost.start(scope, pending.txid, confirmRepost, draft) { wallet.repost(session) } },
             enabled = !repost.running,
             height = 44.dp,
         )
-        val (line, tag) = when (repost.done?.takeIf { it.txid == pending.txid }?.outcome) {
-            Repost.Unknown -> "ยังไม่ทราบผลเหมือนเดิม ส่งรายการเดิมอีกครั้งภายหลังได้" to "unconfirmed_repost_unknown"
-            Repost.Refused -> "เครือข่ายไม่รับรายการเดิม อาจยืนยันไปแล้วหรือเหรียญถูกใช้ไปแล้ว ตรวจประวัติในหน้าแรกหรือใน explorer ก่อนล้างสถานะ" to "unconfirmed_repost_refused"
-            Repost.Failed -> "ส่งรายการเดิมไม่สำเร็จ ลองใหม่ภายหลัง" to "unconfirmed_repost_failed"
-            Repost.Out, null -> null to null
+        when (repost.done?.takeIf { it.txid == pending.txid }?.outcome) {
+            Repost.Unknown -> Note(copy.unknown, "unconfirmed_repost_unknown")
+            Repost.Refused -> Note(copy.refused, "unconfirmed_repost_refused")
+            Repost.Failed -> Note(copy.failed, "unconfirmed_repost_failed")
+            Repost.Out, null -> Unit
         }
-        if (line != null && tag != null) Note(line, tag)
         ReplacementControls(wallet, session, draft, quote, repost, scope, confirmReplacement, pending)
     }
     if (!offered || repost.running) return
@@ -104,15 +105,12 @@ internal fun UnconfirmedClearControl(
     }
     val shape = RoundedCornerShape(16.dp)
     Column(modifier = Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(16.dp)) {
-        val (named, tag) = when (pending) {
-            is SingleSigWallet.UnconfirmedSend -> "txid ${shorten(pending.txid, "…")}" to "unconfirmed_clear_txid"
-            SingleSigWallet.DamagedGuard -> "บันทึกการส่งครั้งก่อนเสียหาย ไม่ทราบ txid" to "unconfirmed_clear_damaged"
-        }
-        Text(named, color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, modifier = Modifier.testTag(tag))
+        val text = clearConfirm(pending)
+        Text(text.named, color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, modifier = Modifier.testTag(text.tag))
         Spacer(modifier = Modifier.height(6.dp))
-        Text("กดต่อเมื่อตรวจใน explorer แล้วว่าไม่มีธุรกรรมนี้ ถ้าส่งไปแล้วจะจ่ายซ้ำ", color = MbNavyInk, fontSize = 14.sp, lineHeight = 20.sp)
+        Text(text.warning, color = MbNavyInk, fontSize = 14.sp, lineHeight = 20.sp)
         Spacer(modifier = Modifier.height(12.dp))
-        PrimaryCta("ยืนยันส่งใหม่", "unconfirmed_clear_confirm", { stuck = !wallet.clearUnconfirmedSend(session) }, height = 44.dp)
+        PrimaryCta("ยืนยันส่งใหม่", "unconfirmed_clear_confirm", { stuck = !wallet.clearUnconfirmedSend(session, pending) }, height = 44.dp)
         if (stuck) {
             Spacer(modifier = Modifier.height(6.dp))
             Text("ล้างสถานะการส่งครั้งก่อนไม่สำเร็จ ลองใหม่ภายหลัง", color = MbEyebrow, fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 17.sp, modifier = Modifier.testTag("unconfirmed_clear_failed"))
@@ -121,6 +119,47 @@ internal fun UnconfirmedClearControl(
         LinkRow("ยกเลิก", "unconfirmed_clear_cancel", color = MbBody) { confirming = false }
     }
 }
+
+/** The words of the retry of a guard's own bytes, a draft awaiting design review. */
+internal class RetryCopy(val label: String, val running: String, val unknown: String, val refused: String, val failed: String)
+
+/** The retry's words for the guard [pending]. On a chain that holds a cancel its bytes are the cancel, so the words name the cancel. */
+internal fun retryCopy(pending: SingleSigWallet.UnconfirmedSend): RetryCopy = if (pending.holdsCancel) CANCEL_RETRY_COPY else RETRY_COPY
+
+private val RETRY_COPY = RetryCopy(
+    label = "ส่งรายการเดิมอีกครั้ง",
+    running = "กำลังส่งรายการเดิม…",
+    unknown = "ยังไม่ทราบผลเหมือนเดิม ส่งรายการเดิมอีกครั้งภายหลังได้",
+    refused = "เครือข่ายไม่รับรายการเดิม อาจยืนยันไปแล้วหรือเหรียญถูกใช้ไปแล้ว ตรวจประวัติในหน้าแรกหรือใน explorer ก่อนล้างสถานะ",
+    failed = "ส่งรายการเดิมไม่สำเร็จ ลองใหม่ภายหลัง",
+)
+
+private val CANCEL_RETRY_COPY = RetryCopy(
+    label = "ส่งรายการยกเลิกอีกครั้ง",
+    running = "กำลังส่งรายการยกเลิก…",
+    unknown = "ยังไม่ทราบผลของรายการยกเลิก ส่งรายการยกเลิกอีกครั้งภายหลังได้",
+    refused = "เครือข่ายไม่รับรายการยกเลิก รายการเดิมอาจยืนยันไปแล้ว ตรวจประวัติในหน้าแรกหรือใน explorer",
+    failed = "ส่งรายการยกเลิกไม่สำเร็จ ลองใหม่ภายหลัง",
+)
+
+/**
+ * What the clear's confirm names, under [tag], and the line under it, a draft awaiting design review. Any transaction of a chain may
+ * be the one that is out, so it names every one, oldest first, and the user must check them all.
+ */
+internal class ClearConfirm(val named: String, val tag: String, val warning: String)
+
+/** The clear's confirm for the guard [pending]. */
+internal fun clearConfirm(pending: SingleSigWallet.Unsettled): ClearConfirm = when (pending) {
+    is SingleSigWallet.UnconfirmedSend -> ClearConfirm(
+        (pending.replaces + pending.txid).joinToString("\n") { "txid ${shorten(it, "…")}" },
+        "unconfirmed_clear_txid",
+        if (pending.replaces.isEmpty()) ONE_PAYMENT_WARNING else CHAIN_WARNING,
+    )
+    SingleSigWallet.DamagedGuard -> ClearConfirm("บันทึกการส่งครั้งก่อนเสียหาย ไม่ทราบ txid", "unconfirmed_clear_damaged", ONE_PAYMENT_WARNING)
+}
+
+private const val ONE_PAYMENT_WARNING = "กดต่อเมื่อตรวจใน explorer แล้วว่าไม่มีธุรกรรมนี้ ถ้าส่งไปแล้วจะจ่ายซ้ำ"
+private const val CHAIN_WARNING = "กดต่อเมื่อตรวจใน explorer แล้วว่าไม่มีธุรกรรมใดในนี้ ถ้ามีรายการใดส่งไปแล้วจะจ่ายซ้ำ"
 
 /**
  * The replacements of the guard [pending], each spending every coin of it, so a chain pays at most once. Which links show is
@@ -195,7 +234,7 @@ private fun ReplacementCard(held: SingleSigWallet.HeldReplacement, quote: FiatQu
 }
 
 /** The words of one [Replacement] on the screens, a draft awaiting design review. [out] comes before the txid in the note. */
-private class ReplacementCopy(
+internal class ReplacementCopy(
     val link: String,
     val tag: String,
     val signing: String,
@@ -209,7 +248,7 @@ private class ReplacementCopy(
     val out: String,
 )
 
-private val Replacement.copy: ReplacementCopy
+internal val Replacement.copy: ReplacementCopy
     get() = when (this) {
         Replacement.FeeBump -> FEE_BUMP_COPY
         Replacement.Cancel -> CANCEL_COPY
@@ -237,7 +276,7 @@ private val CANCEL_COPY = ReplacementCopy(
     warning = "ถ้ารายการเดิมยืนยันก่อน การยกเลิกจะไม่สำเร็จ ผู้รับอาจเห็นรายการเดิมแล้วระหว่างรอ",
     confirm = "ยกเลิกด้วยค่าธรรมเนียมนี้",
     drop = "ไม่ยกเลิก",
-    unknown = "ยังไม่ทราบผลของรายการยกเลิก ส่งรายการเดิมอีกครั้งภายหลังได้",
+    unknown = "ยังไม่ทราบผลของรายการยกเลิก ส่งรายการยกเลิกอีกครั้งภายหลังได้",
     refused = "เครือข่ายไม่รับรายการยกเลิก รายการเดิมอาจยืนยันไปแล้ว ตรวจประวัติในหน้าแรกหรือใน explorer",
     failed = "ส่งรายการยกเลิกไม่สำเร็จ ลองใหม่ภายหลัง",
     out = "ส่งรายการยกเลิกแล้ว รอยืนยันในบล็อก ระหว่างนี้ยังส่งรายการใหม่ไม่ได้",

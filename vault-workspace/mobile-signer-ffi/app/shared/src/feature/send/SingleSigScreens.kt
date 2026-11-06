@@ -179,7 +179,8 @@ fun S5ReviewSignScreen(
             Spacer(modifier = Modifier.height(20.dp))
             IssueBanner(it.title, it.message, it.tag)
         }
-        UnconfirmedClearControl(wallet, session, draft, quote, repost, scope, confirmRepost, confirmReplacement)
+        // The guard of this screen's own post has no answer yet, and only a guard of unknown outcome takes a retry, a replacement or a clear.
+        if (!attempt.running) UnconfirmedClearControl(wallet, session, draft, quote, repost, scope, confirmRepost, confirmReplacement)
         RepostedNote(repost, wallet)
         if (total > wallet.spendableSats) {
             Spacer(modifier = Modifier.height(12.dp))

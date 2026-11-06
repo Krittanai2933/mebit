@@ -143,7 +143,7 @@ class SingleSigWallet(
         private set
 
     /**
-     * The payment that may be out, or null. [post] sets it and saves it before the post, and while it is set [prepare] refuses, because the same payment could go out twice. It clears when the post returns or the node refuses, when a [repost] of its bytes or a fee bump ([postReplacement]) is out, when a [bindSession] loads a [history] that holds its txid or one it replaced, when the user clears it through [clearUnconfirmedSend] after checking the explorer, and in [useDemoFixture]. Never by the clock. A chain that holds a cancel clears only by the user or by a history that lists one of its txids with a block. [lastTxid] and [lastSentAtSeconds] stay for payments that went out.
+     * The payment that may be out, or null. [post] sets it and saves it before the post, and while it is set [prepare] refuses, because the same payment could go out twice. It clears when the post returns or the node refuses, when a [repost] of its bytes or a fee bump ([postReplacement]) is out, when a [bindSession] loads a [history] that holds its txid or one it replaced, when the user clears it through [clearUnconfirmedSend] after checking the explorer, and in [useDemoFixture]. Never by the clock. A chain that holds a cancel clears only by the user or by a history that lists one of its txids with a block. Every clear names the guard it settles, so a replacement's guard that took that one's place meanwhile stays. [lastTxid] and [lastSentAtSeconds] stay for payments that went out.
      * The session keeps it in the guard file ([OnboardingSession.unconfirmedSend]), so a wallet built after a restart, or another live instance of the wallet, takes it at its next bind, and clearing it here clears the file too.
      * A damaged guard file is [DamagedGuard] here: no history can settle it, so only the user's clear does.
      */
@@ -183,6 +183,8 @@ class SingleSigWallet(
                 mode = WalletMode.Live
                 lastError = scanErrorThai(snap.scan)
             }
+            // The history can speak only for the guard held as it begins to load. A replacement posted during the load came after it.
+            val judged = unconfirmedSend as? UnconfirmedSend
             // A history failure is not the wallet's, so its own try keeps it from changing the mode or reaching lastError.
             val loaded = try {
                 fetchHistory(session.words, session.passphrase, network)
@@ -192,7 +194,7 @@ class SingleSigWallet(
             }
             history = loaded ?: emptyList()
             // Only a list that names the payment can settle it. The empty list of a failed call says nothing, and neither does the clock.
-            if (loaded != null && (unconfirmedSend as? UnconfirmedSend)?.settledBy(loaded) == true) clearUnconfirmedSend(session)
+            if (loaded != null && judged?.settledBy(loaded) == true) clearUnconfirmedSend(session, judged)
         } catch (e: Exception) {
             // Mode first, so no frame shows the cleared balance as a known one.
             mode = WalletMode.Unavailable
@@ -351,7 +353,7 @@ class SingleSigWallet(
             return false
         } catch (e: MobileSignerException.InvalidPsbtJson) {
             // The node refused the transaction, or hot_broadcast refused before it posted anything: nothing is out and the guard goes.
-            clearUnconfirmedSend(session)
+            clearUnconfirmedSend(session, pending)
             lastError = sendErrorThai(e.message)
             return false
         } catch (e: Exception) {
@@ -359,7 +361,7 @@ class SingleSigWallet(
             lastError = "ยังไม่ทราบว่าการส่งออกไปแล้วหรือยัง อย่าส่งซ้ำ"
             return false
         }
-        clearUnconfirmedSend(session)
+        clearUnconfirmedSend(session, pending)
         lastTxid = prepared.txid
         lastFeeSats = prepared.feeSats.toLong()
         lastAmountSats = prepared.amountSats.toLong()
@@ -373,22 +375,22 @@ class SingleSigWallet(
     }
 
     /**
-     * The payment is out or refused, the explorer lists it, or the user checked and found no such transaction. Clears the guard here
-     * and on the phone, so a new payment can start. False, with the guard kept here and on the phone, when the phone could not drop
-     * every copy of it ([OnboardingSession.clearUnconfirmedSend]).
+     * The payment of [guard] is out or refused, the explorer lists it, or the user checked and found no such transaction. Clears that
+     * guard on the phone and here, so a new payment can start, and only that guard. One that took its place meanwhile, a fee bump's or
+     * a cancel's, stays here and on the phone, because its payment may be out. False, with the guard kept here and on the phone, when
+     * the phone could not drop every copy of it ([OnboardingSession.clearUnconfirmedSend]).
      */
-    fun clearUnconfirmedSend(session: OnboardingSession): Boolean {
-        val pending = unconfirmedSend ?: return true
-        if (!session.clearUnconfirmedSend(pending)) return false
-        unconfirmedSend = null
+    fun clearUnconfirmedSend(session: OnboardingSession, guard: Unsettled): Boolean {
+        if (!session.clearUnconfirmedSend(guard)) return false
+        if (unconfirmedSend == guard) unconfirmedSend = null
         return true
     }
 
     /**
      * Posts the guarded payment again, from the signed bytes the guard file keeps with it. The same bytes are the same transaction, so
      * this can never pay twice and needs no wait. The screen asks the owner first, as it does before signing. [Repost.Out] drops the
-     * guard here, and on the phone unless another instance's repost of it still runs. The balance waits for Home's next bind. The
-     * screen's draft of the payment goes in the same step ([com.mebit.app.feature.send.RepostAttempt.start]).
+     * guard here while the wallet still holds it, and on the phone unless another instance's repost of it still runs. The balance waits
+     * for Home's next bind. The screen's draft of the payment goes in the same step ([com.mebit.app.feature.send.RepostAttempt.start]).
      * Every other end keeps the guard, a refusal included, because after a first post a refusal can mean the payment confirmed or that
      * another transaction spent its coins. [Repost.Failed], with nothing posted, when the phone no longer keeps this guard with its bytes.
      * A chain that holds a cancel keeps its guard on [Repost.Out] too, because the payment it cancels may still confirm.
@@ -399,9 +401,9 @@ class SingleSigWallet(
         val outcome = session.repostUnconfirmedSend(pending) { hex -> posted(network, hex, pending.txid) } ?: Repost.Failed
         if (outcome == Repost.Out && !pending.holdsCancel) {
             // Out is known, so the wallet lets go even while another instance's repost of these bytes keeps the phone's copy. A claim still
-            // meets that copy until its repost ends out or a bind lists the txid.
+            // meets that copy until its repost ends out or a bind lists the txid. A replacement's guard that took this one's place stays.
             session.clearUnconfirmedSend(pending)
-            unconfirmedSend = null
+            if (unconfirmedSend == pending) unconfirmedSend = null
         }
         return outcome
     }
@@ -487,7 +489,7 @@ class SingleSigWallet(
         }
         val outcome = session.repostUnconfirmedSend(next) { hex -> posted(held.network, hex, next.txid) } ?: Repost.Failed
         if (outcome == Repost.Out && !next.holdsCancel) {
-            clearUnconfirmedSend(session)
+            clearUnconfirmedSend(session, next)
             lastTxid = prepared.txid
             lastFeeSats = prepared.feeSats.toLong()
             lastAmountSats = prepared.amountSats.toLong()

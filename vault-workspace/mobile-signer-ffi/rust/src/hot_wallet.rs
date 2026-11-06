@@ -1506,8 +1506,9 @@ enum Replacement {
 /// rate can be above `fee_rate_sat_vb`. Refuses, before any lookup, bytes that are not one transaction with inputs and one
 /// or two outputs whose first is at least 546 sats, and a rate outside 1 to 2,000 sat/vB. After the scan
 /// it refuses, after `replace: `, a second output that is not this wallet's change, inputs that are not
-/// all coins this wallet can spend now (`coins spent:`, most likely because that payment is out), a rate
-/// that would pass 2,000 sat/vB, and what is left below 546 sats. The same scan as
+/// all coins this wallet can spend now (`coins spent:`, most likely because that payment is out), an
+/// input without this wallet's own SIGHASH_ALL signature for its coin, a rate that would pass 2,000
+/// sat/vB, and what is left below 546 sats. The same scan as
 /// `hot_prepare_send_at_rate`, so call it off the main thread.
 #[uniffi::export]
 pub fn hot_prepare_fee_bump(
@@ -1613,6 +1614,11 @@ fn signed_replacement(
                 ))
             })?;
         selected.push((utxo, *owner));
+    }
+    // The bytes come from app storage, where anything could have written them, and the card names no
+    // address, so nothing below may read them until this wallet's own signatures vouch for them.
+    if !signed_here(&earlier, &selected) {
+        return Err(not_ours("it is not signed by this wallet"));
     }
     let total = selected
         .iter()
@@ -1734,6 +1740,10 @@ fn signed_replacement(
         ),
         ("its fee is above the earlier fee", fee > old_fee),
         (
+            "its fee pays the earlier fee and its own size at 1 sat/vB",
+            u128::from(fee) >= u128::from(old_fee) + u128::from(estimated),
+        ),
+        (
             "its rate is above the earlier rate",
             u128::from(fee) * u128::from(old_vsize) > u128::from(old_fee) * u128::from(estimated),
         ),
@@ -1746,6 +1756,41 @@ fn signed_replacement(
 
 fn inputs_of(tx: &Transaction) -> Vec<OutPoint> {
     tx.input.iter().map(|i| i.previous_output).collect()
+}
+
+/// Whether every input `i` of `tx` is spent as `signed` spends `selected[i]`, with no script_sig and a
+/// witness of two items, a SIGHASH_ALL signature by that coin's key over its P2WPKH sighash and then
+/// the key's compressed public key. SIGHASH_ALL commits to every input and output, so none has changed.
+fn signed_here(tx: &Transaction, selected: &[(&Utxo, &OwnKey)]) -> bool {
+    let secp = Secp256k1::verification_only();
+    let mut cache = SighashCache::new(tx);
+    selected.iter().enumerate().all(|(i, (utxo, owner))| {
+        let (input, script) = (&tx.input[i], owner.address.script_pubkey());
+        let sig = input
+            .witness
+            .nth(0)
+            .map(bitcoin::ecdsa::Signature::from_slice);
+        let sighash = cache.p2wpkh_signature_hash(
+            i,
+            &script,
+            Amount::from_sat(utxo.value),
+            EcdsaSighashType::All,
+        );
+        let (Some(Ok(sig)), Ok(sighash)) = (sig, sighash) else {
+            return false;
+        };
+        input.script_sig.is_empty()
+            && input.witness.len() == 2
+            && input.witness.nth(1) == Some(owner.pubkey.to_bytes().as_slice())
+            && sig.sighash_type == EcdsaSighashType::All
+            && secp
+                .verify_ecdsa(
+                    &Message::from_digest(sighash.to_byte_array()),
+                    &sig.signature,
+                    &owner.pubkey.0,
+                )
+                .is_ok()
+    })
 }
 
 /// The fee tiers the Send screen offers, in sat/vB. `slow_sat_vb` aims at confirmation in about an
@@ -4062,8 +4107,9 @@ mod tests {
                 changed(&|tx| tx.input.push(tx.input[0].clone())),
                 "it spends a coin twice",
             ),
+            // Signed as it is, because a value changed after signing is refused as unsigned first.
             (
-                changed(&|tx| tx.output[0].value = Amount::from_sat(20_000)),
+                hand_made('1', 10_000, 20_000, 4_718),
                 "it pays out more than its coins hold",
             ),
         ];
@@ -4075,6 +4121,90 @@ mod tests {
                 );
             }
         }
+    }
+
+    // The guard's bytes come from app storage, so bytes this wallet did not sign could aim a fee bump at
+    // another address, and the card names no address. Every earlier input must carry this wallet's own
+    // SIGHASH_ALL signature for its coin, which commits to every output.
+    #[test]
+    fn a_replacement_is_refused_for_a_payment_this_wallet_did_not_sign() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        let earlier = fake.send(SOMEONE, 5_000, 2).unwrap();
+        let changed = |change: &dyn Fn(&mut Transaction)| {
+            let mut tx = earlier.clone();
+            change(&mut tx);
+            tx
+        };
+        let thief = ScriptBuf::new_p2wpkh(&bitcoin::WPubkeyHash::from_byte_array([0xaa; 20]));
+        let key = own(Chain::External, 0);
+        let sign_as = |tx: &mut Transaction, hash_type: EcdsaSighashType| {
+            let script = key.address.script_pubkey();
+            let sighash = SighashCache::new(&*tx)
+                .p2wpkh_signature_hash(0, &script, Amount::from_sat(10_000), hash_type)
+                .unwrap();
+            let msg = Message::from_digest(sighash.to_byte_array());
+            let mut der = Secp256k1::new()
+                .sign_ecdsa(&msg, &key.privkey.inner)
+                .serialize_der()
+                .to_vec();
+            der.push(hash_type as u8);
+            tx.input[0].witness = Witness::from_slice(&[der.as_slice(), &key.pubkey.to_bytes()]);
+        };
+        let coin = Utxo {
+            txid: Txid::from_str(&id('1')).unwrap(),
+            vout: 0,
+            value: 10_000,
+            confirmed: true,
+        };
+        let cases = [
+            (
+                "output 0 aimed elsewhere after signing",
+                changed(&|tx| tx.output[0].script_pubkey = thief.clone()),
+            ),
+            (
+                "the witness stripped",
+                changed(&|tx| tx.input[0].witness = Witness::new()),
+            ),
+            (
+                "signed by another key of this wallet",
+                signed(&[(&coin, &own(Chain::External, 1))], earlier.output.clone()).unwrap(),
+            ),
+            (
+                "signed SIGHASH_NONE, then output 0 aimed elsewhere",
+                changed(&|tx| {
+                    sign_as(tx, EcdsaSighashType::None);
+                    tx.output[0].script_pubkey = thief.clone();
+                }),
+            ),
+            (
+                "the type byte after its signature is not ALL",
+                changed(&|tx| {
+                    let mut items: Vec<Vec<u8>> =
+                        tx.input[0].witness.iter().map(<[u8]>::to_vec).collect();
+                    *items[0].last_mut().unwrap() = EcdsaSighashType::AllPlusAnyoneCanPay as u8;
+                    tx.input[0].witness = Witness::from_slice(&items);
+                }),
+            ),
+        ];
+        let refusal = "replace: not this wallet's payment: it is not signed by this wallet";
+        let mut wrong = Vec::new();
+        for kind in KINDS {
+            for (case, tx) in &cases {
+                match fake.replace(tx, 5, kind) {
+                    Err(MobileSignerError::InvalidPsbtJson(m)) if m == refusal => {}
+                    other => wrong.push(format!(
+                        "{kind:?}, {case}: {:?}",
+                        other.map(|(tx, _)| tx.output.iter().map(pays).collect::<Vec<_>>())
+                    )),
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "not refused as unsigned:\n{}",
+            wrong.join("\n")
+        );
     }
 
     // Something spent a coin of the earlier payment, most likely that payment itself, so it may be out.

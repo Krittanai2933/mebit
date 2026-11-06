@@ -2,6 +2,7 @@ package com.mebit.app.data
 
 import com.mebit.app.data.SingleSigWallet.DamagedGuard
 import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
+import com.mebit.app.feature.send.RepostAttempt
 import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotSendResult
 import com.mebit.ffi.signer.HotTx
@@ -10,6 +11,12 @@ import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.MobileSignerException
 import com.mebit.ffi.signer.PreparedSend
 import com.mebit.ffi.signer.SoftwareAccountKey
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -94,7 +101,7 @@ class ReplacementTest {
 
         val cleared = Guarded().firstPostUnknown()
         assertTrue(cleared.wallet.prepareReplacement(cleared.session, Replacement.FeeBump, 20))
-        assertTrue(cleared.wallet.clearUnconfirmedSend(cleared.session))
+        assertTrue(cleared.wallet.clearUnconfirmedSend(cleared.session, FIRST))
         assertEquals(Repost.Failed, cleared.wallet.postReplacement(cleared.session), "a bump of a guard the wallet no longer holds")
         assertNull(cleared.guards.text, "nothing written")
 
@@ -291,6 +298,237 @@ class ReplacementTest {
         assertEquals(again, phone.wallet.unconfirmedSend)
         assertEquals(again, phone.guards.guardOf())
     }
+
+    // R9 H1. A bind's history speaks only for the guard held when it began to load. A fee bump posted during the load, its answer lost,
+    // came after a history that lists the first payment, so the bind judges the first payment's guard and the bump's guard stays everywhere.
+    @Test
+    fun aBumpPostedWhileABindsHistoryLoadsKeepsItsGuard() {
+        val phone = Guarded().firstPostUnknown()
+        phone.history = listOf(HotTx(SIGNED_TXID, -101_128L, 0u, null))
+        phone.onHistory = {
+            phone.onHistory = {}
+            assertEquals(Repost.Unknown, phone.bump())
+        }
+        phone.wallet.bindSession(phone.session)
+        assertEquals(BUMP_GUARD, phone.wallet.unconfirmedSend, "the wallet")
+        assertEquals(BUMP_GUARD, phone.guards.guardOf(), "the phone")
+    }
+
+    // The cancel of that race, out. The listing of the first payment with no block settles the first payment's guard, the one the bind
+    // judged, and never the cancel's that took its place, because until a block holds one transaction of the chain the payment may confirm.
+    @Test
+    fun aCancelPostedWhileABindsHistoryLoadsKeepsItsGuard() {
+        val phone = Guarded().firstPostUnknown()
+        phone.history = listOf(HotTx(SIGNED_TXID, -101_128L, 0u, null))
+        phone.answer = { HotSendResult(it) }
+        phone.onHistory = {
+            phone.onHistory = {}
+            assertEquals(Repost.Out, phone.cancel())
+        }
+        phone.wallet.bindSession(phone.session)
+        assertEquals(CANCEL_GUARD, phone.wallet.unconfirmedSend, "the wallet")
+        assertEquals(CANCEL_GUARD, phone.guards.guardOf(), "the phone")
+    }
+
+    // R9 O1. Review offered the guard's controls while its own first post still ran, so a cancel could go out inside that post. The first
+    // post, ending out, settles the guard it wrote and never the cancel's that took its place, so no new payment goes while the payment and
+    // its cancel may both be out.
+    @Test
+    fun aCancelPostedWhileTheFirstPostRunsKeepsItsGuardWhenThatPostEndsOut() = cancelDuringTheFirstPost(Repost.Out)
+
+    // The same with the cancel's answer lost, so the cancel may be out.
+    @Test
+    fun aCancelWhoseAnswerWasLostKeepsItsGuardWhenTheFirstPostEndsOut() = cancelDuringTheFirstPost(Repost.Unknown)
+
+    private fun cancelDuringTheFirstPost(cancelled: Repost) {
+        val phone = Guarded()
+        var during: SingleSigWallet.Unsettled? = null
+        phone.answer = { txid ->
+            if (txid == SIGNED_TXID) {
+                phone.answer = { if (cancelled == Repost.Out) HotSendResult(it) else throw MobileSignerException.BroadcastUnknown("unknown") }
+                assertEquals(cancelled, phone.cancel(), "the cancel")
+                during = phone.guards.guardOf()
+            }
+            HotSendResult(txid)
+        }
+        assertTrue(phone.wallet.prepare(phone.session, 100_000, 8, PAYEE))
+        assertTrue(phone.wallet.post(phone.session), "the first post is out")
+        assertEquals(CANCEL_GUARD, during, "the cancel's guard was on the phone before its post")
+        assertEquals(CANCEL_GUARD, phone.wallet.unconfirmedSend, "the wallet")
+        assertEquals(CANCEL_GUARD, phone.guards.guardOf(), "the phone")
+        assertFalse(phone.wallet.prepare(phone.session, 50_000, 8, PAYEE) && phone.wallet.post(phone.session), "a new payment")
+        assertEquals(listOf(SIGNED_TXID, CANCEL.first), phone.posts)
+    }
+
+    // R9 O1, the bump. Inside the first post a retry is refused, which offers the fee bump, and the bump's answer is lost, so it may be
+    // out. The first post is then refused too. It settles the guard it wrote and never the bump's, so the payment is not signed again.
+    @Test
+    fun aBumpWhoseAnswerWasLostKeepsItsGuardWhenTheFirstPostIsRefused() {
+        val phone = Guarded()
+        phone.answer = { txid ->
+            if (txid == SIGNED_TXID && phone.posts.size == 1) {
+                assertEquals(Repost.Refused, phone.wallet.repost(phone.session), "a retry")
+                assertEquals(Repost.Unknown, phone.bump(), "the bump the refusal offered")
+            }
+            if (txid == BUMP.first) throw MobileSignerException.BroadcastUnknown("unknown")
+            throw MobileSignerException.InvalidPsbtJson("invalid PSBT json: esplora post: status code 400: mempool min fee not met")
+        }
+        assertTrue(phone.wallet.prepare(phone.session, 100_000, 8, PAYEE))
+        assertFalse(phone.wallet.post(phone.session), "the first post is refused")
+        assertEquals(BUMP_GUARD, phone.wallet.unconfirmedSend, "the wallet")
+        assertEquals(BUMP_GUARD, phone.guards.guardOf(), "the phone")
+        assertFalse(phone.wallet.prepare(phone.session, 100_000, 8, PAYEE) && phone.wallet.post(phone.session), "the payment signed again")
+        assertEquals(listOf(SIGNED_TXID, SIGNED_TXID, BUMP.first), phone.posts)
+    }
+
+    // Every clear names its guard. A settle of one that a replacement took the place of drops nothing, here or on the phone.
+    @Test
+    fun aSettleOfAnEarlierGuardLeavesTheNewerGuardEverywhere() {
+        val phone = Guarded().firstPostUnknown()
+        assertEquals(Repost.Unknown, phone.bump())
+        assertTrue(phone.wallet.clearUnconfirmedSend(phone.session, FIRST), "nothing of the first payment is left to drop")
+        assertEquals(BUMP_GUARD, phone.wallet.unconfirmedSend, "the wallet")
+        assertEquals(BUMP_GUARD, phone.guards.guardOf(), "the phone")
+    }
+
+    // A retry that ends out lets go of its own guard only. A bump posted while the retry's post ran took that guard's place, and stays.
+    @Test
+    fun aRetryThatEndsOutKeepsTheGuardOfABumpPostedDuringIt() {
+        val phone = Guarded().firstPostUnknown()
+        phone.answer = { txid ->
+            if (txid == SIGNED_TXID) {
+                phone.answer = { throw MobileSignerException.BroadcastUnknown("unknown") }
+                assertEquals(Repost.Unknown, phone.bump())
+            }
+            HotSendResult(txid)
+        }
+        assertEquals(Repost.Out, phone.wallet.repost(phone.session))
+        assertEquals(BUMP_GUARD, phone.wallet.unconfirmedSend, "the wallet")
+        assertEquals(BUMP_GUARD, phone.guards.guardOf(), "the phone")
+    }
+
+    // The first post's race the other way round. It ends out while its cancel still posts, and the mark of that post keeps the cancel's guard.
+    @Test
+    fun theFirstPostEndingWhileItsCancelStillPostsKeepsTheCancelsGuard() = runBlocking {
+        val phone = Guarded()
+        val firstPosting = CompletableDeferred<Unit>()
+        val cancelPosting = CompletableDeferred<Unit>()
+        val firstEnded = CompletableDeferred<Unit>()
+        phone.answer = { txid ->
+            when (txid) {
+                SIGNED_TXID -> {
+                    firstPosting.complete(Unit)
+                    runBlocking { cancelPosting.await() }
+                }
+                CANCEL.first -> {
+                    cancelPosting.complete(Unit)
+                    runBlocking { firstEnded.await() }
+                }
+            }
+            HotSendResult(txid)
+        }
+        val cancel = launch(Dispatchers.Default) {
+            firstPosting.await()
+            assertEquals(Repost.Out, phone.cancel())
+        }
+        assertTrue(phone.wallet.prepare(phone.session, 100_000, 8, PAYEE))
+        assertTrue(phone.wallet.post(phone.session), "the first post is out")
+        firstEnded.complete(Unit)
+        cancel.join()
+        assertEquals(CANCEL_GUARD, phone.wallet.unconfirmedSend, "the wallet")
+        assertEquals(CANCEL_GUARD, phone.guards.guardOf(), "the phone")
+    }
+
+    // Two instances. A's first post runs, B takes the guard and cancels, and A's post then ends out. A's settle meets the cancel's line,
+    // which stays, and so does A's next payment.
+    @Test
+    fun aCancelFromAnotherInstanceDuringTheFirstPostKeepsItsGuard() {
+        val a = Guarded()
+        a.answer = { txid ->
+            if (txid == SIGNED_TXID) {
+                val b = Guarded(a.guards)
+                assertEquals(FIRST, b.wallet.unconfirmedSend, "B took the first payment's guard")
+                b.answer = { HotSendResult(it) }
+                assertEquals(Repost.Out, b.cancel())
+            }
+            HotSendResult(txid)
+        }
+        assertTrue(a.wallet.prepare(a.session, 100_000, 8, PAYEE))
+        assertTrue(a.wallet.post(a.session), "A's first post is out")
+        assertEquals(CANCEL_GUARD, a.guards.guardOf())
+        assertFalse(a.wallet.prepare(a.session, 50_000, 8, PAYEE) && a.wallet.post(a.session), "A's next payment")
+        assertEquals(listOf(SIGNED_TXID), a.posts)
+    }
+
+    // Two instances. B's retry of the old bytes runs while A cancels. B's retry ends out, but its settle meets the cancel's line, and so
+    // does B's next payment.
+    @Test
+    fun aRetryOfTheOldBytesRacingACancelDropsNothing() {
+        val a = Guarded().firstPostUnknown()
+        val b = Guarded(a.guards)
+        assertEquals(FIRST, b.wallet.unconfirmedSend)
+        a.answer = { HotSendResult(it) }
+        b.answer = { txid ->
+            if (txid == SIGNED_TXID) assertEquals(Repost.Out, a.cancel(), "A's cancel")
+            HotSendResult(txid)
+        }
+        assertEquals(Repost.Out, b.wallet.repost(b.session))
+        assertFalse(b.wallet.prepare(b.session, 50_000, 8, PAYEE) && b.wallet.post(b.session), "B's next payment")
+        assertEquals(CANCEL_GUARD, a.guards.guardOf())
+        assertEquals(listOf(SIGNED_TXID), b.posts)
+    }
+
+    // Two instances. B took the cancel's guard, and its user clears it while A's cancel still posts. The mark of that post refuses the clear.
+    @Test
+    fun aClearWhileTheCancelPostsDropsNothing() = runBlocking {
+        val a = Guarded().firstPostUnknown()
+        val posting = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        a.answer = { txid ->
+            if (txid == CANCEL.first) {
+                posting.complete(Unit)
+                runBlocking { release.await() }
+            }
+            HotSendResult(txid)
+        }
+        val cancel = launch(Dispatchers.Default) { assertEquals(Repost.Out, a.cancel()) }
+        posting.await()
+        val b = Guarded(a.guards)
+        assertEquals(CANCEL_GUARD, b.wallet.unconfirmedSend, "B took the cancel's guard")
+        assertFalse(b.wallet.clearUnconfirmedSend(b.session, CANCEL_GUARD), "B's clear while the cancel posts")
+        release.complete(Unit)
+        cancel.join()
+        assertEquals(CANCEL_GUARD, a.guards.guardOf())
+    }
+
+    // Two instances. A cancels after B took the first payment's guard. B's bind settles the first payment on a listing with no block, as a
+    // chain with no cancel settles, but the phone keeps the cancel's line, so B's next payment is refused before any post.
+    @Test
+    fun aStaleInstancesBindCannotOpenTheWayForANewPayment() {
+        val a = Guarded().firstPostUnknown()
+        val b = Guarded(a.guards)
+        assertEquals(FIRST, b.wallet.unconfirmedSend)
+        a.answer = { HotSendResult(it) }
+        assertEquals(Repost.Out, a.cancel())
+        b.history = listOf(HotTx(SIGNED_TXID, -101_128L, 0u, null))
+        b.wallet.bindSession(b.session)
+        assertFalse(b.wallet.prepare(b.session, 50_000, 8, PAYEE) && b.wallet.post(b.session), "B's next payment")
+        assertEquals(emptyList<String>(), b.posts)
+        assertEquals(CANCEL_GUARD, a.guards.guardOf())
+    }
+
+    // A double tap on the card's confirm, through the screen's RepostAttempt and the real wallet, posts the cancel once.
+    @Test
+    fun aDoubleTapOnTheCardsConfirmPostsOnce() = runBlocking {
+        val phone = Guarded().firstPostUnknown()
+        assertTrue(phone.wallet.prepareReplacement(phone.session, Replacement.Cancel, 20))
+        val held = assertNotNull(phone.wallet.heldReplacement)
+        val attempt = RepostAttempt()
+        val draft = SendDraft()
+        val scope = CoroutineScope(coroutineContext + Job())
+        List(2) { attempt.postReplacement(scope, held, draft) { phone.wallet.postReplacement(phone.session) } }.forEach { it.join() }
+        assertEquals(listOf(SIGNED_TXID, CANCEL.first), phone.posts)
+    }
 }
 
 private const val SENT_AT = 1_792_740_720L
@@ -315,36 +553,44 @@ private val BUMP_GUARD = UnconfirmedSend(BUMP.first, LATER, BUMP.second, listOf(
 private val CANCEL_GUARD = UnconfirmedSend(CANCEL.first, LATER, CANCEL.second, listOf(SIGNED_TXID), holdsCancel = true)
 
 /**
- * A live wallet on a phone whose guard file is [guards]. The core signs a fee bump as [BUMP] and a cancel as [CANCEL], until a test
- * swaps [sign], and records what it was asked in [core]. Every post lands in [posts] and the node answers [answer]. The clock reads
- * [LATER] once the first post is behind it.
+ * A live wallet on a phone whose guard file is [guards]. The core signs the first payment as [SIGNED_HEX] and every later one as
+ * [OTHER_SIGNED_HEX], as it would from other coins once the first spent its own. It signs a fee bump as [BUMP] and a cancel as
+ * [CANCEL], until a test swaps [sign], and records what it was asked in [core]. Every post lands in [posts] and the node answers
+ * [answer]. Each history load runs [onHistory] and then answers [history]. The clock reads [LATER] once the first post is behind it.
  */
 private class Guarded(val guards: FakePlainFile = FakePlainFile()) {
     val posts = mutableListOf<String>()
     val core = mutableListOf<Pair<Replacement, String>>()
     var answer: (txid: String) -> HotSendResult = { throw MobileSignerException.BroadcastUnknown("unknown") }
     var history: List<HotTx> = emptyList()
+    var onHistory: () -> Unit = {}
     var sign: (Replacement) -> PreparedSend = { kind ->
         when (kind) {
             Replacement.FeeBump -> PreparedSend(BUMP.first, BUMP.second, 20uL * 141uL, 100_000uL)
             Replacement.Cancel -> PreparedSend(CANCEL.first, CANCEL.second, 20uL * 110uL, 98_000uL)
         }
     }
-    private var clock = SENT_AT
+    var clock = SENT_AT
+    private var payments = 0
     val session = OnboardingSession(
         SavedWallet(FakeSecureStore()),
         restoreKey = { w, _, _, _ -> SoftwareAccountKey(w, TEST_CHECK, "tpub-test", "m/48'/1'/0'/2'") },
         payments = PendingPayments(guards),
     ).apply { restoreFromWords(PUBLIC_WORDS_24) }
     val wallet = SingleSigWallet(
-        prepareAtRate = { _, _, _, _, _, _ -> PreparedSend(SIGNED_TXID, SIGNED_HEX, 1_128uL, 100_000uL) },
+        prepareAtRate = { _, _, _, _, amount, _ ->
+            if (payments++ == 0) PreparedSend(SIGNED_TXID, SIGNED_HEX, 1_128uL, 100_000uL) else PreparedSend(OTHER_SIGNED_TXID, OTHER_SIGNED_HEX, 1_128uL, amount)
+        },
         prepareAll = { _, _, _, _, _ -> error("not used") },
         postHex = { _, _, txid ->
             posts += txid
             answer(txid)
         },
         snapshot = { _, _, _ -> HotWalletSnapshot("tb1qreceive", 1_000_000uL, 1_000_000uL, KeyNetwork.TEST, HotScan.COMPLETE) },
-        fetchHistory = { _, _, _ -> history },
+        fetchHistory = { _, _, _ ->
+            onHistory()
+            history
+        },
         nowSeconds = { clock },
         receiveAddressOf = { _, _, _, _ -> "tb1qoffline" },
         bumpAtRate = { _, _, _, hex, _ ->
@@ -368,5 +614,17 @@ private class Guarded(val guards: FakePlainFile = FakePlainFile()) {
         assertEquals(FIRST, wallet.unconfirmedSend)
         clock = LATER
         return this
+    }
+
+    /** The user's fee bump of the guard this wallet holds, at [LATER], past the owner check and then the card's confirm. */
+    fun bump(): Repost = replace(Replacement.FeeBump)
+
+    /** The user's cancel of the guard this wallet holds, at [LATER], past the owner check and then the card's confirm. */
+    fun cancel(): Repost = replace(Replacement.Cancel)
+
+    private fun replace(kind: Replacement): Repost {
+        clock = LATER
+        assertTrue(wallet.prepareReplacement(session, kind, 20), "the core signed the $kind")
+        return wallet.postReplacement(session)
     }
 }
