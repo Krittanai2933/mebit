@@ -713,6 +713,13 @@ fun replacementQuestion(held: SingleSigWallet.HeldReplacement): FeeQuestion? {
     return if (reasons.isEmpty()) null else FeeQuestion(reasons, held.rateSatVb, dustSats, sendAll = false)
 }
 
+/**
+ * The line the card of a signed fee bump shows under its amount when the new fee came out of that amount ([PreparedSend.amountCutSats]),
+ * or null. Draft copy awaiting design review (open item 86).
+ */
+fun amountCutLine(held: SingleSigWallet.HeldReplacement): String? =
+    held.prepared.amountCutSats.toLong().takeIf { it > 0 }?.let { "ผู้รับจะได้น้อยกว่ารายการเดิม ${thousands(it)} sat เพราะค่าธรรมเนียมใหม่หักจากจำนวนที่ส่ง" }
+
 /** The three tiers of board 4.4. [satPerVb] is the board's fixed rate, which [LiveFeeTiers.DEFAULT] uses until the live rates arrive or when they cannot be fetched. */
 enum class FeeTier(val label: String, val eta: String, val satPerVb: Long) {
     Slow("ช้า", "~1 ชม.", 4),

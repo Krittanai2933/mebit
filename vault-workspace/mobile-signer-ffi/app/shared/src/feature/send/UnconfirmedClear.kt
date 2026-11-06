@@ -31,6 +31,7 @@ import com.mebit.app.data.Replacement
 import com.mebit.app.data.Repost
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
+import com.mebit.app.data.amountCutLine
 import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.data.replacementQuestion
 import com.mebit.app.ui.components.PrimaryCta
@@ -222,6 +223,10 @@ private fun ReplacementCard(held: SingleSigWallet.HeldReplacement, quote: FiatQu
         when (held.kind) {
             Replacement.FeeBump -> ReviewRow("ผู้รับเดิม", amount, tag = "replacement_amount")
             Replacement.Cancel -> Text("คืน $amount เข้ากระเป๋านี้", color = MbNavyInk, fontSize = 14.sp, fontWeight = FontWeight.Bold, lineHeight = 20.sp, modifier = Modifier.testTag("replacement_amount"))
+        }
+        amountCutLine(held)?.let {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(it, color = MbNavyInk, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.testTag("replacement_amount_cut"))
         }
         ReviewDivider()
         ReviewRow("ค่าธรรมเนียมใหม่", realFeeText(held.prepared.feeSats.toLong(), quote), tag = "replacement_fee")

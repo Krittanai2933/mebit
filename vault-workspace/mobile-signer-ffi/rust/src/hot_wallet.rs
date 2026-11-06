@@ -1080,6 +1080,11 @@ pub struct PreparedSend {
     /// it is part of `fee_sats` instead, in sats. 0 when there was none.
     #[uniffi(default = 0)]
     pub dust_change_sats: u64,
+    /// How much less a fee bump's destination gets than in the payment it replaces, in sats, because
+    /// that payment had no change and no confirmed coin could keep its amount, so the new fee came out
+    /// of the amount. 0 for every other answer.
+    #[uniffi(default = 0)]
+    pub amount_cut_sats: u64,
 }
 
 /// Scan, select coins, check and sign a payment at `fee_rate_sat_vb`, and post nothing. The only
@@ -1120,12 +1125,14 @@ pub fn hot_prepare_send_at_rate(
     )?))
 }
 
-/// A transaction a builder signed, with the fee it pays and the change below its floor that went into
-/// that fee. Named fields, because the two sums side by side would swap silently.
+/// A transaction a builder signed, with the fee it pays, the change below its floor that went into
+/// that fee and what a fee bump cut from the destination's amount. Named fields, because the sums side
+/// by side would swap silently.
 struct Signed {
     tx: Transaction,
     fee_sats: u64,
     dust_change_sats: u64,
+    amount_cut_sats: u64,
 }
 
 fn prepared(signed: Signed) -> PreparedSend {
@@ -1136,6 +1143,7 @@ fn prepared(signed: Signed) -> PreparedSend {
         // Every builder puts the destination first and change, if any, second. A cancel's one output is what comes back.
         amount_sats: signed.tx.output[0].value.to_sat(),
         dust_change_sats: signed.dust_change_sats,
+        amount_cut_sats: signed.amount_cut_sats,
     }
 }
 
@@ -1490,6 +1498,7 @@ fn signed_payment(
         tx,
         fee_sats,
         dust_change_sats,
+        amount_cut_sats: 0,
     })
 }
 
@@ -1544,6 +1553,7 @@ fn signed_send_all(
         tx,
         fee_sats,
         dust_change_sats: 0,
+        amount_cut_sats: 0,
     })
 }
 
@@ -1551,7 +1561,9 @@ fn signed_send_all(
 /// one of the two can ever confirm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Replacement {
-    /// The same destination and amount at a higher fee, any change to the same change address.
+    /// The same destination and amount at a higher fee, change to the same change address or, for a
+    /// payment with none, to the next unused one. The fee comes out of the amount only when a payment
+    /// with no change has no confirmed coin to keep it.
     FeeBump,
     /// Every coin back to this wallet in one output, at a higher fee.
     Cancel,
@@ -1559,10 +1571,13 @@ enum Replacement {
 
 /// Scan, then sign a fee bump of `earlier_hex`, the signed payment the app's guard keeps, and post
 /// nothing. It spends every input of that payment in its order, so at most one of the two can ever
-/// confirm, and its first output stays as it was. Change goes to the same change address, more
-/// confirmed coins join only when the earlier inputs cannot pay the new fee, and change below its dust
-/// floor goes into the fee. A payment with no change gets one output worth its inputs less the new fee,
-/// so `amount_sats` is lower. The fee meets BIP-125 rules 3, 4 and 6 against that payment. It is at
+/// confirm, and its first output stays as it was. More confirmed coins join only when the earlier
+/// inputs cannot pay the new fee, change goes to the same change address, or for a payment with no
+/// change to the next unused one, as Bitcoin Core's bumpfee does, and change below its dust floor goes
+/// into the fee. Only a payment with no change (a send all, or one whose change went into its fee)
+/// whose amount no confirmed coin can keep gets one output worth its own inputs less the new fee, and
+/// `amount_cut_sats` says how much less the destination gets. The fee meets BIP-125 rules 3, 4 and 6
+/// against that payment. It is at
 /// least that payment's fee plus the new size at 1 sat/vB, at a rate strictly above its rate, so the
 /// rate can be above `fee_rate_sat_vb`. Refuses, before any lookup, bytes that are not one transaction with inputs and one
 /// or two outputs whose first is at least its dust floor, and a rate outside 1 to 10,000 sat/vB. After the scan
@@ -1570,8 +1585,8 @@ enum Replacement {
 /// all coins this wallet can spend now (`coins spent:`, most likely because that payment is out), an
 /// input without this wallet's own SIGHASH_ALL signature for its coin, a rate that would pass 10,000
 /// sat/vB, on the rate asked or on the signed bytes, and what is left below the dust floor of its
-/// output. The same scan as
-/// `hot_prepare_send_at_rate`, so call it off the main thread.
+/// output, and without `replace: ` a payment with change whose amount the confirmed coins cannot keep
+/// (`insufficient funds:`). The same scan as `hot_prepare_send_at_rate`, so call it off the main thread.
 #[uniffi::export]
 pub fn hot_prepare_fee_bump(
     mnemonic_words: Vec<String>,
@@ -1620,7 +1635,8 @@ pub fn hot_prepare_cancel(
     )?))
 }
 
-/// A `kind` replacement of `earlier_hex`, signed and not yet broadcast, with the fee it pays. The bytes,
+/// A `kind` replacement of `earlier_hex`, signed and not yet broadcast, with the fee it pays, the change
+/// it put into that fee and, for a fee bump, what it cut from the destination's amount. The bytes,
 /// their shape and the rate are checked before any network call, the change, the coins and the earlier
 /// fee after the scan, and the signed transaction once more before it is returned. Every refusal is an
 /// error, never a changed payment.
@@ -1720,18 +1736,11 @@ fn signed_replacement(
         }
     };
     let destination = &earlier.output[0];
-    let (outputs, have, dust_change_sats) = match (kind, change) {
-        (Replacement::Cancel, change) => {
-            let back = change
-                .unwrap_or_else(|| wallet.next_unused(Chain::Internal).address.script_pubkey());
-            (one(selected.len(), total, back)?, total, 0)
-        }
-        (Replacement::FeeBump, None) => (
-            one(selected.len(), total, destination.script_pubkey.clone())?,
-            total,
-            0,
-        ),
-        (Replacement::FeeBump, Some(change)) => {
+    let change =
+        change.unwrap_or_else(|| wallet.next_unused(Chain::Internal).address.script_pubkey());
+    let (outputs, have, dust_change_sats) = match kind {
+        Replacement::Cancel => (one(selected.len(), total, change)?, total, 0),
+        Replacement::FeeBump => {
             let amount = destination.value.to_sat();
             let scripts = [destination.script_pubkey.len(), change.len()];
             // BIP-125 rule 2 lets in a coin the earlier payment did not spend only once a block
@@ -1770,6 +1779,13 @@ fn signed_replacement(
                     break (vec![destination.clone()], have, have.saturating_sub(need));
                 }
                 let Some((utxo, owner)) = more.next() else {
+                    // A payment with no change (a send all, or change that went into the fee) whose
+                    // amount no coin can keep takes the new fee from the amount, from its own coins only.
+                    if earlier.output.len() == 1 {
+                        selected.truncate(spent.len());
+                        let script = destination.script_pubkey.clone();
+                        break (one(spent.len(), total, script)?, total, 0);
+                    }
                     return Err(MobileSignerError::InvalidPsbtJson(format!(
                         "insufficient funds: have {have} confirmed, need {need}"
                     )));
@@ -1819,10 +1835,18 @@ fn signed_replacement(
         return Err(fail(format!("check failed: {what}")));
     }
     check_node_rate(fee, tx.vsize() as u64).map_err(fail)?;
+    let amount_cut_sats = match kind {
+        Replacement::FeeBump => destination
+            .value
+            .to_sat()
+            .saturating_sub(tx.output[0].value.to_sat()),
+        Replacement::Cancel => 0,
+    };
     Ok(Signed {
         tx,
         fee_sats: fee,
         dust_change_sats,
+        amount_cut_sats,
     })
 }
 
@@ -3683,6 +3707,7 @@ mod tests {
             tx,
             fee_sats: fee,
             dust_change_sats: 0,
+            amount_cut_sats: 0,
         });
         assert_eq!((ready.amount_sats, ready.fee_sats), (9_822, 178));
         assert_eq!(fake.ready(SOMEONE, 6_000, 1).amount_sats, 6_000);
@@ -3958,6 +3983,7 @@ mod tests {
             tx: signed.clone(),
             fee_sats: fee,
             dust_change_sats: 0,
+            amount_cut_sats: 0,
         });
         // The fake panics on any path that is not a lookup, so a POST could not have gone through it.
         assert!(
@@ -4049,6 +4075,7 @@ mod tests {
             tx: bump,
             fee_sats: fee,
             dust_change_sats: 0,
+            amount_cut_sats: 0,
         });
         assert_eq!((ready.amount_sats, ready.fee_sats), (5_000, 1_410));
     }
@@ -4083,31 +4110,104 @@ mod tests {
         assert_replaces(&fake, &earlier, &bump);
     }
 
-    // A payment with no change (send all, or change that came out zero) has nothing to take the fee from,
-    // so the destination gets less, and no other coin joins.
+    // A fixed payment whose change went into the fee has one output, as a send all has, and its bytes do not
+    // tell the two apart. Its bump keeps the amount and takes the new fee from a confirmed coin, with the
+    // change at the next unused change address, as a bump of a payment with change does.
     #[test]
-    fn a_fee_bump_of_a_payment_with_no_change_lowers_the_amount_and_spends_only_its_coins() {
+    fn a_fee_bump_of_a_payment_whose_change_went_into_the_fee_keeps_the_amount_when_a_coin_can_pay()
+    {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        fake.fund(&addr(Chain::External, 1), 5_000, '2');
+        // At 1 sat/vB the change is 293, below its floor, so the fee is 141 + 293.
+        let earlier = fake.payment(SOMEONE, 9_566, 1).unwrap();
+        assert_eq!((earlier.fee_sats, earlier.dust_change_sats), (434, 293));
+        let earlier = earlier.tx;
+        assert_outputs(&earlier, &[(SOMEONE, 9_566)]);
+        // Two inputs and change are 209 vB. The earlier rate is 434 over 110 vB, so rule 6 raises 2 sat/vB to 4.
+        for (rate, fee) in [(2, 836), (5, 1_045)] {
+            let bump = prepared(
+                fake.replacement(&serialize_hex(&earlier), rate, Replacement::FeeBump)
+                    .unwrap(),
+            );
+            assert_eq!(
+                (bump.amount_sats, bump.fee_sats, bump.amount_cut_sats),
+                (9_566, fee, 0)
+            );
+            let tx: Transaction = deserialize_hex(&bump.hex).unwrap();
+            assert_outputs(
+                &tx,
+                &[
+                    (SOMEONE, 9_566),
+                    (&addr(Chain::Internal, 0), 15_000 - 9_566 - fee),
+                ],
+            );
+            assert_eq!(fee_paid(&fake, &tx), fee);
+            assert_replaces(&fake, &earlier, &tx);
+        }
+    }
+
+    /// A send all of one 10,000-sat coin at 1 sat/vB, signed by a wallet that holds only that coin.
+    fn send_all_of_one_coin() -> Transaction {
+        let mut alone = Fake::new();
+        alone.fund(&addr(Chain::External, 0), 10_000, '1');
+        let (earlier, _) = alone.send_all_at(SOMEONE, 1).unwrap();
+        assert_outputs(&earlier, &[(SOMEONE, 9_890)]);
+        earlier
+    }
+
+    // A send all has no change, so with no coin to spare the new fee comes out of the amount, from its own
+    // coins only, and the answer names how much less the destination gets. A coin too small to pay for its
+    // own input (68 vB, 340 sats at 5 sat/vB) is not spent.
+    #[test]
+    fn a_fee_bump_of_a_send_all_with_no_coin_to_spare_cuts_the_amount_and_names_the_cut() {
+        let earlier = send_all_of_one_coin();
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        fake.fund(&addr(Chain::External, 1), 300, '2');
+        let bump = prepared(
+            fake.replacement(&serialize_hex(&earlier), 5, Replacement::FeeBump)
+                .unwrap(),
+        );
+        // One input and one output are 110 vB, 550 at 5 sat/vB, which is 440 more than the earlier 110.
+        assert_eq!(
+            (bump.amount_sats, bump.fee_sats, bump.amount_cut_sats),
+            (9_450, 550, 440)
+        );
+        let tx: Transaction = deserialize_hex(&bump.hex).unwrap();
+        assert_outputs(&tx, &[(SOMEONE, 9_450)]);
+        assert_eq!(inputs_of(&tx), inputs_of(&earlier));
+        assert_eq!(fee_paid(&fake, &tx), 550);
+        assert_replaces(&fake, &earlier, &tx);
+    }
+
+    // A coin confirmed after a send all keeps its amount on a bump, as Bitcoin Core's bumpfee does: the coin
+    // pays the new fee and the rest comes back as change.
+    #[test]
+    fn a_fee_bump_of_a_send_all_keeps_the_amount_when_a_confirmed_coin_can_pay() {
+        let earlier = send_all_of_one_coin();
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
         fake.fund(&addr(Chain::External, 1), 3_000, '2');
-        let earlier = fake.send(SOMEONE, 10_000 - 141, 1).unwrap();
-        assert_outputs(&earlier, &[(SOMEONE, 9_859)]);
-        let (bump, fee) = fake.replace(&earlier, 5, Replacement::FeeBump).unwrap();
-        // 110 vB at 5 sat/vB, above the 141 + 110 that rule 4 asks.
-        assert_eq!(fee, 550);
-        assert_outputs(&bump, &[(SOMEONE, 9_450)]);
-        assert_eq!(inputs_of(&bump), inputs_of(&earlier));
-        assert!(signed_by(&bump, 0, 10_000, &own(Chain::External, 0)));
-        assert_replaces(&fake, &earlier, &bump);
-        assert_eq!(
-            prepared(Signed {
-                tx: bump,
-                fee_sats: fee,
-                dust_change_sats: 0,
-            })
-            .amount_sats,
-            9_450
+        let bump = prepared(
+            fake.replacement(&serialize_hex(&earlier), 5, Replacement::FeeBump)
+                .unwrap(),
         );
+        // Two inputs and change are 209 vB, 1,045 at 5 sat/vB.
+        assert_eq!(
+            (bump.amount_sats, bump.fee_sats, bump.amount_cut_sats),
+            (9_890, 1_045, 0)
+        );
+        let tx: Transaction = deserialize_hex(&bump.hex).unwrap();
+        assert_outputs(
+            &tx,
+            &[
+                (SOMEONE, 9_890),
+                (&addr(Chain::Internal, 0), 13_000 - 9_890 - 1_045),
+            ],
+        );
+        assert_eq!(fee_paid(&fake, &tx), 1_045);
+        assert_replaces(&fake, &earlier, &tx);
     }
 
     // Change below its dust floor, 294 sats for the P2WPKH change address, goes into the fee, as Bitcoin
@@ -4164,6 +4264,7 @@ mod tests {
             tx: cancel,
             fee_sats: fee,
             dust_change_sats: 0,
+            amount_cut_sats: 0,
         });
         assert_eq!((ready.amount_sats, ready.fee_sats), (29_450, 550));
     }
@@ -4992,6 +5093,7 @@ mod tests {
             tx: cancel,
             fee_sats: fee,
             dust_change_sats: 0,
+            amount_cut_sats: 0,
         });
         fake.broadcast(&ready, answer(200, &ready.txid)).unwrap();
         let (snapshot, asked) = synced_after_payment(
@@ -5019,6 +5121,7 @@ mod tests {
             tx: cancel,
             fee_sats: fee,
             dust_change_sats: 0,
+            amount_cut_sats: 0,
         });
         fake.broadcast(&ready, answer(200, &ready.txid)).unwrap();
         let (snapshot, asked) = synced_after_payment(
@@ -5055,6 +5158,7 @@ mod tests {
             tx: bump,
             fee_sats: fee,
             dust_change_sats: 0,
+            amount_cut_sats: 0,
         });
         fake.broadcast(&ready, answer(200, &ready.txid)).unwrap();
         let (snapshot, asked) = synced_after_payment(

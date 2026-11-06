@@ -1067,6 +1067,21 @@ class SingleSigWalletBroadcastTest {
         assertNull(replacementQuestion(held(0uL, rateSatVb = 2_000)))
     }
 
+    // A fee bump of a payment with no change that no confirmed coin could keep takes the new fee from the amount, and its card says by
+    // how much. One that kept the amount says nothing about it.
+    @Test
+    fun aFeeBumpCardSaysHowMuchLessTheRecipientGetsOnlyWhenTheAmountWasCut() {
+        fun held(cutSats: ULong) = SingleSigWallet.HeldReplacement(
+            PreparedSend(TXID, "h", 550uL, 9_450uL, 0uL, cutSats),
+            KeyNetwork.TEST,
+            UnconfirmedSend(TXID, SENT_AT),
+            Replacement.FeeBump,
+            15,
+        )
+        assertTrue("น้อยกว่ารายการเดิม 1,440 sat" in amountCutLine(held(1_440uL)).orEmpty())
+        assertNull(amountCutLine(held(0uL)))
+    }
+
     // V4. The Send screen quoted send all and the available line from the balance with the mempool in it, so a send all posted a
     // tenth of what Review showed. The wallet now carries the spendable figure beside the balance.
     @Test

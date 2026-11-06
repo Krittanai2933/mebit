@@ -1137,7 +1137,7 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_cancel() != 64952.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_fee_bump() != 2199.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_fee_bump() != 43273.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_all() != 45269.toShort()) {
@@ -2889,6 +2889,7 @@ public object FfiConverterTypePreparedSend: FfiConverterRustBuffer<PreparedSend>
             FfiConverterULong.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
         )
     }
 
@@ -2897,7 +2898,8 @@ public object FfiConverterTypePreparedSend: FfiConverterRustBuffer<PreparedSend>
             FfiConverterString.allocationSize(value.`hex`) +
             FfiConverterULong.allocationSize(value.`feeSats`) +
             FfiConverterULong.allocationSize(value.`amountSats`) +
-            FfiConverterULong.allocationSize(value.`dustChangeSats`)
+            FfiConverterULong.allocationSize(value.`dustChangeSats`) +
+            FfiConverterULong.allocationSize(value.`amountCutSats`)
     )
 
     override fun write(value: PreparedSend, buf: ByteBuffer) {
@@ -2906,6 +2908,7 @@ public object FfiConverterTypePreparedSend: FfiConverterRustBuffer<PreparedSend>
         FfiConverterULong.write(value.`feeSats`, buf)
         FfiConverterULong.write(value.`amountSats`, buf)
         FfiConverterULong.write(value.`dustChangeSats`, buf)
+        FfiConverterULong.write(value.`amountCutSats`, buf)
     }
 }
 
@@ -3751,10 +3754,13 @@ public actual fun `hotPrepareCancel`(`mnemonicWords`: List<kotlin.String>, `pass
 /**
  * Scan, then sign a fee bump of `earlier_hex`, the signed payment the app's guard keeps, and post
  * nothing. It spends every input of that payment in its order, so at most one of the two can ever
- * confirm, and its first output stays as it was. Change goes to the same change address, more
- * confirmed coins join only when the earlier inputs cannot pay the new fee, and change below its dust
- * floor goes into the fee. A payment with no change gets one output worth its inputs less the new fee,
- * so `amount_sats` is lower. The fee meets BIP-125 rules 3, 4 and 6 against that payment. It is at
+ * confirm, and its first output stays as it was. More confirmed coins join only when the earlier
+ * inputs cannot pay the new fee, change goes to the same change address, or for a payment with no
+ * change to the next unused one, as Bitcoin Core's bumpfee does, and change below its dust floor goes
+ * into the fee. Only a payment with no change (a send all, or one whose change went into its fee)
+ * whose amount no confirmed coin can keep gets one output worth its own inputs less the new fee, and
+ * `amount_cut_sats` says how much less the destination gets. The fee meets BIP-125 rules 3, 4 and 6
+ * against that payment. It is at
  * least that payment's fee plus the new size at 1 sat/vB, at a rate strictly above its rate, so the
  * rate can be above `fee_rate_sat_vb`. Refuses, before any lookup, bytes that are not one transaction with inputs and one
  * or two outputs whose first is at least its dust floor, and a rate outside 1 to 10,000 sat/vB. After the scan
@@ -3762,8 +3768,8 @@ public actual fun `hotPrepareCancel`(`mnemonicWords`: List<kotlin.String>, `pass
  * all coins this wallet can spend now (`coins spent:`, most likely because that payment is out), an
  * input without this wallet's own SIGHASH_ALL signature for its coin, a rate that would pass 10,000
  * sat/vB, on the rate asked or on the signed bytes, and what is left below the dust floor of its
- * output. The same scan as
- * `hot_prepare_send_at_rate`, so call it off the main thread.
+ * output, and without `replace: ` a payment with change whose amount the confirmed coins cannot keep
+ * (`insufficient funds:`). The same scan as `hot_prepare_send_at_rate`, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
 public actual fun `hotPrepareFeeBump`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `earlierHex`: kotlin.String, `feeRateSatVb`: kotlin.ULong): PreparedSend {
