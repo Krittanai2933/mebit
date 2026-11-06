@@ -21,6 +21,7 @@ import com.mebit.app.feature.onboarding.LockWords
 import com.mebit.app.getPlatform
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.QuoteCache
+import com.mebit.app.data.Replacement
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
@@ -68,6 +69,7 @@ fun S5ReviewSignScreen(
     quotes: QuoteCache,
     confirm: suspend () -> Boolean,
     confirmRepost: suspend () -> Boolean,
+    confirmReplacement: suspend (Replacement) -> Boolean,
     onSigned: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
@@ -79,15 +81,18 @@ fun S5ReviewSignScreen(
     var failed by remember { mutableStateOf(false) }
     val attempt = remember { SignAttempt() }
     val repost = remember { RepostAttempt() }
-    // A repost that runs, or put the payment out, settles this draft. Signing it again could pay twice, and its first failure no
-    // longer stands. Running counts too, because the guard leaves a moment before the screen learns that the repost is out.
-    val reposted = repost.running || repost.outTxid != null
+    // A repost or a replacement that runs, or put a transaction out, settles this draft. Signing it again could pay twice, and its first
+    // failure no longer stands. Running counts too, because the guard leaves a moment before the screen learns that the post is out.
+    val reposted = repost.running || repost.wentOut
     // Back and cancel wait while a payment is in flight, because leaving would hide one that still goes out. The back chip stays so the header does not shift.
     val leave = onBack?.let { back -> { if (!attempt.running && !repost.running) back() } }
-    // A payment held for the fee question is signed and nothing more, so leaving the screen lets it go and none waits here stale. The
-    // draft of a payment a repost here put out went already, when the repost learned it was out ([RepostAttempt.start]).
+    // A payment held for the fee question, or a replacement held for its card, is signed and nothing more, so leaving the screen lets it
+    // go and none waits here stale. The draft of a payment a post here put out went already, when the post learned it was out.
     DisposableEffect(wallet) {
-        onDispose { wallet.dropHeldSend() }
+        onDispose {
+            wallet.dropHeldSend()
+            wallet.dropHeldReplacement()
+        }
     }
     val total = draft.amountSats + draft.feeSats
     val question = wallet.feeQuestion(draft)
@@ -174,8 +179,8 @@ fun S5ReviewSignScreen(
             Spacer(modifier = Modifier.height(20.dp))
             IssueBanner(it.title, it.message, it.tag)
         }
-        UnconfirmedClearControl(wallet, session, repost) { txid -> repost.start(scope, txid, confirmRepost, draft) { wallet.repost(session) } }
-        RepostedNote(repost)
+        UnconfirmedClearControl(wallet, session, draft, quote, repost, scope, confirmRepost, confirmReplacement)
+        RepostedNote(repost, wallet)
         if (total > wallet.spendableSats) {
             Spacer(modifier = Modifier.height(12.dp))
             Text("ยอดไม่พอ", color = MaterialTheme.colorScheme.error)

@@ -23,6 +23,18 @@ sealed interface Claim {
     data object NotSaved : Claim
 }
 
+/** How a [PendingPayments.swap] ended. */
+sealed interface Swap {
+    /** The phone holds the replacement as the wallet's guard now, in place of the payment it replaces, so it may be posted. */
+    data object Written : Swap
+
+    /** The wallet's line no longer names the payment the replacement replaces, so nothing is written. [now] is what the file holds instead, which is another payment's guard, null when the guard is gone, or [DamagedGuard]. */
+    class Changed(val now: Unsettled?) : Swap
+
+    /** There is no file, the write failed, or the replacement is not the next line of that payment's chain, so it must not go. */
+    data object NotSaved : Swap
+}
+
 /**
  * The pay-twice guards on this phone: for each wallet, by master fingerprint, the payment that may be out. They live in [file], a
  * plain file in app storage that no backup copies, not in the secure store, so a phone that cannot keep a secret still keeps its
@@ -32,7 +44,9 @@ sealed interface Claim {
  * With no [file] there is nowhere to keep a guard, so every claim is [Claim.NotSaved].
  *
  * The file holds one line per wallet, "fingerprint txid seconds" or "fingerprint txid seconds hex", and a newline, the txid empty or
- * 64 lowercase hex, and the hex a transaction whose txid is the line's ([txidOf]). A file that cannot be read, or holds anything
+ * 64 lowercase hex, and the hex a transaction whose txid is the line's ([txidOf]). A replacement's line ([swap]) adds the txids it
+ * replaces, "fingerprint txid seconds hex replaced,replaced", each 64 lowercase hex, distinct and not the line's own, and "cancel"
+ * after them once its chain holds a cancel. A file that cannot be read, or holds anything
  * else, is damaged. It may hide any wallet's guard, so it is [DamagedGuard] for every wallet, refuses every claim, and only the
  * user's clear deletes it. Only a wallet's own settle deletes its guard, never a forget of the wallet, so the same words imported
  * again still refuse until that payment settles.
@@ -50,9 +64,23 @@ class PendingPayments internal constructor(private val file: PlainFile?) {
         val f = file ?: return@synchronized Claim.NotSaved
         val guards = f.guards() ?: return@synchronized Claim.Damaged
         guards[fingerprint]?.let { return@synchronized Claim.Taken(it) }
-        val written = FINGERPRINT.matches(fingerprint) && TXID.matches(send.txid) && (send.hex == null || txidOf(send.hex) == send.txid) &&
-            f.write(encode(guards + (fingerprint to send)))
+        val written = FINGERPRINT.matches(fingerprint) && send.writable() && f.write(encode(guards + (fingerprint to send)))
         if (written) Claim.Written else Claim.NotSaved
+    }
+
+    /**
+     * Writes [next] as the guard of [fingerprint] in place of [earlier], while the wallet's line still names [earlier]'s txid, and
+     * otherwise writes nothing and says what the file holds. [next] must keep its signed transaction, name the whole chain it
+     * replaces, [earlier]'s and [earlier] itself, and keep a cancel mark the chain holds, because any payment of the chain may be the
+     * one that is out, and only a block settles a cancel.
+     */
+    fun swap(fingerprint: String, earlier: UnconfirmedSend, next: UnconfirmedSend): Swap = synchronized(guardLock) {
+        val f = file ?: return@synchronized Swap.NotSaved
+        val guards = f.guards() ?: return@synchronized Swap.Changed(DamagedGuard)
+        val now = guards[fingerprint]
+        if (now?.txid != earlier.txid) return@synchronized Swap.Changed(now)
+        val follows = next.hex != null && next.replaces == earlier.replaces + earlier.txid && (next.holdsCancel || !earlier.holdsCancel)
+        if (follows && next.writable() && f.write(encode(guards + (fingerprint to next)))) Swap.Written else Swap.NotSaved
     }
 
     /**
@@ -101,12 +129,25 @@ private val reposting = mutableListOf<String>()
 
 private val FINGERPRINT = Regex("[0-9a-f]{8}")
 private val TXID = Regex("(?:[0-9a-f]{64})?")
+private val REPLACED = Regex("[0-9a-f]{64}")
+private const val CANCEL_MARK = "cancel"
 
 /** The guards the file holds, or null when it is damaged: there but unreadable, or holding text [encode] never writes. */
 private fun PlainFile.guards(): Map<String, UnconfirmedSend>? = read()?.let(::decode)
 
-private fun encode(guards: Map<String, UnconfirmedSend>): String =
-    guards.entries.joinToString("") { (fingerprint, send) -> "$fingerprint ${send.txid} ${send.sinceSeconds}${send.hex?.let { " $it" }.orEmpty()}\n" }
+/**
+ * Whether [encode] writes this guard so that [decode] reads it back the same. That needs the txid's shape, bytes that are its own
+ * transaction, and the payments it replaces and the cancel mark only beside those bytes, each replaced txid once and none the guard's own.
+ */
+private fun UnconfirmedSend.writable(): Boolean =
+    TXID.matches(txid) && (hex == null || txidOf(hex) == txid) &&
+        (replaces.isEmpty() || hex != null && replaces.all(REPLACED::matches) && replaces.toSet().size == replaces.size && txid !in replaces) &&
+        (!holdsCancel || replaces.isNotEmpty())
+
+private fun encode(guards: Map<String, UnconfirmedSend>): String = guards.entries.joinToString("") { (fingerprint, send) ->
+    val replaced = send.replaces.joinToString(",").ifEmpty { null }
+    listOfNotNull(fingerprint, send.txid, "${send.sinceSeconds}", send.hex, replaced, CANCEL_MARK.takeIf { send.holdsCancel }).joinToString(" ") + "\n"
+}
 
 /** The guards [text] holds, or null when it is anything [encode] never writes. */
 private fun decode(text: String): Map<String, UnconfirmedSend>? {
@@ -115,11 +156,12 @@ private fun decode(text: String): Map<String, UnconfirmedSend>? {
     for (line in text.split('\n').dropLast(1)) {
         val fields = line.split(' ')
         val since = fields.getOrNull(2)?.toLongOrNull()
-        val hex = fields.getOrNull(3)
-        if (fields.size !in 3..4 || !FINGERPRINT.matches(fields[0]) || !TXID.matches(fields[1]) || since == null || fields[0] in guards) return null
+        if (fields.size !in 3..6 || !FINGERPRINT.matches(fields[0]) || since == null || fields[0] in guards) return null
+        if (fields.size == 6 && fields[5] != CANCEL_MARK) return null
+        val send = UnconfirmedSend(fields[1], since, fields.getOrNull(3), fields.getOrNull(4)?.split(',').orEmpty(), holdsCancel = fields.size == 6)
         // Bytes that are not the line's own transaction could be another payment, so the file is damaged rather than trusted.
-        if (hex != null && txidOf(hex) != fields[1]) return null
-        guards[fields[0]] = UnconfirmedSend(fields[1], since, hex)
+        if (!send.writable()) return null
+        guards[fields[0]] = send
     }
     return guards
 }

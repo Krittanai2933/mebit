@@ -229,6 +229,9 @@ class OnboardingSession(
         return payments.settle(fingerprint, guard)
     }
 
+    /** The wallet is about to post [next], which replaces its guard [earlier]. Swaps this wallet's line in the guard file ([PendingPayments.swap]). */
+    fun replaceUnconfirmedSend(earlier: SingleSigWallet.UnconfirmedSend, next: SingleSigWallet.UnconfirmedSend): Swap = payments.swap(fingerprint, earlier, next)
+
     /** [PendingPayments.repost] of this wallet's [guard]. [post] gets the signed bytes the guard file keeps with it, or nothing runs and this is null. */
     fun <T> repostUnconfirmedSend(guard: SingleSigWallet.UnconfirmedSend, post: (hex: String) -> T): T? = payments.repost(fingerprint, guard, post)
 

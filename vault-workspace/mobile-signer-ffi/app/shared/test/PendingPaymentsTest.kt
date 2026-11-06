@@ -37,6 +37,18 @@ class PendingPaymentsTest {
         "an empty fourth field" to FakePlainFile().apply { text = "$TEST_CHECK $SIGNED_TXID $SENT_AT \n" },
         "a fifth field" to FakePlainFile().apply { text = "$TEST_CHECK $SIGNED_TXID $SENT_AT $SIGNED_HEX $SENT_AT\n" },
         "bytes under no txid" to FakePlainFile().apply { text = "$TEST_CHECK  $SENT_AT $SIGNED_HEX\n" },
+        // C3. The payments a replacement replaces, which only a line with its bytes names.
+        "a fifth field without bytes" to FakePlainFile().apply { text = "$TEST_CHECK $SIGNED_TXID $SENT_AT  $OTHER_SIGNED_TXID\n" },
+        "a replaced txid in uppercase" to FakePlainFile().apply { text = "$TEST_CHECK $SIGNED_TXID $SENT_AT $SIGNED_HEX ${OTHER_SIGNED_TXID.uppercase()}\n" },
+        "a short replaced txid" to FakePlainFile().apply { text = "$TEST_CHECK $SIGNED_TXID $SENT_AT $SIGNED_HEX abc\n" },
+        "a replaced txid twice" to FakePlainFile().apply { text = "$TEST_CHECK $SIGNED_TXID $SENT_AT $SIGNED_HEX $OTHER_SIGNED_TXID,$OTHER_SIGNED_TXID\n" },
+        "the line's own txid as replaced" to FakePlainFile().apply { text = "$TEST_CHECK $SIGNED_TXID $SENT_AT $SIGNED_HEX $SIGNED_TXID\n" },
+        "an empty list of replaced" to FakePlainFile().apply { text = "$TEST_CHECK $SIGNED_TXID $SENT_AT $SIGNED_HEX \n" },
+        "a list of empty txids" to FakePlainFile().apply { text = "$TEST_CHECK $SIGNED_TXID $SENT_AT $SIGNED_HEX ,\n" },
+        // Option (a). The cancel mark, which only follows the payments it replaces.
+        "a cancel mark without a list" to FakePlainFile().apply { text = "$TEST_CHECK $SIGNED_TXID $SENT_AT $SIGNED_HEX cancel\n" },
+        "a sixth field that is not the mark" to FakePlainFile().apply { text = "$TEST_CHECK $SIGNED_TXID $SENT_AT $SIGNED_HEX $OTHER_SIGNED_TXID Cancel\n" },
+        "a seventh field" to FakePlainFile().apply { text = "$TEST_CHECK $SIGNED_TXID $SENT_AT $SIGNED_HEX $OTHER_SIGNED_TXID cancel cancel\n" },
     )
 
     private val signed = UnconfirmedSend(SIGNED_TXID, SENT_AT, SIGNED_HEX)
@@ -54,6 +66,90 @@ class PendingPaymentsTest {
         assertEquals("$TEST_CHECK $SIGNED_TXID $SENT_AT $SIGNED_HEX\n$OTHER_CHECK $TEST_TXID $SENT_AT\n", file.text)
         assertEquals(send, payments.of(OTHER_CHECK), "a line of three keeps no bytes")
         assertEquals(signed, PendingPayments(file).of(TEST_CHECK), "the line with bytes, read by a new instance")
+    }
+
+    // C3 and option (a). A replacement's line names every payment of its chain as a fifth field, and a sixth marks a chain that holds a
+    // cancel, which only a block settles. Each reads back whole in a new instance.
+    @Test
+    fun aReplacementKeepsItsChainAsAFifthFieldAndACancelAsASixth() {
+        val file = FakePlainFile()
+        val payments = PendingPayments(file)
+        assertEquals(Claim.Written, payments.claim(TEST_CHECK, signed))
+        val bump = UnconfirmedSend(OTHER_SIGNED_TXID, SENT_AT + 60, OTHER_SIGNED_HEX, listOf(SIGNED_TXID))
+        assertEquals(Swap.Written, payments.swap(TEST_CHECK, signed, bump))
+        assertEquals("$TEST_CHECK $OTHER_SIGNED_TXID ${SENT_AT + 60} $OTHER_SIGNED_HEX $SIGNED_TXID\n", file.text)
+        assertEquals(bump, PendingPayments(file).of(TEST_CHECK), "the chain, read by a new instance")
+        val cancel = UnconfirmedSend(COINBASE_TXID, SENT_AT + 120, COINBASE_HEX, listOf(SIGNED_TXID, OTHER_SIGNED_TXID), holdsCancel = true)
+        assertEquals(Swap.Written, payments.swap(TEST_CHECK, bump, cancel))
+        assertEquals("$TEST_CHECK $COINBASE_TXID ${SENT_AT + 120} $COINBASE_HEX $SIGNED_TXID,$OTHER_SIGNED_TXID cancel\n", file.text)
+        assertEquals(cancel, PendingPayments(file).of(TEST_CHECK), "the cancel mark, read by a new instance")
+    }
+
+    // C3. A swap writes the replacement only while the wallet's line still names the payment it replaces. Otherwise it writes nothing
+    // and says what the file holds, so the wallet takes that.
+    @Test
+    fun aSwapWritesOnlyWhileTheLineStillNamesThePaymentItReplaces() {
+        val bump = UnconfirmedSend(OTHER_SIGNED_TXID, SENT_AT + 60, OTHER_SIGNED_HEX, listOf(SIGNED_TXID))
+        val another = UnconfirmedSend(COINBASE_TXID, SENT_AT, COINBASE_HEX)
+        val otherLine = FakePlainFile().also { assertEquals(Claim.Written, PendingPayments(it).claim(TEST_CHECK, another)) }
+        val noLine = FakePlainFile()
+        val cases = listOf("another payment's line" to otherLine, "no line" to noLine) + damagedFiles()
+        for ((case, file) in cases) {
+            val text = file.text
+            val writes = file.writes
+            val now = assertIs<Swap.Changed>(PendingPayments(file).swap(TEST_CHECK, signed, bump), case).now
+            assertEquals(PendingPayments(file).of(TEST_CHECK), now, "what the file holds, $case")
+            assertEquals(writes, file.writes, "no write, $case")
+            assertEquals(text, file.text, case)
+        }
+        assertEquals(another, assertIs<Swap.Changed>(PendingPayments(otherLine).swap(TEST_CHECK, signed, bump)).now)
+        assertNull(assertIs<Swap.Changed>(PendingPayments(noLine).swap(TEST_CHECK, signed, bump)).now)
+        val file = FakePlainFile()
+        assertEquals(Claim.Written, PendingPayments(file).claim(TEST_CHECK, signed))
+        assertEquals(Claim.Written, PendingPayments(file).claim(OTHER_CHECK, another))
+        assertEquals(Swap.Written, PendingPayments(file).swap(TEST_CHECK, signed, bump))
+        assertEquals(bump, PendingPayments(file).of(TEST_CHECK))
+        assertEquals(another, PendingPayments(file).of(OTHER_CHECK), "another wallet's line stays whole")
+        val late = UnconfirmedSend(COINBASE_TXID, SENT_AT + 90, COINBASE_HEX, listOf(SIGNED_TXID))
+        assertEquals(bump, assertIs<Swap.Changed>(PendingPayments(file).swap(TEST_CHECK, signed, late), "a second swap from the same guard").now)
+        assertEquals(bump, PendingPayments(file).of(TEST_CHECK), "the first swap stays")
+    }
+
+    // C3 and option (a). A replacement must keep its bytes, name the whole chain it replaces and keep the chain's cancel mark, because
+    // any payment of the chain may be the one that is out and only a block settles a cancel. Anything else writes nothing.
+    @Test
+    fun aSwapThatIsNotTheChainsNextLineOrCannotBeWrittenSavesNothing() {
+        val bump = UnconfirmedSend(OTHER_SIGNED_TXID, SENT_AT + 60, OTHER_SIGNED_HEX, listOf(SIGNED_TXID))
+        val notNext = listOf(
+            "no bytes" to bump.copy(hex = null),
+            "bytes of another transaction" to bump.copy(hex = COINBASE_HEX),
+            "a txid that is not one" to bump.copy(txid = "abc"),
+            "no payment replaced" to bump.copy(replaces = emptyList()),
+            "a payment the chain never had" to bump.copy(replaces = listOf(COINBASE_TXID, SIGNED_TXID)),
+            "itself among the replaced" to bump.copy(replaces = listOf(SIGNED_TXID, OTHER_SIGNED_TXID)),
+        )
+        for ((case, next) in notNext) {
+            val file = FakePlainFile()
+            assertEquals(Claim.Written, PendingPayments(file).claim(TEST_CHECK, signed))
+            val writes = file.writes
+            assertEquals(Swap.NotSaved, PendingPayments(file).swap(TEST_CHECK, signed, next), case)
+            assertEquals(writes, file.writes, "no write, $case")
+            assertEquals(signed, PendingPayments(file).of(TEST_CHECK), case)
+        }
+        val file = FakePlainFile()
+        assertEquals(Claim.Written, PendingPayments(file).claim(TEST_CHECK, signed))
+        val cancel = bump.copy(holdsCancel = true)
+        assertEquals(Swap.Written, PendingPayments(file).swap(TEST_CHECK, signed, cancel))
+        val again = UnconfirmedSend(COINBASE_TXID, SENT_AT + 120, COINBASE_HEX, listOf(SIGNED_TXID, OTHER_SIGNED_TXID))
+        assertEquals(Swap.NotSaved, PendingPayments(file).swap(TEST_CHECK, cancel, again), "a replacement that drops the cancel mark")
+        assertEquals(cancel, PendingPayments(file).of(TEST_CHECK))
+        assertEquals(Swap.Written, PendingPayments(file).swap(TEST_CHECK, cancel, again.copy(holdsCancel = true)), "one that keeps it")
+        assertEquals(Swap.NotSaved, PendingPayments(null).swap(TEST_CHECK, signed, bump), "no file")
+        val failing = FakePlainFile()
+        assertEquals(Claim.Written, PendingPayments(failing).claim(TEST_CHECK, signed))
+        failing.failWrite = true
+        assertEquals(Swap.NotSaved, PendingPayments(failing).swap(TEST_CHECK, signed, bump), "a write that fails")
+        assertEquals(signed, PendingPayments(failing).of(TEST_CHECK))
     }
 
     @Test

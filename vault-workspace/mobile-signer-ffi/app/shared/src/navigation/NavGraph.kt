@@ -32,6 +32,7 @@ import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.OwnerCheck
 import com.mebit.app.data.MultisigSendDraft
+import com.mebit.app.data.Replacement
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.StartNotice
@@ -163,6 +164,15 @@ fun MebitNavHost(
 
     // Posting a guarded payment's bytes again asks the owner as signing does, so a stranger cannot push out a payment the owner gave up on.
     val confirmRepost: suspend () -> Boolean = { appLock.confirm(biometrics, session.appLockEnabled, "ยืนยันการส่งรายการเดิมอีกครั้ง") }
+
+    // A fee bump or a cancel signs a new transaction, so it asks the owner as signing does, with its own reason.
+    val confirmReplacement: suspend (Replacement) -> Boolean = { kind ->
+        val reason = when (kind) {
+            Replacement.FeeBump -> "ยืนยันการเพิ่มค่าธรรมเนียมแล้วส่งใหม่"
+            Replacement.Cancel -> "ยืนยันการยกเลิกรายการ"
+        }
+        appLock.confirm(biometrics, session.appLockEnabled, reason)
+    }
 
     val onBack: (() -> Unit)? = if (backStack.size > 1) ({ goBack() }) else null
     // The link is the only caller, and it is gone in a release build. This keeps the sheet shut even if another caller appears.
@@ -435,6 +445,7 @@ fun MebitNavHost(
             draft = sendDraft,
             quotes = quotes,
             confirmRepost = confirmRepost,
+            confirmReplacement = confirmReplacement,
             onContinue = { navigate(MovieRoute.S5ReviewSign) },
             onReceive = { navigate(if (session.backupConfirmed) MovieRoute.S3Receive else MovieRoute.S2ReceiveBackupGate) },
             onBack = onBack,
@@ -447,6 +458,7 @@ fun MebitNavHost(
             quotes = quotes,
             confirm = { appLock.confirm(biometrics, session.appLockEnabled, "ยืนยันการเซ็นส่งเงิน") },
             confirmRepost = confirmRepost,
+            confirmReplacement = confirmReplacement,
             onSigned = { navigate(MovieRoute.S6SentSlip) },
             onBack = onBack,
             onOpenCatalog = openCatalog,

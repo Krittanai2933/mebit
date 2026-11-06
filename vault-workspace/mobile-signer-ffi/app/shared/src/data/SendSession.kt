@@ -16,6 +16,8 @@ import com.mebit.ffi.signer.MobileSignerException
 import com.mebit.ffi.signer.PreparedSend
 import com.mebit.ffi.signer.hotBroadcast
 import com.mebit.ffi.signer.hotFeeTiers
+import com.mebit.ffi.signer.hotPrepareCancel
+import com.mebit.ffi.signer.hotPrepareFeeBump
 import com.mebit.ffi.signer.hotPrepareSendAll
 import com.mebit.ffi.signer.hotPrepareSendAtRate
 import com.mebit.ffi.signer.hotReceiveAddress
@@ -28,7 +30,7 @@ import kotlin.time.Clock
  * Single-sig hot wallet surface for Movie Page S*.
  * Live path uses BIP-84 + Esplora (hot_* UniFFI). Demo path keeps offline fixtures.
  *
- * [prepareAtRate], [prepareAll], [postHex], [snapshot], [fetchHistory], [receiveAddressOf], [fetchFeeTiers] and [fetchDetail] are the hot_* calls. Tests pass fakes, so they need no native library or network.
+ * [prepareAtRate], [prepareAll], [postHex], [snapshot], [fetchHistory], [receiveAddressOf], [fetchFeeTiers], [fetchDetail], [bumpAtRate] and [cancelAtRate] are the hot_* calls. Tests pass fakes, so they need no native library or network.
  * [nowSeconds] is the phone clock in Unix seconds, which [lastSentAtSeconds] reads when a payment goes out.
  */
 class SingleSigWallet(
@@ -41,6 +43,8 @@ class SingleSigWallet(
     private val receiveAddressOf: (words: List<String>, passphrase: String, network: KeyNetwork, index: UInt) -> String = ::hotReceiveAddress,
     private val fetchFeeTiers: (network: KeyNetwork) -> FeeTiers = ::hotFeeTiers,
     private val fetchDetail: (words: List<String>, passphrase: String, network: KeyNetwork, txid: String) -> HotTxDetail? = ::hotTxDetail,
+    private val bumpAtRate: (words: List<String>, passphrase: String, network: KeyNetwork, earlierHex: String, feeRateSatVb: ULong) -> PreparedSend = ::hotPrepareFeeBump,
+    private val cancelAtRate: (words: List<String>, passphrase: String, network: KeyNetwork, earlierHex: String, feeRateSatVb: ULong) -> PreparedSend = ::hotPrepareCancel,
 ) {
     /** What the wallet is. A real key is only ever [Live] or [Unavailable], so a real wallet never looks like the demo. */
     enum class WalletMode {
@@ -62,14 +66,33 @@ class SingleSigWallet(
      * [txid] is the one hot_prepare_send_at_rate computed. [sinceSeconds] is the phone clock when the post began. [hex] is the signed
      * transaction the guard file keeps beside it, whose txid is [txid], so [repost] can post the same payment again. Null for a guard
      * written without it, by a build before it or by the move from an older record.
+     * A replacement ([postReplacement]) spends every coin of the payment it replaces, so one chain of them can pay at most once.
+     * [replaces] names the earlier payments of its chain, oldest first, because any of them may be the one that is out, and
+     * [holdsCancel] is true once the chain holds a cancel. Both only beside [hex].
      */
-    data class UnconfirmedSend(val txid: String, val sinceSeconds: Long, val hex: String? = null) : Unsettled
+    data class UnconfirmedSend(
+        val txid: String,
+        val sinceSeconds: Long,
+        val hex: String? = null,
+        val replaces: List<String> = emptyList(),
+        val holdsCancel: Boolean = false,
+    ) : Unsettled {
+        /**
+         * Whether [history] shows this chain settled. It must list the txid or one this replaced, and once the chain holds a cancel only
+         * with a block behind it, because until a block holds one transaction of the chain the payment it cancels may still confirm.
+         */
+        fun settledBy(history: List<HotTx>): Boolean =
+            history.any { (it.txid == txid || it.txid in replaces) && (!holdsCancel || it.confirmations > 0u) }
+    }
 
     /** The guard file is on the phone but cannot be read or decoded, so a payment may be out whose txid and time are lost. No explorer can settle it, only the user. */
     data object DamagedGuard : Unsettled
 
     /** A payment the core signed that nothing has posted: what [prepare] holds until [post] sends it or [dropHeldSend] lets it go. [network] is the one it was signed for, so [post] cannot send it anywhere else. */
     data class HeldSend(val prepared: PreparedSend, val network: KeyNetwork)
+
+    /** A [kind] replacement of the guard [replaces] that the core signed and nothing has posted. [prepareReplacement] holds it until [postReplacement] sends it or [dropHeldReplacement] lets it go. [network] is the one it was signed for. */
+    data class HeldReplacement(val prepared: PreparedSend, val network: KeyNetwork, val replaces: UnconfirmedSend, val kind: Replacement)
 
     /** The [WalletMode] the last [bindSession] left. [WalletMode.Demo] until the first bind. */
     var mode: WalletMode by mutableStateOf(WalletMode.Demo)
@@ -120,7 +143,7 @@ class SingleSigWallet(
         private set
 
     /**
-     * The payment that may be out, or null. [post] sets it and saves it before the post, and while it is set [prepare] refuses, because the same payment could go out twice. It clears when the post returns or the node refuses, when a [repost] of its bytes is out, when a [bindSession] loads a [history] that holds its txid, when the user clears it through [clearUnconfirmedSend] after checking the explorer, and in [useDemoFixture]. Never by the clock. [lastTxid] and [lastSentAtSeconds] stay for payments that went out.
+     * The payment that may be out, or null. [post] sets it and saves it before the post, and while it is set [prepare] refuses, because the same payment could go out twice. It clears when the post returns or the node refuses, when a [repost] of its bytes or a fee bump ([postReplacement]) is out, when a [bindSession] loads a [history] that holds its txid or one it replaced, when the user clears it through [clearUnconfirmedSend] after checking the explorer, and in [useDemoFixture]. Never by the clock. A chain that holds a cancel clears only by the user or by a history that lists one of its txids with a block. [lastTxid] and [lastSentAtSeconds] stay for payments that went out.
      * The session keeps it in the guard file ([OnboardingSession.unconfirmedSend]), so a wallet built after a restart, or another live instance of the wallet, takes it at its next bind, and clearing it here clears the file too.
      * A damaged guard file is [DamagedGuard] here: no history can settle it, so only the user's clear does.
      */
@@ -137,6 +160,13 @@ class SingleSigWallet(
 
     /** Counts the drops of a held payment, so a [prepare] that returns after [dropHeldSend] ran holds nothing. */
     private var heldEpoch: Int by mutableStateOf(0)
+
+    /** The replacement [prepareReplacement] signed and holds for the screen's card, or null. Nothing of it is written or out. */
+    var heldReplacement: HeldReplacement? by mutableStateOf(null)
+        private set
+
+    /** Counts the drops of a held replacement, as [heldEpoch] does for a payment. */
+    private var replacementEpoch: Int by mutableStateOf(0)
 
     fun bindSession(session: OnboardingSession, network: KeyNetwork = KeyNetwork.TEST) {
         lastError = null
@@ -161,8 +191,8 @@ class SingleSigWallet(
                 null
             }
             history = loaded ?: emptyList()
-            // Only a list that names the txid can settle it: the empty list of a failed call says nothing, and neither does the clock.
-            if (loaded != null && (unconfirmedSend as? UnconfirmedSend)?.let { pending -> loaded.any { it.txid == pending.txid } } == true) clearUnconfirmedSend(session)
+            // Only a list that names the payment can settle it. The empty list of a failed call says nothing, and neither does the clock.
+            if (loaded != null && (unconfirmedSend as? UnconfirmedSend)?.settledBy(loaded) == true) clearUnconfirmedSend(session)
         } catch (e: Exception) {
             // Mode first, so no frame shows the cleared balance as a known one.
             mode = WalletMode.Unavailable
@@ -361,28 +391,107 @@ class SingleSigWallet(
      * screen's draft of the payment goes in the same step ([com.mebit.app.feature.send.RepostAttempt.start]).
      * Every other end keeps the guard, a refusal included, because after a first post a refusal can mean the payment confirmed or that
      * another transaction spent its coins. [Repost.Failed], with nothing posted, when the phone no longer keeps this guard with its bytes.
+     * A chain that holds a cancel keeps its guard on [Repost.Out] too, because the payment it cancels may still confirm.
      * Blocks, so call it off the main thread.
      */
     fun repost(session: OnboardingSession, network: KeyNetwork = KeyNetwork.TEST): Repost {
         val pending = unconfirmedSend as? UnconfirmedSend ?: return Repost.Failed
-        val outcome = session.repostUnconfirmedSend(pending) { hex ->
-            try {
-                postHex(network, hex, pending.txid)
-                Repost.Out
-            } catch (e: MobileSignerException.BroadcastUnknown) {
-                Repost.Unknown
-            } catch (e: MobileSignerException.InvalidPsbtJson) {
-                // "esplora post:" is the node's own answer. Every other refusal came before anything was posted.
-                if (e.message.orEmpty().removePrefix("invalid PSBT json: ").startsWith("esplora post:")) Repost.Refused else Repost.Failed
-            } catch (e: Exception) {
-                Repost.Failed
-            }
-        } ?: Repost.Failed
-        if (outcome == Repost.Out) {
+        val outcome = session.repostUnconfirmedSend(pending) { hex -> posted(network, hex, pending.txid) } ?: Repost.Failed
+        if (outcome == Repost.Out && !pending.holdsCancel) {
             // Out is known, so the wallet lets go even while another instance's repost of these bytes keeps the phone's copy. A claim still
             // meets that copy until its repost ends out or a bind lists the txid.
             session.clearUnconfirmedSend(pending)
             unconfirmedSend = null
+        }
+        return outcome
+    }
+
+    /** Posts [hex], whose txid is [txid], and says how it ended. */
+    private fun posted(network: KeyNetwork, hex: String, txid: String): Repost = try {
+        postHex(network, hex, txid)
+        Repost.Out
+    } catch (e: MobileSignerException.BroadcastUnknown) {
+        Repost.Unknown
+    } catch (e: MobileSignerException.InvalidPsbtJson) {
+        // "esplora post:" is the node's own answer. Every other refusal came before anything was posted.
+        if (e.message.orEmpty().removePrefix("invalid PSBT json: ").startsWith("esplora post:")) Repost.Refused else Repost.Failed
+    } catch (e: Exception) {
+        Repost.Failed
+    }
+
+    /**
+     * Signs a [kind] replacement of the guarded payment, at [feeRateSatVb] or the lowest rate the network takes for it, and holds it in
+     * [heldReplacement] with nothing written or posted, so the screen can show what it pays and ask before [postReplacement]. It needs
+     * the guard's signed bytes and a real key whose wallet is live with its balance known, as [prepare] does. A chain that holds a cancel
+     * takes no fee bump, because that would pay the destination the cancel took back. False when any is missing, with a Thai [lastError]
+     * when the core refused, and with no error when [dropHeldReplacement] ran while the core was signing. Blocks, so call it off the
+     * main thread.
+     */
+    fun prepareReplacement(session: OnboardingSession, kind: Replacement, feeRateSatVb: Long, network: KeyNetwork = KeyNetwork.TEST): Boolean {
+        lastError = null
+        heldReplacement = null
+        val epoch = replacementEpoch
+        val pending = unconfirmedSend as? UnconfirmedSend ?: return false
+        val hex = pending.hex ?: return false
+        if (kind == Replacement.FeeBump && pending.holdsCancel) return false
+        if (session.words.size < 12 || !(live && balanceKnown)) {
+            lastError = "ยังดึงยอดคงเหลือไม่ได้ จึงยังส่งไม่ได้"
+            return false
+        }
+        val sign = when (kind) {
+            Replacement.FeeBump -> bumpAtRate
+            Replacement.Cancel -> cancelAtRate
+        }
+        val prepared = try {
+            sign(session.words, session.passphrase, network, hex, feeRateSatVb.toULong())
+        } catch (e: Exception) {
+            lastError = sendErrorThai(e.message)
+            return false
+        }
+        if (epoch != replacementEpoch) return false
+        heldReplacement = HeldReplacement(prepared, network, pending, kind)
+        return true
+    }
+
+    /** Lets the held replacement go without posting it, a [prepareReplacement] still running included. Nothing of it was written or posted. */
+    fun dropHeldReplacement() {
+        replacementEpoch++
+        heldReplacement = null
+    }
+
+    /**
+     * Posts the replacement [prepareReplacement] holds, once the user confirmed it. Its guard goes to the phone first. The file swaps the
+     * guard it replaces for one that names the whole chain and keeps a cancel mark ([PendingPayments.swap]), so whichever payment of the
+     * chain is out, the guard stays until a history settles it. Then the post.
+     * [Repost.Out] of a fee bump drops the guard and records the bump as the last payment, as [post] does. A cancel that is out keeps
+     * the guard, because until a block holds one transaction of the chain the payment it cancels may confirm, and it records nothing,
+     * because nothing was paid to anyone. [Repost.Unknown] and [Repost.Refused] keep the replacement's guard, because an earlier payment
+     * may be out. [Repost.Failed] posts nothing. That covers no held replacement, one that no longer replaces this wallet's guard, a file
+     * that names another payment now, none or a damaged one, which the wallet then takes, and a file that could not take the guard.
+     * Blocks, so call it off the main thread.
+     */
+    fun postReplacement(session: OnboardingSession): Repost {
+        val held = heldReplacement ?: return Repost.Failed
+        heldReplacement = null
+        val earlier = held.replaces
+        if ((unconfirmedSend as? UnconfirmedSend)?.txid != earlier.txid) return Repost.Failed
+        val prepared = held.prepared
+        val next = UnconfirmedSend(prepared.txid, nowSeconds(), prepared.hex, earlier.replaces + earlier.txid, earlier.holdsCancel || held.kind == Replacement.Cancel)
+        when (val swap = session.replaceUnconfirmedSend(earlier, next)) {
+            Swap.Written -> unconfirmedSend = next
+            is Swap.Changed -> {
+                unconfirmedSend = swap.now
+                return Repost.Failed
+            }
+            Swap.NotSaved -> return Repost.Failed
+        }
+        val outcome = session.repostUnconfirmedSend(next) { hex -> posted(held.network, hex, next.txid) } ?: Repost.Failed
+        if (outcome == Repost.Out && !next.holdsCancel) {
+            clearUnconfirmedSend(session)
+            lastTxid = prepared.txid
+            lastFeeSats = prepared.feeSats.toLong()
+            lastAmountSats = prepared.amountSats.toLong()
+            lastSentAtSeconds = nowSeconds()
         }
         return outcome
     }
@@ -409,10 +518,20 @@ class SingleSigWallet(
         unconfirmedSend = null
         heldEpoch++
         heldSend = null
+        dropHeldReplacement()
     }
 }
 
-/** How a [SingleSigWallet.repost] ended. Only [Out] drops the guard. */
+/** What replaces a payment of unknown outcome. Each spends every coin of the payment it replaces, so at most one of them can confirm. */
+enum class Replacement {
+    /** The same destination and amount at a higher fee. */
+    FeeBump,
+
+    /** Every coin back to this wallet, at a higher fee. Only a block settles it, because until then the payment it cancels may confirm. */
+    Cancel,
+}
+
+/** How a [SingleSigWallet.repost] or a [SingleSigWallet.postReplacement] ended. Only [Out] drops the guard, and not one whose chain holds a cancel. */
 enum class Repost {
     /** The node took the bytes, or answered that it already holds or has confirmed them, so the payment is out. */
     Out,
@@ -453,6 +572,11 @@ fun sendErrorThai(message: String?): String {
         m.startsWith("the whole balance ") -> "ยอดทั้งหมดหลังหักค่าธรรมเนียมน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)"
         m.startsWith("fee ") && " is below " in m -> "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น"
         m.startsWith("fee ") && " is above " in m -> "ค่าธรรมเนียมสูงผิดปกติ ตรวจจำนวนอีกครั้ง"
+        // hot_prepare_fee_bump and hot_prepare_cancel. A spent coin most likely means the earlier payment is out.
+        m.startsWith("replace: coins spent:") -> "เหรียญของรายการเดิมถูกใช้ไปแล้ว รายการเดิมอาจออกไปแล้ว ตรวจประวัติในหน้าแรกก่อน"
+        m.startsWith("replace: not this wallet's payment:") -> "รายการเดิมไม่ใช่รายการที่กระเป๋านี้แทนที่ได้"
+        m.startsWith("replace: rate ") -> "ค่าธรรมเนียมที่ต้องใช้สูงเกินเพดาน 2,000 sat/vB"
+        m.startsWith("replace: what is left") -> "ยอดที่เหลือหลังหักค่าธรรมเนียมใหม่น้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)"
         m.startsWith("esplora scan:") -> ABNORMAL_HISTORY
         m.startsWith("esplora utxo:") || m.startsWith("esplora balance:") -> "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง"
         m == "amount plus fee does not fit u64" -> "จำนวนผิดปกติ"

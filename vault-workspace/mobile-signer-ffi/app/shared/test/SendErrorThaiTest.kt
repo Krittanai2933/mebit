@@ -33,6 +33,13 @@ class SendErrorThaiTest {
         "esplora get: no testnet4 host is reachable (https://blockstream.info/testnet4/api: esplora get: status code 429; https://mempool.space/testnet4/api: Connection Failed)" to "explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่",
         // Seen on an iPhone 15 over 5G on 3 Nov 2026, as the bindings print it.
         "esplora get: https://mempool.space/testnet4/api/address/tb1q5squ69zn40x44ewqgl6dsaqgwjj38pc7f7j9hp: Connection Failed: tls connection init failed: Resource temporarily unavailable (os error 35)" to "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง",
+        // hot_prepare_fee_bump and hot_prepare_cancel.
+        "replace: coins spent: 1111111111111111111111111111111111111111111111111111111111111111:0 is not a coin this wallet can spend" to "เหรียญของรายการเดิมถูกใช้ไปแล้ว รายการเดิมอาจออกไปแล้ว ตรวจประวัติในหน้าแรกก่อน",
+        "replace: not this wallet's payment: its second output is not this wallet's change" to "รายการเดิมไม่ใช่รายการที่กระเป๋านี้แทนที่ได้",
+        "replace: not this wallet's payment: not one transaction" to "รายการเดิมไม่ใช่รายการที่กระเป๋านี้แทนที่ได้",
+        "replace: rate 2001 is above 2000 sat/vB" to "ค่าธรรมเนียมที่ต้องใช้สูงเกินเพดาน 2,000 sat/vB",
+        "replace: what is left, 1000 less the fee 550, is below the 546 sat dust limit" to "ยอดที่เหลือหลังหักค่าธรรมเนียมใหม่น้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)",
+        "replace: check failed: its rate is above the earlier rate" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
         "missing witness slot" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
         "" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
     )

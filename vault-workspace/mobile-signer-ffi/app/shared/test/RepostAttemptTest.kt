@@ -9,6 +9,7 @@ import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.OwnerCheck
 import com.mebit.app.data.PUBLIC_WORDS_24
 import com.mebit.app.data.PendingPayments
+import com.mebit.app.data.Replacement
 import com.mebit.app.data.Repost
 import com.mebit.app.data.SIGNED_HEX
 import com.mebit.app.data.SIGNED_TXID
@@ -195,6 +196,108 @@ class RepostAttemptTest {
         assertEquals("", phone.draft.destination)
     }
 
+    // C3 and option (a). Signing a replacement signs a new transaction, so the owner check comes first, and a refused one signs nothing.
+    @Test
+    fun aReplacementIsSignedOnlyAfterTheOwnerCheck() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val attempt = RepostAttempt()
+        val events = mutableListOf<String>()
+        attempt.startReplacement(scope, Replacement.FeeBump, TXID, confirm = { events += "asked"; false }) {
+            events += "signed"
+            null
+        }.join()
+        assertEquals(listOf("asked"), events, "a refused owner check")
+        assertNull(attempt.signFailure)
+        attempt.startReplacement(scope, Replacement.Cancel, TXID, confirm = { events += "asked"; true }) {
+            events += "signed"
+            "ยอดที่เหลือหลังหักค่าธรรมเนียมใหม่น้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)"
+        }.join()
+        assertEquals(listOf("asked", "asked", "signed"), events, "a passed owner check")
+        assertEquals(SignFailure(TXID, "ยอดที่เหลือหลังหักค่าธรรมเนียมใหม่น้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)"), attempt.signFailure)
+        assertFalse(attempt.running)
+    }
+
+    // Option (a), A4. A cancel is offered at once, before any retry, because a retry could put out the payment the user wants to cancel.
+    // C3. A fee bump only once the node refused the guard's bytes on this screen, because a refusal is when a higher fee helps. A chain
+    // that holds a cancel gets only another cancel, on the same gate.
+    @Test
+    fun aCancelIsOfferedAtOnceAndABumpOrASecondCancelOnlyAfterTheNodeRefusedTheBytesHere() = runBlocking {
+        val guard = SingleSigWallet.UnconfirmedSend(TXID, 1_792_740_720L, SIGNED_HEX)
+        val cancelled = SingleSigWallet.UnconfirmedSend(BUMP_TXID, 1_792_741_020L, SIGNED_HEX, listOf(TXID), holdsCancel = true)
+        val fresh = RepostAttempt()
+        assertEquals(listOf(Replacement.Cancel), fresh.offers(guard), "a guard with its bytes, before any retry")
+        assertEquals(emptyList<Replacement>(), fresh.offers(guard.copy(hex = null)), "a guard without bytes")
+        assertEquals(emptyList<Replacement>(), fresh.offers(cancelled), "a chain that holds a cancel, before a refusal")
+        for (outcome in listOf(Repost.Unknown, Repost.Failed, Repost.Out)) {
+            val attempt = RepostAttempt()
+            attempt.run(TXID, confirm = { true }) { outcome }
+            assertEquals(listOf(Replacement.Cancel), attempt.offers(guard), "after a retry that ended $outcome")
+        }
+        val refused = RepostAttempt()
+        refused.run(TXID, confirm = { true }) { Repost.Refused }
+        assertEquals(listOf(Replacement.FeeBump, Replacement.Cancel), refused.offers(guard), "after a refused retry")
+        assertEquals(listOf(Replacement.Cancel), refused.offers(guard.copy(txid = BUMP_TXID)), "a refusal of another guard's bytes")
+        val scope = CoroutineScope(coroutineContext + Job())
+        val bumpRefused = RepostAttempt()
+        bumpRefused.postReplacement(scope, held(Replacement.FeeBump), SendDraft()) { Repost.Refused }.join()
+        assertEquals(listOf(Replacement.FeeBump, Replacement.Cancel), bumpRefused.offers(guard.copy(txid = BUMP_TXID, replaces = listOf(TXID))), "after a refused bump")
+        val cancelRefused = RepostAttempt()
+        cancelRefused.postReplacement(scope, held(Replacement.Cancel), SendDraft()) { Repost.Refused }.join()
+        assertEquals(listOf(Replacement.Cancel), cancelRefused.offers(cancelled), "after a refused cancel")
+        val cancelOut = RepostAttempt()
+        cancelOut.postReplacement(scope, held(Replacement.Cancel), SendDraft()) { Repost.Out }.join()
+        assertEquals(emptyList<Replacement>(), cancelOut.offers(cancelled), "after a cancel that is out")
+    }
+
+    // C3 and A4. A replacement that is out drops the draft in the step that learns it, as a repost does, because the draft may hold that
+    // payment and a second review of it would pay twice. One that is not out keeps it.
+    @Test
+    fun theDraftGoesWithAReplacementThatIsOut() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        for (kind in Replacement.entries) for (outcome in Repost.entries) {
+            val draft = SendDraft().apply {
+                destination = "tb1qthepayee"
+                setAmountInSats(100_000)
+            }
+            val attempt = RepostAttempt()
+            attempt.postReplacement(scope, held(kind), draft) { outcome }.join()
+            assertEquals(Replaced(kind, TXID, BUMP_TXID, outcome), attempt.replaced, "$kind $outcome")
+            assertEquals(if (outcome == Repost.Out) "" else "tb1qthepayee", draft.destination, "$kind $outcome")
+            assertEquals(outcome == Repost.Out, attempt.wentOut, "$kind $outcome")
+        }
+    }
+
+    // C3 and A4. Back, รับ and cancel wait while a replacement signs or posts, as they do while a repost runs.
+    @Test
+    fun leavingWaitsWhileAReplacementSignsOrPosts() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + Job())
+        val attempt = RepostAttempt()
+        var left = 0
+        val leave = attempt.unlessRunning { left++ }
+        val owner = CompletableDeferred<Boolean>()
+        val signing = attempt.startReplacement(scope, Replacement.Cancel, TXID, confirm = { owner.await() }) { null }
+        yield()
+        val whileSigning = attempt.step
+        leave()
+        owner.complete(true)
+        signing.join()
+        val node = CompletableDeferred<Unit>()
+        val posting = attempt.postReplacement(scope, held(Replacement.FeeBump), SendDraft()) {
+            runBlocking { node.await() }
+            Repost.Unknown
+        }
+        yield()
+        val whilePosting = attempt.step
+        leave()
+        // The node answers before any assertion, so a failing one cannot leave the post blocked and the test hanging.
+        node.complete(Unit)
+        posting.join()
+        leave()
+        assertEquals(Step.Sign(Replacement.Cancel), whileSigning)
+        assertEquals(Step.Post(Replacement.FeeBump), whilePosting)
+        assertEquals(1, left, "only the tap after both ended left")
+    }
+
     /** A phone with no passcode and no screen lock, so the Spending PIN is the owner check. */
     private object NoLock : Biometrics {
         override fun available() = false
@@ -204,6 +307,17 @@ class RepostAttemptTest {
 }
 
 private const val TXID = "c5ed075ef44b807f51123cf0c6e53c75385a17a510f995b560bf73b1102d5474"
+
+/** A replacement's txid. The attempt only carries it, so any 64 digits do. */
+private val BUMP_TXID = "b".repeat(64)
+
+/** A held [kind] replacement [BUMP_TXID] of the guard [TXID], as the card hands it to the attempt. */
+private fun held(kind: Replacement) = SingleSigWallet.HeldReplacement(
+    PreparedSend(BUMP_TXID, SIGNED_HEX, 2_820uL, 100_000uL),
+    KeyNetwork.TEST,
+    SingleSigWallet.UnconfirmedSend(TXID, 1_792_740_720L, SIGNED_HEX),
+    kind,
+)
 
 /**
  * A live wallet with a draft of 100,000 sats to a payee, whose first post of [SIGNED_HEX] ended with its answer lost, so the guard

@@ -23,6 +23,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,6 +55,7 @@ import com.mebit.app.data.LiveFeeTiers
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.FiatQuote
 import com.mebit.app.data.QuoteCache
+import com.mebit.app.data.Replacement
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SendIssue
 import com.mebit.app.data.SingleSigWallet
@@ -99,6 +101,7 @@ fun S4SendScreen(
     draft: SendDraft,
     quotes: QuoteCache,
     confirmRepost: suspend () -> Boolean,
+    confirmReplacement: suspend (Replacement) -> Boolean,
     onContinue: () -> Unit,
     onReceive: () -> Unit,
     onBack: (() -> Unit)?,
@@ -108,6 +111,10 @@ fun S4SendScreen(
     val entry = remember(draft) { AmountEntry(draft) }
     val scope = rememberCoroutineScope()
     val repost = remember { RepostAttempt() }
+    // A replacement held for its card is signed and nothing more, so leaving the screen lets it go.
+    DisposableEffect(wallet) {
+        onDispose { wallet.dropHeldReplacement() }
+    }
     // Once per open of this screen. Rust answers from memory for five minutes, so a second open costs no network call.
     LaunchedEffect(draft) { entry.applyTiers(withContext(Dispatchers.Default) { wallet.feeTiers() }, wallet.spendableSats) }
     val addressOk = if (draft.destination.isEmpty()) null else isValidAddress(draft.destination, KeyNetwork.TEST)
@@ -130,7 +137,7 @@ fun S4SendScreen(
         MebitScreen(
             eyebrow = "SEND · กระเป๋าใช้จ่าย",
             title = null,
-            // Back and รับ wait while a repost runs, as Review's back does. The back chip stays so the header does not shift.
+            // Back and รับ wait while a repost or a replacement runs, as Review's back does. The back chip stays so the header does not shift.
             onBack = onBack?.let(repost::unlessRunning),
             onOpenCatalog = onOpenCatalog,
             tag = "screen_send/s4",
@@ -177,7 +184,7 @@ fun S4SendScreen(
                 SendIssue.PaymentUnconfirmed -> {
                     Spacer(modifier = Modifier.height(20.dp))
                     IssuePanel("PAYMENT UNCONFIRMED", "การส่งครั้งก่อนยังยืนยันไม่ได้ รอสักครู่ แล้วเปิดหน้าแรกเพื่อตรวจยอดก่อนส่งอีกครั้ง")
-                    UnconfirmedClearControl(wallet, session, repost) { txid -> repost.start(scope, txid, confirmRepost, draft) { wallet.repost(session) } }
+                    UnconfirmedClearControl(wallet, session, draft, quote, repost, scope, confirmRepost, confirmReplacement)
                 }
                 is SendIssue.Insufficient -> {
                     Spacer(modifier = Modifier.height(20.dp))
@@ -186,7 +193,7 @@ fun S4SendScreen(
                 null -> Unit
             }
             // Outside the panel, which leaves with the guard the repost settled.
-            RepostedNote(repost)
+            RepostedNote(repost, wallet)
         }
     }
 }

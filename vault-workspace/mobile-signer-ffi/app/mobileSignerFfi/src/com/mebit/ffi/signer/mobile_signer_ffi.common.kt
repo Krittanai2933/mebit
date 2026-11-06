@@ -540,11 +540,13 @@ public data class PreparedSend (
     /**
      * The fee the transaction pays, in sats: its virtual size times the rate asked for, rounded up.
      * A payment whose change would be dust is refused instead of folding the change into the fee.
+     * A fee bump or a cancel pays what `hot_prepare_fee_bump` says, change of 546 sats or less included.
      */
     var `feeSats`: kotlin.ULong, 
     /**
      * What `destination` is paid, in sats: the amount asked for, or for `hot_prepare_send_all`
-     * the whole balance less `fee_sats`, which is only known once the coins are.
+     * the whole balance less `fee_sats`, which is only known once the coins are. For a fee bump it
+     * is what the earlier payment's destination gets, and for a cancel what comes back to this wallet.
      */
     var `amountSats`: kotlin.ULong
 ) {
@@ -1080,6 +1082,35 @@ public expect fun `hotFeeTiers`(`network`: KeyNetwork): FeeTiers
  * wallet is erased.
  */
 public expect fun `hotForgetScanState`()
+
+/**
+ * Scan, then sign a cancel of `earlier_hex`, the signed payment the app's guard keeps, and post
+ * nothing. It spends exactly that payment's inputs in its order and pays them back to this wallet in
+ * one output, to its change address when it had change and else to the next unused one. The fee follows the rules of
+ * `hot_prepare_fee_bump` for that one output, and `amount_sats` is what comes back. Until a block holds
+ * one of the two, the earlier payment may still confirm instead. The same refusals as
+ * `hot_prepare_fee_bump`, so call it off the main thread.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `hotPrepareCancel`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `earlierHex`: kotlin.String, `feeRateSatVb`: kotlin.ULong): PreparedSend
+
+/**
+ * Scan, then sign a fee bump of `earlier_hex`, the signed payment the app's guard keeps, and post
+ * nothing. It spends every input of that payment in its order, so at most one of the two can ever
+ * confirm, and its first output stays as it was. Change goes to the same change address, more
+ * confirmed coins join only when the earlier inputs cannot pay the new fee, and change of 546 sats or
+ * less goes into the fee. A payment with no change gets one output worth its inputs less the new fee,
+ * so `amount_sats` is lower. The fee meets BIP-125 rules 3, 4 and 6 against that payment. It is at
+ * least that payment's fee plus the new size at 1 sat/vB, at a rate strictly above its rate, so the
+ * rate can be above `fee_rate_sat_vb`. Refuses, before any lookup, bytes that are not one transaction with inputs and one
+ * or two outputs whose first is at least 546 sats, and a rate outside 1 to 2,000 sat/vB. After the scan
+ * it refuses, after `replace: `, a second output that is not this wallet's change, inputs that are not
+ * all coins this wallet can spend now (`coins spent:`, most likely because that payment is out), a rate
+ * that would pass 2,000 sat/vB, and what is left below 546 sats. The same scan as
+ * `hot_prepare_send_at_rate`, so call it off the main thread.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `hotPrepareFeeBump`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `earlierHex`: kotlin.String, `feeRateSatVb`: kotlin.ULong): PreparedSend
 
 /**
  * Scan, spend every coin `hot_prepare_send_at_rate` would consider, and sign one output paying

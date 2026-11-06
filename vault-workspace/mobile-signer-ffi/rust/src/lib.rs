@@ -860,6 +860,14 @@ mod tests {
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_all(),
             ),
             (
+                "func_hot_prepare_fee_bump",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_prepare_fee_bump(),
+            ),
+            (
+                "func_hot_prepare_cancel",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_prepare_cancel(),
+            ),
+            (
                 "func_hot_broadcast",
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_broadcast(),
             ),
