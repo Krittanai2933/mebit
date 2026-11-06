@@ -802,6 +802,7 @@ class SendDraft {
         destination = ""
         amountText = ""
         amountSats = 0L
+        sendAllMarked = false
         chooseTier(FeeTier.Normal)
         lastError = null
     }

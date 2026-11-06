@@ -190,6 +190,17 @@ class AmountEntryTest {
     }
 
     @Test
+    fun aNewPaymentAfterSendAllOpensWithNoAmount() {
+        val (draft, entry) = fresh()
+        entry.sendAll(3_120_000)
+        draft.reset()
+        // The Send screen applies the fetched rates each time it opens.
+        entry.applyTiers(LiveFeeTiers(1, 1, 2, live = true), 3_120_000)
+        assertEquals(0L, draft.amountSats, "a new payment is not refilled with the whole balance")
+        assertFalse(entry.isSendAll)
+    }
+
+    @Test
     fun aFeeTierChangeLeavesATypedAmountAlone() {
         val (draft, entry) = fresh()
         entry.typeBtc("0.01")
