@@ -5001,6 +5001,16 @@ mod tests {
         }
     }
 
+    fn throttled_after(secs: u64) -> GetError {
+        match throttled() {
+            GetError::Throttled { what, .. } => GetError::Throttled {
+                retry_after: Some(Duration::from_secs(secs)),
+                what,
+            },
+            _ => unreachable!(),
+        }
+    }
+
     type Retried = (Result<String, MobileSignerError>, usize, Vec<Duration>);
 
     // Runs `get_with_retry` over scripted attempts. Returns the result, the attempts made and the sleeps.
@@ -5376,6 +5386,241 @@ mod tests {
             assert_eq!(chosen(&hosts).is_none(), forgotten, "{case}");
             assert_eq!(fake.next_snapshot_syncs(), forgotten, "{case}");
         }
+    }
+
+    /// A transport over one host with no host choice, so every lookup of a window goes to that host by
+    /// construction. `answer` is the network, and `sleep` is the wait between a lookup's attempts.
+    struct OneHost<'a> {
+        answer: &'a (dyn Fn(&str) -> Result<String, GetError> + Sync),
+        sleep: &'a (dyn Fn(Duration) + Sync),
+        limits: &'a Limits,
+    }
+
+    impl Transport for OneHost<'_> {
+        fn get(&self, url: &str) -> Result<String, MobileSignerError> {
+            get_forgetting(
+                &|| {
+                    attempt_unless_limited(
+                        HOSTS[0],
+                        &|| (self.answer)(url),
+                        self.limits,
+                        &Instant::now,
+                    )
+                },
+                self.sleep,
+                &Mutex::new(None),
+                &|| {},
+            )
+        }
+
+        fn broadcast(&self, _: &str, _: &str) -> Result<String, MobileSignerError> {
+            unreachable!("a test that only reads posts nothing")
+        }
+    }
+
+    // Ten lookups in flight: the fourth is refused with 429 and the rest get a brief 503. Without the
+    // check before each attempt, each 503 would be asked twice more, 28 requests, and the first error
+    // would read as the 503.
+    #[test]
+    fn a_429_in_a_batch_ends_the_batch_and_the_retries_of_its_siblings() {
+        use std::sync::Barrier;
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let addresses: Vec<Address> = (0..2 * WINDOW as u32)
+            .map(|i| own(Chain::External, i).address)
+            .collect();
+        let refused = addresses[3].to_string();
+        let calls = AtomicUsize::new(0);
+        let in_flight = Barrier::new(WINDOW);
+        let limits = Limits::default();
+        let answer = |url: &str| {
+            if calls.fetch_add(1, SeqCst) < WINDOW {
+                in_flight.wait();
+            }
+            if url.ends_with(&refused) {
+                Err(throttled())
+            } else {
+                Err(outage())
+            }
+        };
+        let limited = || {
+            limits
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(host, _)| *host == HOSTS[0])
+        };
+        let sleep = |_| {
+            let start = Instant::now();
+            while !limited() && start.elapsed() < Duration::from_secs(2) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        let host = OneHost {
+            answer: &answer,
+            sleep: &sleep,
+            limits: &limits,
+        };
+        let refs: Vec<&Address> = addresses.iter().collect();
+        let error = EsploraSource(&host).summaries(&refs).unwrap_err();
+        assert_eq!(
+            calls.load(SeqCst),
+            WINDOW,
+            "one request per lookup of the window, none after"
+        );
+        assert!(crate::chain::throttled(&error).is_some(), "{error:?}");
+    }
+
+    /// Whether `call` runs at `t0 + after` on a host that answered 429 at `t0` with `retry_after`.
+    fn asked_again(retry_after: Option<u64>, after: Duration) -> bool {
+        let limits = Limits::default();
+        let t0 = Instant::now();
+        let first = attempt_unless_limited(
+            HOSTS[0],
+            &|| {
+                Err(GetError::Throttled {
+                    retry_after: retry_after.map(Duration::from_secs),
+                    what: "esplora get: HTTP status 429".into(),
+                })
+            },
+            &limits,
+            &|| t0,
+        );
+        assert!(matches!(first, Err(GetError::Throttled { .. })));
+        let asked = Cell::new(false);
+        let _ = attempt_unless_limited(
+            HOSTS[0],
+            &|| {
+                asked.set(true);
+                Ok(String::new())
+            },
+            &limits,
+            &|| t0 + after,
+        );
+        asked.get()
+    }
+
+    #[test]
+    fn a_limit_lasts_the_retry_after_capped_at_ten_minutes_and_a_minute_without_one_or_with_zero() {
+        let second = Duration::from_secs(1);
+        assert!(!asked_again(Some(30), Duration::from_secs(29)));
+        assert!(asked_again(Some(30), Duration::from_secs(30)));
+        assert!(!asked_again(Some(86_400), LIMIT_MAX - second));
+        assert!(asked_again(Some(86_400), LIMIT_MAX));
+        assert!(!asked_again(None, LIMIT_DEFAULT - second));
+        assert!(asked_again(None, LIMIT_DEFAULT));
+        assert!(
+            !asked_again(Some(0), LIMIT_DEFAULT - second),
+            "Retry-After 0 is not an invitation"
+        );
+        assert!(asked_again(Some(0), LIMIT_DEFAULT));
+        // Two lookups in flight together, past the check before either answers. The first answers 429
+        // with no Retry-After at t0. The second waits for that to be recorded, then answers 429 with
+        // Retry-After 5 at t0 + 1 s. The later answer never shortens the limit.
+        let limits = Limits::default();
+        let t0 = Instant::now();
+        let recorded = || {
+            limits
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(host, _)| *host == HOSTS[0])
+        };
+        let both_in_flight = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let first = || {
+                    both_in_flight.wait();
+                    Err(throttled())
+                };
+                let _ = attempt_unless_limited(HOSTS[0], &first, &limits, &|| t0);
+            });
+            scope.spawn(|| {
+                let second_answer = || {
+                    both_in_flight.wait();
+                    while !recorded() {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(throttled_after(5))
+                };
+                let _ = attempt_unless_limited(HOSTS[0], &second_answer, &limits, &|| t0 + second);
+            });
+        });
+        let asked = Cell::new(false);
+        let late = attempt_unless_limited(
+            HOSTS[0],
+            &|| {
+                asked.set(true);
+                Ok(String::new())
+            },
+            &limits,
+            &|| t0 + Duration::from_secs(59),
+        );
+        assert!(
+            !asked.get() && late.is_err(),
+            "the 60 s limit stands over the 5 s one"
+        );
+    }
+
+    #[test]
+    fn a_get_whose_host_is_limited_is_refused_unasked_and_moves_no_limit() {
+        let limits = Limits::default();
+        let t0 = Instant::now();
+        let _ = attempt_unless_limited(HOSTS[0], &|| Err(throttled_after(5)), &limits, &|| t0);
+        let asked = Cell::new(0);
+        let count = || {
+            asked.set(asked.get() + 1);
+            Ok(String::new())
+        };
+        let refused =
+            attempt_unless_limited(HOSTS[0], &count, &limits, &|| t0 + Duration::from_secs(1));
+        let MobileSignerError::InvalidPsbtJson(text) =
+            MobileSignerError::from(refused.unwrap_err())
+        else {
+            panic!("wrong error kind")
+        };
+        assert!(text.contains("limited for 4 s more"), "{text}");
+        assert_eq!(asked.get(), 0, "refused without a request");
+        let free =
+            attempt_unless_limited(HOSTS[0], &count, &limits, &|| t0 + Duration::from_secs(5));
+        assert!(free.is_ok());
+        assert_eq!(asked.get(), 1, "a refusal moved no limit");
+    }
+
+    // Forget once, on the final result, with the limit wrapper inside. Moving the forget into the
+    // attempt closure would count three, and a 429 after a loss would forget nothing either way.
+    #[test]
+    fn a_loss_is_forgotten_once_whatever_the_attempt_wrapper_sees() {
+        let through = |script: Vec<Result<String, GetError>>| {
+            let hosts = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
+            let limits = Limits::default();
+            let script = Mutex::new(VecDeque::from(script));
+            let attempts = Cell::new(0);
+            let lost_calls = Cell::new(0);
+            let result = get_forgetting(
+                &|| {
+                    attempt_unless_limited(
+                        HOSTS[0],
+                        &|| {
+                            attempts.set(attempts.get() + 1);
+                            script
+                                .lock()
+                                .unwrap()
+                                .pop_front()
+                                .expect("one attempt too many")
+                        },
+                        &limits,
+                        &Instant::now,
+                    )
+                },
+                &|_| {},
+                &hosts,
+                &|| lost_calls.set(lost_calls.get() + 1),
+            );
+            assert!(result.is_err());
+            (attempts.get(), lost_calls.get(), chosen(&hosts))
+        };
+        assert_eq!(through(vec![lost(), lost(), lost()]), (3, 1, None));
+        assert_eq!(through(vec![lost(), Err(throttled())]), (2, 0, Some(0)));
     }
 
     const HOSTS: [&str; 2] = ["https://first.example/api", "https://second.example/api"];

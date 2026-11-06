@@ -804,9 +804,17 @@ impl Http {
 
 impl Transport for Http {
     fn get(&self, url: &str) -> Result<String, MobileSignerError> {
-        let url = on_host(url, self.base()?);
+        let base = self.base()?;
+        let url = on_host(url, base);
         get_forgetting(
-            &|| classify(AGENT.get(&url).call()),
+            &|| {
+                attempt_unless_limited(
+                    base,
+                    &|| classify(AGENT.get(&url).call()),
+                    &LIMITS,
+                    &Instant::now,
+                )
+            },
             &std::thread::sleep,
             &CHOSEN_HOST,
             &self.lost,
@@ -961,6 +969,17 @@ pub(crate) enum HostVerdict {
 }
 pub(crate) type HostChoice = Mutex<Option<HostVerdict>>;
 static CHOSEN_HOST: HostChoice = Mutex::new(None);
+
+/// The hosts that answered 429, each with when its latest limit ends. One entry per host, so it never
+/// grows past the host list. An entry stays after its limit ends, because `pick_host` reads it as the
+/// evidence that a host came back. In memory only, so a restart asks a limited host once more.
+pub(crate) type Limits = Mutex<Vec<(&'static str, Instant)>>;
+static LIMITS: Limits = Mutex::new(Vec::new());
+/// How long a 429 without a usable Retry-After limits its host. It is also the wait before Home's first
+/// ask after a sync that stopped short, so that ask finds the host free.
+pub(crate) const LIMIT_DEFAULT: Duration = Duration::from_secs(60);
+/// The longest Retry-After believed, so one header cannot shut a host out for good.
+pub(crate) const LIMIT_MAX: Duration = Duration::from_secs(10 * 60);
 
 // Retries are for a GET only. A retried broadcast could pay twice, so `broadcast_signed` has none.
 const RETRIES: usize = 2;
@@ -1181,6 +1200,82 @@ pub(crate) fn probe_genesis(host: &HostSpec) -> Result<String, MobileSignerError
         .call()
         .and_then(|response| response.into_string().map_err(ureq::Error::from))
         .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))
+}
+
+/// One attempt at a GET on `base`, made only while `base` is under no limit. A 429 limits `base` and
+/// fails `Throttled`, and so does an attempt not made, each with the limit's text. `get_with_retry`
+/// never asks a `Throttled` again, so once one lookup of a batch records a 429 its siblings make no
+/// further attempt on that host. An attempt not made records nothing. Nothing here forgets the host or
+/// calls `lost`, because a 429 is the host answering.
+pub(crate) fn attempt_unless_limited(
+    base: &'static str,
+    call: &dyn Fn() -> Result<String, GetError>,
+    limits: &Limits,
+    clock: &dyn Fn() -> Instant,
+) -> Result<String, GetError> {
+    let now = clock();
+    if let Some(end) = limit_end(limits, base).filter(|end| now < *end) {
+        return Err(GetError::Throttled {
+            retry_after: None,
+            what: format!("esplora get: {}", limited_text(base, end, now)),
+        });
+    }
+    match call() {
+        Err(GetError::Throttled { retry_after, .. }) => {
+            let now = clock(); // the call may have taken seconds
+            let end = limit_host(limits, base, retry_after, now);
+            Err(GetError::Throttled {
+                retry_after,
+                what: format!("esplora get: {}", limited_text(base, end, now)),
+            })
+        }
+        got => got,
+    }
+}
+
+/// Limits `base` until `now` plus its Retry-After, or `LIMIT_DEFAULT` without one or with 0, at most
+/// `LIMIT_MAX`, and returns when the limit ends. A limit already running past that end stands, so
+/// siblings' 429s end the same whatever their order. The only writer of a `Limits`.
+fn limit_host(
+    limits: &Limits,
+    base: &'static str,
+    retry_after: Option<Duration>,
+    now: Instant,
+) -> Instant {
+    let end = now
+        + retry_after
+            .filter(|wait| !wait.is_zero())
+            .unwrap_or(LIMIT_DEFAULT)
+            .min(LIMIT_MAX);
+    let mut table = limits.lock().unwrap_or_else(|p| p.into_inner());
+    match table.iter_mut().find(|(host, _)| *host == base) {
+        Some((_, stored)) => {
+            *stored = (*stored).max(end);
+            *stored
+        }
+        None => {
+            table.push((base, end));
+            end
+        }
+    }
+}
+
+/// When the latest limit `base` set ends, or ended, or None if it never answered 429.
+fn limit_end(limits: &Limits, base: &str) -> Option<Instant> {
+    limits
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .iter()
+        .find(|(host, _)| *host == base)
+        .map(|(_, end)| *end)
+}
+
+/// `{base}: HTTP status 429, limited for {n} s more`, with n rounded up so the last second reads 1.
+/// Every 429 text the wallet gives is built here, so `throttled` matches each by construction.
+fn limited_text(base: &str, end: Instant, now: Instant) -> String {
+    let left = end.saturating_duration_since(now);
+    let n = left.as_secs() + u64::from(left.subsec_nanos() > 0);
+    format!("{base}: HTTP status 429, limited for {n} s more")
 }
 
 /// `call` with the retry, forgetting the host in use and calling `lost` when the last attempt got no
