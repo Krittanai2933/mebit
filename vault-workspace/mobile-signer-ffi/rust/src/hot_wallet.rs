@@ -35,8 +35,9 @@ use bitcoin::consensus::encode::{deserialize_hex, serialize_hex};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::{All, Message, Secp256k1};
 use bitcoin::{
-    Address, Amount, CompressedPublicKey, Network, OutPoint, PrivateKey, ScriptBuf, Sequence,
-    Transaction, TxIn, TxOut, Txid, Witness, sighash::EcdsaSighashType, sighash::SighashCache,
+    Address, Amount, CompressedPublicKey, Network, OutPoint, PrivateKey, Script, ScriptBuf,
+    Sequence, Transaction, TxIn, TxOut, Txid, Witness, sighash::EcdsaSighashType,
+    sighash::SighashCache,
 };
 
 const ACCOUNT_PATH: &str = "m/84'/1'/0'";
@@ -1069,7 +1070,7 @@ pub struct PreparedSend {
     pub hex: String,
     /// The fee the transaction pays, in sats: its virtual size times the rate asked for, rounded up.
     /// A payment whose change would be dust is refused instead of folding the change into the fee.
-    /// A fee bump or a cancel pays what `hot_prepare_fee_bump` says, change of 546 sats or less included.
+    /// A fee bump or a cancel pays what `hot_prepare_fee_bump` says, change below its dust floor included.
     pub fee_sats: u64,
     /// What `destination` is paid, in sats: the amount asked for, or for `hot_prepare_send_all`
     /// the whole balance less `fee_sats`, which is only known once the coins are. For a fee bump it
@@ -1084,10 +1085,12 @@ pub struct PreparedSend {
 /// The fee is the size of the transaction as built times the rate, so a payment that needs more
 /// coins pays more, never a fixed sum that falls under the rate. The answer's `fee_sats` is that
 /// fee, and the app compares it with the estimate its screens showed and asks the user when it is
-/// much higher. Refuses, before signing, a rate outside 1 to 2,000 sat/vB, an amount below the 546
-/// sat dust limit, an amount that overflows u64 with its fee, and change that would be dust (above 0
-/// and at most 546 sats). A fee above the amount is signed, because the fee is paid on top and the
-/// destination still gets the amount, so the app asks the user before it posts. Only confirmed
+/// much higher. Refuses, before signing, a rate outside 1 to 2,000 sat/vB, an amount below the dust
+/// floor of the destination's script (294 sats for P2WPKH up to 546 for P2PKH, the outputs the
+/// network refuses), an amount that overflows u64 with its fee, and change that would be dust (above 0
+/// and below the change address's floor, 294 sats). A fee above the amount is signed, because the fee
+/// is paid on top and the destination still gets the amount, so the app asks the user before it
+/// posts. Only confirmed
 /// coins of receive addresses are spent; the wallet's own unconfirmed change is spent too. About
 /// 40 Esplora calls for a fresh wallet, so call it off the main thread.
 #[uniffi::export]
@@ -1128,7 +1131,7 @@ fn prepared(signed: &Transaction, fee_sats: u64) -> PreparedSend {
 /// size of that transaction times `fee_rate_sat_vb`, so it and the amount are only known once the
 /// coins are: the answer's `amount_sats` is what leaves. Refuses, before signing, a rate outside
 /// 1 to 2,000 sat/vB, a wallet with nothing confirmed to spend, and a
-/// balance that would leave less than the 546 sat dust limit after the fee. The same scan as
+/// balance that would leave less than the destination's dust floor after the fee. The same scan as
 /// `hot_prepare_send_at_rate`, so call it off the main thread.
 #[uniffi::export]
 pub fn hot_prepare_send_all(
@@ -1184,8 +1187,13 @@ fn broadcast_via(
     Ok(HotSendResult { txid: result? })
 }
 
-/// Smallest output the network relays. The same floor on the amount and on change.
-const DUST: u64 = 546;
+/// Bitcoin Core's default dust floor for an output paying `script`: P2WPKH 294, P2WSH and P2TR 330, P2SH
+/// 540, P2PKH 546. Both testnet4 hosts refuse a transaction with a fee and any output below it, and take
+/// one at it.
+fn dust_floor(script: &Script) -> u64 {
+    script.minimal_non_dust().to_sat()
+}
+
 const MIN_FEE_RATE: u64 = 1;
 pub(crate) const MAX_FEE_RATE: u64 = 2_000;
 
@@ -1365,13 +1373,14 @@ fn signed_payment(
     store: &ScanStore,
 ) -> Result<(Transaction, u64), MobileSignerError> {
     let refuse = |what: String| Err(MobileSignerError::InvalidPsbtJson(what));
-    if amount_sats < DUST {
+    let dest = destination_on(destination, network)?;
+    let floor = dust_floor(&dest.script_pubkey());
+    if amount_sats < floor {
         return refuse(format!(
-            "amount {amount_sats} is below the {DUST} sat dust limit"
+            "amount {amount_sats} is below the network's {floor} sat dust floor"
         ));
     }
     check_rate(rate_sat_vb)?;
-    let dest = destination_on(destination, network)?;
     // The destination first, then change; the slice to one output drops the change.
     let outputs = [dest.script_pubkey().len(), P2WPKH_SCRIPT];
     // The rate is at most 2,000 and the size a few thousand vB, so the product fits u64.
@@ -1432,8 +1441,12 @@ fn signed_payment(
         }
         fee_sats = real;
     };
-    if change > 0 && change <= DUST {
-        return refuse("change below dust, send the whole balance or change the amount".into());
+    let change_script = wallet.next_unused(Chain::Internal).address.script_pubkey();
+    let change_floor = dust_floor(&change_script);
+    if change > 0 && change < change_floor {
+        return refuse(format!(
+            "change {change} is below the network's {change_floor} sat dust floor, send the whole balance or change the amount"
+        ));
     }
     let mut outputs = vec![TxOut {
         value: Amount::from_sat(amount_sats),
@@ -1442,7 +1455,7 @@ fn signed_payment(
     if change > 0 {
         outputs.push(TxOut {
             value: Amount::from_sat(change),
-            script_pubkey: wallet.next_unused(Chain::Internal).address.script_pubkey(),
+            script_pubkey: change_script,
         });
     }
     Ok((signed(&selected, outputs)?, fee_sats))
@@ -1471,19 +1484,20 @@ fn signed_send_all(
     let wallet = complete(synced(source, words, passphrase, network, clock, store)?)?;
     let (spendable, have) = spendable_coins(source, &wallet)?;
     // One input and one output is the smallest this transaction can be, so a wallet with nothing
-    // to spend is short by that fee and the dust limit.
+    // to spend is short by that fee and the destination's dust floor.
     let fee_sats = rate_sat_vb * vsize(spendable.len().max(1), &[dest.script_pubkey().len()]);
+    let floor = dust_floor(&dest.script_pubkey());
     if spendable.is_empty() {
         return refuse(format!(
             "insufficient funds: have {have} confirmed, need {}",
-            fee_sats + DUST
+            fee_sats + floor
         ));
     }
     let amount_sats = match have.checked_sub(fee_sats) {
-        Some(amount) if amount >= DUST => amount,
+        Some(amount) if amount >= floor => amount,
         _ => {
             return refuse(format!(
-                "the whole balance {have} less the fee {fee_sats} is below the {DUST} sat dust limit"
+                "the whole balance {have} less the fee {fee_sats} is below the network's {floor} sat dust floor"
             ));
         }
     };
@@ -1508,16 +1522,16 @@ enum Replacement {
 /// Scan, then sign a fee bump of `earlier_hex`, the signed payment the app's guard keeps, and post
 /// nothing. It spends every input of that payment in its order, so at most one of the two can ever
 /// confirm, and its first output stays as it was. Change goes to the same change address, more
-/// confirmed coins join only when the earlier inputs cannot pay the new fee, and change of 546 sats or
-/// less goes into the fee. A payment with no change gets one output worth its inputs less the new fee,
+/// confirmed coins join only when the earlier inputs cannot pay the new fee, and change below its dust
+/// floor goes into the fee. A payment with no change gets one output worth its inputs less the new fee,
 /// so `amount_sats` is lower. The fee meets BIP-125 rules 3, 4 and 6 against that payment. It is at
 /// least that payment's fee plus the new size at 1 sat/vB, at a rate strictly above its rate, so the
 /// rate can be above `fee_rate_sat_vb`. Refuses, before any lookup, bytes that are not one transaction with inputs and one
-/// or two outputs whose first is at least 546 sats, and a rate outside 1 to 2,000 sat/vB. After the scan
+/// or two outputs whose first is at least its dust floor, and a rate outside 1 to 2,000 sat/vB. After the scan
 /// it refuses, after `replace: `, a second output that is not this wallet's change, inputs that are not
 /// all coins this wallet can spend now (`coins spent:`, most likely because that payment is out), an
 /// input without this wallet's own SIGHASH_ALL signature for its coin, a rate that would pass 2,000
-/// sat/vB, and what is left below 546 sats. The same scan as
+/// sat/vB, and what is left below the dust floor of its output. The same scan as
 /// `hot_prepare_send_at_rate`, so call it off the main thread.
 #[uniffi::export]
 pub fn hot_prepare_fee_bump(
@@ -1593,7 +1607,8 @@ fn signed_replacement(
     if spent.is_empty() || !(1..=2).contains(&earlier.output.len()) {
         return Err(not_ours("it needs inputs and one or two outputs"));
     }
-    if earlier.output[0].value.to_sat() < DUST {
+    // This wallet never signs an output below its floor, and a bump keeps the first output as it is.
+    if earlier.output[0].value.to_sat() < dust_floor(&earlier.output[0].script_pubkey) {
         return Err(not_ours("its first output is below the dust limit"));
     }
     if (1..spent.len()).any(|i| spent[..i].contains(&spent[i])) {
@@ -1654,13 +1669,14 @@ fn signed_replacement(
     // One output to `script`, worth `have` less the fee of a transaction of `inputs` and that output.
     let one = |inputs: usize, have: u64, script: ScriptBuf| {
         let fee = fee_for(inputs, &[script.len()]);
+        let floor = dust_floor(&script);
         match have.checked_sub(fee) {
-            Some(value) if value >= DUST => Ok(vec![TxOut {
+            Some(value) if value >= floor => Ok(vec![TxOut {
                 value: Amount::from_sat(value),
                 script_pubkey: script,
             }]),
             _ => Err(fail(format!(
-                "what is left, {have} less the fee {fee}, is below the {DUST} sat dust limit"
+                "what is left, {have} less the fee {fee}, is below the network's {floor} sat dust floor"
             ))),
         }
     };
@@ -1698,16 +1714,17 @@ fn signed_replacement(
             });
             let mut more = more.into_iter();
             let mut have = total;
+            let change_floor = dust_floor(&change);
             loop {
                 let need = amount.saturating_add(fee_for(selected.len(), &scripts));
-                if let Some(rest) = have.checked_sub(need).filter(|rest| *rest > DUST) {
+                if let Some(rest) = have.checked_sub(need).filter(|rest| *rest >= change_floor) {
                     let back = TxOut {
                         value: Amount::from_sat(rest),
                         script_pubkey: change,
                     };
                     break (vec![destination.clone(), back], have);
                 }
-                // Change of 546 sats or less goes into the fee, as Bitcoin Core's bumpfee does.
+                // Change below its dust floor goes into the fee, as Bitcoin Core's bumpfee does.
                 if have >= amount.saturating_add(fee_for(selected.len(), &scripts[..1])) {
                     break (vec![destination.clone()], have);
                 }
@@ -3404,24 +3421,29 @@ mod tests {
         spent - tx.output.iter().map(|o| o.value.to_sat()).sum::<u64>()
     }
 
-    // Finding 6. Before, change of 1 to 546 sats was quietly added to the fee.
+    // Finding 6. Before, change of 1 to 546 sats was quietly added to the fee. The floor is the change
+    // address's own, 294 sats for P2WPKH, so change of 294 to 546 sats is kept now.
     #[test]
-    fn dust_change_is_refused_and_change_of_547_or_0_is_fine() {
+    fn change_below_its_floor_is_refused_and_change_at_it_or_0_is_fine() {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
-        let dust = "change below dust, send the whole balance or change the amount";
-        // 10,000 less 9,000 less 141 x 4 (436) or 141 x 7 (13) is dust; less 141 x 3 (577) is not.
-        assert_refused(fake.send(SOMEONE, 9_000, 4), dust);
-        assert_refused(fake.send(SOMEONE, 9_000, 7), dust);
+        // At 1 sat/vB the fee is 141: 9,565 leaves exactly 294 and 9,566 leaves 293.
         assert_outputs(
-            &fake.send(SOMEONE, 9_000, 3).unwrap(),
-            &[(SOMEONE, 9_000), (&addr(Chain::Internal, 0), 577)],
+            &fake.send(SOMEONE, 9_565, 1).unwrap(),
+            &[(SOMEONE, 9_565), (&addr(Chain::Internal, 0), 294)],
         );
-        // At 1 sat/vB the fee is 141: 9,313 leaves exactly 546 and 9,312 leaves 547.
-        assert_refused(fake.send(SOMEONE, 9_313, 1), dust);
+        assert_refused(
+            fake.send(SOMEONE, 9_566, 1),
+            "change 293 is below the network's 294 sat dust floor, send the whole balance or change the amount",
+        );
+        // 10,000 less 9,000 less 141 x 4 (436) is change; less 141 x 7 (13) is not.
         assert_outputs(
-            &fake.send(SOMEONE, 9_312, 1).unwrap(),
-            &[(SOMEONE, 9_312), (&addr(Chain::Internal, 0), 547)],
+            &fake.send(SOMEONE, 9_000, 4).unwrap(),
+            &[(SOMEONE, 9_000), (&addr(Chain::Internal, 0), 436)],
+        );
+        assert_refused(
+            fake.send(SOMEONE, 9_000, 7),
+            "change 13 is below the network's 294 sat dust floor, send the whole balance or change the amount",
         );
         // Send all, as the app computes it: the balance less the 141 vB estimate. One output, and
         // the estimate is kept as the fee rather than shrunk into dust change.
@@ -3438,11 +3460,7 @@ mod tests {
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
         assert_refused(
             fake.send(SOMEONE, 0, 0),
-            "amount 0 is below the 546 sat dust limit",
-        );
-        assert_refused(
-            fake.send(SOMEONE, 545, 1),
-            "amount 545 is below the 546 sat dust limit",
+            "amount 0 is below the network's 294 sat dust floor",
         );
         assert_refused(fake.send(SOMEONE, 1_000, 0), "fee rate 0 is below 1 sat/vB");
         assert_refused(
@@ -3450,10 +3468,26 @@ mod tests {
             "fee rate 2001 is above 2000 sat/vB",
         );
         assert!(fake.calls.lock().unwrap().is_empty());
-        assert_outputs(
-            &fake.send(SOMEONE, 546, 3).unwrap(),
-            &[(SOMEONE, 546), (&addr(Chain::Internal, 0), 9_031)],
-        );
+    }
+
+    // Both testnet4 hosts refuse an output one sat below Bitcoin Core's dust floor for its script and take
+    // one at it. 546 was the P2PKH floor, applied to every address.
+    #[test]
+    fn an_amount_below_its_addresses_floor_is_refused_before_any_lookup_and_one_at_it_is_signed() {
+        for ((kind, to), floor) in destinations().iter().zip([294, 330, 330, 540, 546]) {
+            let mut fake = Fake::new();
+            fake.fund(&addr(Chain::External, 0), 10_000, '1');
+            assert_refused(
+                fake.send(to, floor - 1, 1),
+                &format!(
+                    "amount {} is below the network's {floor} sat dust floor",
+                    floor - 1
+                ),
+            );
+            assert!(fake.calls.lock().unwrap().is_empty(), "{kind}");
+            let tx = fake.send(to, floor, 1).unwrap();
+            assert_eq!(tx.output[0].value.to_sat(), floor, "{kind}");
+        }
     }
 
     // The fee is paid on top of the amount, so a fee above the amount still pays the destination in
@@ -3642,23 +3676,33 @@ mod tests {
         assert_outputs(&tx, &[(SOMEONE, 7_000 - 178)]);
     }
 
-    // At 1 sat/vB one coin and one output cost 110, so 656 sats leave exactly the dust limit and go.
+    // At 1 sat/vB one coin and one output cost the transaction's size, 110 vB to P2WPKH, 122 to P2TR and
+    // P2WSH, 111 to P2SH and 113 to P2PKH, so that plus the destination's floor leaves exactly the floor
+    // and goes, and one sat less is refused.
     #[test]
-    fn send_all_that_would_leave_less_than_dust_after_the_fee_is_refused() {
-        let mut fake = Fake::new();
-        fake.fund(&addr(Chain::External, 0), 656, '1');
-        assert_outputs(&fake.send_all_at(SOMEONE, 1).unwrap().0, &[(SOMEONE, 546)]);
-        let mut short = Fake::new();
-        short.fund(&addr(Chain::External, 0), 655, '1');
-        assert_refused(
-            short.send_all_at(SOMEONE, 1),
-            "the whole balance 655 less the fee 110 is below the 546 sat dust limit",
-        );
+    fn send_all_that_would_leave_less_than_the_destinations_floor_after_the_fee_is_refused() {
+        let sizes_and_floors = [(110, 294), (122, 330), (122, 330), (111, 540), (113, 546)];
+        for ((kind, to), (size, floor)) in destinations().iter().zip(sizes_and_floors) {
+            let mut fake = Fake::new();
+            fake.fund(&addr(Chain::External, 0), size + floor, '1');
+            let (tx, fee) = fake.send_all_at(to, 1).unwrap();
+            assert_eq!(fee, size, "{kind}");
+            assert_outputs(&tx, &[(to, floor)]);
+            let mut short = Fake::new();
+            short.fund(&addr(Chain::External, 0), size + floor - 1, '1');
+            assert_refused(
+                short.send_all_at(to, 1),
+                &format!(
+                    "the whole balance {} less the fee {size} is below the network's {floor} sat dust floor",
+                    size + floor - 1
+                ),
+            );
+        }
         let mut tiny = Fake::new();
         tiny.fund(&addr(Chain::External, 0), 100, '1');
         assert_refused(
             tiny.send_all_at(SOMEONE, 1),
-            "the whole balance 100 less the fee 110 is below the 546 sat dust limit",
+            "the whole balance 100 less the fee 110 is below the network's 294 sat dust floor",
         );
     }
 
@@ -3667,13 +3711,13 @@ mod tests {
         let fake = Fake::new();
         assert_refused(
             fake.send_all_at(SOMEONE, 1),
-            "insufficient funds: have 0 confirmed, need 656",
+            "insufficient funds: have 0 confirmed, need 404",
         );
         let mut pending = Fake::new();
         pending.fund_unconfirmed(&addr(Chain::External, 0), 5_000, '1');
         assert_refused(
             pending.send_all_at(SOMEONE, 2),
-            "insufficient funds: have 0 confirmed, need 766",
+            "insufficient funds: have 0 confirmed, need 514",
         );
     }
 
@@ -3976,22 +4020,24 @@ mod tests {
         assert_eq!(prepared(&bump, fee).amount_sats, 9_450);
     }
 
-    // Change of 1 to 546 sats goes into the fee, as Bitcoin Core's bumpfee does. It is never refused and never kept.
+    // Change below its dust floor, 294 sats for the P2WPKH change address, goes into the fee, as Bitcoin
+    // Core's bumpfee does. It is never refused, and change at the floor is kept.
     #[test]
     fn dust_change_of_a_fee_bump_goes_into_the_fee() {
         let mut fake = Fake::new();
         fake.fund(&addr(Chain::External, 0), 10_000, '1');
-        let earlier = fake.send(SOMEONE, 9_000, 1).unwrap();
-        // At 3 sat/vB the change is 1,000 less 423, which stays.
-        let (kept, fee) = fake.replace(&earlier, 3, Replacement::FeeBump).unwrap();
-        assert_eq!(fee, 423);
-        assert_outputs(&kept, &[(SOMEONE, 9_000), (&addr(Chain::Internal, 0), 577)]);
-        // At 4 sat/vB it would be 1,000 less 564, which is dust, so all 1,000 is the fee.
-        let (folded, fee) = fake.replace(&earlier, 4, Replacement::FeeBump).unwrap();
-        assert_eq!(fee, 1_000);
-        assert_outputs(&folded, &[(SOMEONE, 9_000)]);
-        assert_eq!(fee_paid(&fake, &folded), 1_000);
+        // At 1 sat/vB the change is 858, and a bump at 5 sat/vB pays 705, so 294 is left and stays.
+        let earlier = fake.send(SOMEONE, 9_001, 1).unwrap();
+        let (kept, fee) = fake.replace(&earlier, 5, Replacement::FeeBump).unwrap();
+        assert_eq!(fee, 705);
+        assert_outputs(&kept, &[(SOMEONE, 9_001), (&addr(Chain::Internal, 0), 294)]);
         assert_replaces(&fake, &earlier, &kept);
+        // One sat more to the destination leaves 293, so the whole 998 is the fee.
+        let earlier = fake.send(SOMEONE, 9_002, 1).unwrap();
+        let (folded, fee) = fake.replace(&earlier, 5, Replacement::FeeBump).unwrap();
+        assert_eq!(fee, 998);
+        assert_outputs(&folded, &[(SOMEONE, 9_002)]);
+        assert_eq!(fee_paid(&fake, &folded), 998);
         assert_replaces(&fake, &earlier, &folded);
     }
 
@@ -4037,23 +4083,40 @@ mod tests {
         assert_replaces(&fake, &earlier, &cancel);
     }
 
+    // A cancel's one output goes to this wallet's P2WPKH change and a changeless bump's to its P2WPKH
+    // destination, so both are refused below 294 sats. At 5 sat/vB one coin and one output pay 550.
     #[test]
-    fn a_replacement_that_would_leave_less_than_dust_is_refused() {
-        let mut fake = Fake::new();
-        fake.fund(&addr(Chain::External, 0), 1_000, '1');
-        let (earlier, _) = fake.send_all_at(SOMEONE, 1).unwrap();
-        assert_outputs(&earlier, &[(SOMEONE, 890)]);
+    fn a_replacement_that_would_leave_less_than_the_floor_is_refused() {
+        let mut short = Fake::new();
+        short.fund(&addr(Chain::External, 0), 843, '1');
+        let (earlier, _) = short.send_all_at(SOMEONE, 1).unwrap();
         for kind in KINDS {
             assert_refused(
-                fake.replace(&earlier, 5, kind),
-                "replace: what is left, 1000 less the fee 550, is below the 546 sat dust limit",
+                short.replace(&earlier, 5, kind),
+                "replace: what is left, 843 less the fee 550, is below the network's 294 sat dust floor",
             );
         }
-        // At 4 sat/vB the fee is 440 and 560 is left, which goes.
-        let (cancel, _) = fake.replace(&earlier, 4, Replacement::Cancel).unwrap();
-        assert_outputs(&cancel, &[(&addr(Chain::Internal, 0), 560)]);
-        let (bump, _) = fake.replace(&earlier, 4, Replacement::FeeBump).unwrap();
-        assert_outputs(&bump, &[(SOMEONE, 560)]);
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 844, '1');
+        let (earlier, _) = fake.send_all_at(SOMEONE, 1).unwrap();
+        let (cancel, _) = fake.replace(&earlier, 5, Replacement::Cancel).unwrap();
+        assert_outputs(&cancel, &[(&addr(Chain::Internal, 0), 294)]);
+        let (bump, _) = fake.replace(&earlier, 5, Replacement::FeeBump).unwrap();
+        assert_outputs(&bump, &[(SOMEONE, 294)]);
+    }
+
+    // The first-output check took 546 for every address, so a 300-sat payment to P2WPKH, which the
+    // network takes and this wallet signs, read as not this wallet's and could be neither bumped nor
+    // cancelled.
+    #[test]
+    fn a_300_sat_payment_can_be_bumped_and_cancelled() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        let earlier = fake.send(SOMEONE, 300, 1).unwrap();
+        for kind in KINDS {
+            let (next, _) = fake.replace(&earlier, 2, kind).unwrap();
+            assert_replaces(&fake, &earlier, &next);
+        }
     }
 
     // Every rate asked, below the earlier one too, gives a replacement the network takes under rules 3, 4
@@ -4165,8 +4228,13 @@ mod tests {
                 "it needs inputs and one or two outputs",
             ),
             (
-                changed(&|tx| tx.output[0].value = Amount::from_sat(545)),
+                changed(&|tx| tx.output[0].value = Amount::from_sat(293)),
                 "its first output is below the dust limit",
+            ),
+            // At the floor the check passes, and the changed value is caught by the signature.
+            (
+                changed(&|tx| tx.output[0].value = Amount::from_sat(294)),
+                "it is not signed by this wallet",
             ),
             (
                 changed(&|tx| tx.input.push(tx.input[0].clone())),
@@ -7504,14 +7572,13 @@ mod tests {
         );
     }
 
-    // V5. Every output was sized as P2WPKH (31 vB). A taproot or P2WSH output is 43 vB, P2SH 32 and
-    // P2PKH 34, so those payments paid under the rate asked for, below the relay floor at 1 sat/vB.
-    #[test]
-    fn the_fee_is_never_under_the_rate_asked_for_whatever_the_destination_script_on_both_paths() {
+    /// A testnet4 address of each script type a destination can have, in this order: P2WPKH, P2TR, P2WSH,
+    /// P2SH, P2PKH.
+    fn destinations() -> [(&'static str, String); 5] {
         let key = own(Chain::External, 0);
         let secp = Secp256k1::new();
         let redeem = key.address.script_pubkey();
-        let destinations = [
+        [
             ("P2WPKH", SOMEONE.to_string()),
             (
                 "P2TR",
@@ -7531,8 +7598,14 @@ mod tests {
                 "P2PKH",
                 Address::p2pkh(key.pubkey.pubkey_hash(), Network::Testnet4).to_string(),
             ),
-        ];
-        for (kind, to) in &destinations {
+        ]
+    }
+
+    // V5. Every output was sized as P2WPKH (31 vB). A taproot or P2WSH output is 43 vB, P2SH 32 and
+    // P2PKH 34, so those payments paid under the rate asked for, below the relay floor at 1 sat/vB.
+    #[test]
+    fn the_fee_is_never_under_the_rate_asked_for_whatever_the_destination_script_on_both_paths() {
+        for (kind, to) in &destinations() {
             for rate in [1u64, 7] {
                 let mut fake = Fake::new();
                 fake.fund(&addr(Chain::External, 0), 100_000, '1');

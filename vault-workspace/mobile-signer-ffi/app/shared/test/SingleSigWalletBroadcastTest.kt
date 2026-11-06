@@ -448,9 +448,9 @@ class SingleSigWalletBroadcastTest {
         val hot = FakeHot()
         val session = hot.goLive()
         val writes = hot.store.writes.size
-        hot.prepareResult = { throw MobileSignerException.InvalidPsbtJson("amount 100 is below the 546 sat dust limit") }
+        hot.prepareResult = { throw MobileSignerException.InvalidPsbtJson("amount 100 is below the network's 294 sat dust floor") }
         assertFalse(hot.wallet.broadcast(session, 100, 8, DESTINATION))
-        assertEquals("จำนวนน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)", hot.wallet.lastError)
+        assertEquals("เครือข่ายไม่รับยอดส่งที่ต่ำกว่า 294 sat สำหรับที่อยู่ปลายทางนี้", hot.wallet.lastError)
         assertNull(hot.wallet.unconfirmedSend)
         assertNull(session.unconfirmedSend())
         assertEquals(writes, hot.store.writes.size, "the phone was written for a payment that was never signed")
@@ -700,9 +700,9 @@ class SingleSigWalletBroadcastTest {
     fun aSendAllRefusalSetsNoGuardAndSpeaksThaiAndAMockSendAllIsDeducted() {
         val hot = FakeHot()
         val session = hot.goLive()
-        hot.prepareAllResult = { throw MobileSignerException.InvalidPsbtJson("invalid PSBT json: the whole balance 655 less the fee 110 is below the 546 sat dust limit") }
+        hot.prepareAllResult = { throw MobileSignerException.InvalidPsbtJson("invalid PSBT json: the whole balance 403 less the fee 110 is below the network's 294 sat dust floor") }
         assertFalse(hot.wallet.broadcast(session, 514, 1, DESTINATION, sendAll = true))
-        assertEquals(sendErrorThai("the whole balance 655 less the fee 110 is below the 546 sat dust limit"), hot.wallet.lastError)
+        assertEquals(sendErrorThai("the whole balance 403 less the fee 110 is below the network's 294 sat dust floor"), hot.wallet.lastError)
         assertNull(hot.wallet.unconfirmedSend)
         assertEquals(emptyList<PostCall>(), hot.posts)
         val demo = walletThatMustNotCallHot()

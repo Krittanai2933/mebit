@@ -210,10 +210,10 @@ class RepostAttemptTest {
         assertNull(attempt.signFailure)
         attempt.startReplacement(scope, Replacement.Cancel, TXID, confirm = { events += "asked"; true }) {
             events += "signed"
-            "ยอดที่เหลือหลังหักค่าธรรมเนียมใหม่น้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)"
+            "ยอดที่เหลือหลังหักค่าธรรมเนียมใหม่ต่ำกว่า 294 sat ซึ่งเครือข่ายไม่รับ"
         }.join()
         assertEquals(listOf("asked", "asked", "signed"), events, "a passed owner check")
-        assertEquals(SignFailure(TXID, "ยอดที่เหลือหลังหักค่าธรรมเนียมใหม่น้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)"), attempt.signFailure)
+        assertEquals(SignFailure(TXID, "ยอดที่เหลือหลังหักค่าธรรมเนียมใหม่ต่ำกว่า 294 sat ซึ่งเครือข่ายไม่รับ"), attempt.signFailure)
         assertFalse(attempt.running)
     }
 

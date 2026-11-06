@@ -7,10 +7,13 @@ import kotlin.test.assertFalse
 /** Every Rust refusal of hot_prepare_send_at_rate, hot_broadcast, hot_wallet_snapshot and hot_wallet_history has a Thai line, and none shows its English text. */
 class SendErrorThaiTest {
     private val rows = listOf(
-        "amount 100 is below the 546 sat dust limit" to "จำนวนน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)",
+        // The floor is the destination script's, read from the Rust text.
+        "amount 293 is below the network's 294 sat dust floor" to "เครือข่ายไม่รับยอดส่งที่ต่ำกว่า 294 sat สำหรับที่อยู่ปลายทางนี้",
+        "amount 545 is below the network's 546 sat dust floor" to "เครือข่ายไม่รับยอดส่งที่ต่ำกว่า 546 sat สำหรับที่อยู่ปลายทางนี้",
         "insufficient funds: have 0 confirmed, need 1100" to "ยอดที่ยืนยันแล้วไม่พอ รอให้เงินที่เพิ่งได้รับยืนยันก่อน",
-        "change below dust, send the whole balance or change the amount" to "เงินทอนน้อยเกินไป ส่งทั้งหมดหรือเปลี่ยนจำนวน",
-        "the whole balance 655 less the fee 110 is below the 546 sat dust limit" to "ยอดทั้งหมดหลังหักค่าธรรมเนียมน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)",
+        "change 293 is below the network's 294 sat dust floor, send the whole balance or change the amount" to "เงินทอนต่ำกว่า 294 sat ซึ่งเครือข่ายไม่รับ ส่งทั้งหมดหรือเปลี่ยนจำนวน",
+        "the whole balance 451 less the fee 122 is below the network's 330 sat dust floor" to "ยอดทั้งหมดหลังหักค่าธรรมเนียมต่ำกว่า 330 sat ซึ่งเครือข่ายไม่รับสำหรับที่อยู่ปลายทางนี้",
+        "the whole balance 650 less the fee 111 is below the network's 540 sat dust floor" to "ยอดทั้งหมดหลังหักค่าธรรมเนียมต่ำกว่า 540 sat ซึ่งเครือข่ายไม่รับสำหรับที่อยู่ปลายทางนี้",
         "fee rate 0 is below 1 sat/vB" to "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น",
         "fee rate 2001 is above 2000 sat/vB" to "ค่าธรรมเนียมสูงผิดปกติ ตรวจจำนวนอีกครั้ง",
         "fee did not settle in 4 passes, send a smaller amount" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
@@ -39,7 +42,7 @@ class SendErrorThaiTest {
         "replace: not this wallet's payment: its second output is not this wallet's change" to "รายการเดิมไม่ใช่รายการที่กระเป๋านี้แทนที่ได้",
         "replace: not this wallet's payment: not one transaction" to "รายการเดิมไม่ใช่รายการที่กระเป๋านี้แทนที่ได้",
         "replace: rate 2001 is above 2000 sat/vB" to "ค่าธรรมเนียมที่ต้องใช้สูงเกินเพดาน 2,000 sat/vB",
-        "replace: what is left, 1000 less the fee 550, is below the 546 sat dust limit" to "ยอดที่เหลือหลังหักค่าธรรมเนียมใหม่น้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)",
+        "replace: what is left, 843 less the fee 550, is below the network's 294 sat dust floor" to "ยอดที่เหลือหลังหักค่าธรรมเนียมใหม่ต่ำกว่า 294 sat ซึ่งเครือข่ายไม่รับ",
         "replace: check failed: its rate is above the earlier rate" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
         "missing witness slot" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
         "" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",

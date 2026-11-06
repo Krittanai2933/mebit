@@ -1137,13 +1137,13 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_cancel() != 64952.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_fee_bump() != 9775.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_fee_bump() != 45230.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_all() != 54556.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_all() != 59801.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate() != 29772.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate() != 37856.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_receive_address() != 37856.toShort()) {
@@ -3749,16 +3749,16 @@ public actual fun `hotPrepareCancel`(`mnemonicWords`: List<kotlin.String>, `pass
  * Scan, then sign a fee bump of `earlier_hex`, the signed payment the app's guard keeps, and post
  * nothing. It spends every input of that payment in its order, so at most one of the two can ever
  * confirm, and its first output stays as it was. Change goes to the same change address, more
- * confirmed coins join only when the earlier inputs cannot pay the new fee, and change of 546 sats or
- * less goes into the fee. A payment with no change gets one output worth its inputs less the new fee,
+ * confirmed coins join only when the earlier inputs cannot pay the new fee, and change below its dust
+ * floor goes into the fee. A payment with no change gets one output worth its inputs less the new fee,
  * so `amount_sats` is lower. The fee meets BIP-125 rules 3, 4 and 6 against that payment. It is at
  * least that payment's fee plus the new size at 1 sat/vB, at a rate strictly above its rate, so the
  * rate can be above `fee_rate_sat_vb`. Refuses, before any lookup, bytes that are not one transaction with inputs and one
- * or two outputs whose first is at least 546 sats, and a rate outside 1 to 2,000 sat/vB. After the scan
+ * or two outputs whose first is at least its dust floor, and a rate outside 1 to 2,000 sat/vB. After the scan
  * it refuses, after `replace: `, a second output that is not this wallet's change, inputs that are not
  * all coins this wallet can spend now (`coins spent:`, most likely because that payment is out), an
  * input without this wallet's own SIGHASH_ALL signature for its coin, a rate that would pass 2,000
- * sat/vB, and what is left below 546 sats. The same scan as
+ * sat/vB, and what is left below the dust floor of its output. The same scan as
  * `hot_prepare_send_at_rate`, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
@@ -3781,7 +3781,7 @@ public actual fun `hotPrepareFeeBump`(`mnemonicWords`: List<kotlin.String>, `pas
  * size of that transaction times `fee_rate_sat_vb`, so it and the amount are only known once the
  * coins are: the answer's `amount_sats` is what leaves. Refuses, before signing, a rate outside
  * 1 to 2,000 sat/vB, a wallet with nothing confirmed to spend, and a
- * balance that would leave less than the 546 sat dust limit after the fee. The same scan as
+ * balance that would leave less than the destination's dust floor after the fee. The same scan as
  * `hot_prepare_send_at_rate`, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
@@ -3806,10 +3806,12 @@ public actual fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `pas
  * The fee is the size of the transaction as built times the rate, so a payment that needs more
  * coins pays more, never a fixed sum that falls under the rate. The answer's `fee_sats` is that
  * fee, and the app compares it with the estimate its screens showed and asks the user when it is
- * much higher. Refuses, before signing, a rate outside 1 to 2,000 sat/vB, an amount below the 546
- * sat dust limit, an amount that overflows u64 with its fee, and change that would be dust (above 0
- * and at most 546 sats). A fee above the amount is signed, because the fee is paid on top and the
- * destination still gets the amount, so the app asks the user before it posts. Only confirmed
+ * much higher. Refuses, before signing, a rate outside 1 to 2,000 sat/vB, an amount below the dust
+ * floor of the destination's script (294 sats for P2WPKH up to 546 for P2PKH, the outputs the
+ * network refuses), an amount that overflows u64 with its fee, and change that would be dust (above 0
+ * and below the change address's floor, 294 sats). A fee above the amount is signed, because the fee
+ * is paid on top and the destination still gets the amount, so the app asks the user before it
+ * posts. Only confirmed
  * coins of receive addresses are spent; the wallet's own unconfirmed change is spent too. About
  * 40 Esplora calls for a fresh wallet, so call it off the main thread.
  */

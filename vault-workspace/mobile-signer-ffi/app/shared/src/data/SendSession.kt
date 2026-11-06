@@ -565,19 +565,21 @@ fun offersUnconfirmedClear(sinceSeconds: Long, nowSeconds: Long): Boolean = (now
 fun sendErrorThai(message: String?): String {
     // The bindings print every Rust refusal as "invalid PSBT json: {text}", so the rows below match the text after it.
     val m = message.orEmpty().removePrefix("invalid PSBT json: ")
+    // The floor depends on the output's script, so the line takes it from the Rust text and keeps no copy of the floors.
+    val floor = Regex("""network's (\d+) sat dust floor""").find(m)?.groupValues?.get(1)
     return when {
-        m.startsWith("amount ") && m.endsWith("dust limit") -> "จำนวนน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)"
+        m.startsWith("amount ") && floor != null -> "เครือข่ายไม่รับยอดส่งที่ต่ำกว่า $floor sat สำหรับที่อยู่ปลายทางนี้"
         m.startsWith("insufficient funds") -> "ยอดที่ยืนยันแล้วไม่พอ รอให้เงินที่เพิ่งได้รับยืนยันก่อน"
-        m.startsWith("change below dust") -> "เงินทอนน้อยเกินไป ส่งทั้งหมดหรือเปลี่ยนจำนวน"
-        // hot_prepare_send_all: the balance less the real fee would be dust.
-        m.startsWith("the whole balance ") -> "ยอดทั้งหมดหลังหักค่าธรรมเนียมน้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)"
+        m.startsWith("change ") && floor != null -> "เงินทอนต่ำกว่า $floor sat ซึ่งเครือข่ายไม่รับ ส่งทั้งหมดหรือเปลี่ยนจำนวน"
+        // hot_prepare_send_all: the balance less the real fee would be below the destination's floor.
+        m.startsWith("the whole balance ") && floor != null -> "ยอดทั้งหมดหลังหักค่าธรรมเนียมต่ำกว่า $floor sat ซึ่งเครือข่ายไม่รับสำหรับที่อยู่ปลายทางนี้"
         m.startsWith("fee ") && " is below " in m -> "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น"
         m.startsWith("fee ") && " is above " in m -> "ค่าธรรมเนียมสูงผิดปกติ ตรวจจำนวนอีกครั้ง"
         // hot_prepare_fee_bump and hot_prepare_cancel. A spent coin most likely means the earlier payment is out.
         m.startsWith("replace: coins spent:") -> "เหรียญของรายการเดิมถูกใช้ไปแล้ว รายการเดิมอาจออกไปแล้ว ตรวจประวัติในหน้าแรกก่อน"
         m.startsWith("replace: not this wallet's payment:") -> "รายการเดิมไม่ใช่รายการที่กระเป๋านี้แทนที่ได้"
         m.startsWith("replace: rate ") -> "ค่าธรรมเนียมที่ต้องใช้สูงเกินเพดาน 2,000 sat/vB"
-        m.startsWith("replace: what is left") -> "ยอดที่เหลือหลังหักค่าธรรมเนียมใหม่น้อยกว่าขั้นต่ำที่เครือข่ายรับ (546 sat)"
+        m.startsWith("replace: what is left") && floor != null -> "ยอดที่เหลือหลังหักค่าธรรมเนียมใหม่ต่ำกว่า $floor sat ซึ่งเครือข่ายไม่รับ"
         m.startsWith("esplora scan:") -> ABNORMAL_HISTORY
         m.startsWith("esplora utxo:") || m.startsWith("esplora balance:") -> "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง"
         m == "amount plus fee does not fit u64" -> "จำนวนผิดปกติ"
