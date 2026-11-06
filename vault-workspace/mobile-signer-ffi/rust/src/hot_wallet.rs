@@ -46,7 +46,7 @@ const ACCOUNT_PATH: &str = "m/84'/1'/0'";
 const SHARE_TTL: Duration = Duration::from_secs(10);
 /// How often a full pass asks every index again, when the own node, which has no request limit, serves.
 const OWN_NODE_FULL_PASS: Duration = Duration::from_secs(30 * 60);
-/// The same through a public host, which allows about 700 requests an hour (blockstream.info). A pick
+/// The same through a public host, which limits requests per IP (docs/04-open-items.md item 49). A pick
 /// from the design. A full pass asks each index below the frontier plus `GAP` once and proves nothing again.
 const PUBLIC_FULL_PASS: Duration = Duration::from_secs(6 * 60 * 60);
 /// Unused indices after the last used one that a routine sync asks about. shortcut: a coin paid to an
@@ -4578,6 +4578,161 @@ mod tests {
         );
     }
 
+    // Fix 2 of issue #26. A payment marks the scan stale, not wiped, so the sync after it is routine and
+    // still sees the spent coin gone and the change arrived, inside the share window of the sync before it.
+    #[test]
+    fn after_a_broadcast_the_spent_coin_and_the_change_are_right_without_a_full_pass() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        assert_eq!(fake.snapshot("").unwrap().balance_sats, 10_000);
+        let ready = fake.ready(SOMEONE, 3_000, 1);
+        let change = 10_000 - 3_000 - ready.fee_sats;
+        let paid: Transaction = deserialize_hex(&ready.hex).unwrap();
+        assert_outputs(
+            &paid,
+            &[(SOMEONE, 3_000), (&addr(Chain::Internal, 0), change)],
+        );
+        fake.broadcast(&ready, answer(200, &ready.txid)).unwrap();
+        let (snapshot, asked) = synced_after_payment(
+            &mut fake,
+            &[&addr(Chain::External, 0)],
+            (&addr(Chain::Internal, 0), change, 'b'),
+        );
+        assert_eq!(
+            (snapshot.balance_sats, snapshot.spendable_sats),
+            (change, change)
+        );
+        assert_eq!(
+            asked,
+            6 + 5 + 15 + 1 + 1,
+            "receive 0 and the five after it, change 0 to 4, then change 5 to 19 once 0 turned used, the change's coin list, and the change's parent"
+        );
+        let next = fake.send(SOMEONE, 1_000, 1).unwrap();
+        assert_eq!(next.input.len(), 1, "the change coin alone");
+        let spent = &next.input[0].previous_output;
+        assert_eq!((spent.txid.to_string(), spent.vout), (id('b'), 0));
+        assert_eq!(
+            pays(&next.output[1]),
+            addr(Chain::Internal, 1),
+            "the next change moves on"
+        );
+    }
+
+    /// The chain after a payment that is out: each address in `spent` emptied, and `back` the change it paid
+    /// this wallet, still in the mempool. Then one snapshot, with the requests it cost.
+    fn synced_after_payment(
+        fake: &mut Fake,
+        spent: &[&str],
+        back: (&str, u64, char),
+    ) -> (HotWalletSnapshot, usize) {
+        for address in spent {
+            fake.touch(address);
+            fake.utxos.insert((*address).to_string(), "[]".into());
+        }
+        fake.fund_change(back.0, back.1, back.2);
+        let before = fake.requests();
+        let snapshot = fake.snapshot("").unwrap();
+        let asked = fake.requests() - before;
+        (snapshot, asked)
+    }
+
+    // A cancel pays every coin back to the earlier payment's change script. The next routine sync asks the
+    // funded receive addresses, the five past the last used one, change 0 to 4, then change 5 to 19 once
+    // 0 turned used, the two coin lists and the change's parent.
+    #[test]
+    fn a_cancel_with_change_is_seen_by_the_next_routine_sync() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 30_000, '1');
+        fake.fund(&addr(Chain::External, 1), 4_000, '2');
+        let earlier = fake.send(SOMEONE, 20_000, 2).unwrap();
+        let (cancel, fee) = fake.replace(&earlier, 5, Replacement::Cancel).unwrap();
+        assert_eq!(
+            cancel.output[0].script_pubkey,
+            earlier.output[1].script_pubkey
+        );
+        let ready = prepared(&cancel, fee);
+        fake.broadcast(&ready, answer(200, &ready.txid)).unwrap();
+        let (snapshot, asked) = synced_after_payment(
+            &mut fake,
+            &[&addr(Chain::External, 0)],
+            (&addr(Chain::Internal, 0), 30_000 - fee, 'c'),
+        );
+        assert_eq!(snapshot.scan, HotScan::Complete);
+        assert_eq!(
+            (snapshot.balance_sats, snapshot.spendable_sats),
+            (30_000 - fee + 4_000, 30_000 - fee + 4_000)
+        );
+        assert_eq!(asked, 7 + 5 + 15 + 2 + 1, "a routine sync, not a full pass");
+    }
+
+    // A cancel of a payment with no change pays everything to the next unused change address.
+    #[test]
+    fn a_cancel_without_change_is_seen_on_the_next_unused_change_address() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        fake.fund(&addr(Chain::External, 1), 4_000, '2');
+        let (earlier, _) = fake.send_all_at(SOMEONE, 1).unwrap();
+        let (cancel, fee) = fake.replace(&earlier, 3, Replacement::Cancel).unwrap();
+        let ready = prepared(&cancel, fee);
+        fake.broadcast(&ready, answer(200, &ready.txid)).unwrap();
+        let (snapshot, asked) = synced_after_payment(
+            &mut fake,
+            &[&addr(Chain::External, 0), &addr(Chain::External, 1)],
+            (&addr(Chain::Internal, 0), 14_000 - fee, 'c'),
+        );
+        assert_eq!(snapshot.scan, HotScan::Complete);
+        assert_eq!(
+            (snapshot.balance_sats, snapshot.spendable_sats),
+            (14_000 - fee, 14_000 - fee)
+        );
+        assert_eq!(
+            asked,
+            7 + 5 + 15 + 1 + 1,
+            "a routine sync with one coin list"
+        );
+    }
+
+    // A fee bump keeps the earlier payment's change script, so the next routine sync finds its change there.
+    #[test]
+    fn a_fee_bump_keeps_the_change_where_the_next_routine_sync_finds_it() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 30_000, '1');
+        fake.fund(&addr(Chain::External, 1), 4_000, '2');
+        let earlier = fake.send(SOMEONE, 20_000, 2).unwrap();
+        let (bump, fee) = fake.replace(&earlier, 5, Replacement::FeeBump).unwrap();
+        assert_eq!(
+            bump.output[1].script_pubkey,
+            earlier.output[1].script_pubkey
+        );
+        let change = bump.output[1].value.to_sat();
+        let ready = prepared(&bump, fee);
+        fake.broadcast(&ready, answer(200, &ready.txid)).unwrap();
+        let (snapshot, asked) = synced_after_payment(
+            &mut fake,
+            &[&addr(Chain::External, 0)],
+            (&addr(Chain::Internal, 0), change, 'c'),
+        );
+        assert_eq!(snapshot.scan, HotScan::Complete);
+        assert_eq!(snapshot.balance_sats, change + 4_000);
+        assert_eq!(asked, 7 + 5 + 15 + 2 + 1, "a routine sync, not a full pass");
+    }
+
+    // A routine sync asks only up to LOOKAHEAD past the last used index, so a coin paid further out waits
+    // for the full pass, every PUBLIC_FULL_PASS on a public host.
+    #[test]
+    fn a_payment_to_an_unused_address_far_past_the_last_used_waits_for_the_full_pass() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 10_000, '1');
+        fake.snapshot("").unwrap();
+        fake.tick(SHARE_TTL);
+        fake.fund_unconfirmed(&addr(Chain::External, 12), 7_000, '7');
+        let routine = fake.snapshot("").unwrap();
+        assert_eq!(routine.balance_sats, 10_000, "the routine sync misses it");
+        fake.tick(PUBLIC_FULL_PASS);
+        let full = fake.snapshot("").unwrap();
+        assert_eq!(full.balance_sats, 17_000, "the full pass finds it");
+    }
+
     #[test]
     fn a_sync_that_fails_keeps_what_it_knew_so_the_next_call_is_a_routine_sync() {
         let mut fake = Fake::new();
@@ -6057,6 +6212,32 @@ mod tests {
         );
         assert_eq!(free.unwrap(), 1);
         assert_eq!(probes.get(), 1);
+    }
+
+    #[test]
+    fn a_429_on_the_fee_recommendation_sends_the_estimates_to_the_next_host() {
+        let answer = |base: &str, path: &str| match (base, path) {
+            (b, "/v1/fees/recommended") if b == HOSTS[0] => Err(throttled()),
+            (b, "/fee-estimates") if b == HOSTS[1] => {
+                Ok(r#"{"1": 12.5, "3": 8.1, "6": 4.0}"#.into())
+            }
+            other => panic!("unexpected request {other:?}"),
+        };
+        let world = World::new(&answer);
+        let tiers = fee_tiers_from(
+            &EsploraSource(&world),
+            KeyNetwork::Test,
+            Instant::now(),
+            &Mutex::new(None),
+        );
+        assert_eq!(tiers, live(4, 9, 13));
+        assert_eq!(
+            *world.requests.lock().unwrap(),
+            [
+                (HOSTS[0], "/v1/fees/recommended".to_string()),
+                (HOSTS[1], "/fee-estimates".to_string()),
+            ]
+        );
     }
 
     fn no_host_message(result: Result<usize, MobileSignerError>) -> String {

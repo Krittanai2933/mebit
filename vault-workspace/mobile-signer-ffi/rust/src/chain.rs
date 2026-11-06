@@ -1,8 +1,8 @@
 //! The seam between the wallet and a chain source. `hot_wallet` reads address summaries, history,
 //! transactions and coins, posts payments and asks for fee rates through `ChainSource`, and never sees a
 //! URL, a JSON body or a host. `EsploraSource` speaks Esplora's REST API over a `Transport`. `Http`, the
-//! real transport, owns the host list, the genesis probe, the retry and the HTTP agent, and a test
-//! answers URLs with its own.
+//! real transport, owns the host list, the genesis probe, the retry, the request limits and the HTTP
+//! agent, and a test answers URLs with its own.
 
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -750,8 +750,8 @@ pub(crate) trait Transport: Sync {
     }
 }
 
-/// The real transport over the hosts this build knows, with the genesis probe that picks one and the
-/// retry. `lost` runs each time a GET leaves the host in use forgotten. A host it skipped after a lie is
+/// The real transport over the hosts this build knows, with the genesis probe that picks one, the
+/// retry, and the limit a host's 429 sets. `lost` runs each time a GET leaves the host in use forgotten. A host it skipped after a lie is
 /// never read again through it, so a scan makes one `Http` per pass.
 pub(crate) struct Http {
     lost: fn(),
@@ -890,9 +890,11 @@ impl HostSpec {
 /// ignores: a tailnet address is the developer's own network, not this repository's. A build without
 /// it tries only the public hosts.
 pub(crate) const OWN_NODE: Option<&str> = option_env!("MEBIT_ESPLORA_HOST");
-/// The public testnet4 Esplora hosts in the order they are tried. blockstream.info allows 700
-/// requests an hour per IP. mempool.space is last because its TLS handshake hung from a phone on 5G
-/// and from the user's networks on 2026-11-03.
+/// The public testnet4 Esplora hosts in the order they are tried. Each limits requests per IP.
+/// blockstream.info's own throttle reply on 2026-11-03 allowed 700 an hour and 500,000 a month without
+/// an account (docs/04-open-items.md item 49), and a phone network shares one IP among many phones.
+/// mempool.space is last because its TLS handshake hung from a phone on 5G and from the user's
+/// networks on 2026-11-03.
 pub(crate) const PUBLIC_TESTNET4_HOSTS: [HostSpec; 2] = [
     HostSpec {
         base: ESPLORA_TESTNET4,

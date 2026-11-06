@@ -71,7 +71,7 @@ internal fun homeScanLine(mode: WalletMode, scan: HotScan): String? =
 
 /**
  * How long Home waits before it asks again after the [asked]th ask in a row whose scan stopped short. It is a minute, then twice
- * as long each time, and never more than a quarter of an hour. While a public host that refused with its request limit stays the
- * host in use, it answers each ask of a ten-address window three times over, so asking every minute could keep it refusing.
+ * as long each time, and never more than a quarter of an hour. A host that refused with its request limit is left alone for the
+ * wait it asked for, or a minute, so the first ask finds it or the next host free, and the doubling spares a host that keeps refusing.
  */
 internal fun scanContinueDelayMillis(asked: Int): Long = (60_000L shl asked.coerceIn(0, 4)).coerceAtMost(15 * 60_000L)

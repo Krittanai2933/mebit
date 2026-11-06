@@ -18,7 +18,7 @@ class SendErrorThaiTest {
         // A host lied in a proof, and no other host was left.
         "esplora scan: receive index 19: tb1qexample: transaction 1111111111111111111111111111111111111111111111111111111111111111 does not pay it" to "ประวัติของกระเป๋านี้ผิดปกติ ตรวจกับ explorer ก่อนส่ง",
         // A payment or a history while the scan goes on, after a host's request limit or a lost read.
-        "esplora get: receive index 190 could not be asked: esplora get: HTTP status 429, gave up after 3 attempts" to "explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่",
+        "esplora get: receive index 190 could not be asked: esplora get: https://blockstream.info/testnet4/api: HTTP status 429, limited for 60 s more" to "explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่",
         "esplora get: receive index 3 could not be proven: esplora get: https://blockstream.info/testnet4/api/tx/aa/hex: Network Error: connection reset by peer, gave up after 3 attempts" to "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง",
         "esplora utxo: 1111111111111111111111111111111111111111111111111111111111111111:0 is listed twice" to "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง",
         "esplora utxo: the coins' values do not fit u64" to "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง",
@@ -29,8 +29,10 @@ class SendErrorThaiTest {
         "esplora post: https://mempool.space/testnet/api/tx: status code 400: bad-txns-inputs-missingorspent" to "ส่งไม่สำเร็จ",
         "esplora get: https://mempool.space/testnet/api/address/tb1q/utxo: Network Error: connection refused" to "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง",
         "esplora get: lookup thread panicked" to "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง",
-        "esplora get: HTTP status 429, gave up after 3 attempts" to "explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่",
-        "esplora get: no testnet4 host is reachable (https://blockstream.info/testnet4/api: esplora get: status code 429; https://mempool.space/testnet4/api: Connection Failed)" to "explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่",
+        "esplora get: https://blockstream.info/testnet4/api: HTTP status 429, limited for 60 s more" to "explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่",
+        // Every host under its request limit, and one limited beside one that is down (chain.rs limited_text).
+        "esplora get: no testnet4 host is reachable (https://blockstream.info/testnet4/api: HTTP status 429, limited for 42 s more; https://mempool.space/testnet4/api: HTTP status 429, limited for 42 s more)" to "explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่",
+        "esplora get: no testnet4 host is reachable (https://blockstream.info/testnet4/api: HTTP status 429, limited for 42 s more; https://mempool.space/testnet4/api: Connection Failed)" to "explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่",
         // Seen on an iPhone 15 over 5G on 3 Nov 2026, as the bindings print it.
         "esplora get: https://mempool.space/testnet4/api/address/tb1q5squ69zn40x44ewqgl6dsaqgwjj38pc7f7j9hp: Connection Failed: tls connection init failed: Resource temporarily unavailable (os error 35)" to "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง",
         // hot_prepare_fee_bump and hot_prepare_cancel.
@@ -58,7 +60,7 @@ class SendErrorThaiTest {
         assertEquals("ดึงข้อมูลกระเป๋าไม่สำเร็จ ลองใหม่ภายหลัง", readErrorThai("missing witness slot"))
         assertEquals("ดึงข้อมูลกระเป๋าไม่สำเร็จ ลองใหม่ภายหลัง", readErrorThai(null))
         assertEquals("ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง", readErrorThai("invalid PSBT json: esplora get: lookup thread panicked"))
-        assertEquals("explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่", readErrorThai("invalid PSBT json: esplora get: HTTP status 429, gave up after 3 attempts"))
+        assertEquals("explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่", readErrorThai("invalid PSBT json: esplora get: https://blockstream.info/testnet4/api: HTTP status 429, limited for 60 s more"))
     }
 
     @Test
