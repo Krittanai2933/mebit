@@ -186,13 +186,16 @@ class SavedWallet internal constructor(private val store: SecureStore) {
 
 /**
  * Layout, big endian: magic "MB" (2), version (1), network (1: 0 test, 1 main), flags (1: 1 backup, 2 imported, 4 lock,
- * 8 unconfirmed send, and bits 16 and 32 the address type's code: 0 Native SegWit, 1 Legacy, 2 Nested SegWit, 3 Taproot),
+ * 8 unconfirmed send, bits 16 and 32 the address type's code: 0 Native SegWit, 1 Legacy, 2 Nested SegWit, 3 Taproot, and 64 an
+ * address type the user has not confirmed yet),
  * fingerprint (8 ASCII), words as ONE UTF-8 string joined by single spaces (u16 length + bytes),
  * passphrase (u16 length + bytes, byte exact), then only with flag 8 the payment of unknown outcome: its txid (u16 length +
  * ASCII, empty or 64 lowercase hex) and when its broadcast ended (8, Unix seconds, never negative). Only builds before the
  * guard file wrote flag 8. decode still reads it, so [OnboardingSession.install] can move that guard to [PendingPayments],
  * and encode never writes it. Native SegWit sets neither type bit, so every record of that type has the bytes an older
  * build reads too, and an older build takes a record of another type for a newer app's and never opens or overwrites it.
+ * A confirmed type sets no bit 64, so its record keeps the bytes it had, and every build before bit 64 takes a record with it
+ * for a newer app's in the same way.
  * encode throws, naming no word, on a record it could not read back exactly: a fingerprint that is not 8 ASCII characters,
  * an empty word or one holding a space, text UTF-8 cannot carry (a lone surrogate), a field over 65,535 bytes.
  * decode never throws: bad magic, short or trailing bytes, word count outside BIP39_SIZES, an empty word, a fingerprint byte
@@ -212,6 +215,7 @@ private object RecordCodec {
     private const val UNCONFIRMED = 8
     private const val TYPE_SHIFT = 4
     private const val TYPE_BITS = 3 shl TYPE_SHIFT
+    private const val TYPE_PENDING = 64
 
     /** Not the ordinal, as with [NETWORK_BYTE]: Native SegWit is 0 so that a default record keeps the bytes it had. */
     private val TYPE_CODE = mapOf(
@@ -234,7 +238,7 @@ private object RecordCodec {
                 out[3] = NETWORK_BYTE.getValue(r.network)
                 out[4] = (
                     (if (r.backupConfirmed) BACKUP else 0) or (if (r.imported) IMPORTED else 0) or (if (r.appLockEnabled) LOCK else 0) or
-                        (TYPE_CODE.getValue(r.addressType) shl TYPE_SHIFT)
+                        (TYPE_CODE.getValue(r.addressType) shl TYPE_SHIFT) or (if (r.addressTypeConfirmed) 0 else TYPE_PENDING)
                     ).toByte()
                 r.fingerprint.forEachIndexed { i, c -> out[5 + i] = c.code.toByte() }
                 out.putField(out.putField(HEADER, words), passphrase)
@@ -251,7 +255,7 @@ private object RecordCodec {
         // A value v1 never writes came from a newer app, so the rest is not judged by v1 rules.
         val network = NETWORK_BYTE.entries.firstOrNull { it.value == b[3] }?.key ?: return Decoded.Newer
         val flags = b[4].toInt() and 0xFF
-        if ((flags and (BACKUP or IMPORTED or LOCK or UNCONFIRMED or TYPE_BITS).inv()) != 0) return Decoded.Newer
+        if ((flags and (BACKUP or IMPORTED or LOCK or UNCONFIRMED or TYPE_BITS or TYPE_PENDING).inv()) != 0) return Decoded.Newer
         val addressType = TYPE_CODE.entries.first { it.value == (flags and TYPE_BITS) shr TYPE_SHIFT }.key
         if ((5 until HEADER).any { b[it] < 0 }) return Decoded.Corrupt
         val wordsEnd = b.fieldEnd(HEADER) ?: return Decoded.Corrupt
@@ -265,7 +269,10 @@ private object RecordCodec {
         val send = if (hasSend) (b.unconfirmedSendOrNull(passphraseEnd + 2, txidEnd) ?: return Decoded.Corrupt) else null
         val fingerprint = b.decodeToString(5, HEADER)
         return Decoded.Ok(
-            WalletRecord(words, passphrase, network, fingerprint, (flags and BACKUP) != 0, (flags and IMPORTED) != 0, (flags and LOCK) != 0, addressType),
+            WalletRecord(
+                words, passphrase, network, fingerprint, (flags and BACKUP) != 0, (flags and IMPORTED) != 0, (flags and LOCK) != 0, addressType,
+                addressTypeConfirmed = (flags and TYPE_PENDING) == 0,
+            ),
             send,
         )
     }

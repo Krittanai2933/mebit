@@ -19,6 +19,8 @@ class WalletRecord(
     val appLockEnabled: Boolean,
     /** How the hot wallet's addresses look. A record saved before the choice existed reads as Native SegWit. */
     val addressType: AddressType = AddressType.NATIVE_SEGWIT,
+    /** False while the user has not confirmed [addressType] on the Address Type screen. A record saved before this field reads as confirmed. */
+    val addressTypeConfirmed: Boolean = true,
 ) {
     init {
         require(words.size in BIP39_SIZES) { "word count" } // no record without a key, and the message names no word

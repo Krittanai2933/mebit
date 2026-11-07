@@ -108,7 +108,8 @@ internal fun testRecord(
     imported: Boolean = false,
     appLockEnabled: Boolean = false,
     addressType: AddressType = AddressType.NATIVE_SEGWIT,
-) = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled, addressType)
+    addressTypeConfirmed: Boolean = true,
+) = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled, addressType, addressTypeConfirmed)
 
 /**
  * An in-memory [PlainFile] for common tests. [text] is what the file holds, null for no file. [failWrite] makes each write fail

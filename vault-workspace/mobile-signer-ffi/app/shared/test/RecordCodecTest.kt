@@ -153,7 +153,7 @@ class RecordCodecTest {
     /** An opened record of the public test words and its old guard, laid out by hand as the codec's KDoc documents version 1. */
     private fun layout(r: UnlockResult.Opened): ByteArray {
         val flags = (if (r.record.backupConfirmed) 1 else 0) or (if (r.record.imported) 2 else 0) or (if (r.record.appLockEnabled) 4 else 0) or
-            (TYPE_BITS.getValue(r.record.addressType))
+            (TYPE_BITS.getValue(r.record.addressType)) or (if (r.record.addressTypeConfirmed) 0 else 64)
         return r.oldGuard?.let { oldRecordBytes(it, flags) } ?: v1Bytes(flags = flags)
     }
 
@@ -183,12 +183,28 @@ class RecordCodecTest {
         assertEquals(AddressType.NATIVE_SEGWIT, assertIs<UnlockResult.Opened>(opened(v1Bytes(flags = 7))).record.addressType)
     }
 
+    // Bit 64 marks a type the user has not confirmed, for each type, and reads back so. A confirmed record writes exactly the bytes it had
+    // before the bit existed, so every build reads it as before, and every build before the bit reads one with it as a newer app's.
+    @Test
+    fun anUnconfirmedAddressTypeWritesBit64AndAConfirmedOneKeepsTheBytesItHad() {
+        for ((type, bits) in TYPE_BITS) {
+            for (confirmed in listOf(true, false)) {
+                val case = "$type, confirmed $confirmed"
+                val store = FakeSecureStore()
+                SavedWallet(store).save(testRecord(backupConfirmed = true, addressType = type, addressTypeConfirmed = confirmed), WriteMode.Create)
+                val documented = v1Bytes(flags = 1 or bits or (if (confirmed) 0 else 64))
+                assertTrue(store.writes.single().bytes.contentEquals(documented), "encoder output, $case")
+                val back = assertIs<UnlockResult.Opened>(opened(documented), "documented bytes, $case").record
+                assertEquals(type to confirmed, back.addressType to back.addressTypeConfirmed, case)
+                assertTrue(back.backupConfirmed, "backup, $case")
+            }
+        }
+    }
+
     @Test
     fun unknownFlagBitsAndNetworkBytesAreNewer() {
-        for (bit in listOf(64, 128)) {
-            assertBroken(Cause.NewerVersion, v1Bytes(flags = 1 or bit), "flag bit $bit")
-            assertBroken(Cause.NewerVersion, v1Bytes(flags = 8 or bit) + sendSection(TEST_TXID.encodeToByteArray(), 1), "flag bit $bit beside a payment of unknown outcome")
-        }
+        assertBroken(Cause.NewerVersion, v1Bytes(flags = 1 or 128), "flag bit 128")
+        assertBroken(Cause.NewerVersion, v1Bytes(flags = 8 or 128) + sendSection(TEST_TXID.encodeToByteArray(), 1), "flag bit 128 beside a payment of unknown outcome")
         for (network in listOf(2, 255)) assertBroken(Cause.NewerVersion, v1Bytes(network = network), "network byte $network")
     }
 
