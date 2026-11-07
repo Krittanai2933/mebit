@@ -55,10 +55,11 @@ class CreatePassphraseTest {
         val shown = FakeSecureStore()
         val afterHome = session(shown)
         afterHome.generateThisDevice()
+        afterHome.confirmAddressType() // Address Type comes before Home
         afterHome.endFirstSetup()
         afterHome.changeNewKeyPassphrase(PASSPHRASE)
         assertEquals(checkFor(""), afterHome.fingerprint, "a wallet Home has shown changed its key")
-        assertEquals(1, shown.writes.size, "a wallet Home has shown was rewritten")
+        assertEquals(2, shown.writes.size, "a wallet Home has shown was rewritten")
 
         val imported = session(FakeSecureStore())
         imported.restoreFromWords(PUBLIC_WORDS_24)

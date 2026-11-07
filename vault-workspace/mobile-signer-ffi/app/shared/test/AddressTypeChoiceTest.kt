@@ -6,6 +6,7 @@ import com.mebit.ffi.signer.SoftwareAccountKey
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -63,15 +64,17 @@ class AddressTypeChoiceTest {
         assertEquals(AddressType.TAPROOT, session.addressType)
     }
 
+    // Home comes only after the user confirmed the type, so a wallet Home showed, or one loaded with its type confirmed, keeps it.
     @Test
     fun theTypeIsFinalOnceHomeShowedTheWalletOrForAWalletLoadedAtStart() {
         val store = FakeSecureStore()
         val shown = session(store)
         shown.generateThisDevice()
+        shown.confirmAddressType()
         shown.endFirstSetup()
         shown.chooseAddressType(AddressType.TAPROOT)
         assertEquals(AddressType.NATIVE_SEGWIT, shown.addressType, "a wallet Home has shown changed its type")
-        assertEquals(1, store.writes.size, "a wallet Home has shown was rewritten")
+        assertEquals(2, store.writes.size, "a wallet Home has shown was rewritten")
 
         val loaded = session(FakeSecureStore())
         assertTrue(loaded.install(store.savedCopy(), ANY_VERSION), "install")
@@ -138,6 +141,75 @@ class AddressTypeChoiceTest {
         assertEquals(AddressType.TAPROOT, store.savedCopy().addressType, "the saved copy dropped the choice")
     }
 
+    // A restart during Address Type must not finalize Native SegWit. A new key is saved with its type pending, each tap saves its type
+    // pending, and only leaving the step forward saves it confirmed, once.
+    @Test
+    fun aNewKeyIsSavedWithItsTypePendingEachTapStaysPendingAndTheConfirmIsSavedOnce() {
+        val store = FakeSecureStore()
+        val session = session(store)
+        session.generateThisDevice()
+        assertEquals(AddressType.NATIVE_SEGWIT to false, store.savedType(), "the key's first save")
+        session.chooseAddressType(AddressType.TAPROOT)
+        assertEquals(AddressType.TAPROOT to false, store.savedType(), "a tap")
+        session.confirmAddressType()
+        assertEquals(AddressType.TAPROOT to true, store.savedType(), "the confirm")
+        val writes = store.writes.size
+        session.confirmAddressType()
+        assertEquals(writes, store.writes.size, "a second confirm wrote again")
+    }
+
+    // An import without a passphrase is saved pending as a new key is. A passphrase import is written once, when its fingerprint is
+    // accepted, already confirmed because the screen confirms the type first.
+    @Test
+    fun anImportIsSavedPendingAndAStagedOneIsWrittenOnceAlreadyConfirmed() {
+        val plain = FakeSecureStore()
+        session(plain).restoreFromWords(PUBLIC_WORDS_24)
+        assertEquals(AddressType.NATIVE_SEGWIT to false, plain.savedType())
+        val store = FakeSecureStore()
+        val staged = session(store)
+        staged.restoreFromWords(PUBLIC_WORDS_24, "a passphrase", accepted = false)
+        staged.chooseAddressType(AddressType.NESTED_SEGWIT)
+        staged.confirmAddressType()
+        assertEquals(0, store.writes.size, "a staged import was written before its fingerprint matched")
+        staged.acceptStagedKey()
+        assertEquals(listOf("Create"), store.modes(), "one write")
+        assertEquals(AddressType.NESTED_SEGWIT to true, store.savedType())
+    }
+
+    // Another passphrase is another wallet, so the type confirmed for the first waits for the user's confirm again.
+    @Test
+    fun aPassphraseChangeReopensTheType() {
+        val store = FakeSecureStore()
+        val session = session(store)
+        session.generateThisDevice()
+        session.chooseAddressType(AddressType.TAPROOT)
+        session.confirmAddressType()
+        session.changeNewKeyPassphrase("a passphrase")
+        assertEquals(AddressType.TAPROOT to false, store.savedType())
+    }
+
+    // A cold start of a wallet whose type was not confirmed comes back to first setup with the user's last tap, which can still change
+    // and then be confirmed. Once confirmed, the next cold start loads the type as final.
+    @Test
+    fun aRestartBeforeTheConfirmKeepsTheTapAndFirstSetup() {
+        val store = FakeSecureStore()
+        session(store).apply {
+            generateThisDevice()
+            chooseAddressType(AddressType.TAPROOT)
+        }
+        val loaded = session(store)
+        val opened = assertIs<UnlockResult.Opened>(SavedWallet(store).openNow())
+        assertTrue(loaded.install(opened.record, opened.version), "install")
+        assertEquals(Triple(AddressType.TAPROOT, false, true), Triple(loaded.addressType, loaded.addressTypeConfirmed, loaded.inFirstSetup))
+        loaded.chooseAddressType(AddressType.NESTED_SEGWIT)
+        loaded.confirmAddressType()
+        assertEquals(AddressType.NESTED_SEGWIT to true, store.savedType(), "the tap and the confirm after the restart")
+        val again = session(store)
+        val reopened = assertIs<UnlockResult.Opened>(SavedWallet(store).openNow())
+        assertTrue(again.install(reopened.record, reopened.version), "install")
+        assertFalse(again.inFirstSetup, "a confirmed type reopened first setup")
+    }
+
     // On mainnet only Native SegWit can be chosen: it is preselected, and a tap on any other type leaves it. The same tap on testnet chooses.
     @Test
     fun onMainnetATapOnATypeTheCoreRefusesChangesNothing() {
@@ -165,4 +237,7 @@ class AddressTypeChoiceTest {
         SoftwareAccountKey(PUBLIC_WORDS_24, if (passphrase.isEmpty()) TEST_CHECK else "5a5a5a5a", "tpub-test", "m/84'/1'/0'")
 
     private fun FakeSecureStore.savedCopy(): WalletRecord = assertIs<UnlockResult.Opened>(SavedWallet(this).openNow(), "the saved copy").record
+
+    /** The saved copy's address type and whether the user confirmed it. */
+    private fun FakeSecureStore.savedType(): Pair<AddressType, Boolean> = savedCopy().let { it.addressType to it.addressTypeConfirmed }
 }

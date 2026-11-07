@@ -30,6 +30,12 @@ fun coldStart(probe: StoreProbe): Boot = when (probe) {
     }
 }
 
-/** Pure. The unbacked-up wallet lands where the backup nudge lives; the Back stack holds only this route. */
-fun startRoute(backupConfirmed: Boolean): MovieRoute =
-    if (backupConfirmed) MovieRoute.S1HomeSingleSig else MovieRoute.HomeFirstRun
+/**
+ * Pure. A wallet whose address type the user has not confirmed opens at Address Type, before App Lock, Home or any address. Otherwise
+ * the unbacked-up wallet lands where the backup nudge lives. The Back stack holds only this route.
+ */
+fun startRoute(backupConfirmed: Boolean, addressTypeConfirmed: Boolean): MovieRoute = when {
+    !addressTypeConfirmed -> MovieRoute.AddressType
+    backupConfirmed -> MovieRoute.S1HomeSingleSig
+    else -> MovieRoute.HomeFirstRun
+}

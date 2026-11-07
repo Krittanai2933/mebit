@@ -50,7 +50,7 @@ class WalletGateState internal constructor(
         try {
             when (val r = wallet.open(reason)) {
                 is UnlockResult.Opened -> if (session.install(r.record, r.version, r.oldGuard)) {
-                    boot = Boot.Open(startRoute(r.record.backupConfirmed))
+                    boot = Boot.Open(startRoute(r.record.backupConfirmed, r.record.addressTypeConfirmed))
                 } else {
                     notInstalled = r.oldGuard?.let { r.record.fingerprint to it }
                     boot = Boot.Broken(Cause.Corrupt)

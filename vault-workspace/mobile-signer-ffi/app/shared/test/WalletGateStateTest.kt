@@ -30,6 +30,7 @@ import com.mebit.app.data.WalletRecord
 import com.mebit.app.data.oldRecordBytes
 import com.mebit.app.data.testRecord
 import com.mebit.app.data.v1Bytes
+import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
 import kotlin.random.Random
@@ -102,6 +103,7 @@ class WalletGateStateTest {
         val cases = listOf(
             Triple("backed up", testRecord(passphrase = "a test passphrase", backupConfirmed = true, imported = true), MovieRoute.S1HomeSingleSig),
             Triple("not backed up", testRecord(appLockEnabled = true), MovieRoute.HomeFirstRun),
+            Triple("address type not confirmed", testRecord(backupConfirmed = true, addressType = AddressType.TAPROOT, addressTypeConfirmed = false), MovieRoute.AddressType),
         )
         for ((case, record, route) in cases) {
             val app = AppLaunch(savedPhone(record))
@@ -112,6 +114,8 @@ class WalletGateStateTest {
             assertTrue(s.words == record.words && s.passphrase == record.passphrase && s.fingerprint == record.fingerprint, "the session does not hold the saved key, $case")
             assertEquals(record.flags(), s.flags(), "flags, $case")
             assertEquals(SaveState.Saved, s.saved, case)
+            // A type the user had not confirmed comes back selected, with first setup open so it can still change.
+            assertEquals(Triple(record.addressType, record.addressTypeConfirmed, !record.addressTypeConfirmed), Triple(s.addressType, s.addressTypeConfirmed, s.inFirstSetup), "the type, $case")
         }
     }
 

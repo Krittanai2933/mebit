@@ -57,8 +57,9 @@ class OnboardingSession(
         private set
 
     /**
-     * From a Create or an Import in this run until Home first shows the wallet. Only then may the new key take a passphrase, or the
-     * wallet change its address type, because a wallet Home has shown may hold coins.
+     * From a Create or an Import in this run, or a cold start of a wallet whose address type is not confirmed, until Home first shows
+     * the wallet. Only then may the new key take a passphrase, or the wallet change its address type, because a wallet Home has shown
+     * may hold coins.
      */
     var inFirstSetup: Boolean by mutableStateOf(false)
         private set
@@ -71,6 +72,13 @@ class OnboardingSession(
 
     /** The network the key was made for, saved with it. */
     var network: KeyNetwork by mutableStateOf(KeyNetwork.TEST)
+        private set
+
+    /**
+     * False from a new key's first save until the user leaves the Address Type step forward ([confirmAddressType]). Saved with the
+     * wallet, so a cold start returns to that screen with [addressType], the user's last tap or the preselected Native SegWit.
+     */
+    var addressTypeConfirmed: Boolean by mutableStateOf(true)
         private set
 
     /** What this session knows about the copy on the phone. One state, so Saved can never exist without the copy it refers to. */
@@ -137,8 +145,8 @@ class OnboardingSession(
     /**
      * Penpot 1.4.2: re-derives the key just created from the same words with [passphrase], during first setup only, and
      * replaces the saved copy through the single write point. An empty passphrase gives the original key back. The words
-     * do not change, but the new key has not been checked, so Verify Words runs again. A failed Replace leaves the earlier
-     * copy on the phone, which [proveSavedCopy] catches at App Lock.
+     * do not change, but the new key has not been checked, so Verify Words runs again, and its address type waits for the
+     * user's confirm again. A failed Replace leaves the earlier copy on the phone, which [proveSavedCopy] catches at App Lock.
      */
     fun changeNewKeyPassphrase(passphrase: String) {
         lastError = null
@@ -159,16 +167,29 @@ class OnboardingSession(
     }
 
     /**
-     * Penpot 1.5.1: the hot wallet's address type, in first setup only, saved through the single write point: a Replace of the
-     * copy on the phone, or with the rest of the record when [acceptStagedKey] writes a staged import. The same type again writes
-     * nothing, and so does a type the core does not take on [network] ([hotAddressTypeEnabled], on mainnet only Native SegWit), so no
-     * path saves one. [SavedWallet] saves only TEST today, so a MAIN session meets that rule in tests alone. A failed Replace leaves
-     * the earlier copy on the phone, which [proveSavedCopy] catches at App Lock.
+     * Penpot 1.5.1: a tap on an address type row, in first setup only, saved at once as the user's tentative pick, not confirmed, through
+     * the single write point: a Replace of the copy on the phone, so a restart keeps it, or with the rest of the record when
+     * [acceptStagedKey] writes a staged import. The same type again writes nothing, and so does a type the core does not take on
+     * [network] ([hotAddressTypeEnabled], on mainnet only Native SegWit), so no path saves one. [SavedWallet] saves only TEST today, so
+     * a MAIN session meets that rule in tests alone. A failed Replace leaves the earlier copy on the phone, which [proveSavedCopy]
+     * catches at App Lock.
      */
     fun chooseAddressType(type: AddressType) {
         if (!inFirstSetup || words.isEmpty() || held == Held.Stale || type == addressType) return
         if (!hotAddressTypeEnabled(type, network)) return
         addressType = type
+        addressTypeConfirmed = false
+        persist()
+    }
+
+    /**
+     * The user left the Address Type step forward, by its button or the fingerprint sheet after it, so [addressType] is final: saved
+     * through the single write point, or with the rest of the record when [acceptStagedKey] writes a staged import next. A confirmed type
+     * writes nothing. App Lock's save repairs a confirm whose write failed, and until then a cold start returns to the screen.
+     */
+    fun confirmAddressType() {
+        if (!inFirstSetup || words.isEmpty() || held == Held.Stale || addressTypeConfirmed) return
+        addressTypeConfirmed = true
         persist()
     }
 
@@ -248,6 +269,7 @@ class OnboardingSession(
         lastError = null
         network = KeyNetwork.TEST
         addressType = AddressType.NATIVE_SEGWIT
+        addressTypeConfirmed = true
         recordGuard = null
         held = Held.Nothing
         notSavedBecause = null
@@ -339,6 +361,9 @@ class OnboardingSession(
         imported = record.imported
         appLockEnabled = record.appLockEnabled
         addressType = record.addressType
+        addressTypeConfirmed = record.addressTypeConfirmed
+        // A type not yet confirmed means Home never showed the wallet, so setup goes on where it stopped.
+        inFirstSetup = !record.addressTypeConfirmed
         held = Held.Copy(version)
         recordGuard = oldGuard
         if (oldGuard != null) persist()
@@ -435,7 +460,7 @@ class OnboardingSession(
         return true
     }
 
-    private fun toRecord() = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled, addressType)
+    private fun toRecord() = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled, addressType, addressTypeConfirmed)
 
     private fun applyKey(key: SoftwareAccountKey, passphrase: String, network: KeyNetwork) {
         words = key.mnemonicWords
@@ -447,6 +472,7 @@ class OnboardingSession(
         backupConfirmed = false
         imported = false
         addressType = AddressType.NATIVE_SEGWIT
+        addressTypeConfirmed = false
         held = Held.Nothing
     }
 

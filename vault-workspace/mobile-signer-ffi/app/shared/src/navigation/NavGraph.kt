@@ -244,12 +244,12 @@ fun MebitNavHost(
         )
         MovieRoute.AddressType -> AddressTypeScreen(
             session = session,
-            afterVerify = backStack.getOrNull(backStack.lastIndex - 1) == MovieRoute.VerifyWords,
             onContinue = {
                 importDraft = ffiImportSeedDraft()
                 lockStep()
             },
-            onEditPassphrase = { backTo(MovieRoute.BackupWords) },
+            // A cold start restores Address Type alone, so Backup Words is pushed when the stack does not hold it.
+            onEditPassphrase = { if (MovieRoute.BackupWords in backStack) backTo(MovieRoute.BackupWords) else navigate(MovieRoute.BackupWords) },
             onRejectImport = { backTo(MovieRoute.ImportSeed) },
             onBack = onBack,
             onOpenCatalog = openCatalog,

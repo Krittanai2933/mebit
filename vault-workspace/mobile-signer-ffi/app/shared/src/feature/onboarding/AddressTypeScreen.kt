@@ -72,29 +72,39 @@ internal val AddressTypeRows = listOf(
 internal fun addressTypeEyebrow(imported: Boolean) = if (imported) "IMPORT WALLET · ADDRESS TYPE" else "NEW WALLET · ADDRESS TYPE"
 
 /**
- * Penpot 1.5.1, the same screen at 1.5.3, 1.3.2, 1B.4.5 and 1B.4.6, in first setup after the key is made or imported. "ต่อไป"
- * saves the choice, then a staged passphrase import shows its fingerprint to compare (1B.4.4), and a new key with a passphrase
- * after Verify Words shows its fingerprint to write down (1.5.4), before [onContinue]. Rejecting the import's fingerprint clears
- * the session and [onRejectImport] goes back to Import Seed; rejecting the new key's goes to [onEditPassphrase].
+ * Whether "ต่อไป" shows the new key's fingerprint to write down (1.5.4): a Create with a passphrase whose words were verified since that
+ * passphrase was set, because setting one clears the backup. Saved facts, not the back stack, so the screen a restart brings back asks
+ * the same.
+ */
+internal fun createFingerprintDue(session: OnboardingSession): Boolean =
+    !session.imported && session.backupConfirmed && session.passphrase.isNotEmpty()
+
+/**
+ * Penpot 1.5.1, the same screen at 1.5.3, 1.3.2, 1B.4.5 and 1B.4.6, in first setup after the key is made or imported, and after a
+ * restart that left the type unconfirmed. A row tap saves that type as the tentative pick. "ต่อไป" then shows a staged passphrase
+ * import's fingerprint to compare (1B.4.4), or a new key's to write down when [createFingerprintDue], and leaving forward confirms the
+ * type before [onContinue]. Rejecting the import's fingerprint clears the session and [onRejectImport] goes back to Import Seed;
+ * rejecting the new key's goes to [onEditPassphrase] with the type still unconfirmed.
  */
 @Composable
 fun AddressTypeScreen(
     session: OnboardingSession,
-    afterVerify: Boolean,
     onContinue: () -> Unit,
     onEditPassphrase: () -> Unit,
     onRejectImport: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
-    var selected by remember { mutableStateOf(session.addressType) }
     var sheet by remember { mutableStateOf<FingerprintCopy?>(null) }
+    val finish = {
+        session.confirmAddressType()
+        onContinue()
+    }
     val next = {
-        session.chooseAddressType(selected)
         when {
             session.saved == SaveState.Staged -> sheet = ImportFingerprintCopy
-            afterVerify && session.passphrase.isNotEmpty() -> sheet = CreateFingerprintCopy
-            else -> onContinue()
+            createFingerprintDue(session) -> sheet = CreateFingerprintCopy
+            else -> finish()
         }
     }
     MebitScreen(
@@ -122,7 +132,7 @@ fun AddressTypeScreen(
         Column(modifier = Modifier.selectableGroup()) {
             AddressTypeRows.forEachIndexed { i, row ->
                 if (i > 0) Spacer(modifier = Modifier.height(8.dp))
-                TypeRow(row, session.network, row.type == selected) { selected = row.type }
+                TypeRow(row, session.network, row.type == session.addressType) { session.chooseAddressType(row.type) }
             }
         }
     }
@@ -132,9 +142,13 @@ fun AddressTypeScreen(
             copy = copy,
             onConfirm = {
                 sheet = null
-                if (copy == ImportFingerprintCopy) session.acceptStagedKey()
+                if (copy == ImportFingerprintCopy) {
+                    // Confirmed in memory first, so the import's one write saves the type as final.
+                    session.confirmAddressType()
+                    session.acceptStagedKey()
+                }
                 // A save that lost a race to another wallet cleared the session, and Import Seed says why.
-                if (session.lastError == null) onContinue() else onRejectImport()
+                if (session.lastError == null) finish() else onRejectImport()
             },
             onReject = {
                 sheet = null
