@@ -1809,6 +1809,10 @@ pub fn hot_prepare_cancel(
     )?))
 }
 
+/// How many of the largest spare coins a fee bump tries every set of: 65,535 sets at most, under the
+/// 100,000 tries Bitcoin Core's wallet allows its own coin search.
+const BUMP_SEARCH_COINS: usize = 16;
+
 /// A `kind` replacement of `earlier_hex`, signed and not yet broadcast, with the fee it pays, the change
 /// it put into that fee and, for a fee bump, what it cut from the destination's amount. The bytes,
 /// their shape and the rate are checked before any network call, the change, the coins and the earlier
@@ -1944,9 +1948,10 @@ fn signed_replacement(
             });
             let change_floor = dust_floor(&change);
             let mut short = Short::Funds;
-            // The walk keeps every coin it adds. Only when that finds no bump does it walk again, setting
-            // aside each coin whose leftover passes 10,000 sat/vB for the next smaller one.
-            let (mut pending, mut skipping, mut have) = (more.iter(), false, total);
+            // The walk keeps every coin it adds. Near the limit the sets that pay leave a leftover in a
+            // narrow band no walk finds every time, so only when the walk finds no bump does a search try
+            // the sets of the largest spare coins.
+            let (mut pending, mut searched, mut have) = (more.iter(), false, total);
             loop {
                 let spends = vec![OWN_SPEND; selected.len()];
                 let (with, without) = (vsize(&spends, &scripts), vsize(&spends, &scripts[..1]));
@@ -1964,21 +1969,39 @@ fn signed_replacement(
                     // None is reported when even a change output could not be paid for.
                     Ok(Settle::Fold(dust)) => break (vec![destination.clone()], have, dust),
                     Ok(Settle::Fit(_)) => break (vec![destination.clone()], have, 0),
-                    Err(why) => {
-                        short = short.max(why);
-                        if skipping
-                            && matches!(why, Short::Limit { .. })
-                            && selected.len() > spent.len()
-                        {
-                            have -= selected.pop().map_or(0, |(utxo, _)| utxo.value);
-                        }
-                    }
+                    Err(why) => short = short.max(why),
                 }
                 let Some((utxo, owner)) = pending.next() else {
-                    if !skipping {
-                        (pending, skipping, have) = (more.iter(), true, total);
-                        selected.truncate(spent.len());
-                        continue;
+                    if !searched {
+                        searched = true;
+                        let spares = &more[..more.len().min(BUMP_SEARCH_COINS)];
+                        let coins = |set: u32| {
+                            (0..spares.len())
+                                .filter(move |i| set >> i & 1 == 1)
+                                .map(|i| spares[i])
+                        };
+                        // The walk summed every spare coin with checks, so no set of them overflows.
+                        let holds =
+                            |set: u32| total + coins(set).map(|(u, _)| u.value).sum::<u64>();
+                        let mut sets: Vec<u32> = (1..1 << spares.len()).collect();
+                        // Fewest coins first, then in lexicographic order of the coins largest first.
+                        sets.sort_by_key(|set| {
+                            (set.count_ones(), std::cmp::Reverse(set.reverse_bits()))
+                        });
+                        let found = sets.into_iter().find(|&set| {
+                            let spends = vec![OWN_SPEND; spent.len() + set.count_ones() as usize];
+                            let (with, without) =
+                                (vsize(&spends, &scripts), vsize(&spends, &scripts[..1]));
+                            let left = holds(set).saturating_sub(amount);
+                            settle(left, with, without, change_floor, &fee, &least).is_ok()
+                        });
+                        // The walk's next turn settles that set and signs it.
+                        if let Some(set) = found {
+                            selected.truncate(spent.len());
+                            selected.extend(coins(set).map(|(utxo, owner)| (utxo, *owner)));
+                            have = holds(set);
+                            continue;
+                        }
                     }
                     // A payment with no change (a send all, or change that went into the fee) whose
                     // amount no coin can keep takes the new fee from the amount, from its own coins only.
@@ -5013,8 +5036,8 @@ mod tests {
 
     // The round-3 review's repros. The bump walk kept the largest spare coin, so near the limit it pushed what
     // is left past 10,000 sat/vB, change at its floor paid less than rule 6 asks, and the bump was refused or cut,
-    // while the next smaller coin alone paid at the rate asked. Once the walk as it was finds no bump, it walks
-    // again without each coin that passes the limit, so every bump it signed is still signed the same.
+    // while the next smaller coin alone paid at the rate asked. Once the walk as it was finds no bump, the search
+    // over sets of spare coins finds that coin, so every bump the walk signed is still signed the same.
     #[test]
     fn a_fee_bump_skips_a_spare_coin_that_passes_the_limit_for_a_smaller_one_that_pays() {
         // A payment of 100,000 with change 294 at 9,000 sat/vB, 1,269,000 on 141 vB.
@@ -5089,6 +5112,284 @@ mod tests {
             (1_089_000, 98_999, 110)
         );
         assert_replaces(&fake, &earlier.tx, &bump.tx);
+    }
+
+    // The round-4 review's repros. Near the limit a bump's fee must land between rule 6's least and 10,000 sat/vB on
+    // its signed size, and both walks over the spare coins missed the pair that lands there, so each bump was cut or
+    // refused. Each now keeps the amount with that pair and no change, on 246 vB.
+    #[test]
+    fn a_fee_bump_keeps_the_amount_with_a_set_of_spare_coins_no_walk_finds() {
+        // A payment whose leftover went into its fee, 1,009,999 at 9,000 sat/vB: 990,001 on 110 vB.
+        let mut alone = Fake::new();
+        alone.fund(&addr(Chain::External, 0), 2_000_000, '1');
+        let fit = alone.payment(SOMEONE, 1_009_999, 9_000).unwrap();
+        assert_eq!((fit.fee_sats, fit.tx.vsize()), (990_001, 110));
+        // A payment of 100,000 with change 294 at 9,000 sat/vB.
+        let mut alone = Fake::new();
+        alone.fund(&addr(Chain::External, 0), 1_369_294, '1');
+        let with_change = alone.send(SOMEONE, 100_000, 9_000).unwrap();
+        assert_outputs(
+            &with_change,
+            &[(SOMEONE, 100_000), (&addr(Chain::Internal, 0), 294)],
+        );
+        // Send alls of 2,000,000 at 9,000 and of 1,732,853 at 9,800.
+        let mut alone = Fake::new();
+        alone.fund(&addr(Chain::External, 0), 2_000_000, '1');
+        let (send_all, _) = alone.send_all_at(SOMEONE, 9_000).unwrap();
+        let mut alone = Fake::new();
+        alone.fund(&addr(Chain::External, 0), 1_732_853, '1');
+        let (seed_777, _) = alone.send_all_at(SOMEONE, 9_800).unwrap();
+        for (earlier, held, spares, rate, amount, fee) in [
+            (
+                &fit.tx,
+                2_000_000,
+                &[850_000, 629_999, 604_999][..],
+                9_900,
+                1_009_999,
+                2_445_000,
+            ),
+            (
+                &with_change,
+                1_369_294,
+                &[600_000, 595_000, 580_000],
+                9_900,
+                100_000,
+                2_449_294,
+            ),
+            (
+                &with_change,
+                1_369_294,
+                &[611_000, 600_000, 556_000],
+                9_900,
+                100_000,
+                2_436_294,
+            ),
+            (
+                &send_all,
+                2_000_000,
+                &[880_000, 600_000, 580_000],
+                9_900,
+                1_010_000,
+                2_450_000,
+            ),
+            (
+                &seed_777,
+                1_732_853,
+                &[501_594, 718_324, 5_069, 714_455, 649_244, 558_285],
+                9_800,
+                654_853,
+                2_445_568,
+            ),
+        ] {
+            let mut fake = Fake::new();
+            fake.fund(&addr(Chain::External, 0), held, '1');
+            for (i, value) in spares.iter().enumerate() {
+                let digit = char::from(b'2' + i as u8);
+                fake.fund(&addr(Chain::External, 1 + i as u32), *value, digit);
+            }
+            let bump = fake
+                .replacement(&serialize_hex(earlier), rate, Replacement::FeeBump)
+                .unwrap_or_else(|e| panic!("spares {spares:?}: {e:?}"));
+            assert_outputs(&bump.tx, &[(SOMEONE, amount)]);
+            assert_eq!(
+                (bump.fee_sats, bump.amount_cut_sats, bump.tx.vsize()),
+                (fee, 0, 246),
+                "spares {spares:?}"
+            );
+            assert!(fee <= MAX_FEE_RATE * 246, "spares {spares:?}");
+            assert_replaces(&fake, earlier, &bump.tx);
+        }
+    }
+
+    // A fee bump keeps the amount if and only if some set of the spare coins settles by the same `settle`, fee and
+    // least it signs with, over earlier payments and send alls at up to 9,900 sat/vB with 1 to 7 spare coins, bumped at
+    // 9,000 to 10,000. Where the walk finds a bump it signs as it did before the search, the first run of the largest
+    // coins that settles; else it signs the first set that settles, fewest coins first and then the larger coins. What
+    // signs replaces the earlier payment within the network's limit, and a bump no set keeps is cut or refused. Each
+    // earlier payment is bumped with its first draw of spare coins and with the first of 200 draws that only the search
+    // signs, so that rare case is tried every time.
+    #[test]
+    fn a_fee_bump_keeps_the_amount_if_and_only_if_some_set_of_spare_coins_can() {
+        let mut rnd = xorshift(0xD1B5_4A32_D192_ED03);
+        let (mut walked, mut searched, mut cut, mut refused) = (0, 0, 0, 0);
+        for case in 0..60 {
+            let (mut alone, mut held) = (Fake::new(), Vec::new());
+            for digit in ['1', '2'].into_iter().take(1 + rnd(2) as usize) {
+                let value = [20_000, 300_000, 1_400_000, 3_000_000][rnd(4) as usize] + rnd(900_000);
+                alone.fund(&addr(Chain::External, held.len() as u32), value, digit);
+                held.push((value, digit));
+            }
+            let rate =
+                [1, 7, 300, 3_000, 7_800, 8_500, 9_000, 9_500, 9_800, 9_900][rnd(10) as usize];
+            let earlier = match rnd(3) {
+                0 => alone.send_all_at(SOMEONE, rate).map(|(tx, _)| tx),
+                _ => alone.send(SOMEONE, 294 + rnd(held.iter().map(|c| c.0).sum()), rate),
+            };
+            let Ok(earlier) = earlier else { continue };
+            let spent: Vec<String> = inputs_of(&earlier)
+                .iter()
+                .map(|o| o.txid.to_string())
+                .collect();
+            let (old_fee, old_vsize) = (fee_paid(&alone, &earlier), earlier.vsize() as u64);
+            let asked = 9_000 + rnd(1_001);
+            let rate = asked.max(old_fee / old_vsize + 1);
+            let fee = |size: u64| (rate * size).max(old_fee + size);
+            let kvb = old_fee * 1000 / old_vsize + 1;
+            let least = |size: u64| (old_fee + size).max((kvb * size).div_ceil(1000));
+            let amount = earlier.output[0].value.to_sat();
+            let had = old_fee + earlier.output.iter().map(|o| o.value.to_sat()).sum::<u64>();
+            let scripts = [earlier.output[0].script_pubkey.len(), P2WPKH_SCRIPT];
+            // The coins the earlier payment left and `drawn`, largest first and ties by txid.
+            let spares_of = |drawn: &[(u64, char)]| {
+                let mut spares: Vec<(u64, char)> = held
+                    .iter()
+                    .filter(|(_, digit)| !spent.contains(&id(*digit)))
+                    .chain(drawn)
+                    .copied()
+                    .collect();
+                spares.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+                spares
+            };
+            // The bump these spare coins should sign: the coins it adds as indexes into them, its fee, and whether
+            // the walk finds it.
+            let expect = |spares: &[(u64, char)]| {
+                let pays = |set: &[usize]| {
+                    let spends = vec![OWN_SPEND; spent.len() + set.len()];
+                    let left = had + set.iter().map(|&i| spares[i].0).sum::<u64>() - amount;
+                    let sizes = (vsize(&spends, &scripts), vsize(&spends, &scripts[..1]));
+                    let settled = settle(left, sizes.0, sizes.1, 294, &fee, &least);
+                    settled.ok().map(|settled| match settled {
+                        Settle::Change(rest) | Settle::FloorChange(rest) => left - rest,
+                        Settle::Fold(_) | Settle::Fit(_) => left,
+                    })
+                };
+                let n = spares.len();
+                let walk = (0..=n)
+                    .map(|k| (0..k).collect::<Vec<_>>())
+                    .find(|run| pays(run).is_some());
+                let mut sets: Vec<Vec<usize>> = (0..1u32 << n)
+                    .map(|set| (0..n).filter(|i| set >> i & 1 == 1).collect())
+                    .collect();
+                sets.sort_by(|a, b| a.len().cmp(&b.len()).then(a.cmp(b)));
+                let found = match walk {
+                    Some(run) => Some((run, true)),
+                    None => sets
+                        .into_iter()
+                        .find(|set| pays(set).is_some())
+                        .map(|set| (set, false)),
+                };
+                let found = found.filter(|_| rate <= MAX_FEE_RATE);
+                found.map(|(set, by_walk)| (pays(&set).unwrap(), set, by_walk))
+            };
+            let draws: Vec<Vec<(u64, char)>> = (0..200)
+                .map(|_| {
+                    ('3'..='9')
+                        .take(1 + rnd(7) as usize)
+                        .map(|digit| match rnd(4) {
+                            0 => (300 + rnd(5_000), digit),
+                            1 => (300 + rnd(2_000_000), digit),
+                            2 => (500_000 + rnd(300_000), digit),
+                            _ => (640_000 + rnd(80_000), digit),
+                        })
+                        .collect()
+                })
+                .collect();
+            let only_search = draws
+                .iter()
+                .find(|drawn| matches!(expect(&spares_of(drawn)), Some((_, _, false))));
+            for drawn in [Some(&draws[0]), only_search].into_iter().flatten() {
+                let spares = spares_of(drawn);
+                let mut fake = Fake::new();
+                for (i, (value, digit)) in held.iter().chain(drawn).enumerate() {
+                    fake.fund(&addr(Chain::External, i as u32), *value, *digit);
+                }
+                let bump = fake.replacement(&serialize_hex(&earlier), asked, Replacement::FeeBump);
+                let case = format!(
+                    "case {case}: held {held:?}, spares {spares:?}, earlier {old_fee} on {old_vsize} vB to {amount}, bump at {asked}: {:?}",
+                    bump.as_ref()
+                        .map(|b| (b.fee_sats, b.amount_cut_sats, inputs_of(&b.tx)))
+                );
+                match (expect(&spares), &bump) {
+                    (Some((fee, set, by_walk)), Ok(b)) => {
+                        let added: Vec<String> = inputs_of(&b.tx)[spent.len()..]
+                            .iter()
+                            .map(|o| o.txid.to_string())
+                            .collect();
+                        let want: Vec<String> = set.iter().map(|&i| id(spares[i].1)).collect();
+                        assert_eq!(
+                            (added, b.fee_sats, b.amount_cut_sats),
+                            (want, fee, 0),
+                            "{case}"
+                        );
+                        if by_walk {
+                            walked += 1;
+                        } else {
+                            searched += 1;
+                        }
+                    }
+                    (Some(_), Err(_)) => panic!("refused while a set keeps the amount, {case}"),
+                    (None, Ok(b)) => {
+                        assert!(b.amount_cut_sats > 0, "{case}");
+                        cut += 1;
+                    }
+                    (None, Err(_)) => refused += 1,
+                }
+                if let Ok(b) = &bump {
+                    assert_replaces(&fake, &earlier, &b.tx);
+                    assert!(b.fee_sats <= MAX_FEE_RATE * b.tx.vsize() as u64, "{case}");
+                }
+            }
+        }
+        eprintln!("{walked} walked, {searched} searched, {cut} cut, {refused} refused");
+        assert!(
+            walked > 0 && searched > 0 && cut > 0 && refused > 0,
+            "{walked} walked, {searched} searched, {cut} cut, {refused} refused"
+        );
+    }
+
+    // The search tries every set of the 16 largest spare coins and no other. A payment of 100,000 with change 294 at
+    // 9,000 sat/vB, bumped at 9,900: a spare coin of 560,000 alone passes the limit and two or more fall short, while
+    // one of 500,000 alone pays 1,769,294 on 178 vB. Fifteen coins of 560,000 and one of 500,000 sign with the 500,000.
+    // Sixteen of 560,000 leave four coins of 500,000 out of reach, and the bump is refused after all 65,535 sets.
+    #[test]
+    fn a_fee_bump_searches_the_16_largest_spare_coins_and_no_others() {
+        let mut alone = Fake::new();
+        alone.fund(&addr(Chain::External, 0), 1_369_294, '1');
+        let earlier = alone.send(SOMEONE, 100_000, 9_000).unwrap();
+        let bump = |large: u32, small: u32| {
+            let mut fake = Fake::new();
+            fake.fund(&addr(Chain::External, 0), 1_369_294, '1');
+            for (index, digit, count, value) in [(1, '5', large, 560_000), (2, '6', small, 500_000)]
+            {
+                let coins: Vec<String> = (0..count).map(|i| coin(digit, i, value, true)).collect();
+                fake.stats.insert(
+                    addr(Chain::External, index),
+                    used_stats(value * u64::from(count)),
+                );
+                fake.utxos.insert(
+                    addr(Chain::External, index),
+                    format!("[{}]", coins.join(",")),
+                );
+            }
+            let start = Instant::now();
+            let got = fake.replacement(&serialize_hex(&earlier), 9_900, Replacement::FeeBump);
+            (got, start.elapsed(), fake)
+        };
+        let (signed, _, fake) = bump(15, 1);
+        let signed = signed.unwrap();
+        assert_eq!(inputs_of(&signed.tx)[1].txid.to_string(), id('6'));
+        assert_eq!(
+            (signed.fee_sats, signed.amount_cut_sats, signed.tx.vsize()),
+            (1_769_294, 0, 178)
+        );
+        assert_replaces(&fake, &earlier, &signed.tx);
+        let (refused, took, _) = bump(16, 4);
+        eprintln!("16 spare coins of 560,000 and 4 of 500,000 refused in {took:?}");
+        assert_refused(
+            refused.map(|b| b.fee_sats),
+            "replace: fee 1829294 for 178 vB is above the network's 10000 sat/vB limit",
+        );
+        assert!(took < Duration::from_secs(2), "{took:?}");
     }
 
     #[test]
