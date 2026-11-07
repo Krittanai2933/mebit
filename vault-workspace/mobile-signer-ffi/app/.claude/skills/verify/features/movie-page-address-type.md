@@ -1,20 +1,28 @@
 # Movie Page address type
 
 After the key is made or imported, first setup asks which address type the single-sig wallet uses (Penpot 1.5.1, the
-same screen at 1.5.3, 1.3.2, 1B.4.5 and 1B.4.6). Native SegWit is preselected. The choice is saved with the wallet, and
-Receive, change, signing and fee estimates follow it. The hardware path (Penpot 1.2.2) has no such screen, because a
-hardware key makes no single-sig wallet.
+same screen at 1.5.3, 1.3.2, 1B.4.5 and 1B.4.6). Native SegWit is preselected. Each tap is saved at once as a pick the
+user has not confirmed, and ต่อไป confirms it, so a restart before ต่อไป comes back to this screen with the pick selected
+and never finalizes a type by itself. Receive, change, signing and fees follow the confirmed type. On Mainnet only Native
+SegWit can be picked. The hardware path (Penpot 1.2.2) has no such screen, because a hardware key makes no single-sig
+wallet.
 
 ## Sub-features
 
 - `mp-type-screen` shows four rows (Legacy BIP44, Nested SegWit BIP49, Native SegWit BIP84, Taproot BIP86) with Native
   SegWit selected and its "ค่าเริ่มต้น" badge, the eyebrow NEW WALLET or IMPORT WALLET · ADDRESS TYPE, and each row's
   address prefixes for the session's network (testnet `m หรือ n`, `2`, `tb1q`, `tb1p`; mainnet `1`, `3`, `bc1q`, `bc1p`).
-- `mp-type-create` follows Verify Words, either ทำทีหลัง on Key Created or Backup Words, and goes on to App Lock. With a
-  passphrase set after Verify Words, ต่อไป first shows the fingerprint to write down (Penpot 1.5.4).
+- `mp-type-create` follows Verify Words, either ทำทีหลัง on Key Created or Backup Words, and goes on to App Lock. For a
+  new key with a passphrase whose words were verified, ต่อไป first shows the fingerprint to write down (Penpot 1.5.4),
+  after a restart too, and แก้ passphrase there goes to Backup Words with the type still unconfirmed.
 - `mp-type-import` follows Import Seed. A passphrase import shows the fingerprint to compare after ต่อไป (Penpot
   1B.4.4). ไม่ตรง · แก้ไข and the back chip return to Import Seed with the 24 words and the passphrase still filled.
 - `mp-type-receive` makes Receive show an address of the chosen type, and a cold start keeps it.
+- `mp-type-restart` brings a cold start before ต่อไป back to this screen, after the unlock, with the last tapped type
+  selected and no back chip. ต่อไป then goes on to App Lock, and only then is the type final: the next cold start opens
+  Home.
+- `mp-type-mainnet` keeps the Legacy, Nested SegWit and Taproot rows visible on Mainnet, grey, with the badge
+  ยังไม่รองรับบน Mainnet, and a tap on them changes nothing. The core refuses those types on Mainnet by the same rule.
 
 ## Navigate
 
@@ -40,6 +48,20 @@ hardware key makes no single-sig wallet.
   independent derivation, never against the app itself.
 - **Cold start.** As in [wallet restart](./wallet-restart.md). After the unlock the app opens on the single-sig screen
   (`id:screen_send/s1`), not the first-run home. Receive shows the same address.
+- **Restart before ต่อไป.** Enrol Face ID as in [app lock](./movie-page-app-lock.md), then `verify.sh ios-tap
+  "id:cta_create"`, `verify.sh ios-tap "id:cta_phone"`, `verify.sh ios-tap "id:cta_skip_backup"`, `verify.sh ios-see
+  "id:screen_onboarding/address-type"` and `verify.sh ios-tap "id:address_type_taproot"`. Then `xcrun simctl terminate
+  $U com.mebit.app` and `xcrun simctl launch $U com.mebit.app`. The unlock screen (ปลดล็อก mebit) comes up with the
+  Face ID card. Give it about 6 s, in a background command because a foreground wait is not allowed, before `xcrun simctl
+  spawn $U notifyutil -p com.apple.BiometricKit_Sim.pearl.match`, and send no `ios-*` action while the card is up.
+  `verify.sh ios-see "id:screen_onboarding/address-type"` and `verify.sh ios-gone "id:back"` pass. Shot
+  `mp-type-restart`: Taproot has the orange frame and the filled radio. `idb ui describe-all --udid $U --json` gives
+  `address_type_taproot` alone the `Selected` trait. `verify.sh ios-tap "id:cta_address_type"` and `verify.sh ios-see
+  "id:screen_onboarding/app-lock"`. Another `terminate`, `launch` and `pearl.match` then open
+  `id:screen_home/first-run`, because ต่อไป confirmed the type.
+- **Mainnet.** The app has no network switch and saves testnet wallets only, so no simulator run reaches the Mainnet
+  rows. `AddressTypeScreenTest.onMainnetOnlyNativeSegwitsRowIsEnabled`, `AddressTypeChoiceTest.onMainnetATapOnATypeTheCoreRefusesChangesNothing`
+  and the core's `the_rows_the_app_enables_are_the_accounts_the_core_derives` cover them.
 
 ## Seen in practice
 
@@ -49,6 +71,10 @@ hardware key makes no single-sig wallet.
   `2MuE6YWmddvYPJdpQFzgJiEKHCnAxYLEJ4F`, which embit derives at `m/49'/1'/0'/0/0`.
 - Run `20261108-014538-ios`: one `ios-type` of `TREZOR` keeps all six letters in both passphrase sheets, and the import
   draft survives ไม่ตรง · แก้ไข and the back chip.
+- Run `20261108-045750-ios` (iPhone 17 Pro, iOS 26.5, create, Taproot): after the kill, the relaunch and Face ID the app
+  opened Address Type with Taproot selected and no back chip, ต่อไป reached App Lock, and a second cold start opened
+  first-run Home. The testnet rows were all enabled, as before.
+- `verify.sh ios-see` takes no wait in seconds on iOS. `ios-see SELECTOR 30` stops with a usage line.
 - The first `ios-tap` on Welcome right after `ios-start` can land during the launch animation and do nothing. Tap again
   when the next screen does not show.
 - The first tap into a text field on a fresh simulator brings up iOS's slide-to-type tip, which can take the next keys.
