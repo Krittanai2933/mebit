@@ -144,6 +144,7 @@ class OnboardingSession(
         if (!inFirstSetup || imported || words.isEmpty() || held == Held.Staged || held == Held.Stale) return
         if (passphrase == this.passphrase) return
         val kept = held
+        val type = addressType
         val key = try {
             restoreKey(words, passphrase, network, 0u)
         } catch (e: Exception) {
@@ -152,6 +153,7 @@ class OnboardingSession(
         }
         applyKey(key, passphrase, network)
         held = kept // the copy on the phone is still there, so this save must be a Replace of it, not a Create
+        addressType = type // the same words of the same wallet, so the type the user chose stands
         persist()
     }
 
@@ -440,6 +442,7 @@ class OnboardingSession(
         this.network = network
         backupConfirmed = false
         imported = false
+        addressType = AddressType.NATIVE_SEGWIT
         held = Held.Nothing
     }
 

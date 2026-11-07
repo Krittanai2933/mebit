@@ -115,6 +115,28 @@ class AddressTypeChoiceTest {
         assertEquals(SaveState.NotSaved, session.saved)
     }
 
+    @Test
+    fun aReImportAfterAStagedChoiceStartsFromNativeSegwit() {
+        val store = FakeSecureStore()
+        val session = session(store)
+        session.restoreFromWords(PUBLIC_WORDS_24, "one", accepted = false)
+        session.chooseAddressType(AddressType.LEGACY)
+        session.restoreFromWords(PUBLIC_WORDS_24) // back to Import Seed and typed again, with no passphrase
+        assertEquals(AddressType.NATIVE_SEGWIT, session.addressType, "the preselected type is not Native SegWit")
+        assertEquals(AddressType.NATIVE_SEGWIT, store.savedCopy().addressType, "the saved copy took the earlier staged choice")
+    }
+
+    @Test
+    fun aPassphraseChangeAfterTheChoiceKeepsIt() {
+        val store = FakeSecureStore()
+        val session = session(store)
+        session.generateThisDevice()
+        session.chooseAddressType(AddressType.TAPROOT)
+        session.changeNewKeyPassphrase("a passphrase")
+        assertEquals(AddressType.TAPROOT, session.addressType, "the passphrase change dropped the choice")
+        assertEquals(AddressType.TAPROOT, store.savedCopy().addressType, "the saved copy dropped the choice")
+    }
+
     private fun session(store: FakeSecureStore) = OnboardingSession(
         SavedWallet(store),
         newKey = { p, _, _ -> key(p) },
