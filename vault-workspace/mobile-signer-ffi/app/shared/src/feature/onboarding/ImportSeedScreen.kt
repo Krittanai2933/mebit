@@ -110,7 +110,7 @@ import org.jetbrains.compose.resources.painterResource
 // Penpot Organize > 1B.1 to 1B.4.5. The card's geometry is in SeedPopover.kt, next to the popover rules that use it.
 private const val LAST_SLOT = 23
 
-private enum class ImportSheet { Passphrase, Fingerprint }
+private enum class ImportSheet { Passphrase }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -141,12 +141,8 @@ fun ImportSeedScreen(
 
     fun restore() {
         session.restoreFromWords(draft.words(), draft.passphrase)
-        when {
-            session.lastError != null -> Unit // shown under the grid
-            draft.passphrase.isEmpty() -> onRestored()
-            // A mistyped passphrase is still a valid one, so the fingerprint is the only check.
-            else -> sheet = ImportSheet.Fingerprint
-        }
+        // A passphrase import goes on staged: Address Type shows its fingerprint, the only check of a mistyped passphrase.
+        if (session.lastError == null) onRestored() // else shown under the grid
     }
 
     MebitScreen(
@@ -197,20 +193,6 @@ fun ImportSeedScreen(
                 sheet = null
             },
             onDismiss = { sheet = null },
-        )
-        ImportSheet.Fingerprint -> FingerprintSheet(
-            session = session,
-            copy = ImportFingerprintCopy,
-            onConfirm = {
-                session.acceptStagedKey()
-                sheet = null
-                // A save that lost a race to another wallet clears the session and says why under the grid, so there is nothing to continue with.
-                if (session.lastError == null) onRestored()
-            },
-            onReject = {
-                session.clear()
-                sheet = null
-            },
         )
         null -> Unit
     }

@@ -452,7 +452,7 @@ private val CreatePassphraseCopy = PassphraseCopy(
 )
 
 /** Penpot 1.5.4: a new wallet has nothing to compare with, so the user writes the fingerprint down. */
-private val CreateFingerprintCopy = FingerprintCopy(
+internal val CreateFingerprintCopy = FingerprintCopy(
     title = "จด fingerprint นี้ไว้",
     body = "ค่านี้มาจาก 24 คำกับ passphrase ของคุณ จดไว้คู่กับ 24 คำ ตอนกู้กระเป๋า ถ้าได้ค่าไม่ตรง แปลว่า passphrase หรือ 24 คำพิมพ์ผิด",
     ok = "จดแล้ว · ไปต่อ",
@@ -546,23 +546,6 @@ fun VerifyWordsScreen(
     val quiz = remember(session.words) { verifyQuestions(session.words) }
     val picks = remember(quiz) { mutableStateListOf<String?>().apply { repeat(quiz.size) { add(null) } } }
     var wrong by remember { mutableStateOf(false) }
-    // Penpot 1.5.4: a key with a passphrase from first setup shows its fingerprint to write down before the lock step.
-    var showFingerprint by remember { mutableStateOf(false) }
-    val done = { if (session.inFirstSetup && session.passphrase.isNotEmpty()) showFingerprint = true else onVerified() }
-    if (showFingerprint) {
-        FingerprintSheet(
-            session = session,
-            copy = CreateFingerprintCopy,
-            onConfirm = {
-                showFingerprint = false
-                onVerified()
-            },
-            onReject = {
-                showFingerprint = false
-                onBack?.invoke()
-            },
-        )
-    }
     MebitScreen(
         eyebrow = "BACKUP · ขั้น 2 / 3",
         title = "ยืนยันว่าจดถูก",
@@ -572,7 +555,7 @@ fun VerifyWordsScreen(
         tag = "screen_onboarding/verify-words",
         bottom = {
             if (quiz.isEmpty()) {
-                PrimaryCta("ต่อไป", "cta_skip_verify", done)
+                PrimaryCta("ต่อไป", "cta_skip_verify", onVerified)
             } else {
                 BottomActions(
                     primaryLabel = "ยืนยัน",
@@ -580,7 +563,7 @@ fun VerifyWordsScreen(
                     onPrimary = {
                         if (quiz.indices.all { picks[it] == quiz[it].answer }) {
                             session.markBackupConfirmed()
-                            done()
+                            onVerified()
                         } else {
                             wrong = true
                         }

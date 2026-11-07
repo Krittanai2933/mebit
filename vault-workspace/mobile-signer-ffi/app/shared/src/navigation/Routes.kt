@@ -42,6 +42,12 @@ enum class MovieRoute(
         "ยืนยันคำสำรอง",
         "เลือกคำตามลำดับให้ถูก",
     ),
+    AddressType(
+        "onboarding/address-type",
+        "ADDRESS TYPE",
+        "เลือกรูปแบบที่อยู่",
+        "กำหนดรูปแบบที่อยู่และเส้นทางกุญแจของกระเป๋านี้",
+    ),
     AppLock(
         "onboarding/app-lock",
         "APP LOCK",

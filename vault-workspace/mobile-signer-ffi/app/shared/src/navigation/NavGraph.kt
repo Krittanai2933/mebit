@@ -51,6 +51,7 @@ import com.mebit.app.feature.keys.T15KeyringEmptyScreen
 import com.mebit.app.feature.keys.T15UnverifiedFirstScreen
 import com.mebit.app.feature.keys.VerifyKeyScreen
 import com.mebit.app.feature.onboarding.AppLockScreen
+import com.mebit.app.feature.onboarding.AddressTypeScreen
 import com.mebit.app.feature.onboarding.BackupWordsScreen
 import com.mebit.app.feature.onboarding.HomeFirstRunScreen
 import com.mebit.app.feature.onboarding.HwBackupConfirmScreen
@@ -149,8 +150,17 @@ fun MebitNavHost(
     // After create or import comes App Lock on a phone with an owner check, else the Spending PIN, set before Home.
     fun lockStep() = navigate(if (biometrics.needsPin) MovieRoute.SpendingPin else MovieRoute.AppLock)
 
-    // A backup started from the Home banner returns there. The create flow goes on to the lock step.
-    fun afterBackup() = if (MovieRoute.HomeFirstRun in backStack) navigate(MovieRoute.HomeFirstRun) else lockStep()
+    // First setup picks the address type after the key is made or imported, then goes on to the lock step.
+    fun chooseAddressType() = navigate(MovieRoute.AddressType)
+
+    // Back to the latest [route] on the stack, dropping every screen above it.
+    fun backTo(route: MovieRoute) {
+        val at = backStack.lastIndexOf(route)
+        if (at >= 0) while (backStack.lastIndex > at) backStack.removeAt(backStack.lastIndex)
+    }
+
+    // A backup started from the Home banner returns there. The create flow goes on to the address type.
+    fun afterBackup() = if (MovieRoute.HomeFirstRun in backStack) navigate(MovieRoute.HomeFirstRun) else chooseAddressType()
 
     // Once onboarding is over the words open past the Spending PIN where it guards the session, and as before elsewhere.
     fun openWords() {
@@ -197,14 +207,14 @@ fun MebitNavHost(
         MovieRoute.ImportSeed -> ImportSeedScreen(
             session = session,
             // An import skips backup: the user typed the words from their own record.
-            onRestored = { lockStep() },
+            onRestored = { chooseAddressType() },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
         MovieRoute.KeyCreated -> KeyCreatedScreen(
             session = session,
             onBackup = { navigate(MovieRoute.BackupWords) },
-            onSkip = { lockStep() },
+            onSkip = { chooseAddressType() },
             onOpenCatalog = openCatalog,
         )
         MovieRoute.BackupWords -> BackupWordsScreen(
@@ -217,6 +227,15 @@ fun MebitNavHost(
         MovieRoute.VerifyWords -> VerifyWordsScreen(
             session = session,
             onVerified = { afterBackup() },
+            onBack = onBack,
+            onOpenCatalog = openCatalog,
+        )
+        MovieRoute.AddressType -> AddressTypeScreen(
+            session = session,
+            afterVerify = backStack.getOrNull(backStack.lastIndex - 1) == MovieRoute.VerifyWords,
+            onContinue = { lockStep() },
+            onEditPassphrase = { backTo(MovieRoute.BackupWords) },
+            onRejectImport = { backTo(MovieRoute.ImportSeed) },
             onBack = onBack,
             onOpenCatalog = openCatalog,
         )
