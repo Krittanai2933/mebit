@@ -1939,10 +1939,11 @@ fn signed_replacement(
                     .then(a.txid.cmp(&b.txid))
                     .then(a.vout.cmp(&b.vout))
             });
-            let mut more = more.into_iter();
-            let mut have = total;
             let change_floor = dust_floor(&change);
             let mut short = Short::Funds;
+            // The walk keeps every coin it adds. Only when that finds no bump does it walk again, setting
+            // aside each coin whose leftover passes 10,000 sat/vB for the next smaller one.
+            let (mut pending, mut skipping, mut have) = (more.iter(), false, total);
             loop {
                 let spends = vec![OWN_SPEND; selected.len()];
                 let (with, without) = (vsize(&spends, &scripts), vsize(&spends, &scripts[..1]));
@@ -1960,9 +1961,22 @@ fn signed_replacement(
                     // None is reported when even a change output could not be paid for.
                     Ok(Settle::Fold(dust)) => break (vec![destination.clone()], have, dust),
                     Ok(Settle::Fit(_)) => break (vec![destination.clone()], have, 0),
-                    Err(why) => short = short.max(why),
+                    Err(why) => {
+                        short = short.max(why);
+                        if skipping
+                            && matches!(why, Short::Limit { .. })
+                            && selected.len() > spent.len()
+                        {
+                            have -= selected.pop().map_or(0, |(utxo, _)| utxo.value);
+                        }
+                    }
                 }
-                let Some((utxo, owner)) = more.next() else {
+                let Some((utxo, owner)) = pending.next() else {
+                    if !skipping {
+                        (pending, skipping, have) = (more.iter(), true, total);
+                        selected.truncate(spent.len());
+                        continue;
+                    }
                     // A payment with no change (a send all, or change that went into the fee) whose
                     // amount no coin can keep takes the new fee from the amount, from its own coins only.
                     if earlier.output.len() == 1 {
@@ -4992,6 +5006,62 @@ mod tests {
             );
             assert_replaces(&fake, &earlier, &bump.tx);
         }
+    }
+
+    // The round-3 review's repros. The bump walk kept the largest spare coin, so near the limit it pushed what
+    // is left past 10,000 sat/vB, change at its floor paid less than rule 6 asks, and the bump was refused or cut,
+    // while the next smaller coin alone paid at the rate asked. Once the walk as it was finds no bump, it walks
+    // again without each coin that passes the limit, so every bump it signed is still signed the same.
+    #[test]
+    fn a_fee_bump_skips_a_spare_coin_that_passes_the_limit_for_a_smaller_one_that_pays() {
+        // A payment of 100,000 with change 294 at 9,000 sat/vB, 1,269,000 on 141 vB.
+        let mut alone = Fake::new();
+        alone.fund(&addr(Chain::External, 0), 1_369_294, '1');
+        let earlier = alone.send(SOMEONE, 100_000, 9_000).unwrap();
+        assert_outputs(
+            &earlier,
+            &[(SOMEONE, 100_000), (&addr(Chain::Internal, 0), 294)],
+        );
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 1_369_294, '1');
+        fake.fund(&addr(Chain::External, 1), 560_000, '2');
+        fake.fund(&addr(Chain::External, 2), 500_000, '3');
+        let hex = serialize_hex(&earlier);
+        // At 9,900 the 560,000 coin leaves 1,829,294 on 178 vB and change at its floor is under rule 6 on 209 vB.
+        let bump = fake.replacement(&hex, 9_900, Replacement::FeeBump).unwrap();
+        assert_eq!(inputs_of(&bump.tx)[1].txid.to_string(), id('3'));
+        assert_outputs(&bump.tx, &[(SOMEONE, 100_000)]);
+        assert_eq!(
+            (bump.fee_sats, bump.amount_cut_sats, bump.tx.vsize()),
+            (1_769_294, 0, 178)
+        );
+        assert_replaces(&fake, &earlier, &bump.tx);
+        // At 9,001, rule 6's least, the walk as it was signs with both spare coins on 246 vB, and still does.
+        let (kept, fee) = fake.replace(&earlier, 9_000, Replacement::FeeBump).unwrap();
+        assert_eq!((kept.input.len(), fee, kept.vsize()), (3, 2_329_294, 246));
+        assert_outputs(&kept, &[(SOMEONE, 100_000)]);
+        assert_replaces(&fake, &earlier, &kept);
+
+        // A send all of 922,000 at 9,800 sat/vB, 1,078,000 on 110 vB, was cut by 11,000 with spare coins of 800,000
+        // and 690,000. The 690,000 coin alone keeps the amount.
+        let mut alone = Fake::new();
+        alone.fund(&addr(Chain::External, 0), 2_000_000, '1');
+        let (earlier, _) = alone.send_all_at(SOMEONE, 9_800).unwrap();
+        assert_outputs(&earlier, &[(SOMEONE, 922_000)]);
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 2_000_000, '1');
+        fake.fund(&addr(Chain::External, 1), 800_000, '2');
+        fake.fund(&addr(Chain::External, 2), 690_000, '3');
+        let bump = fake
+            .replacement(&serialize_hex(&earlier), 9_900, Replacement::FeeBump)
+            .unwrap();
+        assert_eq!(inputs_of(&bump.tx)[1].txid.to_string(), id('3'));
+        assert_outputs(&bump.tx, &[(SOMEONE, 922_000)]);
+        assert_eq!(
+            (bump.fee_sats, bump.amount_cut_sats, bump.tx.vsize()),
+            (1_768_000, 0, 178)
+        );
+        assert_replaces(&fake, &earlier, &bump.tx);
     }
 
     #[test]
