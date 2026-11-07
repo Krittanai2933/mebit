@@ -7,6 +7,7 @@ import com.mebit.app.EraseResult
 import com.mebit.app.StoreVersion
 import com.mebit.app.Why
 import com.mebit.app.WriteMode
+import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
 import com.mebit.ffi.signer.generateSoftwareMultisigKey
@@ -58,6 +59,10 @@ class OnboardingSession(
     var inFirstSetup: Boolean by mutableStateOf(false)
         private set
     var lastError: String? by mutableStateOf(null)
+        private set
+
+    /** How the hot wallet's addresses look. Native SegWit, the type of every wallet saved before the choice existed. */
+    var addressType: AddressType by mutableStateOf(AddressType.NATIVE_SEGWIT)
         private set
 
     /** The network the key was made for, saved with it. */

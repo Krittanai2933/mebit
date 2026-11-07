@@ -578,26 +578,26 @@ private class Guarded(val guards: FakePlainFile = FakePlainFile()) {
         payments = PendingPayments(guards),
     ).apply { restoreFromWords(PUBLIC_WORDS_24) }
     val wallet = SingleSigWallet(
-        prepareAtRate = { _, _, _, _, amount, _ ->
+        prepareAtRate = { _, _, _, _, _, amount, _ ->
             if (payments++ == 0) PreparedSend(SIGNED_TXID, SIGNED_HEX, 1_128uL, 100_000uL) else PreparedSend(OTHER_SIGNED_TXID, OTHER_SIGNED_HEX, 1_128uL, amount)
         },
-        prepareAll = { _, _, _, _, _ -> error("not used") },
+        prepareAll = { _, _, _, _, _, _ -> error("not used") },
         postHex = { _, _, txid ->
             posts += txid
             answer(txid)
         },
-        snapshot = { _, _, _ -> HotWalletSnapshot("tb1qreceive", 1_000_000uL, 1_000_000uL, KeyNetwork.TEST, HotScan.COMPLETE) },
-        fetchHistory = { _, _, _ ->
+        snapshot = { _, _, _, _ -> HotWalletSnapshot("tb1qreceive", 1_000_000uL, 1_000_000uL, KeyNetwork.TEST, HotScan.COMPLETE) },
+        fetchHistory = { _, _, _, _ ->
             onHistory()
             history
         },
         nowSeconds = { clock },
-        receiveAddressOf = { _, _, _, _ -> "tb1qoffline" },
-        bumpAtRate = { _, _, _, hex, _ ->
+        receiveAddressOf = { _, _, _, _, _ -> "tb1qoffline" },
+        bumpAtRate = { _, _, _, _, hex, _ ->
             core += Replacement.FeeBump to hex
             sign(Replacement.FeeBump)
         },
-        cancelAtRate = { _, _, _, hex, _ ->
+        cancelAtRate = { _, _, _, _, hex, _ ->
             core += Replacement.Cancel to hex
             sign(Replacement.Cancel)
         },

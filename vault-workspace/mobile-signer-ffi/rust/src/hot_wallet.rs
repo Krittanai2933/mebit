@@ -1,4 +1,5 @@
-//! Single-sig hot wallet (free BTC). BIP-84 P2WPKH on the account key.
+//! Single-sig hot wallet (free BTC) on one key account of the `AddressType` the user picked, BIP-84
+//! P2WPKH unless they picked another.
 //!
 //! Shape matches the BDK hot-wallet half described in `mobile-signer-ffi/README.md`.
 //! Address/UTXO/sign/broadcast are real against testnet Esplora; full `bdk_wallet`
@@ -143,6 +144,13 @@ impl Account {
         network: Network,
         address_type: AddressType,
     ) -> Result<Self, MobileSignerError> {
+        // shortcut: proof.rs anchors mainnet use at segwit's activation, which a Legacy or Nested
+        // address predates; take the other types on mainnet once that anchor is reviewed per type.
+        if network == Network::Bitcoin && address_type != AddressType::NativeSegwit {
+            return Err(MobileSignerError::InvalidPsbtJson(format!(
+                "{address_type:?} is not enabled on mainnet in this build"
+            )));
+        }
         let bad = |e: bitcoin::bip32::Error| MobileSignerError::InvalidPsbtJson(e.to_string());
         let mnemonic = mnemonic_from(words)?;
         let secp = Secp256k1::new();
@@ -659,21 +667,22 @@ fn refresh(
 
 // The `///` text on each export stays as committed: UniFFI hashes it into the checksum the committed
 // Kotlin bindings pin. What each call does now is on the inner function it hands over to.
-/// First receive address at BIP-84 index `index` (usually 0). `passphrase` is the
+/// Receive address `index` (usually 0) of `address_type`'s account. `passphrase` is the
 /// BIP-39 passphrase the key was restored with, empty for none: a different
-/// passphrase is a different wallet.
+/// passphrase is a different wallet. Mainnet takes Native SegWit only.
 #[uniffi::export]
 pub fn hot_receive_address(
     mnemonic_words: Vec<String>,
     passphrase: String,
     network: KeyNetwork,
+    address_type: AddressType,
     index: u32,
 ) -> Result<String, MobileSignerError> {
     let account = Account::new(
         &mnemonic_words,
         &passphrase,
         network_of(network),
-        AddressType::NativeSegwit,
+        address_type,
     )?;
     Ok(account.key(Chain::External, index)?.address.to_string())
 }
@@ -684,13 +693,14 @@ pub fn hot_wallet_snapshot(
     mnemonic_words: Vec<String>,
     passphrase: String,
     network: KeyNetwork,
+    address_type: AddressType,
 ) -> Result<HotWalletSnapshot, MobileSignerError> {
     snapshot_from(
         &EsploraSource(&testnet4()),
         &mnemonic_words,
         &passphrase,
         network,
-        AddressType::NativeSegwit,
+        address_type,
         &SystemTime::now,
         &SCAN_STORE,
     )
@@ -781,13 +791,14 @@ pub fn hot_wallet_history(
     mnemonic_words: Vec<String>,
     passphrase: String,
     network: KeyNetwork,
+    address_type: AddressType,
 ) -> Result<Vec<HotTx>, MobileSignerError> {
     history_of(
         &EsploraSource(&testnet4()),
         &mnemonic_words,
         &passphrase,
         network,
-        AddressType::NativeSegwit,
+        address_type,
         &SystemTime::now,
         &SCAN_STORE,
     )
@@ -935,6 +946,7 @@ pub fn hot_tx_detail(
     mnemonic_words: Vec<String>,
     passphrase: String,
     network: KeyNetwork,
+    address_type: AddressType,
     txid: String,
 ) -> Result<Option<HotTxDetail>, MobileSignerError> {
     detail_of(
@@ -942,7 +954,7 @@ pub fn hot_tx_detail(
         &mnemonic_words,
         &passphrase,
         network,
-        AddressType::NativeSegwit,
+        address_type,
         &txid,
         &SCAN_STORE,
     )
@@ -1152,6 +1164,7 @@ pub fn hot_prepare_send_at_rate(
     mnemonic_words: Vec<String>,
     passphrase: String,
     network: KeyNetwork,
+    address_type: AddressType,
     destination: String,
     amount_sats: u64,
     fee_rate_sat_vb: u64,
@@ -1161,7 +1174,7 @@ pub fn hot_prepare_send_at_rate(
         &mnemonic_words,
         &passphrase,
         network,
-        AddressType::NativeSegwit,
+        address_type,
         &destination,
         amount_sats,
         fee_rate_sat_vb,
@@ -1206,6 +1219,7 @@ pub fn hot_prepare_send_all(
     mnemonic_words: Vec<String>,
     passphrase: String,
     network: KeyNetwork,
+    address_type: AddressType,
     destination: String,
     fee_rate_sat_vb: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
@@ -1214,7 +1228,7 @@ pub fn hot_prepare_send_all(
         &mnemonic_words,
         &passphrase,
         network,
-        AddressType::NativeSegwit,
+        address_type,
         &destination,
         fee_rate_sat_vb,
         &SystemTime::now,
@@ -1816,6 +1830,7 @@ pub fn hot_prepare_fee_bump(
     mnemonic_words: Vec<String>,
     passphrase: String,
     network: KeyNetwork,
+    address_type: AddressType,
     earlier_hex: String,
     fee_rate_sat_vb: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
@@ -1824,7 +1839,7 @@ pub fn hot_prepare_fee_bump(
         &mnemonic_words,
         &passphrase,
         network,
-        AddressType::NativeSegwit,
+        address_type,
         &earlier_hex,
         fee_rate_sat_vb,
         Replacement::FeeBump,
@@ -1844,6 +1859,7 @@ pub fn hot_prepare_cancel(
     mnemonic_words: Vec<String>,
     passphrase: String,
     network: KeyNetwork,
+    address_type: AddressType,
     earlier_hex: String,
     fee_rate_sat_vb: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
@@ -1852,7 +1868,7 @@ pub fn hot_prepare_cancel(
         &mnemonic_words,
         &passphrase,
         network,
-        AddressType::NativeSegwit,
+        address_type,
         &earlier_hex,
         fee_rate_sat_vb,
         Replacement::Cancel,
@@ -2424,6 +2440,7 @@ mod tests {
                     abandon_about(),
                     passphrase.into(),
                     KeyNetwork::Test,
+                    AddressType::NativeSegwit,
                     index,
                 );
                 assert_eq!(public.unwrap(), expected, "{passphrase:?} 0/{index}");
@@ -2433,7 +2450,14 @@ mod tests {
 
     #[test]
     fn address_check_matches_what_hot_prepare_send_accepts() {
-        let own = hot_receive_address(abandon_about(), String::new(), KeyNetwork::Test, 0).unwrap();
+        let own = hot_receive_address(
+            abandon_about(),
+            String::new(),
+            KeyNetwork::Test,
+            AddressType::NativeSegwit,
+            0,
+        )
+        .unwrap();
         assert!(is_valid_address(own.clone(), KeyNetwork::Test));
         assert!(
             !is_valid_address(own, KeyNetwork::Main),
@@ -2453,10 +2477,30 @@ mod tests {
 
     #[test]
     fn a_different_passphrase_is_a_different_wallet() {
-        let a = hot_receive_address(abandon_about(), "a".into(), KeyNetwork::Test, 0).unwrap();
-        let b = hot_receive_address(abandon_about(), "b".into(), KeyNetwork::Test, 0).unwrap();
-        let none =
-            hot_receive_address(abandon_about(), String::new(), KeyNetwork::Test, 0).unwrap();
+        let a = hot_receive_address(
+            abandon_about(),
+            "a".into(),
+            KeyNetwork::Test,
+            AddressType::NativeSegwit,
+            0,
+        )
+        .unwrap();
+        let b = hot_receive_address(
+            abandon_about(),
+            "b".into(),
+            KeyNetwork::Test,
+            AddressType::NativeSegwit,
+            0,
+        )
+        .unwrap();
+        let none = hot_receive_address(
+            abandon_about(),
+            String::new(),
+            KeyNetwork::Test,
+            AddressType::NativeSegwit,
+            0,
+        )
+        .unwrap();
         assert!(a != b && a != none && b != none);
     }
 
@@ -8876,6 +8920,36 @@ mod tests {
     ];
 
     #[test]
+    fn mainnet_refuses_every_type_but_native_segwit() {
+        for address_type in AddressType::ALL {
+            let main = hot_receive_address(
+                abandon_about(),
+                String::new(),
+                KeyNetwork::Main,
+                address_type,
+                0,
+            );
+            match address_type {
+                AddressType::NativeSegwit => assert!(main.unwrap().starts_with("bc1q")),
+                _ => assert!(
+                    matches!(&main, Err(MobileSignerError::InvalidPsbtJson(m)) if m.contains("mainnet")),
+                    "{address_type:?}: {main:?}"
+                ),
+            }
+            assert!(
+                hot_receive_address(
+                    abandon_about(),
+                    String::new(),
+                    KeyNetwork::Test,
+                    address_type,
+                    0
+                )
+                .is_ok()
+            );
+        }
+    }
+
+    #[test]
     fn addresses_of_each_type_match_an_independent_derivation() {
         for &(address_type, passphrase, chain, index, expected) in TYPE_VECTORS {
             let account = Account::new(
@@ -9321,7 +9395,14 @@ mod tests {
         words.push("art".into());
         // Receive index 0, derived outside this crate (stdlib PBKDF2 + BIP-32 + bech32).
         assert_eq!(
-            hot_receive_address(words.clone(), String::new(), KeyNetwork::Test, 0).unwrap(),
+            hot_receive_address(
+                words.clone(),
+                String::new(),
+                KeyNetwork::Test,
+                AddressType::NativeSegwit,
+                0
+            )
+            .unwrap(),
             "tb1qtk89me2ae95dmlp3yfl4q9ynpux8mxjujuf2fr"
         );
         let asked = Mutex::new(Vec::new());

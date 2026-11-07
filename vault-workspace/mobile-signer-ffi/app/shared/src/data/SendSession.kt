@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
+import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.FeeTiers
 import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotSendResult
@@ -29,23 +30,23 @@ import kotlin.time.Clock
 
 /**
  * Single-sig hot wallet surface for Movie Page S*.
- * Live path uses BIP-84 + Esplora (hot_* UniFFI). Demo path keeps offline fixtures.
+ * Live path uses the session's address type + Esplora (hot_* UniFFI). Demo path keeps offline fixtures.
  *
  * [prepareAtRate], [prepareAll], [postHex], [snapshot], [fetchHistory], [receiveAddressOf], [fetchFeeTiers], [fetchDetail], [bumpAtRate] and [cancelAtRate] are the hot_* calls. Tests pass fakes, so they need no native library or network.
  * [nowSeconds] is the phone clock in Unix seconds, which [lastSentAtSeconds] reads when a payment goes out.
  */
 class SingleSigWallet(
-    private val prepareAtRate: (words: List<String>, passphrase: String, network: KeyNetwork, destination: String, amountSats: ULong, feeRateSatVb: ULong) -> PreparedSend = ::hotPrepareSendAtRate,
-    private val prepareAll: (words: List<String>, passphrase: String, network: KeyNetwork, destination: String, feeRateSatVb: ULong) -> PreparedSend = ::hotPrepareSendAll,
+    private val prepareAtRate: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType, destination: String, amountSats: ULong, feeRateSatVb: ULong) -> PreparedSend = ::hotPrepareSendAtRate,
+    private val prepareAll: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType, destination: String, feeRateSatVb: ULong) -> PreparedSend = ::hotPrepareSendAll,
     private val postHex: (network: KeyNetwork, hex: String, txid: String) -> HotSendResult = ::hotBroadcast,
-    private val snapshot: (words: List<String>, passphrase: String, network: KeyNetwork) -> HotWalletSnapshot = ::hotWalletSnapshot,
-    private val fetchHistory: (words: List<String>, passphrase: String, network: KeyNetwork) -> List<HotTx> = ::hotWalletHistory,
+    private val snapshot: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType) -> HotWalletSnapshot = ::hotWalletSnapshot,
+    private val fetchHistory: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType) -> List<HotTx> = ::hotWalletHistory,
     private val nowSeconds: () -> Long = { Clock.System.now().epochSeconds },
-    private val receiveAddressOf: (words: List<String>, passphrase: String, network: KeyNetwork, index: UInt) -> String = ::hotReceiveAddress,
+    private val receiveAddressOf: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType, index: UInt) -> String = ::hotReceiveAddress,
     private val fetchFeeTiers: (network: KeyNetwork) -> FeeTiers = ::hotFeeTiers,
-    private val fetchDetail: (words: List<String>, passphrase: String, network: KeyNetwork, txid: String) -> HotTxDetail? = ::hotTxDetail,
-    private val bumpAtRate: (words: List<String>, passphrase: String, network: KeyNetwork, earlierHex: String, feeRateSatVb: ULong) -> PreparedSend = ::hotPrepareFeeBump,
-    private val cancelAtRate: (words: List<String>, passphrase: String, network: KeyNetwork, earlierHex: String, feeRateSatVb: ULong) -> PreparedSend = ::hotPrepareCancel,
+    private val fetchDetail: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType, txid: String) -> HotTxDetail? = ::hotTxDetail,
+    private val bumpAtRate: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType, earlierHex: String, feeRateSatVb: ULong) -> PreparedSend = ::hotPrepareFeeBump,
+    private val cancelAtRate: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType, earlierHex: String, feeRateSatVb: ULong) -> PreparedSend = ::hotPrepareCancel,
 ) {
     /** What the wallet is. A real key is only ever [Live] or [Unavailable], so a real wallet never looks like the demo. */
     enum class WalletMode {
@@ -179,7 +180,7 @@ class SingleSigWallet(
         // A wallet with no guard of its own takes the one the phone keeps for this key, which a run before a restart or another instance wrote.
         if (unconfirmedSend == null) unconfirmedSend = session.unconfirmedSend()
         try {
-            val snap = snapshot(session.words, session.passphrase, network)
+            val snap = snapshot(session.words, session.passphrase, network, session.addressType)
             show(snap) {
                 mode = WalletMode.Live
                 lastError = scanErrorThai(snap.scan)
@@ -188,7 +189,7 @@ class SingleSigWallet(
             val judged = unconfirmedSend as? UnconfirmedSend
             // A history failure is not the wallet's, so its own try keeps it from changing the mode or reaching lastError.
             val loaded = try {
-                fetchHistory(session.words, session.passphrase, network)
+                fetchHistory(session.words, session.passphrase, network, session.addressType)
             } catch (e: Exception) {
                 lastFailure = "history: ${e.message ?: e}"
                 null
@@ -206,7 +207,7 @@ class SingleSigWallet(
             history = emptyList()
             // The address needs only the key, so the wallet keeps its own address, never the demo's, while the chain is out of reach.
             receiveAddress = try {
-                receiveAddressOf(session.words, session.passphrase, network, 0u)
+                receiveAddressOf(session.words, session.passphrase, network, session.addressType, 0u)
             } catch (_: Exception) {
                 ""
             }
@@ -240,7 +241,7 @@ class SingleSigWallet(
     fun detail(session: OnboardingSession, txid: String, network: KeyNetwork = KeyNetwork.TEST): TxDetailLoad.Done {
         if (session.words.size < 12) return TxDetailLoad.RowOnly
         return try {
-            fetchDetail(session.words, session.passphrase, network, txid)?.let { TxDetailLoad.Loaded(it) } ?: TxDetailLoad.NotFound
+            fetchDetail(session.words, session.passphrase, network, session.addressType, txid)?.let { TxDetailLoad.Loaded(it) } ?: TxDetailLoad.NotFound
         } catch (e: Exception) {
             TxDetailLoad.Failed(e.message ?: e.toString())
         }
@@ -291,9 +292,9 @@ class SingleSigWallet(
         }
         val prepared = try {
             if (sendAll) {
-                prepareAll(session.words, session.passphrase, network, destination, feeRateSatVb.toULong())
+                prepareAll(session.words, session.passphrase, network, session.addressType, destination, feeRateSatVb.toULong())
             } else {
-                prepareAtRate(session.words, session.passphrase, network, destination, amountSats.toULong(), feeRateSatVb.toULong())
+                prepareAtRate(session.words, session.passphrase, network, session.addressType, destination, amountSats.toULong(), feeRateSatVb.toULong())
             }
         } catch (e: Exception) {
             lastError = sendErrorThai(e.message)
@@ -369,7 +370,7 @@ class SingleSigWallet(
         lastSentAtSeconds = nowSeconds()
         // Its own try: the payment is out once the post returns, and reading it as failed invites a retry that pays twice.
         try {
-            show(snapshot(session.words, session.passphrase, network))
+            show(snapshot(session.words, session.passphrase, network, session.addressType))
         } catch (e: Exception) {
         }
         return true
@@ -446,7 +447,7 @@ class SingleSigWallet(
             Replacement.Cancel -> cancelAtRate
         }
         val prepared = try {
-            sign(session.words, session.passphrase, network, hex, feeRateSatVb.toULong())
+            sign(session.words, session.passphrase, network, session.addressType, hex, feeRateSatVb.toULong())
         } catch (e: Exception) {
             lastError = sendErrorThai(e.message)
             return false

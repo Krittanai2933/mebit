@@ -16,9 +16,10 @@ use bitcoin::{
 use crate::MobileSignerError;
 use crate::hot_wallet::{OwnKey, full_size};
 
-/// One wallet has one type for life: every key of an account carries the account's type, so no
-/// transaction mixes two. The default is the type every wallet saved before this setting had.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// How the hot wallet's addresses look. One wallet has one type for life: every key of an account
+/// carries the account's type, so no transaction mixes two. The default is the type every wallet
+/// saved before this setting had.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum AddressType {
     /// BIP-44 P2PKH. The signature and the key go in the script_sig, over the legacy sighash.
     Legacy,
@@ -137,7 +138,7 @@ impl AddressType {
                     .map_err(|e| bad(e.to_string()))?;
                 let keypair = Keypair::from_secret_key(secp, &key.privkey.inner)
                     .tap_tweak(secp, None)
-                    .to_inner();
+                    .to_keypair();
                 // No aux randomness, so the same payment signs the same bytes, as RFC 6979 does for ECDSA.
                 let sig = secp.sign_schnorr_no_aux_rand(
                     &Message::from_digest(sighash.to_byte_array()),
@@ -210,7 +211,7 @@ impl AddressType {
                         .verify_schnorr(
                             &sig,
                             &Message::from_digest(sighash.to_byte_array()),
-                            &output_key.to_inner(),
+                            &output_key.to_x_only_public_key(),
                         )
                         .is_ok())
             }

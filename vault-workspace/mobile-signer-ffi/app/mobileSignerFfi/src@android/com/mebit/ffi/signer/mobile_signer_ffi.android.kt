@@ -1134,31 +1134,31 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_hot_forget_scan_state() != 8205.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_cancel() != 64952.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_cancel() != 21487.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_fee_bump() != 50935.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_fee_bump() != 12978.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_all() != 35787.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_all() != 64839.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate() != 10572.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate() != 39001.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_receive_address() != 37856.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_receive_address() != 35083.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_tx_detail() != 42863.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_tx_detail() != 25710.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_use_state_dir() != 46375.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_wallet_history() != 12433.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_wallet_history() != 50495.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_wallet_snapshot() != 48081.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_wallet_snapshot() != 59318.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_is_valid_address() != 44198.toShort()) {
@@ -1450,6 +1450,7 @@ internal object UniffiLib : Library {
         `mnemonicWords`: RustBufferByValue,
         `passphrase`: RustBufferByValue,
         `network`: RustBufferByValue,
+        `addressType`: RustBufferByValue,
         `earlierHex`: RustBufferByValue,
         `feeRateSatVb`: Long,
         uniffiCallStatus: UniffiRustCallStatus,
@@ -1459,6 +1460,7 @@ internal object UniffiLib : Library {
         `mnemonicWords`: RustBufferByValue,
         `passphrase`: RustBufferByValue,
         `network`: RustBufferByValue,
+        `addressType`: RustBufferByValue,
         `earlierHex`: RustBufferByValue,
         `feeRateSatVb`: Long,
         uniffiCallStatus: UniffiRustCallStatus,
@@ -1468,6 +1470,7 @@ internal object UniffiLib : Library {
         `mnemonicWords`: RustBufferByValue,
         `passphrase`: RustBufferByValue,
         `network`: RustBufferByValue,
+        `addressType`: RustBufferByValue,
         `destination`: RustBufferByValue,
         `feeRateSatVb`: Long,
         uniffiCallStatus: UniffiRustCallStatus,
@@ -1477,6 +1480,7 @@ internal object UniffiLib : Library {
         `mnemonicWords`: RustBufferByValue,
         `passphrase`: RustBufferByValue,
         `network`: RustBufferByValue,
+        `addressType`: RustBufferByValue,
         `destination`: RustBufferByValue,
         `amountSats`: Long,
         `feeRateSatVb`: Long,
@@ -1487,6 +1491,7 @@ internal object UniffiLib : Library {
         `mnemonicWords`: RustBufferByValue,
         `passphrase`: RustBufferByValue,
         `network`: RustBufferByValue,
+        `addressType`: RustBufferByValue,
         `index`: Int,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
@@ -1495,6 +1500,7 @@ internal object UniffiLib : Library {
         `mnemonicWords`: RustBufferByValue,
         `passphrase`: RustBufferByValue,
         `network`: RustBufferByValue,
+        `addressType`: RustBufferByValue,
         `txid`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
@@ -1508,6 +1514,7 @@ internal object UniffiLib : Library {
         `mnemonicWords`: RustBufferByValue,
         `passphrase`: RustBufferByValue,
         `network`: RustBufferByValue,
+        `addressType`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     @JvmStatic
@@ -1515,6 +1522,7 @@ internal object UniffiLib : Library {
         `mnemonicWords`: RustBufferByValue,
         `passphrase`: RustBufferByValue,
         `network`: RustBufferByValue,
+        `addressType`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     @JvmStatic
@@ -2968,6 +2976,24 @@ public object FfiConverterTypeWalletInfo: FfiConverterRustBuffer<WalletInfo> {
 
 
 
+
+public object FfiConverterTypeAddressType: FfiConverterRustBuffer<AddressType> {
+    override fun read(buf: ByteBuffer): AddressType = try {
+        AddressType.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: AddressType): ULong = 4UL
+
+    override fun write(value: AddressType, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
 public object BleExceptionErrorHandler : UniffiRustCallStatusErrorHandler<BleException> {
     override fun lift(errorBuf: RustBufferByValue): BleException = FfiConverterTypeBleError.lift(errorBuf)
 }
@@ -3738,12 +3764,13 @@ public actual fun `hotForgetScanState`() {
  * `hot_prepare_fee_bump`, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
-public actual fun `hotPrepareCancel`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `earlierHex`: kotlin.String, `feeRateSatVb`: kotlin.ULong): PreparedSend {
+public actual fun `hotPrepareCancel`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType, `earlierHex`: kotlin.String, `feeRateSatVb`: kotlin.ULong): PreparedSend {
     return FfiConverterTypePreparedSend.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_prepare_cancel(
             FfiConverterSequenceString.lower(`mnemonicWords`),
             FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterTypeAddressType.lower(`addressType`),
             FfiConverterString.lower(`earlierHex`),
             FfiConverterULong.lower(`feeRateSatVb`),
             uniffiRustCallStatus,
@@ -3775,12 +3802,13 @@ public actual fun `hotPrepareCancel`(`mnemonicWords`: List<kotlin.String>, `pass
  * (`insufficient funds:`). The same scan as `hot_prepare_send_at_rate`, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
-public actual fun `hotPrepareFeeBump`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `earlierHex`: kotlin.String, `feeRateSatVb`: kotlin.ULong): PreparedSend {
+public actual fun `hotPrepareFeeBump`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType, `earlierHex`: kotlin.String, `feeRateSatVb`: kotlin.ULong): PreparedSend {
     return FfiConverterTypePreparedSend.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_prepare_fee_bump(
             FfiConverterSequenceString.lower(`mnemonicWords`),
             FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterTypeAddressType.lower(`addressType`),
             FfiConverterString.lower(`earlierHex`),
             FfiConverterULong.lower(`feeRateSatVb`),
             uniffiRustCallStatus,
@@ -3800,12 +3828,13 @@ public actual fun `hotPrepareFeeBump`(`mnemonicWords`: List<kotlin.String>, `pas
  * `hot_prepare_send_at_rate`, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
-public actual fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `feeRateSatVb`: kotlin.ULong): PreparedSend {
+public actual fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType, `destination`: kotlin.String, `feeRateSatVb`: kotlin.ULong): PreparedSend {
     return FfiConverterTypePreparedSend.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_prepare_send_all(
             FfiConverterSequenceString.lower(`mnemonicWords`),
             FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterTypeAddressType.lower(`addressType`),
             FfiConverterString.lower(`destination`),
             FfiConverterULong.lower(`feeRateSatVb`),
             uniffiRustCallStatus,
@@ -3839,12 +3868,13 @@ public actual fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `pas
  * so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
-public actual fun `hotPrepareSendAtRate`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeRateSatVb`: kotlin.ULong): PreparedSend {
+public actual fun `hotPrepareSendAtRate`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeRateSatVb`: kotlin.ULong): PreparedSend {
     return FfiConverterTypePreparedSend.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_prepare_send_at_rate(
             FfiConverterSequenceString.lower(`mnemonicWords`),
             FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterTypeAddressType.lower(`addressType`),
             FfiConverterString.lower(`destination`),
             FfiConverterULong.lower(`amountSats`),
             FfiConverterULong.lower(`feeRateSatVb`),
@@ -3854,17 +3884,18 @@ public actual fun `hotPrepareSendAtRate`(`mnemonicWords`: List<kotlin.String>, `
 }
 
 /**
- * First receive address at BIP-84 index `index` (usually 0). `passphrase` is the
+ * Receive address `index` (usually 0) of `address_type`'s account. `passphrase` is the
  * BIP-39 passphrase the key was restored with, empty for none: a different
- * passphrase is a different wallet.
+ * passphrase is a different wallet. Mainnet takes Native SegWit only.
  */
 @Throws(MobileSignerException::class)
-public actual fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `index`: kotlin.UInt): kotlin.String {
+public actual fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType, `index`: kotlin.UInt): kotlin.String {
     return FfiConverterString.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_receive_address(
             FfiConverterSequenceString.lower(`mnemonicWords`),
             FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterTypeAddressType.lower(`addressType`),
             FfiConverterUInt.lower(`index`),
             uniffiRustCallStatus,
         )
@@ -3875,12 +3906,13 @@ public actual fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `pas
  * One transaction of the wallet in full, or None when the explorer does not know `txid`.
  */
 @Throws(MobileSignerException::class)
-public actual fun `hotTxDetail`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `txid`: kotlin.String): HotTxDetail? {
+public actual fun `hotTxDetail`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType, `txid`: kotlin.String): HotTxDetail? {
     return FfiConverterOptionalTypeHotTxDetail.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_tx_detail(
             FfiConverterSequenceString.lower(`mnemonicWords`),
             FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterTypeAddressType.lower(`addressType`),
             FfiConverterString.lower(`txid`),
             uniffiRustCallStatus,
         )
@@ -3909,12 +3941,13 @@ public actual fun `hotUseStateDir`(`dir`: kotlin.String) {
  * whole call, never one transaction.
  */
 @Throws(MobileSignerException::class)
-public actual fun `hotWalletHistory`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork): List<HotTx> {
+public actual fun `hotWalletHistory`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType): List<HotTx> {
     return FfiConverterSequenceTypeHotTx.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_wallet_history(
             FfiConverterSequenceString.lower(`mnemonicWords`),
             FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterTypeAddressType.lower(`addressType`),
             uniffiRustCallStatus,
         )
     })
@@ -3924,12 +3957,13 @@ public actual fun `hotWalletHistory`(`mnemonicWords`: List<kotlin.String>, `pass
  * Confirmed + mempool balance for receive index 0 via Esplora.
  */
 @Throws(MobileSignerException::class)
-public actual fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork): HotWalletSnapshot {
+public actual fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType): HotWalletSnapshot {
     return FfiConverterTypeHotWalletSnapshot.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_wallet_snapshot(
             FfiConverterSequenceString.lower(`mnemonicWords`),
             FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterTypeAddressType.lower(`addressType`),
             uniffiRustCallStatus,
         )
     })

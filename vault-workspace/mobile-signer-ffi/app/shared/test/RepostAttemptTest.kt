@@ -333,16 +333,16 @@ private class LostAnswer {
         payments = PendingPayments(FakePlainFile()),
     ).apply { restoreFromWords(PUBLIC_WORDS_24) }
     val wallet = SingleSigWallet(
-        prepareAtRate = { _, _, _, _, _, _ -> PreparedSend(SIGNED_TXID, SIGNED_HEX, 1_128uL, 100_000uL) },
-        prepareAll = { _, _, _, _, _ -> error("not used") },
+        prepareAtRate = { _, _, _, _, _, _, _ -> PreparedSend(SIGNED_TXID, SIGNED_HEX, 1_128uL, 100_000uL) },
+        prepareAll = { _, _, _, _, _, _ -> error("not used") },
         postHex = { _, _, txid ->
             posts += txid
             answer(txid)
         },
-        snapshot = { _, _, _ -> HotWalletSnapshot("tb1qreceive", 1_000_000uL, 1_000_000uL, KeyNetwork.TEST, HotScan.COMPLETE) },
-        fetchHistory = { _, _, _ -> emptyList() },
+        snapshot = { _, _, _, _ -> HotWalletSnapshot("tb1qreceive", 1_000_000uL, 1_000_000uL, KeyNetwork.TEST, HotScan.COMPLETE) },
+        fetchHistory = { _, _, _, _ -> emptyList() },
         nowSeconds = { 1_792_740_720L },
-        receiveAddressOf = { _, _, _, _ -> "tb1qoffline" },
+        receiveAddressOf = { _, _, _, _, _ -> "tb1qoffline" },
     )
     val draft = SendDraft().apply {
         destination = "tb1qthepayee"

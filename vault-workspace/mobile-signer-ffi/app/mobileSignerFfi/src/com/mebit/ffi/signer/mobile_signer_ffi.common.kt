@@ -610,6 +610,39 @@ public data class WalletInfo (
 
 
 
+/**
+ * How the hot wallet's addresses look. One wallet has one type for life: every key of an account
+ * carries the account's type, so no transaction mixes two. The default is the type every wallet
+ * saved before this setting had.
+ */
+
+
+public enum class AddressType {
+    
+    /**
+     * BIP-44 P2PKH. The signature and the key go in the script_sig, over the legacy sighash.
+     */
+    LEGACY,
+    /**
+     * BIP-49 P2SH-P2WPKH. The script_sig pushes the P2WPKH script; the witness is as Native SegWit's.
+     */
+    NESTED_SEGWIT,
+    /**
+     * BIP-84 P2WPKH.
+     */
+    NATIVE_SEGWIT,
+    /**
+     * BIP-86 P2TR key path with no script tree: one 64-byte Schnorr signature, SIGHASH_DEFAULT.
+     */
+    TAPROOT;
+    public companion object
+}
+
+
+
+
+
+
 
 /**
  * Every failure a Bluetooth export returns.
@@ -1105,7 +1138,7 @@ public expect fun `hotForgetScanState`()
  * `hot_prepare_fee_bump`, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
-public expect fun `hotPrepareCancel`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `earlierHex`: kotlin.String, `feeRateSatVb`: kotlin.ULong): PreparedSend
+public expect fun `hotPrepareCancel`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType, `earlierHex`: kotlin.String, `feeRateSatVb`: kotlin.ULong): PreparedSend
 
 /**
  * Scan, then sign a fee bump of `earlier_hex`, the signed payment the app's guard keeps, and post
@@ -1131,7 +1164,7 @@ public expect fun `hotPrepareCancel`(`mnemonicWords`: List<kotlin.String>, `pass
  * (`insufficient funds:`). The same scan as `hot_prepare_send_at_rate`, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
-public expect fun `hotPrepareFeeBump`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `earlierHex`: kotlin.String, `feeRateSatVb`: kotlin.ULong): PreparedSend
+public expect fun `hotPrepareFeeBump`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType, `earlierHex`: kotlin.String, `feeRateSatVb`: kotlin.ULong): PreparedSend
 
 /**
  * Scan, spend every coin `hot_prepare_send_at_rate` would consider, and sign one output paying
@@ -1145,7 +1178,7 @@ public expect fun `hotPrepareFeeBump`(`mnemonicWords`: List<kotlin.String>, `pas
  * `hot_prepare_send_at_rate`, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
-public expect fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `feeRateSatVb`: kotlin.ULong): PreparedSend
+public expect fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType, `destination`: kotlin.String, `feeRateSatVb`: kotlin.ULong): PreparedSend
 
 /**
  * Scan, select coins, check and sign a payment at `fee_rate_sat_vb`, and post nothing. The only
@@ -1173,21 +1206,21 @@ public expect fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `pas
  * so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
-public expect fun `hotPrepareSendAtRate`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeRateSatVb`: kotlin.ULong): PreparedSend
+public expect fun `hotPrepareSendAtRate`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeRateSatVb`: kotlin.ULong): PreparedSend
 
 /**
- * First receive address at BIP-84 index `index` (usually 0). `passphrase` is the
+ * Receive address `index` (usually 0) of `address_type`'s account. `passphrase` is the
  * BIP-39 passphrase the key was restored with, empty for none: a different
- * passphrase is a different wallet.
+ * passphrase is a different wallet. Mainnet takes Native SegWit only.
  */
 @Throws(MobileSignerException::class)
-public expect fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `index`: kotlin.UInt): kotlin.String
+public expect fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType, `index`: kotlin.UInt): kotlin.String
 
 /**
  * One transaction of the wallet in full, or None when the explorer does not know `txid`.
  */
 @Throws(MobileSignerException::class)
-public expect fun `hotTxDetail`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `txid`: kotlin.String): HotTxDetail?
+public expect fun `hotTxDetail`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType, `txid`: kotlin.String): HotTxDetail?
 
 /**
  * Keeps each wallet's scan in `dir`, app storage that no backup copies, so the first sync after a restart
@@ -1204,13 +1237,13 @@ public expect fun `hotUseStateDir`(`dir`: kotlin.String)
  * whole call, never one transaction.
  */
 @Throws(MobileSignerException::class)
-public expect fun `hotWalletHistory`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork): List<HotTx>
+public expect fun `hotWalletHistory`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType): List<HotTx>
 
 /**
  * Confirmed + mempool balance for receive index 0 via Esplora.
  */
 @Throws(MobileSignerException::class)
-public expect fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork): HotWalletSnapshot
+public expect fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType): HotWalletSnapshot
 
 /**
  * True when `address` parses and belongs to `network`: the same test `hot_prepare_send_at_rate` applies to its destination.

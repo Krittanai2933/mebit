@@ -89,11 +89,11 @@ private class FakeHot(val guards: FakePlainFile = FakePlainFile(), val fingerpri
     var historyFails = false
     val store = FakeSecureStore()
     val wallet = SingleSigWallet(
-        prepareAtRate = { words, passphrase, network, destination, amountSats, feeRateSatVb ->
+        prepareAtRate = { words, passphrase, network, _, destination, amountSats, feeRateSatVb ->
             prepares += PrepareCall(words, passphrase, network, destination, amountSats, feeRateSatVb)
             prepareResult(feeRateSatVb)
         },
-        prepareAll = { words, passphrase, network, destination, feeRateSatVb ->
+        prepareAll = { words, passphrase, network, _, destination, feeRateSatVb ->
             prepareAlls += PrepareAllCall(words, passphrase, network, destination, feeRateSatVb)
             prepareAllResult(feeRateSatVb)
         },
@@ -101,13 +101,13 @@ private class FakeHot(val guards: FakePlainFile = FakePlainFile(), val fingerpri
             posts += PostCall(network, hex, txid)
             postResult()
         },
-        snapshot = { _, _, _ ->
+        snapshot = { _, _, _, _ ->
             snapshots++
             snapshotResult()
         },
-        fetchHistory = { _, _, _ -> if (historyFails) throw IllegalStateException("history unreadable") else history },
+        fetchHistory = { _, _, _, _ -> if (historyFails) throw IllegalStateException("history unreadable") else history },
         nowSeconds = { clock },
-        receiveAddressOf = { _, _, _, _ -> "tb1qoffline" },
+        receiveAddressOf = { _, _, _, _, _ -> "tb1qoffline" },
     )
 
     /** A 12-word session saved on [store] and bound through a working snapshot: the wallet is live with 1,000,000 sats. */
@@ -175,11 +175,11 @@ private fun restart(store: FakeSecureStore, guards: FakePlainFile): OnboardingSe
 }
 
 private fun walletThatMustNotCallHot(nowSeconds: () -> Long = { 0L }) = SingleSigWallet(
-    prepareAtRate = { _, _, _, _, _, _ -> fail("prepare ran") },
-    prepareAll = { _, _, _, _, _ -> fail("prepareAll ran") },
+    prepareAtRate = { _, _, _, _, _, _, _ -> fail("prepare ran") },
+    prepareAll = { _, _, _, _, _, _ -> fail("prepareAll ran") },
     postHex = { _, _, _ -> fail("post ran") },
-    snapshot = { _, _, _ -> fail("snapshot ran") },
-    fetchHistory = { _, _, _ -> fail("history ran") },
+    snapshot = { _, _, _, _ -> fail("snapshot ran") },
+    fetchHistory = { _, _, _, _ -> fail("history ran") },
     nowSeconds = nowSeconds,
 )
 
@@ -849,10 +849,10 @@ class SingleSigWalletBroadcastTest {
     fun theFeeTiersComeFromRustAndFallBackToTheBoardWhenTheBridgeFails() {
         var answer: () -> FeeTiers = { FeeTiers(1uL, 1uL, 2uL, true) }
         val wallet = SingleSigWallet(
-            prepareAtRate = { _, _, _, _, _, _ -> fail("prepare ran") },
+            prepareAtRate = { _, _, _, _, _, _, _ -> fail("prepare ran") },
             postHex = { _, _, _ -> fail("post ran") },
-            snapshot = { _, _, _ -> fail("snapshot ran") },
-            fetchHistory = { _, _, _ -> fail("history ran") },
+            snapshot = { _, _, _, _ -> fail("snapshot ran") },
+            fetchHistory = { _, _, _, _ -> fail("history ran") },
             fetchFeeTiers = { answer() },
         )
         assertEquals(LiveFeeTiers(1, 1, 2, live = true), wallet.feeTiers())

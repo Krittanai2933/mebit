@@ -30,11 +30,11 @@ private fun SingleSigWallet.state() = WalletState(mode, history, lastError, last
 private class DetailChain(var answer: () -> HotTxDetail?) {
     val asked = mutableListOf<Asked>()
     val wallet = SingleSigWallet(
-        prepareAtRate = { _, _, _, _, _, _ -> fail("prepare ran") },
+        prepareAtRate = { _, _, _, _, _, _, _ -> fail("prepare ran") },
         postHex = { _, _, _ -> fail("post ran") },
-        snapshot = { _, _, network -> HotWalletSnapshot("tb1qaddressthesnapshotreported", 1_000_000uL, 1_000_000uL, network, HotScan.COMPLETE) },
-        fetchHistory = { _, _, _ -> listOf(ROW) },
-        fetchDetail = { words, passphrase, network, txid ->
+        snapshot = { _, _, network, _ -> HotWalletSnapshot("tb1qaddressthesnapshotreported", 1_000_000uL, 1_000_000uL, network, HotScan.COMPLETE) },
+        fetchHistory = { _, _, _, _ -> listOf(ROW) },
+        fetchDetail = { words, passphrase, network, _, txid ->
             asked += Asked(words, passphrase, network, txid)
             answer()
         },
@@ -50,7 +50,7 @@ private class DetailChain(var answer: () -> HotTxDetail?) {
 class SingleSigWalletDetailTest {
     @Test
     fun theDemoWalletShowsItsRowAndAsksNothing() {
-        val wallet = SingleSigWallet(fetchDetail = { _, _, _, _ -> fail("the demo asked the explorer") })
+        val wallet = SingleSigWallet(fetchDetail = { _, _, _, _, _ -> fail("the demo asked the explorer") })
         assertEquals(TxDetailLoad.RowOnly, wallet.detail(OnboardingSession(), DETAIL_TXID))
     }
 
