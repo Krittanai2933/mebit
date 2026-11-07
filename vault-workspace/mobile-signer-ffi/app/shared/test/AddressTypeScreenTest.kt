@@ -29,6 +29,13 @@ class AddressTypeScreenTest {
         )
     }
 
+    // Mainnet takes Native SegWit alone, as the core's accounts refuse the rest, so only its row is enabled there. Testnet takes all four.
+    @Test
+    fun onMainnetOnlyNativeSegwitsRowIsEnabled() {
+        assertEquals(listOf(true, true, true, true), AddressTypeRows.map { it.enabled(KeyNetwork.TEST) })
+        assertEquals(listOf(false, false, true, false), AddressTypeRows.map { it.enabled(KeyNetwork.MAIN) })
+    }
+
     @Test
     fun theEyebrowNamesTheFlow() {
         assertEquals("NEW WALLET · ADDRESS TYPE", addressTypeEyebrow(imported = false))

@@ -47,6 +47,14 @@ impl AddressType {
         Self::Taproot,
     ];
 
+    /// Whether this build derives, scans and signs this type on `network`: every type on testnet4,
+    /// Native SegWit alone on mainnet. shortcut: proof.rs anchors mainnet use at segwit's activation,
+    /// which a Legacy or Nested address predates; take the other types on mainnet once that anchor is
+    /// reviewed per type.
+    pub(crate) fn enabled_on(self, network: Network) -> bool {
+        network != Network::Bitcoin || self == Self::NativeSegwit
+    }
+
     /// The BIP-43 purpose. The coin type stays 1' on both networks.
     pub(crate) const fn purpose(self) -> u32 {
         match self {

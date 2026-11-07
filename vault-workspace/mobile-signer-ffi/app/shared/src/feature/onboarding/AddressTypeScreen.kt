@@ -44,6 +44,7 @@ import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
+import com.mebit.ffi.signer.hotAddressTypeEnabled
 
 private val SelectedRow = Color(0xFFFFF8EF)
 private val RadioRing = Color(0xFFB4BAC4)
@@ -52,7 +53,13 @@ private val RadioRing = Color(0xFFB4BAC4)
 internal class AddressTypeRow(val type: AddressType, val label: String, val bip: String, private val mainnet: String, private val testnet: String) {
     /** The detail line, with the prefixes of [network], so it agrees with the address Receive shows. */
     fun detail(network: KeyNetwork) = "$bip · เริ่มด้วย ${if (network == KeyNetwork.MAIN) mainnet else testnet}"
+
+    /** Whether the core takes this type on [network], by the rule its accounts enforce ([hotAddressTypeEnabled]): on mainnet only Native SegWit. */
+    fun enabled(network: KeyNetwork) = hotAddressTypeEnabled(type, network)
 }
+
+/** The badge of a row the core does not take on this network, grey, in the default badge's place and style. Draft copy awaiting design review. */
+internal const val NOT_ON_MAINNET = "ยังไม่รองรับบน Mainnet"
 
 internal val AddressTypeRows = listOf(
     AddressTypeRow(AddressType.LEGACY, "Legacy", "BIP44", "1", "m หรือ n"),
@@ -145,6 +152,8 @@ fun AddressTypeScreen(
 @Composable
 private fun TypeRow(row: AddressTypeRow, network: KeyNetwork, selected: Boolean, onSelect: () -> Unit) {
     val shape = RoundedCornerShape(15.dp)
+    // Read at render, so the rows follow the session's network.
+    val enabled = row.enabled(network)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -152,27 +161,32 @@ private fun TypeRow(row: AddressTypeRow, network: KeyNetwork, selected: Boolean,
             .clip(shape)
             .background(if (selected) SelectedRow else MbWhite)
             .border(if (selected) 1.5.dp else 1.dp, if (selected) MbBtcOrange else MbBorder, shape)
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onSelect)
             .padding(start = 18.dp, end = 18.dp)
             .testTag("address_type_" + row.type.name.lowercase()),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(row.label, color = MbNavyInk, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
+                Text(row.label, color = if (enabled) MbNavyInk else MbSlate, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
                 // The badge marks the default, so it stays on Native SegWit whatever is picked.
-                if (row.type == AddressType.NATIVE_SEGWIT) {
+                val badge = when {
+                    row.type == AddressType.NATIVE_SEGWIT -> "ค่าเริ่มต้น"
+                    !enabled -> NOT_ON_MAINNET
+                    else -> null
+                }
+                badge?.let {
                     Spacer(modifier = Modifier.width(11.dp))
-                    Text("ค่าเริ่มต้น", color = MbEyebrow, fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold)
+                    Text(it, color = if (enabled) MbEyebrow else MbSlate, fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
             Spacer(modifier = Modifier.height(6.dp))
-            Text(row.detail(network), color = MbBody, fontSize = 11.2.sp)
+            Text(row.detail(network), color = if (enabled) MbBody else MbSlate, fontSize = 11.2.sp)
         }
         Box(
             modifier = Modifier
                 .size(18.dp)
-                .border(1.5.dp, if (selected) MbBtcOrange else RadioRing, CircleShape),
+                .border(1.5.dp, if (selected) MbBtcOrange else if (enabled) RadioRing else MbBorder, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             if (selected) Box(Modifier.size(8.dp).clip(CircleShape).background(MbBtcOrange))

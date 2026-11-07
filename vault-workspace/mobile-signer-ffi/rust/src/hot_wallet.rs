@@ -145,9 +145,7 @@ impl Account {
         network: Network,
         address_type: AddressType,
     ) -> Result<Self, MobileSignerError> {
-        // shortcut: proof.rs anchors mainnet use at segwit's activation, which a Legacy or Nested
-        // address predates; take the other types on mainnet once that anchor is reviewed per type.
-        if network == Network::Bitcoin && address_type != AddressType::NativeSegwit {
+        if !address_type.enabled_on(network) {
             return Err(MobileSignerError::InvalidPsbtJson(format!(
                 "{address_type:?} is not enabled on mainnet in this build"
             )));
@@ -695,9 +693,17 @@ pub fn hot_account_path(address_type: AddressType) -> String {
     format!("m/{}", address_type.account_path())
 }
 
-/// The virtual size the Send and Review screens price a payment of an `address_type` wallet at: one
-/// of its coins paying an address of the same type, with change, as `signed_payment` builds it. Native
-/// SegWit's is 141, the size every estimate used before the other types.
+/// Whether a wallet on `network` can take `address_type`, as every call that derives one of its keys
+/// enforces: every type on testnet4, Native SegWit alone on mainnet.
+#[uniffi::export]
+pub fn hot_address_type_enabled(address_type: AddressType, network: KeyNetwork) -> bool {
+    address_type.enabled_on(network_of(network))
+}
+
+/// The virtual size the Send screen prices a payment of an `address_type` wallet at, before Review
+/// quotes the real one with `hot_quote_send`: one of its coins paying an address of the same type,
+/// with change, as `signed_payment` builds it. Native SegWit's is 141, the size every estimate used
+/// before the other types.
 #[uniffi::export]
 pub fn hot_typical_vsize(address_type: AddressType) -> u64 {
     let script = address_type.script_len();
@@ -9389,6 +9395,31 @@ mod tests {
                 )
                 .is_ok()
             );
+        }
+    }
+
+    // Address Type enables a row only where the core derives that account: the app reads the rule through
+    // `hot_address_type_enabled`, and `Account::new` refuses by the same rule.
+    #[test]
+    fn the_rows_the_app_enables_are_the_accounts_the_core_derives() {
+        for (network, enabled) in [
+            (KeyNetwork::Test, [true; 4]),
+            (KeyNetwork::Main, [false, false, true, false]),
+        ] {
+            assert_eq!(
+                AddressType::ALL.map(|t| hot_address_type_enabled(t, network)),
+                enabled,
+                "{network:?}"
+            );
+            for address_type in AddressType::ALL {
+                let derives =
+                    Account::new(&abandon_about(), "", network_of(network), address_type).is_ok();
+                assert_eq!(
+                    derives,
+                    hot_address_type_enabled(address_type, network),
+                    "{address_type:?} on {network:?}"
+                );
+            }
         }
     }
 

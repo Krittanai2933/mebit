@@ -1,6 +1,7 @@
 package com.mebit.app.data
 
 import com.mebit.ffi.signer.AddressType
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -135,6 +136,22 @@ class AddressTypeChoiceTest {
         session.changeNewKeyPassphrase("a passphrase")
         assertEquals(AddressType.TAPROOT, session.addressType, "the passphrase change dropped the choice")
         assertEquals(AddressType.TAPROOT, store.savedCopy().addressType, "the saved copy dropped the choice")
+    }
+
+    // On mainnet only Native SegWit can be chosen: it is preselected, and a tap on any other type leaves it. The same tap on testnet chooses.
+    @Test
+    fun onMainnetATapOnATypeTheCoreRefusesChangesNothing() {
+        val main = session(FakeSecureStore())
+        main.generateThisDevice(network = KeyNetwork.MAIN)
+        assertEquals(AddressType.NATIVE_SEGWIT, main.addressType, "the preselected type on mainnet")
+        for (type in listOf(AddressType.LEGACY, AddressType.NESTED_SEGWIT, AddressType.TAPROOT)) {
+            main.chooseAddressType(type)
+            assertEquals(AddressType.NATIVE_SEGWIT, main.addressType, "$type on mainnet")
+        }
+        val test = session(FakeSecureStore())
+        test.generateThisDevice()
+        test.chooseAddressType(AddressType.TAPROOT)
+        assertEquals(AddressType.TAPROOT, test.addressType, "the same tap on testnet")
     }
 
     private fun session(store: FakeSecureStore) = OnboardingSession(

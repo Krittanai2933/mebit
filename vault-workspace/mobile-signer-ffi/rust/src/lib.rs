@@ -861,6 +861,10 @@ mod tests {
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_typical_vsize(),
             ),
             (
+                "func_hot_address_type_enabled",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_address_type_enabled(),
+            ),
+            (
                 "func_hot_prepare_send_at_rate",
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate(),
             ),

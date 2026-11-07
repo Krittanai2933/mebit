@@ -11,6 +11,7 @@ import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
 import com.mebit.ffi.signer.generateSoftwareMultisigKey
+import com.mebit.ffi.signer.hotAddressTypeEnabled
 import com.mebit.ffi.signer.hotForgetScanState
 import com.mebit.ffi.signer.restoreSoftwareMultisigKey
 import kotlinx.atomicfu.locks.SynchronizedObject
@@ -160,10 +161,13 @@ class OnboardingSession(
     /**
      * Penpot 1.5.1: the hot wallet's address type, in first setup only, saved through the single write point: a Replace of the
      * copy on the phone, or with the rest of the record when [acceptStagedKey] writes a staged import. The same type again writes
-     * nothing. A failed Replace leaves the earlier copy on the phone, which [proveSavedCopy] catches at App Lock.
+     * nothing, and so does a type the core does not take on [network] ([hotAddressTypeEnabled], on mainnet only Native SegWit), so no
+     * path saves one. [SavedWallet] saves only TEST today, so a MAIN session meets that rule in tests alone. A failed Replace leaves
+     * the earlier copy on the phone, which [proveSavedCopy] catches at App Lock.
      */
     fun chooseAddressType(type: AddressType) {
         if (!inFirstSetup || words.isEmpty() || held == Held.Stale || type == addressType) return
+        if (!hotAddressTypeEnabled(type, network)) return
         addressType = type
         persist()
     }
