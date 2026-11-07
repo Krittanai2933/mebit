@@ -110,7 +110,8 @@ fun AddressTypeScreen(
             )
         },
     ) {
-        Spacer(modifier = Modifier.height(39.dp))
+        // Board 1.5.1's first row is at y 225, 11 pt above the first card of Verify Words (board 1.5), which spaces 39.
+        Spacer(modifier = Modifier.height(28.dp))
         Column(modifier = Modifier.selectableGroup()) {
             AddressTypeRows.forEachIndexed { i, row ->
                 if (i > 0) Spacer(modifier = Modifier.height(8.dp))
