@@ -55,7 +55,10 @@ class OnboardingSession(
     var appLockEnabled: Boolean by mutableStateOf(false)
         private set
 
-    /** From a Create in this run until Home first shows the wallet. Only then may the new key take a passphrase, because a wallet Home has shown may hold coins. */
+    /**
+     * From a Create or an Import in this run until Home first shows the wallet. Only then may the new key take a passphrase, or the
+     * wallet change its address type, because a wallet Home has shown may hold coins.
+     */
     var inFirstSetup: Boolean by mutableStateOf(false)
         private set
     var lastError: String? by mutableStateOf(null)
@@ -152,7 +155,18 @@ class OnboardingSession(
         persist()
     }
 
-    /** Home has shown the wallet, so its key is final. */
+    /**
+     * Penpot 1.5.1: the hot wallet's address type, in first setup only, saved through the single write point: a Replace of the
+     * copy on the phone, or with the rest of the record when [acceptStagedKey] writes a staged import. The same type again writes
+     * nothing. A failed Replace leaves the earlier copy on the phone, which [proveSavedCopy] catches at App Lock.
+     */
+    fun chooseAddressType(type: AddressType) {
+        if (!inFirstSetup || words.isEmpty() || held == Held.Stale || type == addressType) return
+        addressType = type
+        persist()
+    }
+
+    /** Home has shown the wallet, so its key and its address type are final. */
     fun endFirstSetup() {
         inFirstSetup = false
     }
@@ -168,6 +182,7 @@ class OnboardingSession(
             applyKey(restoreKey(words, passphrase, network, 0u), passphrase, network)
             backupConfirmed = true
             imported = true
+            inFirstSetup = true
         } catch (e: Exception) {
             lastError = e.message
             return
@@ -203,7 +218,8 @@ class OnboardingSession(
     }
 
     private fun holdsThisKey(record: WalletRecord) =
-        record.fingerprint == fingerprint && record.network == network && record.words == words && record.passphrase == passphrase
+        record.fingerprint == fingerprint && record.network == network && record.words == words && record.passphrase == passphrase &&
+            record.addressType == addressType
 
     /** The copy on the phone is not this wallet or cannot be opened, so this wallet is not saved after all. The key stays in memory. */
     private fun notSaved(result: UnlockResult): UnlockResult {
@@ -225,6 +241,7 @@ class OnboardingSession(
         inFirstSetup = false
         lastError = null
         network = KeyNetwork.TEST
+        addressType = AddressType.NATIVE_SEGWIT
         recordGuard = null
         held = Held.Nothing
         notSavedBecause = null
@@ -315,6 +332,7 @@ class OnboardingSession(
         backupConfirmed = record.backupConfirmed // from the record, not from how the key was made, which forces these
         imported = record.imported
         appLockEnabled = record.appLockEnabled
+        addressType = record.addressType
         held = Held.Copy(version)
         recordGuard = oldGuard
         if (oldGuard != null) persist()
@@ -411,7 +429,7 @@ class OnboardingSession(
         return true
     }
 
-    private fun toRecord() = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled)
+    private fun toRecord() = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled, addressType)
 
     private fun applyKey(key: SoftwareAccountKey, passphrase: String, network: KeyNetwork) {
         words = key.mnemonicWords

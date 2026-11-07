@@ -62,7 +62,6 @@ class CreatePassphraseTest {
 
         val imported = session(FakeSecureStore())
         imported.restoreFromWords(PUBLIC_WORDS_24)
-        assertFalse(imported.inFirstSetup, "an import is not a new key")
         imported.changeNewKeyPassphrase(PASSPHRASE)
         assertEquals(checkFor(""), imported.fingerprint, "an imported key changed")
 
