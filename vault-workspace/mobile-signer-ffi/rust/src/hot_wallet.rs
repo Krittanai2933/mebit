@@ -8706,6 +8706,62 @@ mod tests {
     //         .address(NETWORKS["test"])
     const TYPE_VECTORS: &[(AddressType, &str, u32, u32, &str)] = &[
         (
+            AddressType::Legacy,
+            "",
+            0,
+            0,
+            "mkpZhYtJu2r87Js3pDiWJDmPte2NRZ8bJV",
+        ),
+        (
+            AddressType::Legacy,
+            "",
+            0,
+            1,
+            "mzpbWabUQm1w8ijuJnAof5eiSTep27deVH",
+        ),
+        (
+            AddressType::Legacy,
+            "",
+            1,
+            0,
+            "mi8nhzZgGZQthq6DQHbru9crMDerUdTKva",
+        ),
+        (
+            AddressType::Legacy,
+            "",
+            1,
+            1,
+            "mz9HfS6y833A8HP8bfpLikzCbjonJXaAGW",
+        ),
+        (
+            AddressType::Legacy,
+            "TREZOR",
+            0,
+            0,
+            "muGDAb8H52iHAjF463rTazTjCWADPW7Yic",
+        ),
+        (
+            AddressType::Legacy,
+            "TREZOR",
+            0,
+            1,
+            "mvdfAFHYzRvt4Te9FKZ68D7ZACcr3dTmp3",
+        ),
+        (
+            AddressType::Legacy,
+            "TREZOR",
+            1,
+            0,
+            "mwxfSYqTaJEv8uy93Z5vPoyUnrFHhYp8xE",
+        ),
+        (
+            AddressType::Legacy,
+            "TREZOR",
+            1,
+            1,
+            "mxYucRqt4oVLiiDEcreQzEaFbL8iZW4EqD",
+        ),
+        (
             AddressType::NestedSegwit,
             "",
             0,
@@ -8787,6 +8843,7 @@ mod tests {
     #[test]
     fn each_type_derives_its_published_mainnet_vector() {
         let published = |address_type| match address_type {
+            AddressType::Legacy => "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
             AddressType::NestedSegwit => "37VucYSaXLCAsxYyAPfbSi9eh4iEcbShgf",
             AddressType::NativeSegwit => "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu",
         };
@@ -8930,6 +8987,49 @@ mod tests {
             script_pubkey: key.address.script_pubkey(),
         };
         (signed(&[(&coins[0], key)], vec![pay]).unwrap(), coins)
+    }
+
+    #[test]
+    fn a_legacy_spend_with_a_witness_or_another_script_sig_is_not_signed_here() {
+        let key = own_as(AddressType::Legacy, Chain::External, 0);
+        let (tx, coins) = one_signed(&key);
+        let selected = [(&coins[0], &key)];
+        assert!(signed_here(&tx, &selected));
+        let script_sig = tx.input[0].script_sig.clone();
+        let mut witnessed = tx.clone();
+        witnessed.input[0].witness = Witness::from_slice(&[[0u8; 1]]);
+        let mut empty = tx.clone();
+        empty.input[0].script_sig = ScriptBuf::new();
+        // The same pushes behind a no-op: the node runs it, but it is not what `signed` writes.
+        let mut padded = tx.clone();
+        let mut bytes = vec![0x61]; // OP_NOP
+        bytes.extend_from_slice(script_sig.as_bytes());
+        padded.input[0].script_sig = ScriptBuf::from(bytes);
+        let other = own_as(AddressType::Legacy, Chain::External, 1);
+        let mut other_key = tx.clone();
+        other_key.input[0].script_sig = legacy_like(&script_sig, &other);
+        for (what, forged) in [
+            ("witness", witnessed),
+            ("empty", empty),
+            ("padded", padded),
+            ("other key", other_key),
+        ] {
+            assert!(!signed_here(&forged, &selected), "{what}");
+        }
+    }
+
+    /// `script_sig`'s signature push followed by `key`'s public key.
+    fn legacy_like(script_sig: &Script, key: &OwnKey) -> ScriptBuf {
+        let sig = match script_sig.instructions().next() {
+            Some(Ok(bitcoin::script::Instruction::PushBytes(sig))) => sig.to_owned(),
+            other => panic!("not a push: {other:?}"),
+        };
+        let pubkey =
+            bitcoin::script::PushBytesBuf::try_from(key.pubkey.to_bytes().to_vec()).unwrap();
+        ScriptBuf::builder()
+            .push_slice(sig)
+            .push_slice(pubkey)
+            .into_script()
     }
 
     #[test]

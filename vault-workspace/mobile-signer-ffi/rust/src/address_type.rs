@@ -4,7 +4,7 @@
 
 use bitcoin::bip32::{ChildNumber, DerivationPath};
 use bitcoin::hashes::Hash;
-use bitcoin::script::PushBytesBuf;
+use bitcoin::script::{Instruction, PushBytesBuf};
 use bitcoin::secp256k1::{All, Message, Secp256k1, Verification};
 use bitcoin::sighash::{EcdsaSighashType, SighashCache};
 use bitcoin::transaction::InputWeightPrediction;
@@ -19,6 +19,8 @@ use crate::hot_wallet::{OwnKey, full_size};
 /// transaction mixes two. The default is the type every wallet saved before this setting had.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum AddressType {
+    /// BIP-44 P2PKH. The signature and the key go in the script_sig, over the legacy sighash.
+    Legacy,
     /// BIP-49 P2SH-P2WPKH. The script_sig pushes the P2WPKH script; the witness is as Native SegWit's.
     NestedSegwit,
     /// BIP-84 P2WPKH.
@@ -34,11 +36,12 @@ pub(crate) struct Spend {
 
 impl AddressType {
     #[cfg(test)]
-    pub(crate) const ALL: [AddressType; 2] = [Self::NestedSegwit, Self::NativeSegwit];
+    pub(crate) const ALL: [AddressType; 3] = [Self::Legacy, Self::NestedSegwit, Self::NativeSegwit];
 
     /// The BIP-43 purpose. The coin type stays 1' on both networks.
     pub(crate) const fn purpose(self) -> u32 {
         match self {
+            Self::Legacy => 44,
             Self::NestedSegwit => 49,
             Self::NativeSegwit => 84,
         }
@@ -56,6 +59,8 @@ impl AddressType {
     /// ground to 72 bytes with the sighash byte by `full_size`.
     pub(crate) const fn input_weight(self) -> InputWeightPrediction {
         match self {
+            // `<sig||01> <pubkey>`: 1 + 72 + 1 + 33 bytes.
+            Self::Legacy => InputWeightPrediction::P2PKH_COMPRESSED_MAX,
             // A 23-byte script_sig: one push of the 22-byte P2WPKH script.
             Self::NestedSegwit => InputWeightPrediction::from_slice(23, &[72, 33]),
             Self::NativeSegwit => InputWeightPrediction::P2WPKH_MAX,
@@ -70,6 +75,7 @@ impl AddressType {
         network: Network,
     ) -> Address {
         match self {
+            Self::Legacy => Address::p2pkh(pubkey, network),
             Self::NestedSegwit => Address::p2shwpkh(pubkey, network),
             Self::NativeSegwit => Address::p2wpkh(pubkey, network),
         }
@@ -92,6 +98,16 @@ impl AddressType {
             .ok_or_else(|| bad("missing prevout".into()))?
             .value;
         match self {
+            Self::Legacy => {
+                let sighash = cache
+                    .legacy_signature_hash(i, &key.address.script_pubkey(), ALL)
+                    .map_err(|e| bad(e.to_string()))?;
+                let sig = ecdsa_all(secp, sighash.to_byte_array(), key)?;
+                Ok(Spend {
+                    script_sig: legacy_script_sig(sig, key)?,
+                    witness: Witness::new(),
+                })
+            }
             Self::NestedSegwit => Ok(Spend {
                 script_sig: nested_script_sig(key)?,
                 witness: wpkh_witness(secp, cache, i, value, key)?,
@@ -118,6 +134,24 @@ impl AddressType {
         };
         let (script_sig, witness) = (input.script_sig.clone(), input.witness.clone());
         match self {
+            Self::Legacy => {
+                // Exactly two pushes, written back byte for byte, so no other encoding of them passes.
+                let pushes: Vec<Vec<u8>> = script_sig
+                    .instructions()
+                    .map_while(|ins| match ins {
+                        Ok(Instruction::PushBytes(data)) => Some(data.as_bytes().to_vec()),
+                        _ => None,
+                    })
+                    .collect();
+                let [sig, _] = pushes.as_slice() else {
+                    return false;
+                };
+                let sighash = cache.legacy_signature_hash(i, &key.address.script_pubkey(), ALL);
+                witness.is_empty()
+                    && legacy_script_sig(sig.clone(), key)
+                        .is_ok_and(|expected| script_sig == expected)
+                    && sighash.is_ok_and(|h| ecdsa_all_signed(sig, h.to_byte_array(), key))
+            }
             Self::NestedSegwit => {
                 nested_script_sig(key).is_ok_and(|expected| script_sig == expected)
                     && wpkh_witness_signed(cache, i, prevout.value, &witness, key)
@@ -127,6 +161,21 @@ impl AddressType {
             }
         }
     }
+}
+
+/// SIGHASH_ALL as the legacy sighash takes it.
+const ALL: u32 = EcdsaSighashType::All as u32;
+
+/// Legacy's script_sig: a push of `sig`, the signature with its sighash byte, then a push of `key`'s
+/// compressed public key.
+fn legacy_script_sig(sig: Vec<u8>, key: &OwnKey) -> Result<ScriptBuf, MobileSignerError> {
+    let sig = PushBytesBuf::try_from(sig).map_err(|e| bad(e.to_string()))?;
+    let pubkey =
+        PushBytesBuf::try_from(key.pubkey.to_bytes().to_vec()).map_err(|e| bad(e.to_string()))?;
+    Ok(ScriptBuf::builder()
+        .push_slice(sig)
+        .push_slice(pubkey)
+        .into_script())
 }
 
 fn bad(what: String) -> MobileSignerError {
