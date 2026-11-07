@@ -11,6 +11,7 @@ import com.mebit.app.StoreVersion
 import com.mebit.app.Why
 import com.mebit.app.WriteMode
 import com.mebit.app.WriteResult
+import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
 import kotlinx.coroutines.runBlocking
 
@@ -106,7 +107,8 @@ internal fun testRecord(
     backupConfirmed: Boolean = false,
     imported: Boolean = false,
     appLockEnabled: Boolean = false,
-) = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled)
+    addressType: AddressType = AddressType.NATIVE_SEGWIT,
+) = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled, addressType)
 
 /**
  * An in-memory [PlainFile] for common tests. [text] is what the file holds, null for no file. [failWrite] makes each write fail

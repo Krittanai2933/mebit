@@ -4,6 +4,7 @@ import com.mebit.app.ReadResult
 import com.mebit.app.Why
 import com.mebit.app.WriteMode
 import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
+import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -151,7 +152,8 @@ class RecordCodecTest {
 
     /** An opened record of the public test words and its old guard, laid out by hand as the codec's KDoc documents version 1. */
     private fun layout(r: UnlockResult.Opened): ByteArray {
-        val flags = (if (r.record.backupConfirmed) 1 else 0) or (if (r.record.imported) 2 else 0) or (if (r.record.appLockEnabled) 4 else 0)
+        val flags = (if (r.record.backupConfirmed) 1 else 0) or (if (r.record.imported) 2 else 0) or (if (r.record.appLockEnabled) 4 else 0) or
+            (TYPE_BITS.getValue(r.record.addressType))
         return r.oldGuard?.let { oldRecordBytes(it, flags) } ?: v1Bytes(flags = flags)
     }
 
@@ -162,8 +164,28 @@ class RecordCodecTest {
     }
 
     @Test
+    fun eachAddressTypeWritesItsDocumentedBitsAndReadsBack() {
+        for ((type, bits) in TYPE_BITS) {
+            val store = FakeSecureStore()
+            SavedWallet(store).save(testRecord(passphrase = "x y", backupConfirmed = true, addressType = type), WriteMode.Create)
+            val documented = v1Bytes(passphrase = "x y".encodeToByteArray(), flags = 1 or bits)
+            assertTrue(store.writes.single().bytes.contentEquals(documented), "encoder output, $type")
+            val back = assertIs<UnlockResult.Opened>(opened(documented), "documented bytes, $type").record
+            assertEquals(type, back.addressType, "type")
+            assertTrue(back.backupConfirmed, "backup beside $type")
+        }
+    }
+
+    // A record from before the address type, and every Native SegWit record since, sets neither bit and reads as Native SegWit.
+    @Test
+    fun aRecordWithoutTypeBitsIsNativeSegwit() {
+        assertEquals(AddressType.NATIVE_SEGWIT, testRecord().addressType)
+        assertEquals(AddressType.NATIVE_SEGWIT, assertIs<UnlockResult.Opened>(opened(v1Bytes(flags = 7))).record.addressType)
+    }
+
+    @Test
     fun unknownFlagBitsAndNetworkBytesAreNewer() {
-        for (bit in listOf(16, 32, 64, 128)) {
+        for (bit in listOf(64, 128)) {
             assertBroken(Cause.NewerVersion, v1Bytes(flags = 1 or bit), "flag bit $bit")
             assertBroken(Cause.NewerVersion, v1Bytes(flags = 8 or bit) + sendSection(TEST_TXID.encodeToByteArray(), 1), "flag bit $bit beside a payment of unknown outcome")
         }
@@ -258,5 +280,15 @@ class RecordCodecTest {
             val error = assertFailsWith<IllegalArgumentException>("$count words") { testRecord(words = List(count) { "abandon" }) }
             assertFalse("abandon" in error.message.orEmpty(), "the message names a word, $count words")
         }
+    }
+
+    private companion object {
+        /** The flag bits of each address type, as the codec's KDoc documents them. */
+        val TYPE_BITS = mapOf(
+            AddressType.NATIVE_SEGWIT to 0,
+            AddressType.LEGACY to 16,
+            AddressType.NESTED_SEGWIT to 32,
+            AddressType.TAPROOT to 48,
+        )
     }
 }

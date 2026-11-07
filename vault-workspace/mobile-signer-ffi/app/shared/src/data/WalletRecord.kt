@@ -1,5 +1,6 @@
 package com.mebit.app.data
 
+import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
 
 /**
@@ -16,6 +17,8 @@ class WalletRecord(
     val backupConfirmed: Boolean,
     val imported: Boolean,
     val appLockEnabled: Boolean,
+    /** How the hot wallet's addresses look. A record saved before the choice existed reads as Native SegWit. */
+    val addressType: AddressType = AddressType.NATIVE_SEGWIT,
 ) {
     init {
         require(words.size in BIP39_SIZES) { "word count" } // no record without a key, and the message names no word
