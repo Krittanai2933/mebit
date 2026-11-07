@@ -83,7 +83,6 @@ import com.mebit.app.data.SEED_ROW_PITCH
 import com.mebit.app.data.SEED_SLOT
 import com.mebit.app.data.SeedStatus
 import com.mebit.app.data.SuggestionWindow
-import com.mebit.app.data.ffiImportSeedDraft
 import com.mebit.app.data.popoverPlacement
 import com.mebit.app.data.suggestionWindow
 import com.mebit.app.hideWhen
@@ -114,15 +113,16 @@ private const val LAST_SLOT = 23
 
 private enum class ImportSheet { Passphrase }
 
+/** [draft] belongs to the caller, so the words and the passphrase outlive the detour to Address Type and back. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ImportSeedScreen(
     session: OnboardingSession,
+    draft: ImportSeedDraft,
     onRestored: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
-    val draft = remember { ffiImportSeedDraft() }
     val guard = rememberCaptureGuard()
     var engaged by remember { mutableStateOf(false) }
     var taps by remember { mutableIntStateOf(0) }

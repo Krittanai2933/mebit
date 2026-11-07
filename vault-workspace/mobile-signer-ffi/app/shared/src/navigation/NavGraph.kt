@@ -37,6 +37,7 @@ import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.StartNotice
 import com.mebit.app.data.VaultDraft
+import com.mebit.app.data.ffiImportSeedDraft
 import com.mebit.app.data.liveQuoteCache
 import com.mebit.app.data.pairedDevice
 import com.mebit.app.feature.keys.AddKeyScreen
@@ -112,6 +113,10 @@ fun MebitNavHost(
     val quotes = remember { liveQuoteCache() }
     val sendDraft = remember { SendDraft() }
     val multisigSend = remember { MultisigSendDraft() }
+    // Import Seed's words and passphrase. They outlive the detour to Address Type and back, and a fresh draft replaces them once
+    // the import goes on to the lock step or the user leaves Import Seed by its back chip. Memory only: never rememberSaveable,
+    // which Android writes to disk.
+    var importDraft by remember { mutableStateOf(ffiImportSeedDraft()) }
     val phone = rememberBiometrics()
     // The gates' owner check, which is the phone's own or, on a phone without one, the Spending PIN (open item 79).
     val biometrics = remember(phone, session) { OwnerCheck(phone, session) }
@@ -206,9 +211,15 @@ fun MebitNavHost(
         )
         MovieRoute.ImportSeed -> ImportSeedScreen(
             session = session,
+            draft = importDraft,
             // An import skips backup: the user typed the words from their own record.
             onRestored = { chooseAddressType() },
-            onBack = onBack,
+            onBack = onBack?.let { back ->
+                {
+                    importDraft = ffiImportSeedDraft()
+                    back()
+                }
+            },
             onOpenCatalog = openCatalog,
         )
         MovieRoute.KeyCreated -> KeyCreatedScreen(
@@ -233,7 +244,10 @@ fun MebitNavHost(
         MovieRoute.AddressType -> AddressTypeScreen(
             session = session,
             afterVerify = backStack.getOrNull(backStack.lastIndex - 1) == MovieRoute.VerifyWords,
-            onContinue = { lockStep() },
+            onContinue = {
+                importDraft = ffiImportSeedDraft()
+                lockStep()
+            },
             onEditPassphrase = { backTo(MovieRoute.BackupWords) },
             onRejectImport = { backTo(MovieRoute.ImportSeed) },
             onBack = onBack,
