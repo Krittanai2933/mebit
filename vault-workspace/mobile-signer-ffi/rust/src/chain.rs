@@ -589,9 +589,9 @@ fn esplora_estimates(json: &Value) -> Vec<(u32, &Value)> {
         .collect()
 }
 
-/// The highest tier, 1% under `MAX_FEE_RATE`. The fee is the rate times the size estimate, and a
-/// signed transaction can be up to 1 vB under that estimate (about 1% of the smallest payment) because
-/// signing does not grind for a short signature, so a fee at the limit itself can be refused.
+/// The highest tier, 1% under `MAX_FEE_RATE`, so a payment at the fast tier leaves room for the fee
+/// bump or cancel the app asks at the fast tier too: BIP-125 rule 6 asks a rate above the earlier one,
+/// and a payment at the limit itself could never be replaced.
 const MAX_TIER_RATE: u64 = MAX_FEE_RATE - MAX_FEE_RATE / 100;
 
 /// A rate as the Send screen can use it: a finite positive number rounded up to whole sat/vB and

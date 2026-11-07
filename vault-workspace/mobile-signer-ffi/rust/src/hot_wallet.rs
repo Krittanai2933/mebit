@@ -33,7 +33,7 @@ use bitcoin::absolute::LockTime;
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv, Xpub};
 use bitcoin::consensus::encode::{deserialize_hex, serialize_hex};
 use bitcoin::hashes::{Hash, sha256};
-use bitcoin::secp256k1::{All, Message, Secp256k1};
+use bitcoin::secp256k1::{All, Message, Secp256k1, SecretKey, ecdsa};
 use bitcoin::transaction::{InputWeightPrediction, predict_weight};
 use bitcoin::{
     Address, Amount, CompressedPublicKey, Network, OutPoint, PrivateKey, Script, ScriptBuf,
@@ -1222,8 +1222,8 @@ const MIN_FEE_RATE: u64 = 1;
 pub(crate) const MAX_FEE_RATE: u64 = 10_000;
 
 /// The node's test on the signed bytes: `fee_sats` at most `MAX_FEE_RATE` times `vsize`, the signed
-/// transaction's virtual size. The size a fee is built for is an upper bound, and change put into the
-/// fee raises it, so the real rate can sit above the rate asked.
+/// transaction's virtual size. `signed` makes that the size the fee was built for, and change put into
+/// the fee raises the fee, so the real rate can sit above the rate asked.
 fn check_node_rate(fee_sats: u64, vsize: u64) -> Result<(), String> {
     if fee_sats > MAX_FEE_RATE * vsize {
         return Err(format!(
@@ -1240,8 +1240,8 @@ const OWN_SPEND: InputWeightPrediction = InputWeightPrediction::P2WPKH_MAX;
 
 /// Virtual size, rounded up, of a transaction spending coins spent as `inputs` to outputs whose
 /// scripts are `output_scripts` bytes long, every count at its real varint width: from 253 inputs
-/// the input count takes 3 bytes. An upper bound for what `signed` builds, which can come out a
-/// vbyte under where a signature is short.
+/// the input count takes 3 bytes. Exact for what `signed` builds, which grinds every signature to
+/// the size `OWN_SPEND` assumes.
 fn vsize(inputs: &[InputWeightPrediction], output_scripts: &[usize]) -> u64 {
     predict_weight(inputs.iter().copied(), output_scripts.iter().copied()).to_vbytes_ceil()
 }
@@ -1346,7 +1346,8 @@ fn own_change_transactions(
     Ok(signed)
 }
 
-/// `selected` spent to `outputs`, each input signed with its coin's own key.
+/// `selected` spent to `outputs`, each input signed with its coin's own key, and checked to weigh
+/// exactly what `vsize` sized its fee for.
 fn signed(
     selected: &[(&Utxo, &OwnKey)],
     outputs: Vec<TxOut>,
@@ -1380,7 +1381,7 @@ fn signed(
             )
             .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?;
         let msg = Message::from_digest(sighash.to_byte_array());
-        let sig = secp.sign_ecdsa(&msg, &owner.privkey.inner);
+        let sig = full_size(&secp, &msg, &owner.privkey.inner)?;
         let mut der = sig.serialize_der().to_vec();
         der.push(EcdsaSighashType::All as u8);
         let witness = cache
@@ -1388,7 +1389,45 @@ fn signed(
             .ok_or_else(|| MobileSignerError::InvalidPsbtJson("missing witness slot".into()))?;
         *witness = Witness::from_slice(&[der.as_slice(), &owner.pubkey.to_bytes()]);
     }
-    Ok(cache.into_transaction())
+    let tx = cache.into_transaction();
+    let built_for = predict_weight(
+        vec![OWN_SPEND; tx.input.len()],
+        tx.output.iter().map(|o| o.script_pubkey.len()),
+    );
+    if tx.weight() != built_for {
+        return Err(MobileSignerError::InvalidPsbtJson(format!(
+            "signed weight {} is not the {} its fee was built for",
+            tx.weight(),
+            built_for
+        )));
+    }
+    Ok(tx)
+}
+
+/// A signature of `msg` by `key` whose DER encoding is 71 bytes, 72 with the sighash byte: a 33-byte r
+/// and a 32-byte s, the size `OWN_SPEND` assumes. About half of all signatures come out shorter, and a
+/// transaction a vbyte under the size its fee was built for passed the checks on that size and failed
+/// the node's on its bytes near 10,000 sat/vB. RFC 6979 first, as before, then a counter as extra
+/// nonce data, so the same payment always signs the same bytes. 1,024 short ones in a row (odds under
+/// 2^-1000) end in an error, never a loop without end.
+fn full_size(
+    secp: &Secp256k1<All>,
+    msg: &Message,
+    key: &SecretKey,
+) -> Result<ecdsa::Signature, MobileSignerError> {
+    (0u32..1_024)
+        .map(|n| {
+            if n == 0 {
+                return secp.sign_ecdsa(msg, key);
+            }
+            let mut extra = [0u8; 32];
+            extra[..4].copy_from_slice(&n.to_le_bytes());
+            secp.sign_ecdsa_with_noncedata(msg, key, &extra)
+        })
+        .find(|sig| sig.serialize_der().len() == 71)
+        .ok_or_else(|| {
+            MobileSignerError::InvalidPsbtJson("no full-size signature in 1024 tries".into())
+        })
 }
 
 /// A payment from the coins of every used address, each input signed with its own key, any change
@@ -1727,7 +1766,7 @@ fn signed_replacement(
         )));
     }
     // Rules 3 and 4 ask at least the earlier fee plus the new size at the 1 sat/vB incremental relay
-    // rate. The size is an upper bound, so the real rate is at least `rate`.
+    // rate. The size is the signed size, so the real rate is at least `rate`.
     let fee_for = |inputs: usize, scripts: &[usize]| {
         let size = vsize(&vec![OWN_SPEND; inputs], scripts);
         (rate * size).max(old_fee.saturating_add(size))
@@ -4414,8 +4453,8 @@ mod tests {
         }
     }
 
-    // Bitcoin Core refuses a fee above 10,000 sat/vB times the signed transaction's own size, which can be
-    // smaller than the size the fee was built for, and change put into the fee raises the fee. One coin
+    // Bitcoin Core refuses a fee above 10,000 sat/vB times the signed transaction's own size, the size the fee
+    // was built for, and change put into the fee raises the fee. One coin
     // and one output is 110 vB signed: change of 100 sats folded at 7,000 sat/vB pays 987,100, under
     // 1,100,000, and at 8,000 sat/vB pays 1,128,100, over it.
     #[test]
@@ -7406,12 +7445,12 @@ mod tests {
         assert_eq!(host.tiers(), live(9900, 9900, 9900));
     }
 
-    // The fee is the rate times the size estimate, and signing does not grind for a short signature, so two
-    // inputs and one output, 178 vB estimated, sign at 177 when both signatures come out short. The app asks
-    // a replacement at the fast tier, so a cancel at the highest one must pass the node's 10,000 sat/vB on
-    // its signed size whatever the signatures, over 20 values of the second coin.
+    // The fee is the rate times the size estimate. Plain signing came out short about half the time, so two inputs
+    // and one output, 178 vB estimated, signed at 177 when both signatures did. Every signature is now ground to the
+    // estimate's 72 bytes, so the cancel the app asks at the fast tier signs at exactly 178 vB, over 20 values of the
+    // second coin.
     #[test]
-    fn a_two_coin_cancel_at_the_highest_fast_tier_signs_whatever_its_signed_size() {
+    fn a_two_coin_cancel_at_the_highest_fast_tier_signs_at_the_size_its_fee_was_built_for() {
         let fast = FeeHost::new(
             Ok(r#"{"fastestFee":20000,"halfHourFee":1,"hourFee":1}"#),
             NOT_FOUND,
@@ -7419,7 +7458,6 @@ mod tests {
         .tiers()
         .fast_sat_vb;
         let estimate = vsize(&[OWN_SPEND; 2], &[P2WPKH_SCRIPT]) as usize;
-        let mut under_estimate = 0;
         for second in 0..20 {
             let mut fake = Fake::new();
             fake.fund(&addr(Chain::External, 0), 10_000_000, '1');
@@ -7429,11 +7467,66 @@ mod tests {
             let (cancel, _) = fake
                 .replace(&earlier, fast, Replacement::Cancel)
                 .unwrap_or_else(|e| panic!("second coin {second}: {e:?}"));
-            under_estimate += usize::from(cancel.vsize() < estimate);
+            assert_eq!(cancel.vsize(), estimate, "second coin {second}");
+            assert_replaces(&fake, &earlier, &cancel);
         }
-        assert!(
-            under_estimate > 0,
-            "no cancel signed under its estimate, so none tested the edge"
+    }
+
+    // Repro 1 of the round-2 review (open item 86 point 7). A fast-tier send all of two coins and its fast-tier bump or
+    // cancel both signed 1 vB under the estimate when their signatures came out short, and rule 6 then asked a rate the
+    // node's 10,000 sat/vB refused on the bytes: 7 of 80 refused. With full-size signatures all 80 sign.
+    #[test]
+    fn a_fast_tier_replacement_of_a_fast_tier_two_coin_send_all_signs() {
+        let fast = FeeHost::new(
+            Ok(r#"{"fastestFee":20000,"halfHourFee":1,"hourFee":1}"#),
+            NOT_FOUND,
+        )
+        .tiers()
+        .fast_sat_vb;
+        for second in 0..40u64 {
+            let mut fake = Fake::new();
+            fake.fund(&addr(Chain::External, 0), 10_000_000, '1');
+            fake.fund(&addr(Chain::External, 1), 6_000_000 + second, '2');
+            let (earlier, _) = fake.send_all_at(SOMEONE, fast).unwrap();
+            for kind in KINDS {
+                let (next, fee) = fake
+                    .replace(&earlier, fast, kind)
+                    .unwrap_or_else(|e| panic!("second coin {second}, {kind:?}: {e:?}"));
+                assert_replaces(&fake, &earlier, &next);
+                assert!(fee <= MAX_FEE_RATE * next.vsize() as u64, "{kind:?}: {fee}");
+            }
+        }
+    }
+
+    // Every fee is the rate times the size of 72-byte signatures, and the node judges the signed bytes, so a payment,
+    // a send all, a fee bump and a cancel each sign every input at 72 bytes and weigh what the fee was built for.
+    #[test]
+    fn every_signature_is_ground_to_the_size_the_fee_was_built_for() {
+        for second in 0..30u64 {
+            let mut fake = Fake::new();
+            fake.fund(&addr(Chain::External, 0), 100_000, '1');
+            fake.fund(&addr(Chain::External, 1), 50_000 + second, '2');
+            let payment = fake.send(SOMEONE, 120_000, 3).unwrap();
+            let (all, _) = fake.send_all_at(SOMEONE, 2).unwrap();
+            let mut txs = vec![payment.clone(), all];
+            for kind in KINDS {
+                txs.push(fake.replace(&payment, 10, kind).unwrap().0);
+            }
+            for tx in &txs {
+                let scripts: Vec<usize> = tx.output.iter().map(|o| o.script_pubkey.len()).collect();
+                let estimate = vsize(&vec![OWN_SPEND; tx.input.len()], &scripts);
+                assert_eq!(tx.vsize() as u64, estimate, "second coin {second}");
+                for input in &tx.input {
+                    assert_eq!(input.witness.nth(0).map(<[u8]>::len), Some(72));
+                }
+            }
+        }
+        // The same payment signs the same bytes.
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 100_000, '1');
+        assert_eq!(
+            fake.send(SOMEONE, 5_000, 3).unwrap(),
+            fake.send(SOMEONE, 5_000, 3).unwrap()
         );
     }
 
