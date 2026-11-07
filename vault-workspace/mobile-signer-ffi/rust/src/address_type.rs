@@ -4,9 +4,10 @@
 
 use bitcoin::bip32::{ChildNumber, DerivationPath};
 use bitcoin::hashes::Hash;
+use bitcoin::key::{Keypair, TapTweak};
 use bitcoin::script::{Instruction, PushBytesBuf};
-use bitcoin::secp256k1::{All, Message, Secp256k1, Verification};
-use bitcoin::sighash::{EcdsaSighashType, SighashCache};
+use bitcoin::secp256k1::{All, Message, Secp256k1, Verification, schnorr};
+use bitcoin::sighash::{EcdsaSighashType, Prevouts, SighashCache, TapSighashType};
 use bitcoin::transaction::InputWeightPrediction;
 use bitcoin::{
     Address, Amount, CompressedPublicKey, Network, ScriptBuf, Transaction, TxOut, Witness,
@@ -26,6 +27,8 @@ pub enum AddressType {
     /// BIP-84 P2WPKH.
     #[default]
     NativeSegwit,
+    /// BIP-86 P2TR key path with no script tree: one 64-byte Schnorr signature, SIGHASH_DEFAULT.
+    Taproot,
 }
 
 /// What `AddressType::spend` puts in one input.
@@ -36,7 +39,12 @@ pub(crate) struct Spend {
 
 impl AddressType {
     #[cfg(test)]
-    pub(crate) const ALL: [AddressType; 3] = [Self::Legacy, Self::NestedSegwit, Self::NativeSegwit];
+    pub(crate) const ALL: [AddressType; 4] = [
+        Self::Legacy,
+        Self::NestedSegwit,
+        Self::NativeSegwit,
+        Self::Taproot,
+    ];
 
     /// The BIP-43 purpose. The coin type stays 1' on both networks.
     pub(crate) const fn purpose(self) -> u32 {
@@ -44,6 +52,7 @@ impl AddressType {
             Self::Legacy => 44,
             Self::NestedSegwit => 49,
             Self::NativeSegwit => 84,
+            Self::Taproot => 86,
         }
     }
 
@@ -64,13 +73,14 @@ impl AddressType {
             // A 23-byte script_sig: one push of the 22-byte P2WPKH script.
             Self::NestedSegwit => InputWeightPrediction::from_slice(23, &[72, 33]),
             Self::NativeSegwit => InputWeightPrediction::P2WPKH_MAX,
+            Self::Taproot => InputWeightPrediction::P2TR_KEY_DEFAULT_SIGHASH,
         }
     }
 
     /// The address `pubkey` receives at.
     pub(crate) fn address<C: Verification>(
         self,
-        _secp: &Secp256k1<C>,
+        secp: &Secp256k1<C>,
         pubkey: &CompressedPublicKey,
         network: Network,
     ) -> Address {
@@ -78,6 +88,7 @@ impl AddressType {
             Self::Legacy => Address::p2pkh(pubkey, network),
             Self::NestedSegwit => Address::p2shwpkh(pubkey, network),
             Self::NativeSegwit => Address::p2wpkh(pubkey, network),
+            Self::Taproot => Address::p2tr(secp, pubkey.0.x_only_public_key().0, None, network),
         }
     }
 
@@ -116,6 +127,27 @@ impl AddressType {
                 script_sig: ScriptBuf::new(),
                 witness: wpkh_witness(secp, cache, i, value, key)?,
             }),
+            Self::Taproot => {
+                let sighash = cache
+                    .taproot_key_spend_signature_hash(
+                        i,
+                        &Prevouts::All(prevouts),
+                        TapSighashType::Default,
+                    )
+                    .map_err(|e| bad(e.to_string()))?;
+                let keypair = Keypair::from_secret_key(secp, &key.privkey.inner)
+                    .tap_tweak(secp, None)
+                    .to_inner();
+                // No aux randomness, so the same payment signs the same bytes, as RFC 6979 does for ECDSA.
+                let sig = secp.sign_schnorr_no_aux_rand(
+                    &Message::from_digest(sighash.to_byte_array()),
+                    &keypair,
+                );
+                Ok(Spend {
+                    script_sig: ScriptBuf::new(),
+                    witness: Witness::from_slice(&[sig.as_ref()]),
+                })
+            }
         }
     }
 
@@ -158,6 +190,29 @@ impl AddressType {
             }
             Self::NativeSegwit => {
                 script_sig.is_empty() && wpkh_witness_signed(cache, i, prevout.value, &witness, key)
+            }
+            Self::Taproot => {
+                let secp = Secp256k1::verification_only();
+                let (output_key, _) = key.pubkey.0.x_only_public_key().0.tap_tweak(&secp, None);
+                let sighash = cache.taproot_key_spend_signature_hash(
+                    i,
+                    &Prevouts::All(prevouts),
+                    TapSighashType::Default,
+                );
+                // 64 bytes is SIGHASH_DEFAULT; a 65th byte names another sighash type.
+                let sig = witness
+                    .nth(0)
+                    .filter(|sig| sig.len() == 64)
+                    .map(schnorr::Signature::from_slice);
+                script_sig.is_empty()
+                    && witness.len() == 1
+                    && matches!((sig, sighash), (Some(Ok(sig)), Ok(sighash)) if secp
+                        .verify_schnorr(
+                            &sig,
+                            &Message::from_digest(sighash.to_byte_array()),
+                            &output_key.to_inner(),
+                        )
+                        .is_ok())
             }
         }
     }

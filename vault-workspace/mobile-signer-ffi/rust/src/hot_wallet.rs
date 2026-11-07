@@ -8706,6 +8706,62 @@ mod tests {
     //         .address(NETWORKS["test"])
     const TYPE_VECTORS: &[(AddressType, &str, u32, u32, &str)] = &[
         (
+            AddressType::Taproot,
+            "",
+            0,
+            0,
+            "tb1p8wpt9v4frpf3tkn0srd97pksgsxc5hs52lafxwru9kgeephvs7rqlqt9zj",
+        ),
+        (
+            AddressType::Taproot,
+            "",
+            0,
+            1,
+            "tb1p90h6z3p36n9hrzy7580h5l429uwchyg8uc9sz4jwzhdtuhqdl5eqmpwq6n",
+        ),
+        (
+            AddressType::Taproot,
+            "",
+            1,
+            0,
+            "tb1p6uav7en8k7zsumsqugdmg5j6930zmzy4dg7jcddshsr0fvxlqx7q7p5els",
+        ),
+        (
+            AddressType::Taproot,
+            "",
+            1,
+            1,
+            "tb1pwhn9lzpaukrjwvwe365x7hcgvtcfywwsaxcq7j04jgrfcxzdq23qhzr7wt",
+        ),
+        (
+            AddressType::Taproot,
+            "TREZOR",
+            0,
+            0,
+            "tb1paaphx7mxrkhpy3fel08k96fgul89tl5rwxweh7v4fevc72mav7gqvwj2e3",
+        ),
+        (
+            AddressType::Taproot,
+            "TREZOR",
+            0,
+            1,
+            "tb1px406xwc209wg0w9kh5lwg07j9en7ene4e869duh390gvezh9tqdst02lnh",
+        ),
+        (
+            AddressType::Taproot,
+            "TREZOR",
+            1,
+            0,
+            "tb1p99xgn6gy9va6y2zez3cwvwmrl04q3qhfxgzgef5c3k3zhw2gan8seqwkcz",
+        ),
+        (
+            AddressType::Taproot,
+            "TREZOR",
+            1,
+            1,
+            "tb1pujy7qru25eqzjl2jqe5fkwexvafekg4pv9l7ljq905ry4z0n4ygs05jzme",
+        ),
+        (
             AddressType::Legacy,
             "",
             0,
@@ -8846,6 +8902,9 @@ mod tests {
             AddressType::Legacy => "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA",
             AddressType::NestedSegwit => "37VucYSaXLCAsxYyAPfbSi9eh4iEcbShgf",
             AddressType::NativeSegwit => "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu",
+            AddressType::Taproot => {
+                "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr"
+            }
         };
         let secp = Secp256k1::new();
         let seed = mnemonic_from(&abandon_about()).unwrap().to_seed("");
@@ -8987,6 +9046,43 @@ mod tests {
             script_pubkey: key.address.script_pubkey(),
         };
         (signed(&[(&coins[0], key)], vec![pay]).unwrap(), coins)
+    }
+
+    #[test]
+    fn a_taproot_spend_in_another_shape_is_not_signed_here() {
+        let key = own_as(AddressType::Taproot, Chain::External, 0);
+        let (tx, coins) = one_signed(&key);
+        let selected = [(&coins[0], &key)];
+        assert!(signed_here(&tx, &selected));
+        let sig = tx.input[0].witness.nth(0).unwrap().to_vec();
+        let with = |witness: Witness| {
+            let mut forged = tx.clone();
+            forged.input[0].witness = witness;
+            forged
+        };
+        let mut all = sig.clone();
+        all.push(0x01); // SIGHASH_ALL, a 65-byte signature
+        let mut script_sig = tx.clone();
+        script_sig.input[0].script_sig = ScriptBuf::from(vec![0x51]);
+        let mut flipped = sig.clone();
+        flipped[63] ^= 1;
+        // The same key spending as P2WPKH would: a 72-byte ECDSA signature and the key.
+        let (native, _) = one_signed(&OwnKey {
+            address_type: AddressType::NativeSegwit,
+            ..own_as(AddressType::Taproot, Chain::External, 0)
+        });
+        for (what, forged) in [
+            ("65 bytes", with(Witness::from_slice(&[all]))),
+            (
+                "two items",
+                with(Witness::from_slice(&[sig.clone(), sig.clone()])),
+            ),
+            ("flipped", with(Witness::from_slice(&[flipped]))),
+            ("p2wpkh shape", with(native.input[0].witness.clone())),
+            ("script_sig", script_sig),
+        ] {
+            assert!(!signed_here(&forged, &selected), "{what}");
+        }
     }
 
     #[test]
