@@ -1160,8 +1160,8 @@ pub struct PreparedSend {
 /// Coins are added largest first, one at a time, until they pay the amount and the fee of the
 /// transaction they make, so any payment some of the coins can make is signed. The fee is the size
 /// of the transaction as built times the rate, so a payment that needs more coins pays more, never a
-/// fixed sum that falls under the rate. The answer's `fee_sats` is that fee, and the app compares it
-/// with the estimate its screens showed and asks the user when it is much higher. Refuses, before
+/// fixed sum that falls under the rate. The answer's `fee_sats` is that fee, the one `hot_quote_send`
+/// reads without signing on the same chain state. Refuses, before
 /// signing, a rate outside 1 to 10,000 sat/vB (the network's limit), an amount below the dust floor
 /// of the destination's script (294 sats for P2WPKH up to 546 for P2PKH, the outputs the network
 /// refuses), an amount that overflows u64 with its fee, coins that cannot pay it (`insufficient
@@ -1251,6 +1251,48 @@ pub fn hot_prepare_send_all(
         &SystemTime::now,
         &SCAN_STORE,
     )?))
+}
+
+/// What `hot_quote_send` reads: the figures of the payment the signer would make now.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct QuotedSend {
+    /// `PreparedSend::fee_sats` of that payment.
+    pub fee_sats: u64,
+    /// `PreparedSend::amount_sats`: the amount asked for, or for send all the balance less `fee_sats`.
+    pub amount_sats: u64,
+    /// `PreparedSend::dust_change_sats`.
+    pub dust_change_sats: u64,
+    /// The payment's virtual size once signed, in vbytes.
+    pub vsize: u64,
+}
+
+/// What `hot_prepare_send_at_rate` with `amount_sats`, or `hot_prepare_send_all` when it is null, would
+/// sign for the same arguments on the chain as this call reads it: the same scan, coin lists, coin
+/// selection, sizes and refusals, and no signature, so no key signs. A Legacy coin's value is proven
+/// from its parent only when the payment is signed, so a host that lists one at another value fails
+/// that payment, never this call. The same scan as the payment, so call it off the main thread.
+#[uniffi::export]
+pub fn hot_quote_send(
+    mnemonic_words: Vec<String>,
+    passphrase: String,
+    network: KeyNetwork,
+    address_type: AddressType,
+    destination: String,
+    amount_sats: Option<u64>,
+    fee_rate_sat_vb: u64,
+) -> Result<QuotedSend, MobileSignerError> {
+    quoted(
+        &EsploraSource(&testnet4()),
+        &mnemonic_words,
+        &passphrase,
+        network,
+        address_type,
+        &destination,
+        amount_sats.map_or(SendAmount::All, SendAmount::Exact),
+        fee_rate_sat_vb,
+        &SystemTime::now,
+        &SCAN_STORE,
+    )
 }
 
 /// Post a transaction from `hot_prepare_send_at_rate` once. `txid` must be the id of the transaction in
@@ -1636,12 +1678,7 @@ fn signed(
         input.script_sig = spend.script_sig;
         input.witness = spend.witness;
     }
-    let built_for = predict_weight(
-        selected
-            .iter()
-            .map(|(_, owner)| owner.address_type.input_weight()),
-        tx.output.iter().map(|o| o.script_pubkey.len()),
-    );
+    let built_for = weight_of(selected, &tx.output);
     if tx.weight() != built_for {
         return Err(MobileSignerError::InvalidPsbtJson(format!(
             "signed weight {} is not the {} its fee was built for",
@@ -1650,6 +1687,18 @@ fn signed(
         )));
     }
     Ok(tx)
+}
+
+/// The weight `selected` paying `outputs` has once signed: each input at its type's `input_weight`,
+/// which `full_size` and `spend` make exact. `signed` refuses bytes of any other weight, and a quote
+/// sizes its node-rate check with it.
+fn weight_of(selected: &[(&Utxo, &OwnKey)], outputs: &[TxOut]) -> bitcoin::Weight {
+    predict_weight(
+        selected
+            .iter()
+            .map(|(_, owner)| owner.address_type.input_weight()),
+        outputs.iter().map(|o| o.script_pubkey.len()),
+    )
 }
 
 /// A signature of `msg` by `key` whose DER encoding is 71 bytes, 72 with the sighash byte: a 33-byte r
@@ -1998,6 +2047,45 @@ fn signed_send_all(
         clock,
         store,
         |plan| signed_plan(source, plan),
+    )
+}
+
+/// The quote's finish: the plan's figures, nothing proven or signed, refused where the signed bytes
+/// would be, past the node's 10,000 sat/vB on the weight `signed` proves the bytes have.
+#[allow(clippy::too_many_arguments)]
+fn quoted(
+    source: &dyn ChainSource,
+    words: &[String],
+    passphrase: &str,
+    network: KeyNetwork,
+    address_type: AddressType,
+    destination: &str,
+    amount: SendAmount,
+    rate_sat_vb: u64,
+    clock: &dyn Fn() -> SystemTime,
+    store: &ScanStore,
+) -> Result<QuotedSend, MobileSignerError> {
+    planned(
+        source,
+        words,
+        passphrase,
+        network,
+        address_type,
+        destination,
+        amount,
+        rate_sat_vb,
+        clock,
+        store,
+        |plan| {
+            let vsize = weight_of(&plan.selected, &plan.outputs).to_vbytes_ceil();
+            check_node_rate(plan.fee_sats, vsize).map_err(MobileSignerError::InvalidPsbtJson)?;
+            Ok(QuotedSend {
+                fee_sats: plan.fee_sats,
+                amount_sats: plan.outputs[0].value.to_sat(),
+                dust_change_sats: plan.dust_change_sats,
+                vsize,
+            })
+        },
     )
 }
 
@@ -3666,6 +3754,34 @@ mod tests {
             txid
         }
 
+        /// `address` holds one coin of each of `values`, each output 1 of its own confirmed transaction that this
+        /// host serves raw, the first made with digit `1`, the next with `2`. Returns the transactions' ids.
+        fn fund_coins(&mut self, address: &str, values: &[u64]) -> Vec<Txid> {
+            let pay = |to: &str, sats| TxOut {
+                value: Amount::from_sat(sats),
+                script_pubkey: Address::from_str(to)
+                    .unwrap()
+                    .assume_checked()
+                    .script_pubkey(),
+            };
+            let (mut listed, mut txids) = (Vec::new(), Vec::new());
+            for (i, value) in values.iter().enumerate() {
+                let digit = char::from_digit(i as u32 + 1, 16).unwrap();
+                let tx = paying(digit, vec![pay(SOMEONE, 1_000), pay(address, *value)]);
+                let txid = tx.compute_txid();
+                listed.push(format!(
+                    r#"{{"txid":"{txid}","vout":1,"status":{{"confirmed":true}},"value":{value}}}"#
+                ));
+                self.raw.insert(txid.to_string(), serialize_hex(&tx));
+                txids.push(txid);
+            }
+            self.stats
+                .insert(address.into(), used_stats(values.iter().sum()));
+            self.utxos
+                .insert(address.into(), format!("[{}]", listed.join(",")));
+            txids
+        }
+
         /// How many times `txid`'s raw bytes were read.
         fn reads_of(&self, txid: Txid) -> usize {
             let path = format!("/tx/{txid}/hex");
@@ -3867,6 +3983,50 @@ mod tests {
 
         fn send(&self, to: &str, amount: u64, rate: u64) -> Result<Transaction, MobileSignerError> {
             self.send_at(to, amount, rate).map(|(tx, _)| tx)
+        }
+
+        /// `hot_quote_send` as the app would reach it, against this Fake.
+        fn quote(
+            &self,
+            to: &str,
+            amount: SendAmount,
+            rate: u64,
+        ) -> Result<QuotedSend, MobileSignerError> {
+            quoted(
+                &EsploraSource(&Reads(&|url| self.get(url))),
+                &abandon_about(),
+                "",
+                KeyNetwork::Test,
+                self.address_type,
+                to,
+                amount,
+                rate,
+                &|| self.now(),
+                &self.store,
+            )
+        }
+
+        /// What the payment `quote` reads signs: `payment`, or `hot_prepare_send_all`'s for send all.
+        fn signed_for(
+            &self,
+            to: &str,
+            amount: SendAmount,
+            rate: u64,
+        ) -> Result<Signed, MobileSignerError> {
+            match amount {
+                SendAmount::Exact(sats) => self.payment(to, sats, rate),
+                SendAmount::All => signed_send_all(
+                    &EsploraSource(&Reads(&|url| self.get(url))),
+                    &abandon_about(),
+                    "",
+                    KeyNetwork::Test,
+                    self.address_type,
+                    to,
+                    rate,
+                    &|| self.now(),
+                    &self.store,
+                ),
+            }
         }
 
         /// The whole balance at `rate` sat/vB, as `hot_prepare_send_all` reaches it, and the fee it pays.
@@ -9408,6 +9568,210 @@ mod tests {
             sent_all.push(all.output[0].value.to_sat());
         }
         assert_eq!(sent_all, [98_488, 98_936, 99_120, 99_208]);
+    }
+
+    /// The quote and the payment of one chain state side by side. Both answer with the same figures, or both refuse with the
+    /// same text, which this returns. The payment's output count and folded change, so a caller can see how its leftover
+    /// settled.
+    #[track_caller]
+    fn quote_and_payment(
+        fake: &Fake,
+        to: &str,
+        amount: SendAmount,
+        rate: u64,
+    ) -> Result<(usize, u64), String> {
+        let case = format!(
+            "{:?} wallet, {amount:?} to {to} at {rate} sat/vB",
+            fake.address_type
+        );
+        let text = |e: MobileSignerError| match e {
+            MobileSignerError::InvalidPsbtJson(m) => m,
+            other => other.to_string(),
+        };
+        match (
+            fake.quote(to, amount, rate),
+            fake.signed_for(to, amount, rate),
+        ) {
+            (Ok(quote), Ok(signed)) => {
+                let paid = QuotedSend {
+                    fee_sats: signed.fee_sats,
+                    amount_sats: signed.tx.output[0].value.to_sat(),
+                    dust_change_sats: signed.dust_change_sats,
+                    vsize: signed.tx.vsize() as u64,
+                };
+                assert_eq!(quote, paid, "{case}");
+                Ok((signed.tx.output.len(), signed.dust_change_sats))
+            }
+            (Err(quote), Err(signed)) => {
+                let (quote, signed) = (text(quote), text(signed));
+                assert_eq!(quote, signed, "{case}");
+                Err(quote)
+            }
+            (quote, signed) => panic!(
+                "{case}: the quote {quote:?}, the payment's fee {:?}",
+                signed.map(|s| s.fee_sats)
+            ),
+        }
+    }
+
+    // The round-3 repro turned around (`.audit/address-type-r3-repros`): Review priced one coin of the wallet's type paying
+    // its own type, so 12 of the 16 wallet and destination types, and every payment of more coins, signed another fee than
+    // it showed. The quote runs the payment's own plan, so for every pair, 1, 3 and 8 coins, each way the leftover settles
+    // and send all, it reads the signed payment's fee, amount, folded change and size, and each refusal is the payment's.
+    #[test]
+    fn a_quote_is_what_the_signer_signs_for_the_same_chain_state() {
+        const COIN: u64 = 50_000_000;
+        for wallet_type in AddressType::ALL {
+            let wallet = own_as(wallet_type, Chain::External, 0).address.to_string();
+            let floor = dust_floor(
+                &own_as(wallet_type, Chain::Internal, 0)
+                    .address
+                    .script_pubkey(),
+            );
+            for coins in [1, 3, 8] {
+                let mut fake = Fake::new();
+                fake.address_type = wallet_type;
+                fake.fund_coins(&wallet, &vec![COIN; coins]);
+                let have = COIN * coins as u64;
+                for dest_type in AddressType::ALL {
+                    let dest =
+                        Account::new(&abandon_about(), "TREZOR", Network::Testnet4, dest_type)
+                            .unwrap()
+                            .key(Chain::External, 0)
+                            .unwrap()
+                            .address;
+                    let to = dest.to_string();
+                    let spends = vec![wallet_type.input_weight(); coins];
+                    let with = vsize(&spends, &[dest_type.script_len(), wallet_type.script_len()]);
+                    let without = vsize(&spends, &[dest_type.script_len()]);
+                    // What every coin holds beyond the amount, and how it settles at the rate asked: change above its
+                    // floor, change under its floor into the fee, too little for a change output, and change at its
+                    // floor because into the fee would pass 10,000 sat/vB. Each needs every coin.
+                    for (kind, rate, left, settled) in [
+                        ("Change", 8, 8 * with + floor + 1_000, (2, 0)),
+                        ("Fold", 8, 8 * with + floor / 2, (1, floor / 2)),
+                        ("Fit", 8, 8 * without + 100, (1, 100)),
+                        (
+                            "FloorChange",
+                            MAX_FEE_RATE,
+                            MAX_FEE_RATE * with + floor - 1,
+                            (2, 0),
+                        ),
+                    ] {
+                        assert_eq!(
+                            quote_and_payment(&fake, &to, SendAmount::Exact(have - left), rate),
+                            Ok(settled),
+                            "{kind}, {coins} coins to {dest_type:?}"
+                        );
+                    }
+                    assert_eq!(
+                        quote_and_payment(&fake, &to, SendAmount::All, 8),
+                        Ok((1, 0))
+                    );
+                    let dest_floor = dust_floor(&dest.script_pubkey());
+                    assert_eq!(
+                        quote_and_payment(&fake, &to, SendAmount::Exact(dest_floor - 1), 8),
+                        Err(format!(
+                            "amount {} is below the network's {dest_floor} sat dust floor",
+                            dest_floor - 1
+                        ))
+                    );
+                }
+                let short = quote_and_payment(&fake, SOMEONE, SendAmount::Exact(have + 1), 8);
+                assert!(
+                    short
+                        .clone()
+                        .unwrap_err()
+                        .starts_with(&format!("insufficient funds: have {have} confirmed, need ")),
+                    "{short:?}"
+                );
+                for amount in [SendAmount::Exact(1_000), SendAmount::All] {
+                    assert_eq!(
+                        quote_and_payment(&fake, SOMEONE, amount, MAX_FEE_RATE + 1),
+                        Err("fee rate 10001 is above the network's 10000 sat/vB limit".into())
+                    );
+                }
+            }
+            let mut small = Fake::new();
+            small.address_type = wallet_type;
+            small.fund_coins(&wallet, &[1_000]);
+            let refused = quote_and_payment(&small, SOMEONE, SendAmount::All, 10);
+            assert!(
+                refused
+                    .clone()
+                    .unwrap_err()
+                    .starts_with("the whole balance 1000 less the fee "),
+                "{refused:?}"
+            );
+        }
+        let mut many = Fake::new();
+        let coins: Vec<String> = (0..1_600u32).map(|i| coin('a', i, 2_000, true)).collect();
+        many.stats
+            .insert(addr(Chain::External, 0), used_stats(2_000 * 1_600));
+        many.utxos
+            .insert(addr(Chain::External, 0), format!("[{}]", coins.join(",")));
+        assert_eq!(
+            quote_and_payment(&many, SOMEONE, SendAmount::Exact(2_900_000), 1),
+            Err("too many coins: this amount needs more than the network's 100000 vB, send a smaller amount".into())
+        );
+        assert_eq!(
+            quote_and_payment(&many, SOMEONE, SendAmount::All, 1),
+            Err("too many coins: the whole balance needs more than the network's 100000 vB, send a fixed amount".into())
+        );
+        let empty = quote_and_payment(&Fake::new(), SOMEONE, SendAmount::All, 1);
+        assert!(
+            empty
+                .clone()
+                .unwrap_err()
+                .starts_with("insufficient funds: have 0 confirmed, need "),
+            "{empty:?}"
+        );
+    }
+
+    // A quote signs nothing, so it proves nothing: a Legacy quote reads the sync and the coin lists and no raw transaction,
+    // and the payment after it still reads each coin's transaction once before it signs.
+    #[test]
+    fn a_quote_reads_no_parent_and_the_payment_still_proves_every_legacy_coin() {
+        let mut fake = Fake::new();
+        fake.address_type = AddressType::Legacy;
+        let wallet = own_as(AddressType::Legacy, Chain::External, 0)
+            .address
+            .to_string();
+        let txids = fake.fund_coins(&wallet, &[40_000, 30_000, 20_000]);
+        let reads = |fake: &Fake| txids.iter().map(|t| fake.reads_of(*t)).collect::<Vec<_>>();
+        fake.quote(SOMEONE, SendAmount::Exact(80_000), 2).unwrap();
+        fake.quote(SOMEONE, SendAmount::All, 2).unwrap();
+        assert_eq!(reads(&fake), [0, 0, 0], "a quote read a parent");
+        let payment = fake.payment(SOMEONE, 80_000, 2).unwrap();
+        assert_eq!(payment.tx.input.len(), 3);
+        assert_eq!(reads(&fake), [1, 1, 1], "the payment proved each coin once");
+    }
+
+    // The chain can move between Review's quote and the signature. A coin that confirms on a funded address in between is the
+    // largest, so the payment spends it alone and pays another fee than the quote read, which is why Review compares the two
+    // before it posts. A quote taken again reads the payment.
+    #[test]
+    fn a_coin_that_arrives_between_quote_and_payment_changes_the_payment() {
+        let mut fake = Fake::new();
+        let wallet = addr(Chain::External, 0);
+        fake.fund_coins(&wallet, &[20_000, 20_000]);
+        let before = fake.quote(SOMEONE, SendAmount::Exact(30_000), 2).unwrap();
+        fake.fund_coins(&wallet, &[20_000, 20_000, 100_000]);
+        let payment = fake.payment(SOMEONE, 30_000, 2).unwrap();
+        assert_eq!(
+            payment.tx.input.len(),
+            1,
+            "the payment spends the coin that arrived"
+        );
+        assert_eq!(
+            (before.fee_sats, payment.fee_sats),
+            (
+                2 * vsize(&[OWN_SPEND; 2], &[SOMEONE_SCRIPT, P2WPKH_SCRIPT]),
+                2 * 141
+            )
+        );
+        let again = fake.quote(SOMEONE, SendAmount::Exact(30_000), 2).unwrap();
+        assert_eq!(again.fee_sats, payment.fee_sats);
     }
 
     // The round-1 review's repro: a host lists a coin of 100,000 sats at 60,000. The legacy sighash commits to no value,

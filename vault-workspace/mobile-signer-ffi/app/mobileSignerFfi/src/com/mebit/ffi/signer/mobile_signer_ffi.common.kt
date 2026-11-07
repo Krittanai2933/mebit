@@ -569,6 +569,33 @@ public data class PreparedSend (
 
 
 /**
+ * What `hot_quote_send` reads: the figures of the payment the signer would make now.
+ */
+
+public data class QuotedSend (
+    /**
+     * `PreparedSend::fee_sats` of that payment.
+     */
+    var `feeSats`: kotlin.ULong, 
+    /**
+     * `PreparedSend::amount_sats`: the amount asked for, or for send all the balance less `fee_sats`.
+     */
+    var `amountSats`: kotlin.ULong, 
+    /**
+     * `PreparedSend::dust_change_sats`.
+     */
+    var `dustChangeSats`: kotlin.ULong, 
+    /**
+     * The payment's virtual size once signed, in vbytes.
+     */
+    var `vsize`: kotlin.ULong
+) {
+    public companion object
+}
+
+
+
+/**
  * A 24-word BIP-39 mnemonic and the BIP-48 P2WSH account key derived from it.
  *
  * `mnemonic_words` is the one copy of the secret that crosses into Kotlin.
@@ -1194,8 +1221,8 @@ public expect fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `pas
  * Coins are added largest first, one at a time, until they pay the amount and the fee of the
  * transaction they make, so any payment some of the coins can make is signed. The fee is the size
  * of the transaction as built times the rate, so a payment that needs more coins pays more, never a
- * fixed sum that falls under the rate. The answer's `fee_sats` is that fee, and the app compares it
- * with the estimate its screens showed and asks the user when it is much higher. Refuses, before
+ * fixed sum that falls under the rate. The answer's `fee_sats` is that fee, the one `hot_quote_send`
+ * reads without signing on the same chain state. Refuses, before
  * signing, a rate outside 1 to 10,000 sat/vB (the network's limit), an amount below the dust floor
  * of the destination's script (294 sats for P2WPKH up to 546 for P2PKH, the outputs the network
  * refuses), an amount that overflows u64 with its fee, coins that cannot pay it (`insufficient
@@ -1213,6 +1240,16 @@ public expect fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `pas
  */
 @Throws(MobileSignerException::class)
 public expect fun `hotPrepareSendAtRate`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeRateSatVb`: kotlin.ULong): PreparedSend
+
+/**
+ * What `hot_prepare_send_at_rate` with `amount_sats`, or `hot_prepare_send_all` when it is null, would
+ * sign for the same arguments on the chain as this call reads it: the same scan, coin lists, coin
+ * selection, sizes and refusals, and no signature, so no key signs. A Legacy coin's value is proven
+ * from its parent only when the payment is signed, so a host that lists one at another value fails
+ * that payment, never this call. The same scan as the payment, so call it off the main thread.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `hotQuoteSend`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType, `destination`: kotlin.String, `amountSats`: kotlin.ULong?, `feeRateSatVb`: kotlin.ULong): QuotedSend
 
 /**
  * Receive address `index` (usually 0) of `address_type`'s account. `passphrase` is the

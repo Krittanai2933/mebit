@@ -1334,6 +1334,8 @@ internal val UniffiVTableCallbackInterfacePairingCodesUniffiByValue.`uniffiFree`
 
 
 
+
+
 internal object UniffiLib {
     init {
             uniffiCallbackInterfacePairingCodes.register(this)
@@ -1585,6 +1587,25 @@ internal object UniffiLib {
         `feeRateSatVb`: Long,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_prepare_send_at_rate(
+        `mnemonicWords`,
+        `passphrase`,
+        `network`,
+        `addressType`,
+        `destination`,
+        `amountSats`,
+        `feeRateSatVb`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_func_hot_quote_send(
+        `mnemonicWords`: RustBufferByValue,
+        `passphrase`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        `addressType`: RustBufferByValue,
+        `destination`: RustBufferByValue,
+        `amountSats`: RustBufferByValue,
+        `feeRateSatVb`: Long,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_quote_send(
         `mnemonicWords`,
         `passphrase`,
         `network`,
@@ -2120,6 +2141,9 @@ internal object UniffiLib {
     )
     fun uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate(
+    )
+    fun uniffi_mobile_signer_ffi_checksum_func_hot_quote_send(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_quote_send(
     )
     fun uniffi_mobile_signer_ffi_checksum_func_hot_receive_address(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_receive_address(
@@ -3280,6 +3304,34 @@ public object FfiConverterTypePreparedSend: FfiConverterRustBuffer<PreparedSend>
 
 
 
+public object FfiConverterTypeQuotedSend: FfiConverterRustBuffer<QuotedSend> {
+    override fun read(buf: ByteBuffer): QuotedSend {
+        return QuotedSend(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: QuotedSend): ULong = (
+            FfiConverterULong.allocationSize(value.`feeSats`) +
+            FfiConverterULong.allocationSize(value.`amountSats`) +
+            FfiConverterULong.allocationSize(value.`dustChangeSats`) +
+            FfiConverterULong.allocationSize(value.`vsize`)
+    )
+
+    override fun write(value: QuotedSend, buf: ByteBuffer) {
+        FfiConverterULong.write(value.`feeSats`, buf)
+        FfiConverterULong.write(value.`amountSats`, buf)
+        FfiConverterULong.write(value.`dustChangeSats`, buf)
+        FfiConverterULong.write(value.`vsize`, buf)
+    }
+}
+
+
+
+
 public object FfiConverterTypeSoftwareAccountKey: FfiConverterRustBuffer<SoftwareAccountKey> {
     override fun read(buf: ByteBuffer): SoftwareAccountKey {
         return SoftwareAccountKey(
@@ -4220,8 +4272,8 @@ public actual fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `pas
  * Coins are added largest first, one at a time, until they pay the amount and the fee of the
  * transaction they make, so any payment some of the coins can make is signed. The fee is the size
  * of the transaction as built times the rate, so a payment that needs more coins pays more, never a
- * fixed sum that falls under the rate. The answer's `fee_sats` is that fee, and the app compares it
- * with the estimate its screens showed and asks the user when it is much higher. Refuses, before
+ * fixed sum that falls under the rate. The answer's `fee_sats` is that fee, the one `hot_quote_send`
+ * reads without signing on the same chain state. Refuses, before
  * signing, a rate outside 1 to 10,000 sat/vB (the network's limit), an amount below the dust floor
  * of the destination's script (294 sats for P2WPKH up to 546 for P2PKH, the outputs the network
  * refuses), an amount that overflows u64 with its fee, coins that cannot pay it (`insufficient
@@ -4247,6 +4299,29 @@ public actual fun `hotPrepareSendAtRate`(`mnemonicWords`: List<kotlin.String>, `
             FfiConverterTypeAddressType.lower(`addressType`),
             FfiConverterString.lower(`destination`),
             FfiConverterULong.lower(`amountSats`),
+            FfiConverterULong.lower(`feeRateSatVb`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * What `hot_prepare_send_at_rate` with `amount_sats`, or `hot_prepare_send_all` when it is null, would
+ * sign for the same arguments on the chain as this call reads it: the same scan, coin lists, coin
+ * selection, sizes and refusals, and no signature, so no key signs. A Legacy coin's value is proven
+ * from its parent only when the payment is signed, so a host that lists one at another value fails
+ * that payment, never this call. The same scan as the payment, so call it off the main thread.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `hotQuoteSend`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType, `destination`: kotlin.String, `amountSats`: kotlin.ULong?, `feeRateSatVb`: kotlin.ULong): QuotedSend {
+    return FfiConverterTypeQuotedSend.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_quote_send(
+            FfiConverterSequenceString.lower(`mnemonicWords`),
+            FfiConverterString.lower(`passphrase`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterTypeAddressType.lower(`addressType`),
+            FfiConverterString.lower(`destination`),
+            FfiConverterOptionalULong.lower(`amountSats`),
             FfiConverterULong.lower(`feeRateSatVb`),
             uniffiRustCallStatus,
         )

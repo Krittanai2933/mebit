@@ -869,6 +869,10 @@ mod tests {
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_all(),
             ),
             (
+                "func_hot_quote_send",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_quote_send(),
+            ),
+            (
                 "func_hot_prepare_fee_bump",
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_prepare_fee_bump(),
             ),
