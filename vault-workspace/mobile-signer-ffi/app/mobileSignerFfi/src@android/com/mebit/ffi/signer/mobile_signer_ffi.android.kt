@@ -1137,7 +1137,7 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_cancel() != 64952.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_fee_bump() != 51592.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_fee_bump() != 50935.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_all() != 35787.toShort()) {
@@ -3769,8 +3769,9 @@ public actual fun `hotPrepareCancel`(`mnemonicWords`: List<kotlin.String>, `pass
  * it refuses, after `replace: `, a second output that is not this wallet's change, inputs that are not
  * all coins this wallet can spend now (`coins spent:`, most likely because that payment is out), an
  * input without this wallet's own SIGHASH_ALL signature for its coin, a rate that would pass 10,000
- * sat/vB, on the rate asked or on the signed bytes, and what is left below the dust floor of its
- * output, and without `replace: ` a payment with change whose amount the confirmed coins cannot keep
+ * sat/vB, on the rate asked or on the signed bytes, what is left below the dust floor of its
+ * output, and a bump above the network's 100,000 vB (`too many coins:`), and without `replace: ` a
+ * payment with change whose amount the confirmed coins cannot keep
  * (`insufficient funds:`). The same scan as `hot_prepare_send_at_rate`, so call it off the main thread.
  */
 @Throws(MobileSignerException::class)

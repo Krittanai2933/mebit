@@ -17,9 +17,10 @@ class SendErrorThaiTest {
         // The network's limit, on the rate asked and on the signed bytes.
         "fee rate 10001 is above the network's 10000 sat/vB limit" to "เครือข่ายไม่รับค่าธรรมเนียมเกิน 10,000 sat/vB เลือกระดับที่ต่ำลง",
         "fee 1128100 for 110 vB is above the network's 10000 sat/vB limit" to "เครือข่ายไม่รับค่าธรรมเนียมเกิน 10,000 sat/vB เลือกระดับที่ต่ำลง",
-        // More coins than one transaction of 100,000 vB holds, for a payment and for send all.
+        // More coins than one transaction of 100,000 vB holds, for a payment, for send all and for a fee bump.
         "too many coins: this amount needs more than the network's 100000 vB, send a smaller amount" to "ต้องรวมเหรียญเกินขนาดที่เครือข่ายรับในธุรกรรมเดียว (100,000 vB) ส่งจำนวนที่น้อยลง",
         "too many coins: the whole balance needs more than the network's 100000 vB, send a fixed amount" to "ต้องรวมเหรียญเกินขนาดที่เครือข่ายรับในธุรกรรมเดียว (100,000 vB) ส่งจำนวนที่น้อยลง",
+        "replace: too many coins: no fee bump fits the network's 100000 vB" to "ต้องรวมเหรียญเกินขนาดที่เครือข่ายรับในธุรกรรมเดียว (100,000 vB) ส่งจำนวนที่น้อยลง",
         // A host lied in a proof, and no other host was left.
         "esplora scan: receive index 19: tb1qexample: transaction 1111111111111111111111111111111111111111111111111111111111111111 does not pay it" to "ประวัติของกระเป๋านี้ผิดปกติ ตรวจกับ explorer ก่อนส่ง",
         // A payment or a history while the scan goes on, after a host's request limit or a lost read.

@@ -571,8 +571,8 @@ fun sendErrorThai(message: String?): String {
     return when {
         m.startsWith("amount ") && floor != null -> "เครือข่ายไม่รับยอดส่งที่ต่ำกว่า $floor sat สำหรับที่อยู่ปลายทางนี้"
         m.startsWith("insufficient funds") -> "ยอดที่ยืนยันแล้วไม่พอ รอให้เงินที่เพิ่งได้รับยืนยันก่อน"
-        // hot_prepare_send_at_rate and hot_prepare_send_all: the coins need more than the network's 100,000 vB in one transaction.
-        m.startsWith("too many coins") -> "ต้องรวมเหรียญเกินขนาดที่เครือข่ายรับในธุรกรรมเดียว (100,000 vB) ส่งจำนวนที่น้อยลง"
+        // hot_prepare_send_at_rate, hot_prepare_send_all and, after "replace: ", hot_prepare_fee_bump: the coins need more than the network's 100,000 vB in one transaction.
+        m.removePrefix("replace: ").startsWith("too many coins") -> "ต้องรวมเหรียญเกินขนาดที่เครือข่ายรับในธุรกรรมเดียว (100,000 vB) ส่งจำนวนที่น้อยลง"
         // hot_prepare_send_all: the balance less the real fee would be below the destination's floor.
         m.startsWith("the whole balance ") && floor != null -> "ยอดทั้งหมดหลังหักค่าธรรมเนียมต่ำกว่า $floor sat ซึ่งเครือข่ายไม่รับสำหรับที่อยู่ปลายทางนี้"
         m.startsWith("fee ") && " is below " in m -> "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น"
