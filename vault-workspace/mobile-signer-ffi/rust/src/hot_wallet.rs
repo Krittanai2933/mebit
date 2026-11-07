@@ -2268,6 +2268,7 @@ mod tests {
     use super::*;
     use crate::chain::*;
     use crate::scan_store::tests::Folder;
+    use bitcoin::bip32::DerivationPath;
     use bitcoin::sighash::EcdsaSighashType;
     use std::fs;
 
@@ -3275,6 +3276,8 @@ mod tests {
     const SOMEONE: &str = REAL_COINBASE_PAYEE;
     /// A P2WPKH output's script, this wallet's change and `SOMEONE`: 22 bytes.
     const P2WPKH_SCRIPT: usize = 22;
+    /// `SOMEONE`'s script length.
+    const SOMEONE_SCRIPT: usize = P2WPKH_SCRIPT;
     /// Stands in for the private node of a build, so the tests read the same with or without one.
     const OWN_NODE_FIXTURE: &str = "http://node.internal:8889/api";
     /// The reads of one proof of use, which are the address's history page and the tip, then the raw
@@ -3304,6 +3307,13 @@ mod tests {
         own(chain, index).address.to_string()
     }
 
+    fn own_as(address_type: AddressType, chain: Chain, index: u32) -> OwnKey {
+        Account::new(&abandon_about(), "", Network::Testnet4, address_type)
+            .unwrap()
+            .key(chain, index)
+            .unwrap()
+    }
+
     /// Esplora keyed by address. An address not set up answers as one nobody ever paid, with no
     /// history. One set up lists its payment in `PROOF` when that block pays it, so a claim of use
     /// proves like a real one. Each Fake has its own scan cache and a clock that moves only by `tick`,
@@ -3322,6 +3332,8 @@ mod tests {
         calls: Mutex<Vec<String>>,
         now: Mutex<SystemTime>,
         store: ScanStore,
+        /// The type of the wallet every call reads and signs, Native SegWit unless a test sets another.
+        address_type: AddressType,
     }
 
     impl Fake {
@@ -3337,6 +3349,7 @@ mod tests {
                 calls: Mutex::new(Vec::new()),
                 now: Mutex::new(UNIX_EPOCH + Duration::from_secs(1_762_300_000)),
                 store: ScanStore::default(),
+                address_type: AddressType::NativeSegwit,
             }
         }
 
@@ -3470,7 +3483,7 @@ mod tests {
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
-                AddressType::NativeSegwit,
+                self.address_type,
                 &|| self.now(),
                 store,
             )
@@ -3486,7 +3499,7 @@ mod tests {
                 words,
                 passphrase,
                 KeyNetwork::Test,
-                AddressType::NativeSegwit,
+                self.address_type,
                 &|| self.now(),
                 &self.store,
             )
@@ -3498,7 +3511,7 @@ mod tests {
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
-                AddressType::NativeSegwit,
+                self.address_type,
                 &|| self.now(),
                 &self.store,
             )
@@ -3522,7 +3535,7 @@ mod tests {
                 &words,
                 "",
                 KeyNetwork::Test,
-                AddressType::NativeSegwit,
+                self.address_type,
                 to,
                 amount,
                 rate,
@@ -3547,7 +3560,7 @@ mod tests {
                 &words,
                 "",
                 KeyNetwork::Test,
-                AddressType::NativeSegwit,
+                self.address_type,
                 to,
                 rate,
                 &|| self.now(),
@@ -3589,7 +3602,7 @@ mod tests {
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
-                AddressType::NativeSegwit,
+                self.address_type,
                 hex,
                 rate,
                 kind,
@@ -8684,6 +8697,265 @@ mod tests {
         }
     }
 
+    // embit 0.8 (an implementation apart from rust-bitcoin) derived these, after it reproduced the 8 BIP-84 vectors above,
+    // BIP-49's published testnet vector (m/49'/1'/0'/0/0, the first Nested row) and the mainnet vectors of
+    // `each_type_derives_its_published_mainnet_vector`. The script, in short:
+    //     root = bip32.HDKey.from_seed(bip39.mnemonic_to_seed(WORDS, passphrase))
+    //     key = root.derive(f"m/{purpose}h/1h/0h/{chain}/{index}").key
+    //     {44: script.p2pkh, 49: lambda k: script.p2sh(script.p2wpkh(k)), 86: script.p2tr}[purpose](key)
+    //         .address(NETWORKS["test"])
+    const TYPE_VECTORS: &[(AddressType, &str, u32, u32, &str)] = &[
+        (
+            AddressType::NestedSegwit,
+            "",
+            0,
+            0,
+            "2Mww8dCYPUpKHofjgcXcBCEGmniw9CoaiD2",
+        ),
+        (
+            AddressType::NestedSegwit,
+            "",
+            0,
+            1,
+            "2N55m54k8vr95ggehfUcNkdbUuQvaqG2GxK",
+        ),
+        (
+            AddressType::NestedSegwit,
+            "",
+            1,
+            0,
+            "2MvdUi5o3f2tnEFh9yGvta6FzptTZtkPJC8",
+        ),
+        (
+            AddressType::NestedSegwit,
+            "",
+            1,
+            1,
+            "2NCtHHE9TjYrYnUWfZv79w9ktk1f2uPUzqu",
+        ),
+        (
+            AddressType::NestedSegwit,
+            "TREZOR",
+            0,
+            0,
+            "2NB2kUBW5uEQHm3qaRWaaBGU8squWdSHQro",
+        ),
+        (
+            AddressType::NestedSegwit,
+            "TREZOR",
+            0,
+            1,
+            "2Mu892r7eH1N8FqRqPgaoBNMZoTWvDYEZpR",
+        ),
+        (
+            AddressType::NestedSegwit,
+            "TREZOR",
+            1,
+            0,
+            "2NArKE8G1CQx274FKnJ941fQpMMh1bwtLq1",
+        ),
+        (
+            AddressType::NestedSegwit,
+            "TREZOR",
+            1,
+            1,
+            "2N8zhjFM8RsTH2XgLkiBXmRvY7UkYmNNhpv",
+        ),
+    ];
+
+    #[test]
+    fn addresses_of_each_type_match_an_independent_derivation() {
+        for &(address_type, passphrase, chain, index, expected) in TYPE_VECTORS {
+            let account = Account::new(
+                &abandon_about(),
+                passphrase,
+                Network::Testnet4,
+                address_type,
+            )
+            .unwrap();
+            let chain = [Chain::External, Chain::Internal][chain as usize];
+            let found = account.key(chain, index).unwrap().address.to_string();
+            assert_eq!(
+                found, expected,
+                "{address_type:?} {passphrase:?} {}/{index}",
+                chain as u32
+            );
+        }
+    }
+
+    // The published first mainnet address of `abandon_about` at m/{purpose}'/0'/0'/0/0, which embit reproduces too.
+    #[test]
+    fn each_type_derives_its_published_mainnet_vector() {
+        let published = |address_type| match address_type {
+            AddressType::NestedSegwit => "37VucYSaXLCAsxYyAPfbSi9eh4iEcbShgf",
+            AddressType::NativeSegwit => "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu",
+        };
+        let secp = Secp256k1::new();
+        let seed = mnemonic_from(&abandon_about()).unwrap().to_seed("");
+        let master = Xpriv::new_master(Network::Bitcoin, &seed).unwrap();
+        for address_type in AddressType::ALL {
+            let path: DerivationPath = format!("m/{}'/0'/0'/0/0", address_type.purpose())
+                .parse()
+                .unwrap();
+            let key = master.derive_priv(&secp, &path).unwrap();
+            let pubkey = CompressedPublicKey::from_private_key(
+                &secp,
+                &PrivateKey::new(key.private_key, Network::Bitcoin),
+            )
+            .unwrap();
+            assert_eq!(
+                address_type
+                    .address(&secp, &pubkey, Network::Bitcoin)
+                    .to_string(),
+                published(address_type),
+            );
+        }
+    }
+
+    /// A Fake of `address_type`'s wallet whose receive 0 and 1 hold 100,000 and 50,000 sats.
+    fn funded_as(address_type: AddressType) -> Fake {
+        let mut fake = Fake::new();
+        fake.address_type = address_type;
+        let addr = |index| {
+            own_as(address_type, Chain::External, index)
+                .address
+                .to_string()
+        };
+        fake.fund(&addr(0), 100_000, '1');
+        fake.fund(&addr(1), 50_000, '2');
+        fake
+    }
+
+    // Each type's payment, send all, fee bump and cancel sign its own inputs, pay change to its own change address,
+    // weigh what their fee was built for at that type's input weight, and sign the same bytes twice.
+    #[test]
+    fn each_type_pays_sends_all_bumps_and_cancels_at_the_size_its_fee_was_built_for() {
+        for address_type in AddressType::ALL {
+            let fake = funded_as(address_type);
+            let own = address_type.input_weight();
+            let change = own_as(address_type, Chain::Internal, 0).address.to_string();
+            let (payment, fee) = fake.send_at(SOMEONE, 120_000, 3).unwrap();
+            let scripts = [
+                SOMEONE_SCRIPT,
+                own_as(address_type, Chain::Internal, 0)
+                    .address
+                    .script_pubkey()
+                    .len(),
+            ];
+            assert_eq!(
+                payment.vsize() as u64,
+                vsize(&[own; 2], &scripts),
+                "{address_type:?}"
+            );
+            assert_eq!(fee, 3 * payment.vsize() as u64, "{address_type:?}");
+            assert_outputs(&payment, &[(SOMEONE, 120_000), (&change, 30_000 - fee)]);
+            assert_eq!(
+                fake.send(SOMEONE, 120_000, 3).unwrap(),
+                payment,
+                "{address_type:?}"
+            );
+            let (all, fee) = fake.send_all_at(SOMEONE, 2).unwrap();
+            assert_eq!(
+                all.vsize() as u64,
+                vsize(&[own; 2], &[SOMEONE_SCRIPT]),
+                "{address_type:?}"
+            );
+            assert_eq!(fee, 2 * all.vsize() as u64, "{address_type:?}");
+            for kind in KINDS {
+                let (next, fee) = fake
+                    .replace(&payment, 10, kind)
+                    .unwrap_or_else(|e| panic!("{address_type:?} {kind:?}: {e:?}"));
+                let scripts: Vec<usize> =
+                    next.output.iter().map(|o| o.script_pubkey.len()).collect();
+                assert_eq!(
+                    next.vsize() as u64,
+                    vsize(&[own; 2], &scripts),
+                    "{address_type:?} {kind:?}"
+                );
+                assert_eq!(fee, 10 * next.vsize() as u64, "{address_type:?} {kind:?}");
+                assert_eq!(
+                    fake.replace(&payment, 10, kind).unwrap().0,
+                    next,
+                    "{address_type:?} {kind:?}"
+                );
+            }
+        }
+    }
+
+    /// `count` confirmed coins of `value` sats each, as `signed` takes them.
+    fn coins_of(count: u32, value: u64) -> Vec<Utxo> {
+        (0..count)
+            .map(|vout| Utxo {
+                txid: Txid::from_byte_array([7; 32]),
+                vout,
+                value,
+                confirmed: true,
+            })
+            .collect()
+    }
+
+    // `signed` refuses a transaction that does not weigh what `vsize` sized its fee for, so each type signing from 1 to
+    // 300 coins, past the 253-input varint step, proves its input weight is exact, and `signed_here` accepts each.
+    #[test]
+    fn each_type_signs_at_its_input_weight_from_1_to_300_coins() {
+        for address_type in AddressType::ALL {
+            let key = own_as(address_type, Chain::External, 0);
+            for count in [1, 2, 252, 253, 300] {
+                let coins = coins_of(count, 10_000);
+                let selected: Vec<(&Utxo, &OwnKey)> = coins.iter().map(|u| (u, &key)).collect();
+                let pay = TxOut {
+                    value: Amount::from_sat(5_000),
+                    script_pubkey: key.address.script_pubkey(),
+                };
+                let tx = signed(&selected, vec![pay])
+                    .unwrap_or_else(|e| panic!("{address_type:?} {count}: {e:?}"));
+                assert_eq!(
+                    tx.vsize() as u64,
+                    vsize(
+                        &vec![address_type.input_weight(); count as usize],
+                        &[key.address.script_pubkey().len()]
+                    ),
+                    "{address_type:?} {count}"
+                );
+                assert!(signed_here(&tx, &selected), "{address_type:?} {count}");
+            }
+        }
+    }
+
+    /// One coin of `key` signed to itself by `signed`, with what `signed_here` reads for it.
+    fn one_signed(key: &OwnKey) -> (Transaction, Vec<Utxo>) {
+        let coins = coins_of(1, 10_000);
+        let pay = TxOut {
+            value: Amount::from_sat(5_000),
+            script_pubkey: key.address.script_pubkey(),
+        };
+        (signed(&[(&coins[0], key)], vec![pay]).unwrap(), coins)
+    }
+
+    #[test]
+    fn a_nested_segwit_spend_without_its_redeem_push_is_not_signed_here() {
+        let key = own_as(AddressType::NestedSegwit, Chain::External, 0);
+        let (tx, coins) = one_signed(&key);
+        let selected = [(&coins[0], &key)];
+        assert!(signed_here(&tx, &selected));
+        let other = own_as(AddressType::NestedSegwit, Chain::External, 1);
+        for script_sig in [
+            ScriptBuf::new(),
+            other.address.script_pubkey(),
+            tx.input[0].script_sig.clone().into_bytes()[1..]
+                .to_vec()
+                .into(),
+        ] {
+            let mut forged = tx.clone();
+            forged.input[0].script_sig = script_sig.clone();
+            assert!(!signed_here(&forged, &selected), "{script_sig:?}");
+        }
+        // The same key's Native SegWit spend: the right witness and no redeem push.
+        let mut native = tx.clone();
+        native.input[0].script_sig = ScriptBuf::new();
+        assert!(!signed_here(&native, &selected));
+    }
+
     #[test]
     fn zero_negative_nan_string_and_missing_rates_are_no_estimate() {
         // Nothing usable on either endpoint: the fallback.
@@ -9748,12 +10020,28 @@ mod tests {
         }
     }
 
-    /// Where the proof block's header search starts, and what `mine_the_proof_block` found, in 173 s on
-    /// 8 threads of an M3 Mac (2026-11-05).
-    const MINED_TIME: u32 = 1_762_387_206;
-    const MINED_NONCE: u32 = 0x0eed_1e38;
+    /// Where the proof block's header search starts, and what `mine_the_proof_block` found, in 648 s on
+    /// 8 threads (2026-11-07, after the block began paying `OTHER_TYPES_PAID`).
+    const MINED_TIME: u32 = 1_762_387_210;
+    const MINED_NONCE: u32 = 0x34fe_799d;
     /// How many addresses of each chain of `abandon_about` the proof block pays, `PAID_SATS` each.
     const PAID: [u32; 2] = [320, 120];
+    /// Receive 0 and 1 and change 0 and 1 of `abandon_about` as Legacy, Nested SegWit and Taproot, which the proof
+    /// block pays too, from `TYPE_VECTORS`.
+    const OTHER_TYPES_PAID: [&str; 12] = [
+        "mkpZhYtJu2r87Js3pDiWJDmPte2NRZ8bJV",
+        "mzpbWabUQm1w8ijuJnAof5eiSTep27deVH",
+        "mi8nhzZgGZQthq6DQHbru9crMDerUdTKva",
+        "mz9HfS6y833A8HP8bfpLikzCbjonJXaAGW",
+        "2Mww8dCYPUpKHofjgcXcBCEGmniw9CoaiD2",
+        "2N55m54k8vr95ggehfUcNkdbUuQvaqG2GxK",
+        "2MvdUi5o3f2tnEFh9yGvta6FzptTZtkPJC8",
+        "2NCtHHE9TjYrYnUWfZv79w9ktk1f2uPUzqu",
+        "tb1p8wpt9v4frpf3tkn0srd97pksgsxc5hs52lafxwru9kgeephvs7rqlqt9zj",
+        "tb1p90h6z3p36n9hrzy7580h5l429uwchyg8uc9sz4jwzhdtuhqdl5eqmpwq6n",
+        "tb1p6uav7en8k7zsumsqugdmg5j6930zmzy4dg7jcddshsr0fvxlqx7q7p5els",
+        "tb1pwhn9lzpaukrjwvwe365x7hcgvtcfywwsaxcq7j04jgrfcxzdq23qhzr7wt",
+    ];
     const PAID_SATS: u64 = 10_000;
     /// The proof block's height on the pages that list its payments.
     const PROOF_HEIGHT: u64 = 100;
@@ -9806,6 +10094,19 @@ mod tests {
                 txs.push(tx(funding, vec![output]));
                 paid.push(to.to_string());
             }
+        }
+        for (index, to) in OTHER_TYPES_PAID.iter().enumerate() {
+            let funding = OutPoint {
+                txid: Txid::from_byte_array([3; 32]),
+                vout: index as u32,
+            };
+            let to = Address::from_str(to).unwrap().assume_checked();
+            let output = TxOut {
+                value: Amount::from_sat(PAID_SATS),
+                script_pubkey: to.script_pubkey(),
+            };
+            txs.push(tx(funding, vec![output]));
+            paid.push(to.to_string());
         }
         let receive_0 = OutPoint {
             txid: txs[0].compute_txid(),
