@@ -75,6 +75,7 @@ import com.mebit.app.CaptureGuard
 import com.mebit.app.data.ImportSeedDraft
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.POPOVER_ROW
+import com.mebit.app.data.PassphraseField
 import com.mebit.app.data.SEED_CARD_HEIGHT
 import com.mebit.app.data.SEED_CARD_PAD
 import com.mebit.app.data.SEED_ROWS
@@ -183,14 +184,15 @@ fun ImportSeedScreen(
 
     when (sheet) {
         ImportSheet.Passphrase -> PassphraseSheet(
-            value = draft.passphrase,
-            rejected = draft.passphraseRejected,
-            onEdit = draft::editPassphrase,
+            initial = draft.passphrase,
             copy = ImportPassphraseCopy,
             guard = guard,
-            onUse = { sheet = null },
+            onUse = {
+                draft.passphrase = it
+                sheet = null
+            },
             onNone = {
-                draft.clearPassphrase()
+                draft.passphrase = ""
                 sheet = null
             },
             onDismiss = { sheet = null },
@@ -268,7 +270,7 @@ private fun SeedGrid(
             }
             // Penpot puts the Passphrase option 15dp under the last row (1B.1 y=549).
             Spacer(modifier = Modifier.height(15.dp))
-            PassphraseOption(set = draft.passphrase.isNotEmpty(), onOpen = onPassphrase, onClear = draft::clearPassphrase)
+            PassphraseOption(set = draft.passphrase.isNotEmpty(), onOpen = onPassphrase, onClear = { draft.passphrase = "" })
         }
         if (editing) {
             // One field serves every slot and only moves: the keyboard is never torn down between words.
@@ -503,18 +505,21 @@ internal val ImportPassphraseCopy = PassphraseCopy(
     none = "ไม่มี passphrase",
 )
 
+/**
+ * The passphrase sheet of Import and Create, opened on [initial]. It keeps what is typed and [onUse] reports it: a caller that read
+ * each key recomposed its whole screen per key, and fast typing on iOS lost letters.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PassphraseSheet(
-    value: String,
-    rejected: Boolean,
-    onEdit: (String) -> Unit,
+    initial: String,
     copy: PassphraseCopy,
     guard: CaptureGuard,
-    onUse: () -> Unit,
+    onUse: (String) -> Unit,
     onNone: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val typed = remember { PassphraseField(initial) }
     var reveal by remember { mutableStateOf(false) }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -544,8 +549,8 @@ internal fun PassphraseSheet(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 BasicTextField(
-                    value = value,
-                    onValueChange = onEdit,
+                    value = typed.text,
+                    onValueChange = typed::edit,
                     singleLine = true,
                     textStyle = TextStyle(color = MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
                     cursorBrush = SolidColor(MbNavy),
@@ -556,7 +561,7 @@ internal fun PassphraseSheet(
                         keyboardType = KeyboardType.Ascii,
                         imeAction = ImeAction.Done,
                     ),
-                    keyboardActions = KeyboardActions(onDone = { if (value.isNotEmpty()) onUse() }),
+                    keyboardActions = KeyboardActions(onDone = { if (typed.text.isNotEmpty()) onUse(typed.text) }),
                     modifier = Modifier.weight(1f).testTag("seed_passphrase_field"),
                 )
                 Image(
@@ -568,7 +573,7 @@ internal fun PassphraseSheet(
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 "ใส่ได้เฉพาะตัวอักษรอังกฤษ ตัวเลข และสัญลักษณ์",
-                color = if (rejected) MbEyebrow else MbBody,
+                color = if (typed.rejected) MbEyebrow else MbBody,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Light,
                 modifier = Modifier.testTag("seed_passphrase_hint"),
@@ -586,7 +591,7 @@ internal fun PassphraseSheet(
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             )
             Spacer(modifier = Modifier.height(16.dp))
-            PrimaryCta("ใช้ passphrase นี้", "cta_passphrase_use", onUse, enabled = value.isNotEmpty())
+            PrimaryCta("ใช้ passphrase นี้", "cta_passphrase_use", { onUse(typed.text) }, enabled = typed.text.isNotEmpty())
             TextButton(
                 onClick = onNone,
                 contentPadding = PaddingValues(0.dp),

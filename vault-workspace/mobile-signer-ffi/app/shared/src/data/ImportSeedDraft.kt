@@ -30,12 +30,8 @@ class ImportSeedDraft(
     var active by mutableIntStateOf(0)
         private set
 
+    /** What the passphrase sheet reported on use, English-only through its [PassphraseField]. Empty for none. */
     var passphrase by mutableStateOf("")
-        private set
-
-    /** True after the last passphrase edit dropped a character that is not printable ASCII. */
-    var passphraseRejected by mutableStateOf(false)
-        private set
 
     /** The screen sets this while a slot has the keyboard: a half-typed word is not an error yet. */
     var typing by mutableStateOf(false)
@@ -151,17 +147,6 @@ class ImportSeedDraft(
         accept(pick ?: if (active == LAST) text else return)
     }
 
-    fun editPassphrase(raw: String) {
-        val kept = englishOnly(raw)
-        passphraseRejected = kept.length != raw.length
-        passphrase = kept
-    }
-
-    fun clearPassphrase() {
-        passphrase = ""
-        passphraseRejected = false
-    }
-
     // The field shows `old` with something typed into it. If `old` is still all there, what was
     // typed is the new word. If the field already replaced or shortened it, take the field's text.
     private fun typedOverWord(old: String, raw: String): String {
@@ -183,5 +168,20 @@ class ImportSeedDraft(
     }
 }
 
+/** A passphrase sheet's field while it is open, on Import and on Create: what is typed, English-only, and whether the last edit dropped a character. */
+class PassphraseField(initial: String) {
+    var text by mutableStateOf(initial)
+        private set
+
+    /** True after the last edit dropped a character that is not printable ASCII. */
+    var rejected by mutableStateOf(false)
+        private set
+
+    fun edit(raw: String) {
+        text = englishOnly(raw)
+        rejected = text.length != raw.length
+    }
+}
+
 /** Keeps printable ASCII only: a passphrase field is English-only, on Import and on Create. */
-fun englishOnly(raw: String): String = raw.filter { it in ' '..'~' }
+private fun englishOnly(raw: String): String = raw.filter { it in ' '..'~' }

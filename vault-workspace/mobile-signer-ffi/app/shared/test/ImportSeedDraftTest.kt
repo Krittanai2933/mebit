@@ -267,20 +267,20 @@ class ImportSeedDraftTest {
     }
 
     @Test
-    fun thePassphraseKeepsPrintableAsciiAndFlagsAnythingElse() {
-        val d = draft()
-        d.editPassphrase("Ab 1!~")
-        assertEquals("Ab 1!~", d.passphrase)
-        assertFalse(d.passphraseRejected)
+    fun thePassphraseFieldKeepsPrintableAsciiAndFlagsAnythingElse() {
+        val f = PassphraseField("TREZOR")
+        assertEquals("TREZOR", f.text, "the sheet opens on the passphrase already set")
+        assertFalse(f.rejected)
 
-        d.editPassphrase("passกุญแจ1")
-        assertEquals("pass1", d.passphrase)
-        assertTrue(d.passphraseRejected)
+        f.edit("Ab 1!~")
+        assertEquals("Ab 1!~", f.text)
+        assertFalse(f.rejected)
 
-        d.editPassphrase("pass1")
-        assertFalse(d.passphraseRejected)
+        f.edit("passกุญแจ1")
+        assertEquals("pass1", f.text)
+        assertTrue(f.rejected)
 
-        d.clearPassphrase()
-        assertEquals("", d.passphrase)
+        f.edit("pass1")
+        assertFalse(f.rejected)
     }
 }

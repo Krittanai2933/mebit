@@ -33,7 +33,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.OnboardingSession
-import com.mebit.app.data.englishOnly
 import com.mebit.app.data.PairedDevice
 import com.mebit.app.data.SaveState
 import com.mebit.app.data.StartNotice
@@ -378,8 +377,6 @@ fun BackupWordsScreen(
     // Penpot 1.4 and 1.4.1: a passphrase for the key just created, offered in first setup only.
     val offerPassphrase = session.inFirstSetup && !session.imported
     var sheetOpen by remember { mutableStateOf(false) }
-    var typed by remember { mutableStateOf("") }
-    var rejected by remember { mutableStateOf(false) }
     MebitScreen(
         eyebrow = "BACKUP · ขั้น 2 / 3",
         title = "จด 24 คำนี้ลงกระดาษ",
@@ -396,11 +393,7 @@ fun BackupWordsScreen(
             {
                 PassphraseOption(
                     set = session.passphrase.isNotEmpty(),
-                    onOpen = {
-                        typed = session.passphrase
-                        rejected = false
-                        sheetOpen = true
-                    },
+                    onOpen = { sheetOpen = true },
                     onClear = { session.changeNewKeyPassphrase("") },
                 )
             }
@@ -423,16 +416,11 @@ fun BackupWordsScreen(
     }
     if (sheetOpen) {
         PassphraseSheet(
-            value = typed,
-            rejected = rejected,
-            onEdit = { raw ->
-                typed = englishOnly(raw)
-                rejected = typed.length != raw.length
-            },
+            initial = session.passphrase,
             copy = CreatePassphraseCopy,
             guard = guard,
             onUse = {
-                session.changeNewKeyPassphrase(typed)
+                session.changeNewKeyPassphrase(it)
                 sheetOpen = false
             },
             onNone = {
