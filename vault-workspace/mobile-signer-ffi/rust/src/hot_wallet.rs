@@ -1678,48 +1678,93 @@ pub(crate) fn full_size(
         })
 }
 
-/// A payment from the coins of every used address, each input signed with its own key, any change
-/// paid to the first unused internal (change) address, not yet broadcast, with the fee it pays.
-/// The amount, the rate, the destination and the sum of the amount and the smallest payment's fee
-/// (which must fit u64) are checked before any network call. `select` picks the coins and how what
-/// they hold beyond the amount settles. A fee above the amount is signed, because the fee is paid on
-/// top and the destination still gets the amount. Every refusal is an error, never a changed
-/// payment. The used-address set may come from a sync `synced` shares.
+/// What a payment sends: the amount the user typed, or the whole balance less the fee.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SendAmount {
+    Exact(u64),
+    All,
+}
+
+/// What `signed` spends and pays for one payment, decided from one sync and one read of the coin
+/// lists, before any proof or signature.
+struct Plan<'c> {
+    /// In input order: largest first for an exact amount, the listing order for send all.
+    selected: Vec<(&'c Utxo, &'c OwnKey)>,
+    /// The destination first, then change if any, as `prepared` reads them.
+    outputs: Vec<TxOut>,
+    /// Inputs less outputs, change that went into the fee included.
+    fee_sats: u64,
+    dust_change_sats: u64,
+}
+
+/// The refusals before any lookup, each kind in the order it has always made them, and the
+/// destination they parsed. An exact amount: the destination, the amount against its dust floor, the
+/// rate, then the amount with one coin's fee, which must fit u64. Send all: the rate, then the
+/// destination.
+fn checked(
+    destination: &str,
+    network: KeyNetwork,
+    address_type: AddressType,
+    amount: SendAmount,
+    rate_sat_vb: u64,
+) -> Result<Address, MobileSignerError> {
+    let SendAmount::Exact(amount_sats) = amount else {
+        check_rate(rate_sat_vb)?;
+        return destination_on(destination, network);
+    };
+    let dest = destination_on(destination, network)?;
+    let floor = dust_floor(&dest.script_pubkey());
+    if amount_sats < floor {
+        return Err(MobileSignerError::InvalidPsbtJson(format!(
+            "amount {amount_sats} is below the network's {floor} sat dust floor"
+        )));
+    }
+    check_rate(rate_sat_vb)?;
+    need(
+        address_type.input_weight(),
+        dest.script_pubkey().len(),
+        amount_sats,
+        rate_sat_vb,
+        1,
+    )?;
+    Ok(dest)
+}
+
+/// The amount and the fee of `inputs` coins spent as `own` paying one output to a `dest_len`-byte
+/// script: the smallest payment of them. The rate is at most 10,000, so the fee fits u64; the sum may
+/// not.
+fn need(
+    own: InputWeightPrediction,
+    dest_len: usize,
+    amount_sats: u64,
+    rate_sat_vb: u64,
+    inputs: usize,
+) -> Result<u64, MobileSignerError> {
+    let fee = rate_sat_vb * vsize(&vec![own; inputs.max(1)], &[dest_len]);
+    amount_sats.checked_add(fee).ok_or_else(|| {
+        MobileSignerError::InvalidPsbtJson("amount plus fee does not fit u64".into())
+    })
+}
+
+/// What `amount` to `destination` at `rate_sat_vb` spends and pays from the wallet `words` and
+/// `passphrase` open, handed to `finish`: `checked`, then `check_network`, one `synced` (which may
+/// share a sync), one `spendable_coins` and the plan. The only path to a plan, so nothing can decide a
+/// payment the signer would not.
 #[allow(clippy::too_many_arguments)]
-fn signed_payment(
+fn planned<T>(
     source: &dyn ChainSource,
     words: &[String],
     passphrase: &str,
     network: KeyNetwork,
     address_type: AddressType,
     destination: &str,
-    amount_sats: u64,
+    amount: SendAmount,
     rate_sat_vb: u64,
     clock: &dyn Fn() -> SystemTime,
     store: &ScanStore,
-) -> Result<Signed, MobileSignerError> {
-    let refuse = |what: String| Err(MobileSignerError::InvalidPsbtJson(what));
-    let dest = destination_on(destination, network)?;
-    let floor = dust_floor(&dest.script_pubkey());
-    if amount_sats < floor {
-        return refuse(format!(
-            "amount {amount_sats} is below the network's {floor} sat dust floor"
-        ));
-    }
-    check_rate(rate_sat_vb)?;
-    let dest_len = dest.script_pubkey().len();
-    let own = address_type.input_weight();
-    // The amount and the fee of `inputs` coins and one output, the smallest payment of them. The rate
-    // is at most 10,000, so the fee fits u64; the sum may not.
-    let need = |inputs: usize| {
-        let fee = rate_sat_vb * vsize(&vec![own; inputs.max(1)], &[dest_len]);
-        amount_sats.checked_add(fee).ok_or_else(|| {
-            MobileSignerError::InvalidPsbtJson("amount plus fee does not fit u64".into())
-        })
-    };
-    // An amount that overflows u64 with the fee of one coin is refused before any lookup.
-    need(1)?;
-
+    finish: impl FnOnce(Plan<'_>) -> Result<T, MobileSignerError>,
+) -> Result<T, MobileSignerError> {
+    let dest = checked(destination, network, address_type, amount, rate_sat_vb)?;
     check_network(network)?;
     let wallet = complete(synced(
         source,
@@ -1730,16 +1775,47 @@ fn signed_payment(
         clock,
         store,
     )?)?;
-    let (mut spendable, have) = spendable_coins(source, &wallet)?;
+    let (spendable, have) = spendable_coins(source, &wallet)?;
+    let own = address_type.input_weight();
+    let plan = match amount {
+        SendAmount::Exact(amount_sats) => plan_payment(
+            &spendable,
+            have,
+            wallet.next_unused(Chain::Internal).address.script_pubkey(),
+            own,
+            &dest,
+            amount_sats,
+            rate_sat_vb,
+        )?,
+        SendAmount::All => plan_send_all(&spendable, have, own, &dest, rate_sat_vb)?,
+    };
+    finish(plan)
+}
+
+/// The coins an exact amount spends and where its leftover goes. `select` picks the coins and how what
+/// they hold beyond the amount settles. Change the network would refuse as an output, or too little
+/// to pay for its own, goes into the fee, as Bitcoin Core's wallet does, and the plan names it for
+/// Review. Pure: no lookup and no key use.
+fn plan_payment<'c>(
+    spendable: &'c [(Utxo, &'c OwnKey)],
+    have: u64,
+    change_script: ScriptBuf,
+    own: InputWeightPrediction,
+    dest: &Address,
+    amount_sats: u64,
+    rate_sat_vb: u64,
+) -> Result<Plan<'c>, MobileSignerError> {
+    let refuse = |what: String| Err(MobileSignerError::InvalidPsbtJson(what));
+    let dest_len = dest.script_pubkey().len();
     // Largest first, ties by outpoint: which coins pay never depends on the host's listing order,
     // and dust is touched only once the big coins fall short.
-    spendable.sort_by(|(a, _), (b, _)| {
+    let mut every: Vec<&(Utxo, &OwnKey)> = spendable.iter().collect();
+    every.sort_by(|(a, _), (b, _)| {
         b.value
             .cmp(&a.value)
             .then(a.txid.cmp(&b.txid))
             .then(a.vout.cmp(&b.vout))
     });
-    let change_script = wallet.next_unused(Chain::Internal).address.script_pubkey();
     // Confirmed coins first. The wallet's own unconfirmed change joins only when they fall short, and
     // then every coin is tried in the same order.
     let walk = |coins: &[&(Utxo, &OwnKey)]| {
@@ -1747,8 +1823,8 @@ fn signed_payment(
             coins.iter().map(|(u, _)| (u.value, own)).collect();
         select(&spends, amount_sats, rate_sat_vb, dest_len, &change_script)
     };
-    let confirmed: Vec<&(Utxo, &OwnKey)> = spendable.iter().filter(|(u, _)| u.confirmed).collect();
-    let every: Vec<&(Utxo, &OwnKey)> = spendable.iter().collect();
+    let confirmed: Vec<&(Utxo, &OwnKey)> =
+        every.iter().copied().filter(|(u, _)| u.confirmed).collect();
     let picked = match walk(&confirmed) {
         Ok(found) => Ok((confirmed, found)),
         Err(first) => walk(&every)
@@ -1758,7 +1834,7 @@ fn signed_payment(
     let (coins, (count, settled)) = match picked {
         Ok(picked) => picked,
         Err(Short::Funds) => {
-            let need = need(spendable.len())?;
+            let need = need(own, dest_len, amount_sats, rate_sat_vb, spendable.len())?;
             return refuse(format!(
                 "insufficient funds: have {have} confirmed, need {need}"
             ));
@@ -1770,10 +1846,12 @@ fn signed_payment(
         }
         Err(Short::Limit { fee, vsize: size }) => return refuse(above_limit(fee, size)),
     };
-    let selected: Vec<(&Utxo, &OwnKey)> = coins[..count].iter().map(|(u, k)| (u, *k)).collect();
+    let selected: Vec<(&Utxo, &OwnKey)> = coins
+        .into_iter()
+        .take(count)
+        .map(|(u, k)| (u, *k))
+        .collect();
     let left = selected.iter().map(|(u, _)| u.value).sum::<u64>() - amount_sats;
-    // Change the network would refuse as an output, or too little to pay for its own, goes into the
-    // fee, as Bitcoin Core's wallet does, and the answer names it for Review.
     let (change, dust_change_sats) = match settled {
         Settle::Change(change) | Settle::FloorChange(change) => (Some(change), 0),
         Settle::Fold(dust) | Settle::Fit(dust) => (None, dust),
@@ -1786,52 +1864,28 @@ fn signed_payment(
         value: Amount::from_sat(value),
         script_pubkey: change_script,
     }));
-    let tx = signed(source, &selected, outputs)?;
-    let fee_sats = left - change.unwrap_or(0);
-    check_node_rate(fee_sats, tx.vsize() as u64).map_err(MobileSignerError::InvalidPsbtJson)?;
-    Ok(Signed {
-        tx,
-        fee_sats,
+    Ok(Plan {
+        selected,
+        outputs,
+        fee_sats: left - change.unwrap_or(0),
         dust_change_sats,
-        amount_cut_sats: 0,
     })
 }
 
-/// The whole balance to `destination` in one output and no change: every coin `signed_payment`
-/// would consider, the fee the size of that transaction times the rate, and the amount what is
-/// left, not yet broadcast, with the fee it pays. The rate and the destination are checked before
-/// any network call; the fee and the amount once the coins are known. Every refusal is an error,
-/// never a changed payment.
-#[allow(clippy::too_many_arguments)]
-fn signed_send_all(
-    source: &dyn ChainSource,
-    words: &[String],
-    passphrase: &str,
-    network: KeyNetwork,
-    address_type: AddressType,
-    destination: &str,
+/// Every coin in listing order paying `dest` the whole balance less the fee, in one output and no
+/// change. The fee is the size of that transaction times the rate. Pure.
+fn plan_send_all<'c>(
+    spendable: &'c [(Utxo, &'c OwnKey)],
+    have: u64,
+    own: InputWeightPrediction,
+    dest: &Address,
     rate_sat_vb: u64,
-    clock: &dyn Fn() -> SystemTime,
-    store: &ScanStore,
-) -> Result<Signed, MobileSignerError> {
+) -> Result<Plan<'c>, MobileSignerError> {
     let refuse = |what: String| Err(MobileSignerError::InvalidPsbtJson(what));
-    check_rate(rate_sat_vb)?;
-    let dest = destination_on(destination, network)?;
-    check_network(network)?;
-    let wallet = complete(synced(
-        source,
-        words,
-        passphrase,
-        network,
-        address_type,
-        clock,
-        store,
-    )?)?;
-    let (spendable, have) = spendable_coins(source, &wallet)?;
     // One input and one output is the smallest this transaction can be, so a wallet with nothing
     // to spend is short by that fee and the destination's dust floor.
     let size = vsize(
-        &vec![address_type.input_weight(); spendable.len().max(1)],
+        &vec![own; spendable.len().max(1)],
         &[dest.script_pubkey().len()],
     );
     let fee_sats = rate_sat_vb * size;
@@ -1855,19 +1909,96 @@ fn signed_send_all(
             ));
         }
     };
-    let selected: Vec<(&Utxo, &OwnKey)> = spendable.iter().map(|(u, k)| (u, *k)).collect();
-    let output = TxOut {
-        value: Amount::from_sat(amount_sats),
-        script_pubkey: dest.script_pubkey(),
-    };
-    let tx = signed(source, &selected, vec![output])?;
-    check_node_rate(fee_sats, tx.vsize() as u64).map_err(MobileSignerError::InvalidPsbtJson)?;
-    Ok(Signed {
-        tx,
+    Ok(Plan {
+        selected: spendable.iter().map(|(u, k)| (u, *k)).collect(),
+        outputs: vec![TxOut {
+            value: Amount::from_sat(amount_sats),
+            script_pubkey: dest.script_pubkey(),
+        }],
         fee_sats,
         dust_change_sats: 0,
+    })
+}
+
+/// The signer's finish: `signed`, which proves each Legacy coin's value from its parent, signs, and
+/// refuses bytes that do not weigh what the fee was built for, then the node's rate on the signed
+/// bytes.
+fn signed_plan(source: &dyn ChainSource, plan: Plan<'_>) -> Result<Signed, MobileSignerError> {
+    let tx = signed(source, &plan.selected, plan.outputs)?;
+    check_node_rate(plan.fee_sats, tx.vsize() as u64)
+        .map_err(MobileSignerError::InvalidPsbtJson)?;
+    Ok(Signed {
+        tx,
+        fee_sats: plan.fee_sats,
+        dust_change_sats: plan.dust_change_sats,
         amount_cut_sats: 0,
     })
+}
+
+/// A payment from the coins of every used address, each input signed with its own key, any change
+/// paid to the first unused internal (change) address, not yet broadcast, with the fee it pays.
+/// The amount, the rate, the destination and the sum of the amount and the smallest payment's fee
+/// (which must fit u64) are checked before any network call. A fee above the amount is signed,
+/// because the fee is paid on top and the destination still gets the amount. Every refusal is an
+/// error, never a changed payment. The used-address set may come from a sync `synced` shares.
+#[allow(clippy::too_many_arguments)]
+fn signed_payment(
+    source: &dyn ChainSource,
+    words: &[String],
+    passphrase: &str,
+    network: KeyNetwork,
+    address_type: AddressType,
+    destination: &str,
+    amount_sats: u64,
+    rate_sat_vb: u64,
+    clock: &dyn Fn() -> SystemTime,
+    store: &ScanStore,
+) -> Result<Signed, MobileSignerError> {
+    planned(
+        source,
+        words,
+        passphrase,
+        network,
+        address_type,
+        destination,
+        SendAmount::Exact(amount_sats),
+        rate_sat_vb,
+        clock,
+        store,
+        |plan| signed_plan(source, plan),
+    )
+}
+
+/// The whole balance to `destination` in one output and no change: every coin `signed_payment`
+/// would consider, the fee the size of that transaction times the rate, and the amount what is
+/// left, not yet broadcast, with the fee it pays. The rate and the destination are checked before
+/// any network call; the fee and the amount once the coins are known. Every refusal is an error,
+/// never a changed payment.
+#[allow(clippy::too_many_arguments)]
+fn signed_send_all(
+    source: &dyn ChainSource,
+    words: &[String],
+    passphrase: &str,
+    network: KeyNetwork,
+    address_type: AddressType,
+    destination: &str,
+    rate_sat_vb: u64,
+    clock: &dyn Fn() -> SystemTime,
+    store: &ScanStore,
+) -> Result<Signed, MobileSignerError> {
+    planned(
+        source,
+        words,
+        passphrase,
+        network,
+        address_type,
+        destination,
+        SendAmount::All,
+        rate_sat_vb,
+        clock,
+        store,
+        |plan| signed_plan(source, plan),
+    )
 }
 
 /// What replaces a signed payment of unknown outcome. Both spend every coin of that payment, so at most
