@@ -1892,9 +1892,11 @@ fn signed_replacement(
     // rate. The size is the signed size, so the real rate is at least `rate`.
     let fee = |size: u64| (rate * size).max(old_fee.saturating_add(size));
     let fee_for = |inputs: usize, scripts: &[usize]| fee(vsize(&vec![OWN_SPEND; inputs], scripts));
-    // The least fee the node takes at a size: rules 3 and 4, and rule 6 strictly above the earlier rate.
+    // The least fee the node takes at a size: rules 3 and 4, and rule 6 a whole sat/kvB above the
+    // earlier rate, as Bitcoin Core truncates both rates to whole sat/kvB before it compares them.
     let least = |size: u64| {
-        let above = u128::from(old_fee) * u128::from(size) / u128::from(old_vsize) + 1;
+        let kvb = u128::from(old_fee) * 1000 / u128::from(old_vsize) + 1;
+        let above = (kvb * u128::from(size)).div_ceil(1000);
         old_fee
             .saturating_add(size)
             .max(u64::try_from(above).unwrap_or(u64::MAX))
@@ -4508,7 +4510,7 @@ mod tests {
 
     /// `next` may replace `earlier` in a mempool. It spends every coin `earlier` spends, and by their exact
     /// sizes it meets BIP-125 rules 3 and 4 (the earlier fee plus its own size at 1 sat/vB, at least) and 6
-    /// (a rate strictly above the earlier one).
+    /// (a rate above the earlier one once Bitcoin Core truncates both to whole sat/kvB).
     #[track_caller]
     fn assert_replaces(fake: &Fake, earlier: &Transaction, next: &Transaction) {
         for coin in inputs_of(earlier) {
@@ -4521,8 +4523,8 @@ mod tests {
             "rules 3 and 4: {fee} against {old_fee} + {vsize}"
         );
         assert!(
-            fee * old_vsize > old_fee * vsize,
-            "rule 6: {fee}/{vsize} against {old_fee}/{old_vsize}"
+            fee * 1000 / vsize > old_fee * 1000 / old_vsize,
+            "rule 6 in whole sat/kvB: {fee}/{vsize} against {old_fee}/{old_vsize}"
         );
     }
 
@@ -5062,6 +5064,30 @@ mod tests {
             (1_768_000, 0, 178)
         );
         assert_replaces(&fake, &earlier, &bump.tx);
+    }
+
+    // Bitcoin Core truncates both rates to whole sat/kvB and refuses a replacement whose rate is not above. A payment
+    // at 9,000 sat/vB whose leftover went into the fee paid 990,001 on 110 vB, 9,000,009 sat/kvB. Its bump at 9,900 with
+    // a spare coin of 891,295 kept change at its floor for 1,881,002 on 209 vB, above as a fraction and 9,000,009 once
+    // truncated. Change at its floor now asks 1,881,003, which that coin cannot leave, so the amount is cut as without it.
+    #[test]
+    fn a_fee_bump_with_change_at_its_floor_meets_rule_6_in_whole_sat_per_kvb() {
+        let mut alone = Fake::new();
+        alone.fund(&addr(Chain::External, 0), 2_000_000, '1');
+        let earlier = alone.payment(SOMEONE, 1_009_999, 9_000).unwrap();
+        assert_eq!((earlier.fee_sats, earlier.tx.vsize()), (990_001, 110));
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 2_000_000, '1');
+        fake.fund(&addr(Chain::External, 1), 891_295, '2');
+        let bump = fake
+            .replacement(&serialize_hex(&earlier.tx), 9_900, Replacement::FeeBump)
+            .unwrap();
+        assert_outputs(&bump.tx, &[(SOMEONE, 911_000)]);
+        assert_eq!(
+            (bump.fee_sats, bump.amount_cut_sats, bump.tx.vsize()),
+            (1_089_000, 98_999, 110)
+        );
+        assert_replaces(&fake, &earlier.tx, &bump.tx);
     }
 
     #[test]
