@@ -6,6 +6,7 @@
 
 uniffi::setup_scaffolding!();
 
+mod address_type;
 pub mod ble;
 mod chain;
 pub mod hot_wallet;

@@ -20,6 +20,7 @@ use std::str::FromStr;
 use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::address_type::AddressType;
 use crate::chain::{
     ChainSource, EsploraSource, Http, Operator, Summary, TxView, Txo, Utxo, WINDOW, check_network,
     history_error, throttled, tx_error,
@@ -30,18 +31,15 @@ use crate::scan_store::{FullPass, Last, ScanStore, WalletId, WalletScan};
 use crate::{KeyNetwork, MobileSignerError};
 use bip39::Mnemonic;
 use bitcoin::absolute::LockTime;
-use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv, Xpub};
+use bitcoin::bip32::{ChildNumber, Xpriv, Xpub};
 use bitcoin::consensus::encode::{deserialize_hex, serialize_hex};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::{All, Message, Secp256k1, SecretKey, ecdsa};
 use bitcoin::transaction::{InputWeightPrediction, predict_weight};
 use bitcoin::{
     Address, Amount, CompressedPublicKey, Network, OutPoint, PrivateKey, Script, ScriptBuf,
-    Sequence, Transaction, TxIn, TxOut, Txid, Witness, sighash::EcdsaSighashType,
-    sighash::SighashCache,
+    Sequence, Transaction, TxIn, TxOut, Txid, Witness, sighash::SighashCache,
 };
-
-const ACCOUNT_PATH: &str = "m/84'/1'/0'";
 
 /// How long after a sync of a wallet ended the next call shares its answer with no request, so the
 /// app's snapshot followed by history costs one sync. A used address's balance is never older than this.
@@ -121,16 +119,20 @@ impl Chain {
     }
 }
 
-struct OwnKey {
-    privkey: PrivateKey,
-    pubkey: CompressedPublicKey,
-    address: Address,
+/// One key of the wallet. It carries the account's address type, so each input signs and is checked
+/// the way its own coin is locked.
+pub(crate) struct OwnKey {
+    pub(crate) address_type: AddressType,
+    pub(crate) privkey: PrivateKey,
+    pub(crate) pubkey: CompressedPublicKey,
+    pub(crate) address: Address,
 }
 
-/// The BIP-84 account's two chain keys, derived once per call. `key` derives one index offline.
+/// The account's two chain keys, derived once per call. `key` derives one index offline.
 struct Account {
     secp: Secp256k1<All>,
     network: Network,
+    address_type: AddressType,
     chains: [Xpriv; 2],
 }
 
@@ -139,18 +141,21 @@ impl Account {
         words: &[String],
         passphrase: &str,
         network: Network,
+        address_type: AddressType,
     ) -> Result<Self, MobileSignerError> {
         let bad = |e: bitcoin::bip32::Error| MobileSignerError::InvalidPsbtJson(e.to_string());
         let mnemonic = mnemonic_from(words)?;
         let secp = Secp256k1::new();
         let master = Xpriv::new_master(network, &mnemonic.to_seed(passphrase)).map_err(bad)?;
-        let path = DerivationPath::from_str(ACCOUNT_PATH).map_err(bad)?;
-        let account = master.derive_priv(&secp, &path).map_err(bad)?;
+        let account = master
+            .derive_priv(&secp, &address_type.account_path())
+            .map_err(bad)?;
         let chain = |index| account.derive_priv(&secp, &[ChildNumber::Normal { index }]);
         let chains = [chain(0).map_err(bad)?, chain(1).map_err(bad)?];
         Ok(Self {
             secp,
             network,
+            address_type,
             chains,
         })
     }
@@ -164,8 +169,9 @@ impl Account {
         let privkey = PrivateKey::new(child.private_key, self.network);
         let pubkey = CompressedPublicKey::from_private_key(&self.secp, &privkey)
             .map_err(|e| bad(e.to_string()))?;
-        let address = Address::p2wpkh(&pubkey, self.network);
+        let address = self.address_type.address(&self.secp, &pubkey, self.network);
         Ok(OwnKey {
+            address_type: self.address_type,
             privkey,
             pubkey,
             address,
@@ -309,10 +315,11 @@ fn synced(
     words: &[String],
     passphrase: &str,
     network: KeyNetwork,
+    address_type: AddressType,
     clock: &dyn Fn() -> SystemTime,
     store: &ScanStore,
 ) -> Result<Wallet, MobileSignerError> {
-    let account = Account::new(words, passphrase, network_of(network))?;
+    let account = Account::new(words, passphrase, network_of(network), address_type)?;
     check_network(network)?;
     let id = account.id();
     let held = store.wallet(&id);
@@ -662,7 +669,12 @@ pub fn hot_receive_address(
     network: KeyNetwork,
     index: u32,
 ) -> Result<String, MobileSignerError> {
-    let account = Account::new(&mnemonic_words, &passphrase, network_of(network))?;
+    let account = Account::new(
+        &mnemonic_words,
+        &passphrase,
+        network_of(network),
+        AddressType::NativeSegwit,
+    )?;
     Ok(account.key(Chain::External, index)?.address.to_string())
 }
 
@@ -678,6 +690,7 @@ pub fn hot_wallet_snapshot(
         &mnemonic_words,
         &passphrase,
         network,
+        AddressType::NativeSegwit,
         &SystemTime::now,
         &SCAN_STORE,
     )
@@ -707,10 +720,19 @@ fn snapshot_from(
     words: &[String],
     passphrase: &str,
     network: KeyNetwork,
+    address_type: AddressType,
     clock: &dyn Fn() -> SystemTime,
     store: &ScanStore,
 ) -> Result<HotWalletSnapshot, MobileSignerError> {
-    let wallet = synced(source, words, passphrase, network, clock, store)?;
+    let wallet = synced(
+        source,
+        words,
+        passphrase,
+        network,
+        address_type,
+        clock,
+        store,
+    )?;
     let (scan, spendable_sats) = match HotScan::from(&wallet.status) {
         HotScan::Complete => match spendable_coins(source, &wallet) {
             Ok((_, have)) => (HotScan::Complete, have),
@@ -765,6 +787,7 @@ pub fn hot_wallet_history(
         &mnemonic_words,
         &passphrase,
         network,
+        AddressType::NativeSegwit,
         &SystemTime::now,
         &SCAN_STORE,
     )
@@ -782,11 +805,20 @@ fn history_of(
     words: &[String],
     passphrase: &str,
     network: KeyNetwork,
+    address_type: AddressType,
     clock: &dyn Fn() -> SystemTime,
     store: &ScanStore,
 ) -> Result<Vec<HotTx>, MobileSignerError> {
     check_network(network)?;
-    let wallet = complete(synced(source, words, passphrase, network, clock, store)?)?;
+    let wallet = complete(synced(
+        source,
+        words,
+        passphrase,
+        network,
+        address_type,
+        clock,
+        store,
+    )?)?;
     let used: Vec<&Address> = wallet.used().map(|(_, k)| &k.address).collect();
     if used.is_empty() {
         return Ok(Vec::new());
@@ -910,6 +942,7 @@ pub fn hot_tx_detail(
         &mnemonic_words,
         &passphrase,
         network,
+        AddressType::NativeSegwit,
         &txid,
         &SCAN_STORE,
     )
@@ -923,13 +956,14 @@ fn detail_of(
     words: &[String],
     passphrase: &str,
     network: KeyNetwork,
+    address_type: AddressType,
     txid: &str,
     store: &ScanStore,
 ) -> Result<Option<HotTxDetail>, MobileSignerError> {
     let txid = Txid::from_str(txid)
         .map_err(|e| tx_error(format!("txid is not 64 hex characters: {e}")))?;
     check_network(network)?;
-    let account = Account::new(words, passphrase, network_of(network))?;
+    let account = Account::new(words, passphrase, network_of(network), address_type)?;
     let Some((tx, tip)) = source.tx(&txid)? else {
         return Ok(None);
     };
@@ -1127,6 +1161,7 @@ pub fn hot_prepare_send_at_rate(
         &mnemonic_words,
         &passphrase,
         network,
+        AddressType::NativeSegwit,
         &destination,
         amount_sats,
         fee_rate_sat_vb,
@@ -1179,6 +1214,7 @@ pub fn hot_prepare_send_all(
         &mnemonic_words,
         &passphrase,
         network,
+        AddressType::NativeSegwit,
         &destination,
         fee_rate_sat_vb,
         &SystemTime::now,
@@ -1245,15 +1281,10 @@ fn above_limit(fee_sats: u64, vsize: u64) -> String {
     format!("fee {fee_sats} for {vsize} vB is above the network's {MAX_FEE_RATE} sat/vB limit")
 }
 
-/// How this wallet's keys spend a coin: BIP-84, a 72-byte signature and a compressed key. The one
-/// place coin selection learns the script type; an address-type setting replaces it and the sighash
-/// in `signed`.
-const OWN_SPEND: InputWeightPrediction = InputWeightPrediction::P2WPKH_MAX;
-
 /// Virtual size, rounded up, of a transaction spending coins spent as `inputs` to outputs whose
 /// scripts are `output_scripts` bytes long, every count at its real varint width: from 253 inputs
-/// the input count takes 3 bytes. Exact for what `signed` builds, which grinds every signature to
-/// the size `OWN_SPEND` assumes.
+/// the input count takes 3 bytes. Exact for what `signed` builds, which spends every input at its
+/// type's `AddressType::input_weight`.
 fn vsize(inputs: &[InputWeightPrediction], output_scripts: &[usize]) -> u64 {
     predict_weight(inputs.iter().copied(), output_scripts.iter().copied()).to_vbytes_ceil()
 }
@@ -1496,28 +1527,27 @@ fn signed(
             .collect(),
         output: outputs,
     };
-    let mut cache = SighashCache::new(tx);
-    for (i, (utxo, owner)) in selected.iter().enumerate() {
-        let sighash = cache
-            .p2wpkh_signature_hash(
-                i,
-                &owner.address.script_pubkey(),
-                Amount::from_sat(utxo.value),
-                EcdsaSighashType::All,
-            )
-            .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?;
-        let msg = Message::from_digest(sighash.to_byte_array());
-        let sig = full_size(&secp, &msg, &owner.privkey.inner)?;
-        let mut der = sig.serialize_der().to_vec();
-        der.push(EcdsaSighashType::All as u8);
-        let witness = cache
-            .witness_mut(i)
-            .ok_or_else(|| MobileSignerError::InvalidPsbtJson("missing witness slot".into()))?;
-        *witness = Witness::from_slice(&[der.as_slice(), &owner.pubkey.to_bytes()]);
+    let prevouts = prevouts_of(selected);
+    // Every input is signed on the unsigned transaction first: `SighashCache` writes no script_sig.
+    let mut cache = SighashCache::new(&tx);
+    let spends = selected
+        .iter()
+        .enumerate()
+        .map(|(i, (_, owner))| {
+            owner
+                .address_type
+                .spend(&secp, &mut cache, i, &prevouts, owner)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut tx = tx;
+    for (input, spend) in tx.input.iter_mut().zip(spends) {
+        input.script_sig = spend.script_sig;
+        input.witness = spend.witness;
     }
-    let tx = cache.into_transaction();
     let built_for = predict_weight(
-        vec![OWN_SPEND; tx.input.len()],
+        selected
+            .iter()
+            .map(|(_, owner)| owner.address_type.input_weight()),
         tx.output.iter().map(|o| o.script_pubkey.len()),
     );
     if tx.weight() != built_for {
@@ -1531,12 +1561,12 @@ fn signed(
 }
 
 /// A signature of `msg` by `key` whose DER encoding is 71 bytes, 72 with the sighash byte: a 33-byte r
-/// and a 32-byte s, the size `OWN_SPEND` assumes. About half of all signatures come out shorter, and a
-/// transaction a vbyte under the size its fee was built for passed the checks on that size and failed
-/// the node's on its bytes near 10,000 sat/vB. RFC 6979 first, as before, then a counter as extra
+/// and a 32-byte s, the size every ECDSA `AddressType::input_weight` assumes. About half of all
+/// signatures come out shorter, and a transaction a vbyte under the size its fee was built for passed
+/// the checks on that size and failed the node's on its bytes near 10,000 sat/vB. RFC 6979 first, as before, then a counter as extra
 /// nonce data, so the same payment always signs the same bytes. 1,024 short ones in a row (odds under
 /// 2^-1000) end in an error, never a loop without end.
-fn full_size(
+pub(crate) fn full_size(
     secp: &Secp256k1<All>,
     msg: &Message,
     key: &SecretKey,
@@ -1569,6 +1599,7 @@ fn signed_payment(
     words: &[String],
     passphrase: &str,
     network: KeyNetwork,
+    address_type: AddressType,
     destination: &str,
     amount_sats: u64,
     rate_sat_vb: u64,
@@ -1585,10 +1616,11 @@ fn signed_payment(
     }
     check_rate(rate_sat_vb)?;
     let dest_len = dest.script_pubkey().len();
+    let own = address_type.input_weight();
     // The amount and the fee of `inputs` coins and one output, the smallest payment of them. The rate
     // is at most 10,000, so the fee fits u64; the sum may not.
     let need = |inputs: usize| {
-        let fee = rate_sat_vb * vsize(&vec![OWN_SPEND; inputs.max(1)], &[dest_len]);
+        let fee = rate_sat_vb * vsize(&vec![own; inputs.max(1)], &[dest_len]);
         amount_sats.checked_add(fee).ok_or_else(|| {
             MobileSignerError::InvalidPsbtJson("amount plus fee does not fit u64".into())
         })
@@ -1597,7 +1629,15 @@ fn signed_payment(
     need(1)?;
 
     check_network(network)?;
-    let wallet = complete(synced(source, words, passphrase, network, clock, store)?)?;
+    let wallet = complete(synced(
+        source,
+        words,
+        passphrase,
+        network,
+        address_type,
+        clock,
+        store,
+    )?)?;
     let (mut spendable, have) = spendable_coins(source, &wallet)?;
     // Largest first, ties by outpoint: which coins pay never depends on the host's listing order,
     // and dust is touched only once the big coins fall short.
@@ -1612,7 +1652,7 @@ fn signed_payment(
     // then every coin is tried in the same order.
     let walk = |coins: &[&(Utxo, &OwnKey)]| {
         let spends: Vec<(u64, InputWeightPrediction)> =
-            coins.iter().map(|(u, _)| (u.value, OWN_SPEND)).collect();
+            coins.iter().map(|(u, _)| (u.value, own)).collect();
         select(&spends, amount_sats, rate_sat_vb, dest_len, &change_script)
     };
     let confirmed: Vec<&(Utxo, &OwnKey)> = spendable.iter().filter(|(u, _)| u.confirmed).collect();
@@ -1676,6 +1716,7 @@ fn signed_send_all(
     words: &[String],
     passphrase: &str,
     network: KeyNetwork,
+    address_type: AddressType,
     destination: &str,
     rate_sat_vb: u64,
     clock: &dyn Fn() -> SystemTime,
@@ -1685,12 +1726,20 @@ fn signed_send_all(
     check_rate(rate_sat_vb)?;
     let dest = destination_on(destination, network)?;
     check_network(network)?;
-    let wallet = complete(synced(source, words, passphrase, network, clock, store)?)?;
+    let wallet = complete(synced(
+        source,
+        words,
+        passphrase,
+        network,
+        address_type,
+        clock,
+        store,
+    )?)?;
     let (spendable, have) = spendable_coins(source, &wallet)?;
     // One input and one output is the smallest this transaction can be, so a wallet with nothing
     // to spend is short by that fee and the destination's dust floor.
     let size = vsize(
-        &vec![OWN_SPEND; spendable.len().max(1)],
+        &vec![address_type.input_weight(); spendable.len().max(1)],
         &[dest.script_pubkey().len()],
     );
     let fee_sats = rate_sat_vb * size;
@@ -1775,6 +1824,7 @@ pub fn hot_prepare_fee_bump(
         &mnemonic_words,
         &passphrase,
         network,
+        AddressType::NativeSegwit,
         &earlier_hex,
         fee_rate_sat_vb,
         Replacement::FeeBump,
@@ -1802,6 +1852,7 @@ pub fn hot_prepare_cancel(
         &mnemonic_words,
         &passphrase,
         network,
+        AddressType::NativeSegwit,
         &earlier_hex,
         fee_rate_sat_vb,
         Replacement::Cancel,
@@ -1830,6 +1881,7 @@ fn signed_replacement(
     words: &[String],
     passphrase: &str,
     network: KeyNetwork,
+    address_type: AddressType,
     earlier_hex: &str,
     rate_sat_vb: u64,
     kind: Replacement,
@@ -1853,7 +1905,15 @@ fn signed_replacement(
     }
     check_rate(rate_sat_vb)?;
     check_network(network)?;
-    let wallet = complete(synced(source, words, passphrase, network, clock, store)?)?;
+    let wallet = complete(synced(
+        source,
+        words,
+        passphrase,
+        network,
+        address_type,
+        clock,
+        store,
+    )?)?;
     // Every address of the change chain the scan derived, which is where this wallet puts change.
     let own: Vec<ScriptBuf> = wallet.keys[Chain::Internal as usize]
         .iter()
@@ -1902,7 +1962,8 @@ fn signed_replacement(
     // Rules 3 and 4 ask at least the earlier fee plus the new size at the 1 sat/vB incremental relay
     // rate. The size is the signed size, so the real rate is at least `rate`.
     let fee = |size: u64| (rate * size).max(old_fee.saturating_add(size));
-    let fee_for = |inputs: usize, scripts: &[usize]| fee(vsize(&vec![OWN_SPEND; inputs], scripts));
+    let own_spend = address_type.input_weight();
+    let fee_for = |inputs: usize, scripts: &[usize]| fee(vsize(&vec![own_spend; inputs], scripts));
     // The least fee the node takes at a size: rules 3 and 4, and rule 6 a whole sat/kvB above the
     // earlier rate, as Bitcoin Core truncates both rates to whole sat/kvB before it compares them.
     let least = |size: u64| {
@@ -1959,7 +2020,7 @@ fn signed_replacement(
             // the sets of the largest spare coins.
             let (mut pending, mut searched, mut have) = (more.iter(), false, total);
             loop {
-                let spends = vec![OWN_SPEND; selected.len()];
+                let spends = vec![own_spend; selected.len()];
                 let (with, without) = (vsize(&spends, &scripts), vsize(&spends, &scripts[..1]));
                 // The earlier coins hold at least its outputs, so `have` covers the amount.
                 let left = have.saturating_sub(amount);
@@ -1981,10 +2042,10 @@ fn signed_replacement(
                     if !searched {
                         searched = true;
                         let spares = &more[..more.len().min(BUMP_SEARCH_COINS)];
-                        // Every coin spends as `OWN_SPEND`, so a set's sizes depend only on its count.
+                        // Every coin spends as `own_spend`, so a set's sizes depend only on its count.
                         let sizes: Vec<(u64, u64)> = (0..=spares.len())
                             .map(|count| {
-                                let spends = vec![OWN_SPEND; spent.len() + count];
+                                let spends = vec![own_spend; spent.len() + count];
                                 (vsize(&spends, &scripts), vsize(&spends, &scripts[..1]))
                             })
                             .collect();
@@ -2057,7 +2118,7 @@ fn signed_replacement(
         .try_fold(have, |left, o| left.checked_sub(o.value.to_sat()))
         .unwrap_or(0);
     let scripts: Vec<usize> = tx.output.iter().map(|o| o.script_pubkey.len()).collect();
-    let estimated = vsize(&vec![OWN_SPEND; tx.input.len()], &scripts);
+    let estimated = vsize(&vec![own_spend; tx.input.len()], &scripts);
     let first = &tx.output[0].script_pubkey;
     let checks = [
         (
@@ -2109,39 +2170,28 @@ fn inputs_of(tx: &Transaction) -> Vec<OutPoint> {
     tx.input.iter().map(|i| i.previous_output).collect()
 }
 
-/// Whether every input `i` of `tx` is spent as `signed` spends `selected[i]`, with no script_sig and a
-/// witness of two items, a SIGHASH_ALL signature by that coin's key over its P2WPKH sighash and then
-/// the key's compressed public key. SIGHASH_ALL commits to every input and output, so none has changed.
+/// Whether every input `i` of `tx` is spent exactly as `signed` spends `selected[i]`, by
+/// `AddressType::spent_by` of that coin's key: the script_sig and witness shape `signed` writes and a
+/// signature by that key that commits to every input and output, so none has changed.
 fn signed_here(tx: &Transaction, selected: &[(&Utxo, &OwnKey)]) -> bool {
-    let secp = Secp256k1::verification_only();
+    let prevouts = prevouts_of(selected);
     let mut cache = SighashCache::new(tx);
-    selected.iter().enumerate().all(|(i, (utxo, owner))| {
-        let (input, script) = (&tx.input[i], owner.address.script_pubkey());
-        let sig = input
-            .witness
-            .nth(0)
-            .map(bitcoin::ecdsa::Signature::from_slice);
-        let sighash = cache.p2wpkh_signature_hash(
-            i,
-            &script,
-            Amount::from_sat(utxo.value),
-            EcdsaSighashType::All,
-        );
-        let (Some(Ok(sig)), Ok(sighash)) = (sig, sighash) else {
-            return false;
-        };
-        input.script_sig.is_empty()
-            && input.witness.len() == 2
-            && input.witness.nth(1) == Some(owner.pubkey.to_bytes().as_slice())
-            && sig.sighash_type == EcdsaSighashType::All
-            && secp
-                .verify_ecdsa(
-                    &Message::from_digest(sighash.to_byte_array()),
-                    &sig.signature,
-                    &owner.pubkey.0,
-                )
-                .is_ok()
-    })
+    tx.input.len() == selected.len()
+        && selected
+            .iter()
+            .enumerate()
+            .all(|(i, (_, owner))| owner.address_type.spent_by(&mut cache, i, &prevouts, owner))
+}
+
+/// The coin each input of `selected` spends, as the sighashes read it.
+fn prevouts_of(selected: &[(&Utxo, &OwnKey)]) -> Vec<TxOut> {
+    selected
+        .iter()
+        .map(|(utxo, owner)| TxOut {
+            value: Amount::from_sat(utxo.value),
+            script_pubkey: owner.address.script_pubkey(),
+        })
+        .collect()
 }
 
 /// The fee tiers the Send screen offers, in sat/vB. `slow_sat_vb` aims at confirmation in about an
@@ -2218,7 +2268,10 @@ mod tests {
     use super::*;
     use crate::chain::*;
     use crate::scan_store::tests::Folder;
+    use bitcoin::sighash::EcdsaSighashType;
     use std::fs;
+
+    const OWN_SPEND: InputWeightPrediction = AddressType::NativeSegwit.input_weight();
 
     fn abandon_about() -> Vec<String> {
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
@@ -2351,7 +2404,13 @@ mod tests {
             ("TREZOR", 1, 1, "tb1q0vy7ch5mc63e3kz5ns8k2s7xxrfygjhesv9l0e"),
         ];
         for (passphrase, chain, index, expected) in vectors {
-            let account = Account::new(&abandon_about(), passphrase, Network::Testnet4).unwrap();
+            let account = Account::new(
+                &abandon_about(),
+                passphrase,
+                Network::Testnet4,
+                AddressType::NativeSegwit,
+            )
+            .unwrap();
             let chain = if chain == 0 {
                 Chain::External
             } else {
@@ -3230,10 +3289,15 @@ mod tests {
     }
 
     fn own(chain: Chain, index: u32) -> OwnKey {
-        Account::new(&abandon_about(), "", Network::Testnet4)
-            .unwrap()
-            .key(chain, index)
-            .unwrap()
+        Account::new(
+            &abandon_about(),
+            "",
+            Network::Testnet4,
+            AddressType::NativeSegwit,
+        )
+        .unwrap()
+        .key(chain, index)
+        .unwrap()
     }
 
     fn addr(chain: Chain, index: u32) -> String {
@@ -3406,6 +3470,7 @@ mod tests {
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 &|| self.now(),
                 store,
             )
@@ -3421,6 +3486,7 @@ mod tests {
                 words,
                 passphrase,
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 &|| self.now(),
                 &self.store,
             )
@@ -3432,6 +3498,7 @@ mod tests {
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 &|| self.now(),
                 &self.store,
             )
@@ -3455,6 +3522,7 @@ mod tests {
                 &words,
                 "",
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 to,
                 amount,
                 rate,
@@ -3479,6 +3547,7 @@ mod tests {
                 &words,
                 "",
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 to,
                 rate,
                 &|| self.now(),
@@ -3520,6 +3589,7 @@ mod tests {
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 hex,
                 rate,
                 kind,
@@ -4431,7 +4501,13 @@ mod tests {
     // cap of 200 refused it on every call.
     #[test]
     fn a_wallet_used_through_receive_index_300_loads_with_its_balance_and_next_receive_address() {
-        let account = Account::new(&abandon_about(), "", Network::Testnet4).unwrap();
+        let account = Account::new(
+            &abandon_about(),
+            "",
+            Network::Testnet4,
+            AddressType::NativeSegwit,
+        )
+        .unwrap();
         let at = |chain, index| account.key(chain, index).unwrap().address.to_string();
         let mut fake = Fake::new();
         for i in 0..=300 {
@@ -5954,6 +6030,7 @@ mod tests {
             &abandon_about(),
             "",
             KeyNetwork::Test,
+            AddressType::NativeSegwit,
             &|| fake.now(),
             &fake.store,
         )
@@ -5984,6 +6061,7 @@ mod tests {
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 &|| fake.now(),
                 &fake.store,
             )
@@ -6009,6 +6087,7 @@ mod tests {
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 &|| fake.now(),
                 &fake.store,
             )
@@ -6042,6 +6121,7 @@ mod tests {
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 &|| fake.now(),
                 &fake.store,
             )
@@ -6322,9 +6402,14 @@ mod tests {
     #[test]
     fn an_unreadable_foreign_or_newer_scan_file_is_ignored_and_discovery_starts_over() {
         let fake = three_used();
-        let id = Account::new(&abandon_about(), "", Network::Testnet4)
-            .unwrap()
-            .id();
+        let id = Account::new(
+            &abandon_about(),
+            "",
+            Network::Testnet4,
+            AddressType::NativeSegwit,
+        )
+        .unwrap()
+        .id();
         let name = format!(
             "{}.json",
             id.iter().map(|b| format!("{b:02x}")).collect::<String>()
@@ -6338,6 +6423,7 @@ mod tests {
                 &abandon_about(),
                 passphrase,
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 &|| fake.now(),
                 &store,
             )
@@ -6441,6 +6527,7 @@ mod tests {
                     &abandon_about(),
                     "",
                     KeyNetwork::Test,
+                    AddressType::NativeSegwit,
                     &|| fake.now(),
                     &fake.store,
                 )
@@ -6469,6 +6556,7 @@ mod tests {
             &abandon_about(),
             "",
             KeyNetwork::Test,
+            AddressType::NativeSegwit,
             &|| fake.now(),
             &fake.store,
         )
@@ -6520,6 +6608,7 @@ mod tests {
                     &abandon_about(),
                     "",
                     KeyNetwork::Test,
+                    AddressType::NativeSegwit,
                     &|| fake.now(),
                     &fake.store,
                 )
@@ -6586,6 +6675,7 @@ mod tests {
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 &|| fake.now(),
                 &fake.store,
             )
@@ -7008,7 +7098,13 @@ mod tests {
             ("a timeout", stalled),
             ("a body cut short", || classify(cut_short(200))),
         ];
-        let account = Account::new(&abandon_about(), "", Network::Testnet4).unwrap();
+        let account = Account::new(
+            &abandon_about(),
+            "",
+            Network::Testnet4,
+            AddressType::NativeSegwit,
+        )
+        .unwrap();
         let at = |chain, index| account.key(chain, index).unwrap().address.to_string();
         let used: Vec<String> = (0..150)
             .map(|i| at(Chain::External, i))
@@ -7040,6 +7136,7 @@ mod tests {
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 &|| fake.now(),
                 &fake.store,
             ) {
@@ -8026,6 +8123,7 @@ mod tests {
             &abandon_about(),
             "",
             KeyNetwork::Test,
+            AddressType::NativeSegwit,
             &|| fake.now(),
             &fake.store,
         )
@@ -8512,6 +8610,80 @@ mod tests {
         );
     }
 
+    // A Native SegWit payment, send all, fee bump and cancel sign exactly the bytes they signed before the address type existed
+    // (df1a4a8), so a wallet with no saved type spends as it always did.
+    #[test]
+    fn a_native_segwit_payment_send_all_bump_and_cancel_sign_the_bytes_they_signed_before_address_types()
+     {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 100_000, '1');
+        fake.fund(&addr(Chain::External, 1), 50_000, '2');
+        let payment = fake.send(SOMEONE, 120_000, 3).unwrap();
+        let (bump, _) = fake.replace(&payment, 10, Replacement::FeeBump).unwrap();
+        let (cancel, _) = fake.replace(&payment, 10, Replacement::Cancel).unwrap();
+        let (all, _) = fake.send_all_at(SOMEONE, 2).unwrap();
+        for (name, tx, before) in [
+            (
+                "payment",
+                &payment,
+                concat!(
+                    "0200000000010211111111111111111111111111111111111111111111111111111111111111110000000000fdffffff",
+                    "22222222222222222222222222222222222222222222222222222222222222220000000000fdffffff02c0d401000000",
+                    "00001600149c98b5a27f7a2c6994a8dc1a741c420e7d3c5a10bd720000000000001600142f34aa1cf00a53b055a291a0",
+                    "3a7d45f0a6988b5202483045022100f7d64402017123e05da0f29844a288aaed3b519d82db026974f5fb30046856e502",
+                    "205cdd2cd771f484be996b86bbb8980a4dcfea0eb2efeb3336f9f3dcde3ac3ad97012102e7ab2537b5d49e970309aae0",
+                    "6e9e49f36ce1c9febbd44ec8e0d1cca0b4f9c31902483045022100a01fb7f137e28917158d8fc0074cf3b05199162064",
+                    "5be89ef8cd10b1192d1e00022061c02acb8cd1b0e9a85758f4bb1357f8120c8fe1873c4993af02897482e3c9bd012103",
+                    "eeed205a69022fed4a62a02457f3699b19c06bf74bf801acc6d9ae84bc16a9e100000000"
+                ),
+            ),
+            (
+                "bump",
+                &bump,
+                concat!(
+                    "0200000000010211111111111111111111111111111111111111111111111111111111111111110000000000fdffffff",
+                    "22222222222222222222222222222222222222222222222222222222222222220000000000fdffffff02c0d401000000",
+                    "00001600149c98b5a27f7a2c6994a8dc1a741c420e7d3c5a10066d0000000000001600142f34aa1cf00a53b055a291a0",
+                    "3a7d45f0a6988b52024830450221009dfae3e9be6814c123535b94186732eca99c601f8723dc05d993949574dc0d5b02",
+                    "203fad84d87be16105dd46aa665b78de7b0a86a2baad18fd65c3b2b50b27cd64c1012102e7ab2537b5d49e970309aae0",
+                    "6e9e49f36ce1c9febbd44ec8e0d1cca0b4f9c31902483045022100d021e406161ded0a1bce59a326867f94b39c983384",
+                    "450c1799b675f320f9ccdc0220583b4da5f021b22276007d5a8537f06a3eb86b24345ce2c0b39a2e0fa9e2ae1a012103",
+                    "eeed205a69022fed4a62a02457f3699b19c06bf74bf801acc6d9ae84bc16a9e100000000"
+                ),
+            ),
+            (
+                "cancel",
+                &cancel,
+                concat!(
+                    "0200000000010211111111111111111111111111111111111111111111111111111111111111110000000000fdffffff",
+                    "22222222222222222222222222222222222222222222222222222222222222220000000000fdffffff01fc4202000000",
+                    "00001600142f34aa1cf00a53b055a291a03a7d45f0a6988b5202483045022100ff98e855ca7022522edd94a4de814519",
+                    "500a6c9bb14f4d274bb6c10d9fea50f50220043d56eef658ca1d29a5c2336c6082b6d377fac83c43dbb34afe6c583319",
+                    "77ed012102e7ab2537b5d49e970309aae06e9e49f36ce1c9febbd44ec8e0d1cca0b4f9c3190248304502210080eb5fd7",
+                    "642961da6bd1f6a51fac236ec514a98eb0b5d5353e602deee620aae20220435285055b96ccda54cb9d36367e881c3461",
+                    "62ecda271022af007c226611b5dc012103eeed205a69022fed4a62a02457f3699b19c06bf74bf801acc6d9ae84bc16a9",
+                    "e100000000"
+                ),
+            ),
+            (
+                "all",
+                &all,
+                concat!(
+                    "0200000000010211111111111111111111111111111111111111111111111111111111111111110000000000fdffffff",
+                    "22222222222222222222222222222222222222222222222222222222222222220000000000fdffffff018c4802000000",
+                    "00001600149c98b5a27f7a2c6994a8dc1a741c420e7d3c5a1002483045022100e8e2472612a17188f0b247e65462c126",
+                    "a3a10287f441bcf89c101a3ce0a6c9fb02206ddd66ebefa3b95a829ef35c5478ab1e7332d35d3cd93f4e34325a405d8c",
+                    "2574012102e7ab2537b5d49e970309aae06e9e49f36ce1c9febbd44ec8e0d1cca0b4f9c31902483045022100d393561d",
+                    "907f5b4e60f4a107dfb4e5f7893f983fb2e8d2357dd6449c4c7756cc02206dbc33b0af4370531aff9ee5be107372a90a",
+                    "e1db0e1b133b7c004789932e93b9012103eeed205a69022fed4a62a02457f3699b19c06bf74bf801acc6d9ae84bc16a9",
+                    "e100000000"
+                ),
+            ),
+        ] {
+            assert_eq!(serialize_hex(tx), before, "{name}");
+        }
+    }
+
     #[test]
     fn zero_negative_nan_string_and_missing_rates_are_no_estimate() {
         // Nothing usable on either endpoint: the fallback.
@@ -8653,6 +8825,7 @@ mod tests {
             &abandon_about(),
             "",
             KeyNetwork::Test,
+            AddressType::NativeSegwit,
             &SystemTime::now,
             &ScanStore::default(),
         )
@@ -8693,7 +8866,9 @@ mod tests {
             .unwrap_or_else(|| std::env::temp_dir().join("mebit-real-scan"));
         let store = ScanStore::default();
         store.use_dir(dir.clone());
-        let id = Account::new(&words, "", Network::Testnet4).unwrap().id();
+        let id = Account::new(&words, "", Network::Testnet4, AddressType::NativeSegwit)
+            .unwrap()
+            .id();
         let file_before = fs::metadata(dir.join(format!(
             "{}.json",
             id.iter().map(|b| format!("{b:02x}")).collect::<String>()
@@ -8705,6 +8880,7 @@ mod tests {
             &words,
             "",
             KeyNetwork::Test,
+            AddressType::NativeSegwit,
             &SystemTime::now,
             &store,
         );
@@ -9049,6 +9225,7 @@ mod tests {
             &abandon_about(),
             "",
             KeyNetwork::Test,
+            AddressType::NativeSegwit,
             txid,
             &fake.store,
         )
@@ -9170,6 +9347,7 @@ mod tests {
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 &id('3'),
                 &fake.store,
             )
@@ -9234,6 +9412,7 @@ mod tests {
             &abandon_about(),
             "",
             KeyNetwork::Test,
+            AddressType::NativeSegwit,
             &id('1'),
             &ScanStore::default(),
         );
@@ -9301,6 +9480,7 @@ mod tests {
             &abandon_about(),
             "",
             KeyNetwork::Main,
+            AddressType::NativeSegwit,
             &one,
             &ScanStore::default(),
         );
@@ -9464,6 +9644,7 @@ mod tests {
             &abandon_about(),
             "",
             KeyNetwork::Test,
+            AddressType::NativeSegwit,
             &id('1'),
             &ScanStore::default(),
         ) {
@@ -9592,7 +9773,13 @@ mod tests {
     }
 
     static PROOF: LazyLock<ProofBlock> = LazyLock::new(|| {
-        let account = Account::new(&abandon_about(), "", Network::Testnet4).unwrap();
+        let account = Account::new(
+            &abandon_about(),
+            "",
+            Network::Testnet4,
+            AddressType::NativeSegwit,
+        )
+        .unwrap();
         let address = |chain, index| account.key(chain, index).unwrap().address;
         let tx = |previous_output, output| Transaction {
             version: bitcoin::transaction::Version::TWO,
@@ -9849,6 +10036,7 @@ mod tests {
             &abandon_about(),
             "",
             KeyNetwork::Test,
+            AddressType::NativeSegwit,
             &SystemTime::now,
             &ScanStore::default(),
         )
@@ -9868,6 +10056,7 @@ mod tests {
             &words,
             "",
             KeyNetwork::Test,
+            AddressType::NativeSegwit,
             &SystemTime::now,
             &store,
         );
@@ -9881,6 +10070,7 @@ mod tests {
             &words,
             "",
             KeyNetwork::Test,
+            AddressType::NativeSegwit,
             &SystemTime::now,
             &store,
         ) {
@@ -10097,7 +10287,8 @@ mod tests {
     fn a_real_testnet4_payment_proves_receive_0_of_the_24_word_phrase_and_the_scan_completes() {
         let mut words = vec!["abandon".to_string(); 23];
         words.push("art".into());
-        let account = Account::new(&words, "", Network::Testnet4).unwrap();
+        let account =
+            Account::new(&words, "", Network::Testnet4, AddressType::NativeSegwit).unwrap();
         let receive = |index| {
             account
                 .key(Chain::External, index)
@@ -10137,6 +10328,7 @@ mod tests {
             &words,
             "",
             KeyNetwork::Test,
+            AddressType::NativeSegwit,
             &SystemTime::now,
             &ScanStore::default(),
         )
@@ -10197,20 +10389,38 @@ mod tests {
             let source = EsploraSource(&Reads(host));
             let store = ScanStore::default();
             let (words, now) = (abandon_about(), &|| fake.now());
-            let snapshot =
-                snapshot_from(&source, &words, "", KeyNetwork::Test, now, &store).unwrap();
+            let snapshot = snapshot_from(
+                &source,
+                &words,
+                "",
+                KeyNetwork::Test,
+                AddressType::NativeSegwit,
+                now,
+                &store,
+            )
+            .unwrap();
             assert_eq!(
                 (snapshot.scan, snapshot.spendable_sats),
                 (scan, 0),
                 "{text}"
             );
             let calls = [
-                history_of(&source, &words, "", KeyNetwork::Test, now, &store).map(|_| ()),
+                history_of(
+                    &source,
+                    &words,
+                    "",
+                    KeyNetwork::Test,
+                    AddressType::NativeSegwit,
+                    now,
+                    &store,
+                )
+                .map(|_| ()),
                 signed_payment(
                     &source,
                     &words,
                     "",
                     KeyNetwork::Test,
+                    AddressType::NativeSegwit,
                     SOMEONE,
                     1_000,
                     1,
@@ -10223,6 +10433,7 @@ mod tests {
                     &words,
                     "",
                     KeyNetwork::Test,
+                    AddressType::NativeSegwit,
                     SOMEONE,
                     1,
                     now,
@@ -10268,7 +10479,13 @@ mod tests {
     #[test]
     fn whatever_a_fake_claims_a_plain_restore_reaches_the_receive_and_change_addresses_it_hands_out()
      {
-        let account = Account::new(&abandon_about(), "", Network::Testnet4).unwrap();
+        let account = Account::new(
+            &abandon_about(),
+            "",
+            Network::Testnet4,
+            AddressType::NativeSegwit,
+        )
+        .unwrap();
         let span = 3 * GAP;
         let index_of = |chain, address: &str| {
             (0..2 * span)
@@ -10351,9 +10568,14 @@ mod tests {
         fs::write(&path, json.to_string()).unwrap();
         let read = ScanStore::default();
         read.use_dir(folder.0.clone());
-        let id = Account::new(&abandon_about(), "", Network::Testnet4)
-            .unwrap()
-            .id();
+        let id = Account::new(
+            &abandon_about(),
+            "",
+            Network::Testnet4,
+            AddressType::NativeSegwit,
+        )
+        .unwrap()
+        .id();
         assert_eq!(
             read.wallet(&id).lock().unwrap().scan.chains[0].proof,
             Some(Proof::Stored(frontier - 1)),
@@ -10457,7 +10679,15 @@ mod tests {
                 let words = abandon_about();
                 let answered = match call {
                     "detail" => {
-                        let _ = detail_of(&source, &words, "", KeyNetwork::Test, &id('1'), &store);
+                        let _ = detail_of(
+                            &source,
+                            &words,
+                            "",
+                            KeyNetwork::Test,
+                            AddressType::NativeSegwit,
+                            &id('1'),
+                            &store,
+                        );
                         true
                     }
                     _ => snapshot_from(
@@ -10465,6 +10695,7 @@ mod tests {
                         &words,
                         "",
                         KeyNetwork::Test,
+                        AddressType::NativeSegwit,
                         &|| fake.now(),
                         &store,
                     )
@@ -10631,6 +10862,7 @@ mod tests {
             &abandon_about(),
             "",
             KeyNetwork::Test,
+            AddressType::NativeSegwit,
             &|| fake.now(),
             &store,
         )
@@ -10677,6 +10909,7 @@ mod tests {
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 &|| honest.now(),
                 store,
             )
@@ -10737,6 +10970,7 @@ mod tests {
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 &|| fake.now(),
                 &fake.store,
             )
@@ -10870,6 +11104,7 @@ mod tests {
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 &|| fake.now(),
                 &fake.store,
             )
@@ -10906,7 +11141,13 @@ mod tests {
     }
 
     fn receive_index(address: &str) -> u32 {
-        let account = Account::new(&abandon_about(), "", Network::Testnet4).unwrap();
+        let account = Account::new(
+            &abandon_about(),
+            "",
+            Network::Testnet4,
+            AddressType::NativeSegwit,
+        )
+        .unwrap();
         (0..PAID[0])
             .find(|&i| account.key(Chain::External, i).unwrap().address.to_string() == address)
             .unwrap()
@@ -10977,6 +11218,7 @@ mod tests {
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 &|| honest.now(),
                 &store,
             )
@@ -11126,6 +11368,7 @@ mod tests {
                 &abandon_about(),
                 "",
                 KeyNetwork::Test,
+                AddressType::NativeSegwit,
                 &|| fake.now(),
                 &fake.store,
             )
