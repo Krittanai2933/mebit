@@ -1226,11 +1226,13 @@ pub(crate) const MAX_FEE_RATE: u64 = 10_000;
 /// the fee raises the fee, so the real rate can sit above the rate asked.
 fn check_node_rate(fee_sats: u64, vsize: u64) -> Result<(), String> {
     if fee_sats > MAX_FEE_RATE * vsize {
-        return Err(format!(
-            "fee {fee_sats} for {vsize} vB is above the network's {MAX_FEE_RATE} sat/vB limit"
-        ));
+        return Err(above_limit(fee_sats, vsize));
     }
     Ok(())
+}
+
+fn above_limit(fee_sats: u64, vsize: u64) -> String {
+    format!("fee {fee_sats} for {vsize} vB is above the network's {MAX_FEE_RATE} sat/vB limit")
 }
 
 /// How this wallet's keys spend a coin: BIP-84, a 72-byte signature and a compressed key. The one
@@ -1244,6 +1246,68 @@ const OWN_SPEND: InputWeightPrediction = InputWeightPrediction::P2WPKH_MAX;
 /// the size `OWN_SPEND` assumes.
 fn vsize(inputs: &[InputWeightPrediction], output_scripts: &[usize]) -> u64 {
     predict_weight(inputs.iter().copied(), output_scripts.iter().copied()).to_vbytes_ceil()
+}
+
+/// How the leftover of some coins, what they hold beyond the amount, settles once it pays a
+/// transaction with no change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Settle {
+    /// Change at or above its script's dust floor, at the rate asked: a second output.
+    Change(u64),
+    /// Change from 0 up to its floor, into the fee, as Bitcoin Core's wallet does.
+    Fold(u64),
+    /// Too little for a change output at the rate asked: what is above the no-change fee goes into
+    /// the fee.
+    Fit(u64),
+    /// Into the fee would pass the network's 10,000 sat/vB, and too little is left for change at the
+    /// rate asked: change at exactly its floor and the rest the fee, under the rate asked and at least
+    /// what the node takes.
+    FloorChange(u64),
+}
+
+/// Why some coins do not settle, in rising order so the worst of several is the one reported: a
+/// smaller amount clears `Funds` and a lower rate `Limit`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Short {
+    Funds,
+    /// Into the fee would make `fee` on `vsize`, past the network's limit, and change at its floor
+    /// would pay less than the node takes.
+    Limit {
+        fee: u64,
+        vsize: u64,
+    },
+}
+
+/// The one stop rule of the payment and the fee bump loops. `left` is the coins less the amount,
+/// `with` and `without` the sizes with and without change, `floor` the change script's dust floor,
+/// `fee` the fee asked for a size and `least` the least fee the node takes for it.
+fn settle(
+    left: u64,
+    with: u64,
+    without: u64,
+    floor: u64,
+    fee: impl Fn(u64) -> u64,
+    least: impl Fn(u64) -> u64,
+) -> Result<Settle, Short> {
+    let change = left.checked_sub(fee(with));
+    if let Some(change) = change.filter(|c| *c >= floor) {
+        return Ok(Settle::Change(change));
+    }
+    if left < fee(without) {
+        return Err(Short::Funds);
+    }
+    if left > MAX_FEE_RATE * without {
+        return match left.checked_sub(floor) {
+            Some(paid) if (least(with)..=MAX_FEE_RATE * with).contains(&paid) => {
+                Ok(Settle::FloorChange(floor))
+            }
+            _ => Err(Short::Limit {
+                fee: left,
+                vsize: without,
+            }),
+        };
+    }
+    Ok(change.map_or(Settle::Fit(left - fee(without)), Settle::Fold))
 }
 
 /// The change output's script: P2WPKH, 22 bytes.
@@ -1624,7 +1688,9 @@ enum Replacement {
 /// confirm, and its first output stays as it was. More confirmed coins join only when the earlier
 /// inputs cannot pay the new fee, change goes to the same change address, or for a payment with no
 /// change to the next unused one, as Bitcoin Core's bumpfee does, and change below its dust floor goes
-/// into the fee. Only a payment with no change (a send all, or one whose change went into its fee)
+/// into the fee. Where that would pass 10,000 sat/vB on the bump's size, the change stays at exactly its
+/// floor and the fee is the rest, under the rate asked but within rules 3, 4 and 6, so the amount is
+/// kept. Only a payment with no change (a send all, or one whose change went into its fee)
 /// whose amount no confirmed coin can keep gets one output worth its own inputs less the new fee, and
 /// `amount_cut_sats` says how much less the destination gets. The fee meets BIP-125 rules 3, 4 and 6
 /// against that payment. It is at
@@ -1767,9 +1833,14 @@ fn signed_replacement(
     }
     // Rules 3 and 4 ask at least the earlier fee plus the new size at the 1 sat/vB incremental relay
     // rate. The size is the signed size, so the real rate is at least `rate`.
-    let fee_for = |inputs: usize, scripts: &[usize]| {
-        let size = vsize(&vec![OWN_SPEND; inputs], scripts);
-        (rate * size).max(old_fee.saturating_add(size))
+    let fee = |size: u64| (rate * size).max(old_fee.saturating_add(size));
+    let fee_for = |inputs: usize, scripts: &[usize]| fee(vsize(&vec![OWN_SPEND; inputs], scripts));
+    // The least fee the node takes at a size: rules 3 and 4, and rule 6 strictly above the earlier rate.
+    let least = |size: u64| {
+        let above = u128::from(old_fee) * u128::from(size) / u128::from(old_vsize) + 1;
+        old_fee
+            .saturating_add(size)
+            .max(u64::try_from(above).unwrap_or(u64::MAX))
     };
     // One output to `script`, worth `have` less the fee of a transaction of `inputs` and that output.
     let one = |inputs: usize, have: u64, script: ScriptBuf| {
@@ -1814,19 +1885,25 @@ fn signed_replacement(
             let mut more = more.into_iter();
             let mut have = total;
             let change_floor = dust_floor(&change);
+            let mut short = Short::Funds;
             loop {
-                let need = amount.saturating_add(fee_for(selected.len(), &scripts));
-                if let Some(rest) = have.checked_sub(need).filter(|rest| *rest >= change_floor) {
-                    let back = TxOut {
-                        value: Amount::from_sat(rest),
-                        script_pubkey: change,
-                    };
-                    break (vec![destination.clone(), back], have, 0);
-                }
-                // Change below its dust floor goes into the fee, as Bitcoin Core's bumpfee does. None
-                // is reported when even a change output could not be paid for.
-                if have >= amount.saturating_add(fee_for(selected.len(), &scripts[..1])) {
-                    break (vec![destination.clone()], have, have.saturating_sub(need));
+                let spends = vec![OWN_SPEND; selected.len()];
+                let (with, without) = (vsize(&spends, &scripts), vsize(&spends, &scripts[..1]));
+                // The earlier coins hold at least its outputs, so `have` covers the amount.
+                let left = have.saturating_sub(amount);
+                match settle(left, with, without, change_floor, &fee, &least) {
+                    Ok(Settle::Change(rest) | Settle::FloorChange(rest)) => {
+                        let back = TxOut {
+                            value: Amount::from_sat(rest),
+                            script_pubkey: change,
+                        };
+                        break (vec![destination.clone(), back], have, 0);
+                    }
+                    // Change below its dust floor goes into the fee, as Bitcoin Core's bumpfee does.
+                    // None is reported when even a change output could not be paid for.
+                    Ok(Settle::Fold(dust)) => break (vec![destination.clone()], have, dust),
+                    Ok(Settle::Fit(_)) => break (vec![destination.clone()], have, 0),
+                    Err(why) => short = short.max(why),
                 }
                 let Some((utxo, owner)) = more.next() else {
                     // A payment with no change (a send all, or change that went into the fee) whose
@@ -1836,9 +1913,13 @@ fn signed_replacement(
                         let script = destination.script_pubkey.clone();
                         break (one(spent.len(), total, script)?, total, 0);
                     }
-                    return Err(MobileSignerError::InvalidPsbtJson(format!(
-                        "insufficient funds: have {have} confirmed, need {need}"
-                    )));
+                    return Err(match short {
+                        Short::Limit { fee: paid, vsize } => fail(above_limit(paid, vsize)),
+                        Short::Funds => MobileSignerError::InvalidPsbtJson(format!(
+                            "insufficient funds: have {have} confirmed, need {}",
+                            amount.saturating_add(fee(with))
+                        )),
+                    });
                 };
                 selected.push((utxo, *owner));
                 have = have.checked_add(utxo.value).ok_or_else(coins_overflow)?;
@@ -4482,17 +4563,86 @@ mod tests {
             ),
             other => panic!("expected the node's limit, got {other:?}"),
         }
-        // A fee bump at 9,000 sat/vB that folds 100 sats of change pays 1,269,100 on 110 vB.
+        // A fee bump at 9,000 sat/vB that folded 100 sats of change would pay 1,269,100 on 110 vB, over the limit, so
+        // the change stays at its 294-sat floor and the fee is the rest, 1,268,806 on 141 vB: under the 9,000 asked and
+        // above what rules 3, 4 and 6 ask.
         let mut bumped = Fake::new();
         bumped.fund(&addr(Chain::External, 0), 1_369_100, '1');
         let earlier = bumped.send(SOMEONE, 100_000, 1).unwrap();
-        match bumped.replace(&earlier, 9_000, Replacement::FeeBump) {
-            Err(MobileSignerError::InvalidPsbtJson(m)) => assert!(
-                m.starts_with("replace: fee 1269100 for ")
-                    && m.ends_with(" vB is above the network's 10000 sat/vB limit"),
-                "{m}"
+        let bump = bumped
+            .replacement(&serialize_hex(&earlier), 9_000, Replacement::FeeBump)
+            .unwrap();
+        assert_outputs(
+            &bump.tx,
+            &[(SOMEONE, 100_000), (&addr(Chain::Internal, 0), 294)],
+        );
+        assert_eq!(
+            (bump.fee_sats, bump.dust_change_sats, bump.tx.vsize()),
+            (1_268_806, 0, 141)
+        );
+        assert_replaces(&bumped, &earlier, &bump.tx);
+    }
+
+    // Repro 2 of the round-2 review (open item 86 point 7). A send all of one 10,000,000-sat coin at 1 sat/vB, bumped
+    // at 9,900 sat/vB with a spare confirmed coin. Putting what is left into the fee passed 10,000 sat/vB on 178 vB from
+    // a spare coin of 1,779,891 sats, and the bump was refused up to 2,069,283. Now the change stays at its 294-sat
+    // floor and the fee falls under the rate asked, from 8,515 to 9,899.99 sat/vB, so the amount is kept wherever a
+    // coin can keep it. Below 1,762,090 no spare coin pays the bump, and the amount is cut as without one.
+    #[test]
+    fn a_send_all_bump_with_a_spare_coin_keeps_the_amount_at_every_size_near_the_limit() {
+        let mut alone = Fake::new();
+        alone.fund(&addr(Chain::External, 0), 10_000_000, '1');
+        let (earlier, _) = alone.send_all_at(SOMEONE, 1).unwrap();
+        assert_outputs(&earlier, &[(SOMEONE, 9_999_890)]);
+        let change = addr(Chain::Internal, 0);
+        let change = change.as_str();
+        for (spare, fee, outputs) in [
+            (1_762_089, 1_089_000, vec![(SOMEONE, 8_911_000)]),
+            (1_762_090, 1_762_200, vec![(SOMEONE, 9_999_890)]),
+            (1_779_890, 1_780_000, vec![(SOMEONE, 9_999_890)]),
+            (
+                1_779_891,
+                1_779_707,
+                vec![(SOMEONE, 9_999_890), (change, 294)],
             ),
-            other => panic!("expected the node's limit, got {other:?}"),
+            (
+                2_000_000,
+                1_999_816,
+                vec![(SOMEONE, 9_999_890), (change, 294)],
+            ),
+            (
+                2_069_283,
+                2_069_099,
+                vec![(SOMEONE, 9_999_890), (change, 294)],
+            ),
+            (
+                2_069_284,
+                2_069_100,
+                vec![(SOMEONE, 9_999_890), (change, 294)],
+            ),
+        ] {
+            let mut fake = Fake::new();
+            fake.fund(&addr(Chain::External, 0), 10_000_000, '1');
+            fake.fund(&addr(Chain::External, 1), spare, '2');
+            let bump = fake
+                .replacement(&serialize_hex(&earlier), 9_900, Replacement::FeeBump)
+                .unwrap_or_else(|e| panic!("spare {spare}: {e:?}"));
+            assert_outputs(&bump.tx, &outputs);
+            assert_eq!(
+                (bump.fee_sats, fee_paid(&fake, &bump.tx)),
+                (fee, fee),
+                "spare {spare}"
+            );
+            assert_eq!(
+                bump.amount_cut_sats,
+                9_999_890 - outputs[0].1,
+                "spare {spare}"
+            );
+            assert!(
+                fee <= MAX_FEE_RATE * bump.tx.vsize() as u64,
+                "spare {spare}"
+            );
+            assert_replaces(&fake, &earlier, &bump.tx);
         }
     }
 

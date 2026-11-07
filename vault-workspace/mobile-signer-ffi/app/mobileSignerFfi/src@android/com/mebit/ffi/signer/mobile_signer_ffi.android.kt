@@ -1137,7 +1137,7 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_cancel() != 64952.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_fee_bump() != 43273.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_fee_bump() != 51592.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_all() != 45269.toShort()) {
@@ -3757,7 +3757,9 @@ public actual fun `hotPrepareCancel`(`mnemonicWords`: List<kotlin.String>, `pass
  * confirm, and its first output stays as it was. More confirmed coins join only when the earlier
  * inputs cannot pay the new fee, change goes to the same change address, or for a payment with no
  * change to the next unused one, as Bitcoin Core's bumpfee does, and change below its dust floor goes
- * into the fee. Only a payment with no change (a send all, or one whose change went into its fee)
+ * into the fee. Where that would pass 10,000 sat/vB on the bump's size, the change stays at exactly its
+ * floor and the fee is the rest, under the rate asked but within rules 3, 4 and 6, so the amount is
+ * kept. Only a payment with no change (a send all, or one whose change went into its fee)
  * whose amount no confirmed coin can keep gets one output worth its own inputs less the new fee, and
  * `amount_cut_sats` says how much less the destination gets. The fee meets BIP-125 rules 3, 4 and 6
  * against that payment. It is at
