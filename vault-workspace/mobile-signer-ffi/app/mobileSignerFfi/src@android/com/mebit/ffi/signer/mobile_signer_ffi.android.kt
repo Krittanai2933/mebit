@@ -1143,7 +1143,7 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_all() != 35787.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate() != 24181.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate() != 10572.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_receive_address() != 37856.toShort()) {
@@ -3833,8 +3833,9 @@ public actual fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `pas
  * floor and the fee is the rest, under the rate asked. A fee above the amount is signed, because
  * the fee is paid on top and the destination still gets the amount, so the app asks the user before
  * it posts.
- * Only confirmed coins of receive addresses are spent; the wallet's own unconfirmed change is spent
- * too. About 40 Esplora calls for a fresh wallet, so call it off the main thread.
+ * Confirmed coins pay first, and the wallet's own unconfirmed change only when they fall short. A
+ * coin someone else sent is spent only once confirmed. About 40 Esplora calls for a fresh wallet,
+ * so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
 public actual fun `hotPrepareSendAtRate`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeRateSatVb`: kotlin.ULong): PreparedSend {

@@ -1167,8 +1167,9 @@ public expect fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `pas
  * floor and the fee is the rest, under the rate asked. A fee above the amount is signed, because
  * the fee is paid on top and the destination still gets the amount, so the app asks the user before
  * it posts.
- * Only confirmed coins of receive addresses are spent; the wallet's own unconfirmed change is spent
- * too. About 40 Esplora calls for a fresh wallet, so call it off the main thread.
+ * Confirmed coins pay first, and the wallet's own unconfirmed change only when they fall short. A
+ * coin someone else sent is spent only once confirmed. About 40 Esplora calls for a fresh wallet,
+ * so call it off the main thread.
  */
 @Throws(MobileSignerException::class)
 public expect fun `hotPrepareSendAtRate`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong, `feeRateSatVb`: kotlin.ULong): PreparedSend

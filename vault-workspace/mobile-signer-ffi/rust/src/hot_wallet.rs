@@ -1110,8 +1110,9 @@ pub struct PreparedSend {
 /// floor and the fee is the rest, under the rate asked. A fee above the amount is signed, because
 /// the fee is paid on top and the destination still gets the amount, so the app asks the user before
 /// it posts.
-/// Only confirmed coins of receive addresses are spent; the wallet's own unconfirmed change is spent
-/// too. About 40 Esplora calls for a fresh wallet, so call it off the main thread.
+/// Confirmed coins pay first, and the wallet's own unconfirmed change only when they fall short. A
+/// coin someone else sent is spent only once confirmed. About 40 Esplora calls for a fresh wallet,
+/// so call it off the main thread.
 #[uniffi::export]
 pub fn hot_prepare_send_at_rate(
     mnemonic_words: Vec<String>,
@@ -1606,13 +1607,23 @@ fn signed_payment(
             .then(a.vout.cmp(&b.vout))
     });
     let change_script = wallet.next_unused(Chain::Internal).address.script_pubkey();
-    let coins: Vec<(u64, InputWeightPrediction)> = spendable
-        .iter()
-        .map(|(u, _)| (u.value, OWN_SPEND))
-        .collect();
-    let (count, settled) = match select(&coins, amount_sats, rate_sat_vb, dest_len, &change_script)
-    {
-        Ok(found) => found,
+    // Confirmed coins first. The wallet's own unconfirmed change joins only when they fall short, and
+    // then every coin is tried in the same order.
+    let walk = |coins: &[&(Utxo, &OwnKey)]| {
+        let spends: Vec<(u64, InputWeightPrediction)> =
+            coins.iter().map(|(u, _)| (u.value, OWN_SPEND)).collect();
+        select(&spends, amount_sats, rate_sat_vb, dest_len, &change_script)
+    };
+    let confirmed: Vec<&(Utxo, &OwnKey)> = spendable.iter().filter(|(u, _)| u.confirmed).collect();
+    let every: Vec<&(Utxo, &OwnKey)> = spendable.iter().collect();
+    let picked = match walk(&confirmed) {
+        Ok(found) => Ok((confirmed, found)),
+        Err(first) => walk(&every)
+            .map(|found| (every, found))
+            .map_err(|second| first.max(second)),
+    };
+    let (coins, (count, settled)) = match picked {
+        Ok(picked) => picked,
         Err(Short::Funds) => {
             let need = need(spendable.len())?;
             return refuse(format!(
@@ -1626,7 +1637,7 @@ fn signed_payment(
         }
         Err(Short::Limit { fee, vsize: size }) => return refuse(above_limit(fee, size)),
     };
-    let selected: Vec<(&Utxo, &OwnKey)> = spendable[..count].iter().map(|(u, k)| (u, *k)).collect();
+    let selected: Vec<(&Utxo, &OwnKey)> = coins[..count].iter().map(|(u, k)| (u, *k)).collect();
     let left = selected.iter().map(|(u, _)| u.value).sum::<u64>() - amount_sats;
     // Change the network would refuse as an output, or too little to pay for its own, goes into the
     // fee, as Bitcoin Core's wallet does, and the answer names it for Review.
@@ -4424,6 +4435,29 @@ mod tests {
         assert_refused(
             fake.send(SOMEONE, 4_000, 2),
             "insufficient funds: have 3000 confirmed, need 4220",
+        );
+    }
+
+    // Confirmed coins pay first. A payment that chained on the wallet's own unconfirmed change, the larger coin here,
+    // while a confirmed coin could pay now spends only the confirmed coin, and the change joins only when confirmed
+    // coins fall short, in the same order. A stranger's unconfirmed coin is never spent (findings 14 and the stranger's
+    // change, above and below).
+    #[test]
+    fn confirmed_coins_pay_before_the_wallets_own_unconfirmed_change() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 5_000, '1');
+        fake.fund_change(&addr(Chain::Internal, 0), 8_000, '2');
+        let spent = |tx: &Transaction| -> Vec<String> {
+            inputs_of(tx).iter().map(|o| o.txid.to_string()).collect()
+        };
+        assert_eq!(spent(&fake.send(SOMEONE, 3_000, 1).unwrap()), [id('1')]);
+        assert_eq!(
+            spent(&fake.send(SOMEONE, 9_000, 1).unwrap()),
+            [id('2'), id('1')]
+        );
+        assert_refused(
+            fake.send(SOMEONE, 13_000, 1),
+            "insufficient funds: have 13000 confirmed, need 13178",
         );
     }
 
