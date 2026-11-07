@@ -15,6 +15,7 @@
 //! Every read and the broadcast go through `crate::chain::ChainSource`, so the wallet logic here never
 //! builds a URL, reads a JSON body or picks a host.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -1517,12 +1518,73 @@ fn own_change_transactions(
     Ok(signed)
 }
 
-/// `selected` spent to `outputs`, each input signed with its coin's own key, and checked to weigh
-/// exactly what `vsize` sized its fee for.
+/// Refuses unless each coin of `selected` whose signature commits to no value, a Legacy one, is output
+/// `vout` of the transaction `source` serves for its txid, paying the coin's key exactly the value the
+/// selection used. A host that listed a Legacy coin at another value would otherwise get a valid payment
+/// whose fee is not the one Review shows. One read per transaction, none for the other types. A read
+/// that got no answer fails with `esplora get:`, which asking again may pass, and an answer that is not
+/// that coin, or does not know its transaction, with `esplora scan:`, as a scan maps the same answers.
+fn prove_values(
+    source: &dyn ChainSource,
+    selected: &[(&Utxo, &OwnKey)],
+) -> Result<(), MobileSignerError> {
+    let mut read: HashMap<Txid, Transaction> = HashMap::new();
+    for (utxo, owner) in selected {
+        if owner.address_type.commits_to_value() {
+            continue;
+        }
+        let coin = OutPoint {
+            txid: utxo.txid,
+            vout: utxo.vout,
+        };
+        let lie = |why: String| {
+            MobileSignerError::InvalidPsbtJson(format!("esplora scan: coin {coin}: {why}"))
+        };
+        let tx = match read.entry(utxo.txid) {
+            Entry::Occupied(known) => known.into_mut(),
+            Entry::Vacant(slot) => {
+                let tx = source.raw_tx(&utxo.txid).map_err(|not| match not {
+                    NotProven::Unreachable(why) => MobileSignerError::InvalidPsbtJson(format!(
+                        "esplora get: coin {coin} could not be read: {why}"
+                    )),
+                    NotProven::Gone(why) | NotProven::Lie(why) => lie(why),
+                    NotProven::Unconfirmed(summary) => lie(format!("{summary:?}")),
+                })?;
+                if tx.compute_txid() != utxo.txid {
+                    return Err(lie(format!("the raw transaction is {}", tx.compute_txid())));
+                }
+                slot.insert(tx)
+            }
+        };
+        let paid = tx
+            .output
+            .get(utxo.vout as usize)
+            .ok_or_else(|| lie(format!("its transaction has {} outputs", tx.output.len())))?;
+        if paid.script_pubkey != owner.address.script_pubkey() {
+            return Err(lie(format!(
+                "its transaction pays it to another script than {}",
+                owner.address
+            )));
+        }
+        if paid.value.to_sat() != utxo.value {
+            return Err(lie(format!(
+                "listed at {} sats, and its transaction pays {}",
+                utxo.value,
+                paid.value.to_sat()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// `selected` spent to `outputs`, once `prove_values` holds for them on `source`, each input signed with
+/// its coin's own key, and checked to weigh exactly what `vsize` sized its fee for.
 fn signed(
+    source: &dyn ChainSource,
     selected: &[(&Utxo, &OwnKey)],
     outputs: Vec<TxOut>,
 ) -> Result<Transaction, MobileSignerError> {
+    prove_values(source, selected)?;
     let secp = Secp256k1::new();
     let tx = Transaction {
         version: bitcoin::transaction::Version::TWO,
@@ -1708,7 +1770,7 @@ fn signed_payment(
         value: Amount::from_sat(value),
         script_pubkey: change_script,
     }));
-    let tx = signed(&selected, outputs)?;
+    let tx = signed(source, &selected, outputs)?;
     let fee_sats = left - change.unwrap_or(0);
     check_node_rate(fee_sats, tx.vsize() as u64).map_err(MobileSignerError::InvalidPsbtJson)?;
     Ok(Signed {
@@ -1782,7 +1844,7 @@ fn signed_send_all(
         value: Amount::from_sat(amount_sats),
         script_pubkey: dest.script_pubkey(),
     };
-    let tx = signed(&selected, vec![output])?;
+    let tx = signed(source, &selected, vec![output])?;
     check_node_rate(fee_sats, tx.vsize() as u64).map_err(MobileSignerError::InvalidPsbtJson)?;
     Ok(Signed {
         tx,
@@ -2127,7 +2189,7 @@ fn signed_replacement(
             }
         }
     };
-    let tx = signed(&selected, outputs)?;
+    let tx = signed(source, &selected, outputs)?;
     let fee = tx
         .output
         .iter()
@@ -2734,6 +2796,22 @@ mod tests {
             r#"{{"txid":"{}","vout":{vout},"status":{{"confirmed":{confirmed}}},"value":{value}}}"#,
             id(digit)
         )
+    }
+
+    /// A transaction that spends coin 0 of the one whose id repeats `digit` to `outputs`.
+    fn paying(digit: char, outputs: Vec<TxOut>) -> Transaction {
+        Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint {
+                    txid: Txid::from_str(&id(digit)).unwrap(),
+                    vout: 0,
+                },
+                ..TxIn::default()
+            }],
+            output: outputs,
+        }
     }
 
     fn hot(txid: &str, net_sats: i64, confirmations: u32, block_time: Option<u64>) -> HotTx {
@@ -3371,7 +3449,10 @@ mod tests {
         /// Transactions this host does not know, so every read of one answers 404: a payment a reorg undid, or one
         /// in a block the host never saw.
         unknown: HashSet<String>,
+        /// Addresses and transactions whose every read times out.
         failing: HashSet<String>,
+        /// What `/tx/{txid}/hex` answers for the transactions `fund_raw` made.
+        raw: HashMap<String, String>,
         tip: String,
         calls: Mutex<Vec<String>>,
         now: Mutex<SystemTime>,
@@ -3389,6 +3470,7 @@ mod tests {
                 parents: HashMap::new(),
                 unknown: HashSet::new(),
                 failing: HashSet::new(),
+                raw: HashMap::new(),
                 tip: TIP.into(),
                 calls: Mutex::new(Vec::new()),
                 now: Mutex::new(UNIX_EPOCH + Duration::from_secs(1_762_300_000)),
@@ -3414,6 +3496,38 @@ mod tests {
             self.stats.insert(address.into(), used_stats(value));
             self.utxos
                 .insert(address.into(), format!("[{}]", coin(digit, 0, value, true)));
+        }
+
+        /// `address` holds output 1 of a confirmed transaction that this host serves raw and that pays it `value` sats,
+        /// and the coin list says `listed`, which an honest host makes `value`. Returns the transaction's id.
+        fn fund_raw(&mut self, address: &str, value: u64, listed: u64, digit: char) -> Txid {
+            let pay = |to: &str, sats| TxOut {
+                value: Amount::from_sat(sats),
+                script_pubkey: Address::from_str(to)
+                    .unwrap()
+                    .assume_checked()
+                    .script_pubkey(),
+            };
+            let tx = paying(digit, vec![pay(SOMEONE, 1_000), pay(address, value)]);
+            let txid = tx.compute_txid();
+            self.stats.insert(address.into(), used_stats(listed));
+            self.utxos.insert(
+                address.into(),
+                format!(r#"[{{"txid":"{txid}","vout":1,"status":{{"confirmed":true}},"value":{listed}}}]"#),
+            );
+            self.raw.insert(txid.to_string(), serialize_hex(&tx));
+            txid
+        }
+
+        /// How many times `txid`'s raw bytes were read.
+        fn reads_of(&self, txid: Txid) -> usize {
+            let path = format!("/tx/{txid}/hex");
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|url| url.ends_with(&path))
+                .count()
         }
 
         /// `address` holds one coin of `value` sats that is still in the mempool.
@@ -3466,6 +3580,22 @@ mod tests {
                 return Err(MobileSignerError::InvalidPsbtJson(format!(
                     "esplora get: {url}: status code 404"
                 )));
+            }
+            if let Some(rest) = path.strip_prefix("/tx/")
+                && self
+                    .failing
+                    .contains(rest.split('/').next().unwrap_or(rest))
+            {
+                return Err(MobileSignerError::InvalidPsbtJson(format!(
+                    "esplora get: {url}: timed out"
+                )));
+            }
+            if let Some(hex) = path
+                .strip_prefix("/tx/")
+                .and_then(|rest| rest.strip_suffix("/hex"))
+                .and_then(|txid| self.raw.get(txid))
+            {
+                return Ok(hex.clone());
             }
             if let Some(answer) = proof_answer(path) {
                 return answer;
@@ -4728,6 +4858,7 @@ mod tests {
         };
         let key = own(Chain::External, 0);
         signed(
+            &EsploraSource(&Refusing("a Native SegWit coin is never read")),
             &[(&coin, &key)],
             vec![to(SOMEONE, amount), to(&addr(Chain::Internal, 0), change)],
         )
@@ -5737,7 +5868,12 @@ mod tests {
             ),
             (
                 "signed by another key of this wallet",
-                signed(&[(&coin, &own(Chain::External, 1))], earlier.output.clone()).unwrap(),
+                signed(
+                    &EsploraSource(&Refusing("a Native SegWit coin is never read")),
+                    &[(&coin, &own(Chain::External, 1))],
+                    earlier.output.clone(),
+                )
+                .unwrap(),
             ),
             (
                 "signed SIGHASH_NONE, then output 0 aimed elsewhere",
@@ -9002,8 +9138,9 @@ mod tests {
         }
     }
 
-    /// A Fake of `address_type`'s wallet whose receive 0 and 1 hold 100,000 and 50,000 sats.
-    fn funded_as(address_type: AddressType) -> Fake {
+    /// A Fake of `address_type`'s wallet whose receive 0 and 1 hold 100,000 and 50,000 sats, each output 1 of a
+    /// transaction the Fake serves raw, which it lists at `listed`. The ids of those two transactions.
+    fn funded_as(address_type: AddressType, listed: [u64; 2]) -> (Fake, [Txid; 2]) {
         let mut fake = Fake::new();
         fake.address_type = address_type;
         let addr = |index| {
@@ -9011,9 +9148,11 @@ mod tests {
                 .address
                 .to_string()
         };
-        fake.fund(&addr(0), 100_000, '1');
-        fake.fund(&addr(1), 50_000, '2');
-        fake
+        let txids = [
+            fake.fund_raw(&addr(0), 100_000, listed[0], '1'),
+            fake.fund_raw(&addr(1), 50_000, listed[1], '2'),
+        ];
+        (fake, txids)
     }
 
     // Each type's payment, send all, fee bump and cancel sign its own inputs, pay change to its own change address,
@@ -9021,7 +9160,7 @@ mod tests {
     #[test]
     fn each_type_pays_sends_all_bumps_and_cancels_at_the_size_its_fee_was_built_for() {
         for address_type in AddressType::ALL {
-            let fake = funded_as(address_type);
+            let (fake, _) = funded_as(address_type, [100_000, 50_000]);
             let own = address_type.input_weight();
             let change = own_as(address_type, Chain::Internal, 0).address.to_string();
             let (payment, fee) = fake.send_at(SOMEONE, 120_000, 3).unwrap();
@@ -9072,16 +9211,172 @@ mod tests {
         }
     }
 
-    /// `count` confirmed coins of `value` sats each, as `signed` takes them.
-    fn coins_of(count: u32, value: u64) -> Vec<Utxo> {
-        (0..count)
+    // The round-1 review's repro: a host lists a coin of 100,000 sats at 60,000. The legacy sighash commits to no value,
+    // so the Legacy payment would be valid at a fee of 40,669 where Review shows 669; it is refused once the coin's
+    // transaction is read. Every other type reads nothing more, and its signature is invalid at the coin's true value.
+    #[test]
+    fn a_coin_listed_below_its_value_never_signs_a_valid_payment_at_another_fee() {
+        for address_type in AddressType::ALL {
+            let (liar, [txid, _]) = funded_as(address_type, [60_000, 50_000]);
+            let key = own_as(address_type, Chain::External, 0);
+            let coin = Utxo {
+                txid,
+                vout: 1,
+                value: 100_000,
+                confirmed: true,
+            };
+            let answer = liar.send_at(SOMEONE, 30_000, 3);
+            match (address_type, &answer) {
+                (AddressType::Legacy, Err(MobileSignerError::InvalidPsbtJson(m))) => {
+                    assert!(m.starts_with("esplora scan:"), "{m}")
+                }
+                (AddressType::Legacy, _) => panic!("Legacy: {answer:?}"),
+                (_, Ok((tx, _))) => assert!(
+                    !signed_here(tx, &[(&coin, &key)]),
+                    "{address_type:?} is valid at the coin's true value"
+                ),
+                (_, Err(e)) => panic!("{address_type:?}: {e:?}"),
+            }
+            assert_eq!(
+                liar.reads_of(txid),
+                usize::from(address_type == AddressType::Legacy),
+                "{address_type:?}"
+            );
+        }
+    }
+
+    // A Legacy coin that its transaction does not show at the value listed, under or over, gets no signature: in a
+    // payment, a send all, a fee bump or a cancel, as an earlier payment's coin or as the spare coin a bump adds. A
+    // transaction the host does not know refuses the same way, and one it does not answer for refuses as a read to try
+    // again.
+    #[test]
+    fn a_legacy_coin_its_transaction_does_not_show_at_the_value_listed_is_refused_before_signing() {
+        let (honest, _) = funded_as(AddressType::Legacy, [100_000, 50_000]);
+        let (earlier, _) = honest.send_at(SOMEONE, 30_000, 3).unwrap();
+        // So little change that a bump at 40 sat/vB must add receive 1's coin.
+        let (tight, _) = honest.send_at(SOMEONE, 95_000, 2).unwrap();
+        let refused = |answer: &Result<(Transaction, u64), MobileSignerError>, why: &str| matches!(answer, Err(MobileSignerError::InvalidPsbtJson(m)) if m.starts_with(why));
+        // 99,500 still holds what `earlier` paid out, so no check of the replacement refuses before the read.
+        for listed in [[99_500, 50_000], [140_000, 50_000]] {
+            let (liar, _) = funded_as(AddressType::Legacy, listed);
+            for (flow, answer) in [
+                ("payment", liar.send_at(SOMEONE, 30_000, 3)),
+                ("send all", liar.send_all_at(SOMEONE, 2)),
+                ("fee bump", liar.replace(&earlier, 10, Replacement::FeeBump)),
+                ("cancel", liar.replace(&earlier, 10, Replacement::Cancel)),
+            ] {
+                assert!(
+                    refused(&answer, "esplora scan:"),
+                    "{listed:?} {flow}: {answer:?}"
+                );
+            }
+        }
+        for listed in [[100_000, 45_000], [100_000, 55_000]] {
+            let (liar, _) = funded_as(AddressType::Legacy, listed);
+            let answer = liar.replace(&tight, 40, Replacement::FeeBump);
+            assert!(
+                refused(&answer, "esplora scan:"),
+                "{listed:?} spare coin: {answer:?}"
+            );
+        }
+        let (mut gone, [txid, _]) = funded_as(AddressType::Legacy, [100_000, 50_000]);
+        gone.unknown.insert(txid.to_string());
+        let answer = gone.send_at(SOMEONE, 30_000, 3);
+        assert!(refused(&answer, "esplora scan:"), "unknown: {answer:?}");
+        let (mut slow, [txid, _]) = funded_as(AddressType::Legacy, [100_000, 50_000]);
+        slow.failing.insert(txid.to_string());
+        let answer = slow.send_at(SOMEONE, 30_000, 3);
+        assert!(refused(&answer, "esplora get:"), "timed out: {answer:?}");
+    }
+
+    // An honest host's Legacy payment, send all, fee bump, cancel and bump that adds a spare coin sign the bytes and pay
+    // the fees they did before `signed` read a Legacy coin's transaction (d87c4ae), and the payment reads each of its
+    // two coins' transactions once. A Legacy transaction has no witness, so its id covers every byte.
+    #[test]
+    fn honest_legacy_payments_send_alls_bumps_and_cancels_sign_what_they_signed_before_the_value_check()
+     {
+        let (fake, [a, b]) = funded_as(AddressType::Legacy, [100_000, 50_000]);
+        let payment = fake.send_at(SOMEONE, 120_000, 3).unwrap();
+        assert_eq!((fake.reads_of(a), fake.reads_of(b)), (1, 1));
+        let one_coin = fake.send_at(SOMEONE, 95_000, 2).unwrap();
+        for (name, (tx, fee), before) in [
+            (
+                "payment",
+                payment.clone(),
+                (
+                    "69925df432b58eff257aeacaed440a9859989c7fac7a1451493d9651cbd0f98c",
+                    1_113,
+                ),
+            ),
+            (
+                "fee bump",
+                fake.replace(&payment.0, 10, Replacement::FeeBump).unwrap(),
+                (
+                    "955caf686b87ca19c7ac3bcb898a5cad2715f55dfcfd000ec18cf6ac722007dc",
+                    3_710,
+                ),
+            ),
+            (
+                "cancel",
+                fake.replace(&payment.0, 10, Replacement::Cancel).unwrap(),
+                (
+                    "ec2cb3241a0e9c7285b7177ba5c075c4f7eeb50d2be648b9b51368120a02ca61",
+                    3_400,
+                ),
+            ),
+            (
+                "send all",
+                fake.send_all_at(SOMEONE, 2).unwrap(),
+                (
+                    "33f7c59f36d64998a6e83a8406735b8cb526023d61fd6d7762fd2fa2c43eef24",
+                    674,
+                ),
+            ),
+            (
+                "one coin",
+                one_coin.clone(),
+                (
+                    "87c3ccb027bd7ee9f9303ffd5d2e26948f59408850525b19b3ac3c3fb6478be4",
+                    446,
+                ),
+            ),
+            (
+                "fee bump with a spare coin",
+                fake.replace(&one_coin.0, 40, Replacement::FeeBump).unwrap(),
+                (
+                    "9a173d0a37ecca7032463967d72ca5641a39617710418dc9e52e4b60cac0caa0",
+                    14_840,
+                ),
+            ),
+        ] {
+            assert_eq!(
+                (tx.compute_wtxid().to_string().as_str(), fee),
+                before,
+                "{name}"
+            );
+        }
+    }
+
+    /// `count` confirmed coins of `value` sats each to `key`, as `signed` takes them: the outputs of one
+    /// transaction, which the returned Fake serves raw.
+    fn coins_of(key: &OwnKey, count: u32, value: u64) -> (Vec<Utxo>, Fake) {
+        let output = TxOut {
+            value: Amount::from_sat(value),
+            script_pubkey: key.address.script_pubkey(),
+        };
+        let tx = paying('7', vec![output; count as usize]);
+        let txid = tx.compute_txid();
+        let mut fake = Fake::new();
+        fake.raw.insert(txid.to_string(), serialize_hex(&tx));
+        let coins = (0..count)
             .map(|vout| Utxo {
-                txid: Txid::from_byte_array([7; 32]),
+                txid,
                 vout,
                 value,
                 confirmed: true,
             })
-            .collect()
+            .collect();
+        (coins, fake)
     }
 
     // `signed` refuses a transaction that does not weigh what `vsize` sized its fee for, so each type signing from 1 to
@@ -9091,14 +9386,18 @@ mod tests {
         for address_type in AddressType::ALL {
             let key = own_as(address_type, Chain::External, 0);
             for count in [1, 2, 252, 253, 300] {
-                let coins = coins_of(count, 10_000);
+                let (coins, fake) = coins_of(&key, count, 10_000);
                 let selected: Vec<(&Utxo, &OwnKey)> = coins.iter().map(|u| (u, &key)).collect();
                 let pay = TxOut {
                     value: Amount::from_sat(5_000),
                     script_pubkey: key.address.script_pubkey(),
                 };
-                let tx = signed(&selected, vec![pay])
-                    .unwrap_or_else(|e| panic!("{address_type:?} {count}: {e:?}"));
+                let tx = signed(
+                    &EsploraSource(&Reads(&|url| fake.get(url))),
+                    &selected,
+                    vec![pay],
+                )
+                .unwrap_or_else(|e| panic!("{address_type:?} {count}: {e:?}"));
                 assert_eq!(
                     tx.vsize() as u64,
                     vsize(
@@ -9114,12 +9413,17 @@ mod tests {
 
     /// One coin of `key` signed to itself by `signed`, with what `signed_here` reads for it.
     fn one_signed(key: &OwnKey) -> (Transaction, Vec<Utxo>) {
-        let coins = coins_of(1, 10_000);
+        let (coins, fake) = coins_of(key, 1, 10_000);
         let pay = TxOut {
             value: Amount::from_sat(5_000),
             script_pubkey: key.address.script_pubkey(),
         };
-        (signed(&[(&coins[0], key)], vec![pay]).unwrap(), coins)
+        let tx = signed(
+            &EsploraSource(&Reads(&|url| fake.get(url))),
+            &[(&coins[0], key)],
+            vec![pay],
+        );
+        (tx.unwrap(), coins)
     }
 
     #[test]

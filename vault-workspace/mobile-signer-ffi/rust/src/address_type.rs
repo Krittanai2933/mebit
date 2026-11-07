@@ -1,6 +1,6 @@
 //! How the hot wallet's single key locks and spends its coins. `AddressType`'s methods are the only
 //! place in the crate that matches on it: `hot_wallet` asks which path, which address, how heavy a
-//! spend is, and how to sign and check one.
+//! spend is, whether its signature commits to the coin's value, and how to sign and check one.
 
 use bitcoin::bip32::{ChildNumber, DerivationPath};
 use bitcoin::hashes::Hash;
@@ -75,6 +75,16 @@ impl AddressType {
             Self::NestedSegwit => InputWeightPrediction::from_slice(23, &[72, 33]),
             Self::NativeSegwit => InputWeightPrediction::P2WPKH_MAX,
             Self::Taproot => InputWeightPrediction::P2TR_KEY_DEFAULT_SIGHASH,
+        }
+    }
+
+    /// Whether a signature of this type commits to the value of the coin it spends. The legacy sighash
+    /// does not, so a coin listed at another value still signs a valid payment at another fee; in the
+    /// other types a wrong value only makes the signature invalid.
+    pub(crate) const fn commits_to_value(self) -> bool {
+        match self {
+            Self::Legacy => false,
+            Self::NestedSegwit | Self::NativeSegwit | Self::Taproot => true,
         }
     }
 
