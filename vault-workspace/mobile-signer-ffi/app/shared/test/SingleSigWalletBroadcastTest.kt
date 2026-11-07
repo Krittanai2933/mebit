@@ -7,6 +7,7 @@ import com.mebit.app.data.SingleSigWallet.DamagedGuard
 import com.mebit.app.data.SingleSigWallet.HeldSend
 import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
 import com.mebit.app.data.SingleSigWallet.Unsettled
+import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.FeeTiers
 import com.mebit.ffi.signer.HotSendResult
 import com.mebit.ffi.signer.HotTx
@@ -17,6 +18,7 @@ import com.mebit.ffi.signer.MobileSignerException
 import com.mebit.ffi.signer.PreparedSend
 import com.mebit.ffi.signer.QuotedSend
 import com.mebit.ffi.signer.SoftwareAccountKey
+import com.mebit.ffi.signer.hotQuoteSend
 import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.update
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +28,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
@@ -924,6 +927,21 @@ class SingleSigWalletBroadcastTest {
         val guarded = FakeHot()
         assertEquals(QuoteLoad.Failed(EARLIER_UNSETTLED), guarded.wallet.quote(guarded.unknownSend(), request), "a payment that may be out")
         assertEquals(1, hot.quotes.size, "a precondition asked the core")
+    }
+
+    // hot_quote_send is the one export whose argument may be null, so this goes through the real bindings: an amount reaches the
+    // payment's dust refusal and null reaches send all, which checks the rate first. Both refuse before any lookup.
+    @Test
+    fun theQuoteBindingCarriesAnAmountOrNullToTheCore() {
+        val to = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
+        val fixed = assertFailsWith<MobileSignerException.InvalidPsbtJson> {
+            hotQuoteSend(PUBLIC_WORDS_24, "", KeyNetwork.TEST, AddressType.NATIVE_SEGWIT, to, 100uL, 1uL)
+        }
+        assertTrue("amount 100 is below the network's 294 sat dust floor" in fixed.message.orEmpty(), fixed.message)
+        val all = assertFailsWith<MobileSignerException.InvalidPsbtJson> {
+            hotQuoteSend(PUBLIC_WORDS_24, "", KeyNetwork.TEST, AddressType.NATIVE_SEGWIT, to, null, 0uL)
+        }
+        assertTrue("fee rate 0 is below 1 sat/vB" in all.message.orEmpty(), all.message)
     }
 
     // V6. A post while another payment's guard was set posted anyway and erased that guard. A bind after a restart brings in a guard
