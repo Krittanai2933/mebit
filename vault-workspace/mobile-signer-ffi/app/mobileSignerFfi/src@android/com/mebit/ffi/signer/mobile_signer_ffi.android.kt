@@ -1062,6 +1062,8 @@ internal typealias UniffiVTableCallbackInterfacePairingCodesUniffiByValue = Unif
 
 
 
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -1123,6 +1125,9 @@ internal object IntegrityCheckingUniffiLib : Library {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key() != 291.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_account_path() != 24485.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_broadcast() != 37288.toShort()) {
@@ -1226,6 +1231,9 @@ internal object IntegrityCheckingUniffiLib : Library {
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_hot_account_path(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_hot_broadcast(
@@ -1427,6 +1435,11 @@ internal object UniffiLib : Library {
         `passphrase`: RustBufferByValue,
         `network`: RustBufferByValue,
         `account`: Int,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_hot_account_path(
+        `addressType`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     @JvmStatic
@@ -3703,6 +3716,19 @@ public actual fun `generateSoftwareMultisigKey`(`passphrase`: kotlin.String, `ne
             FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
             FfiConverterUInt.lower(`account`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The account path the hot wallet derives `address_type`'s keys from, `m/{purpose}'/1'/0'` on either
+ * network, as the fingerprint sheets print it.
+ */
+public actual fun `hotAccountPath`(`addressType`: AddressType): kotlin.String {
+    return FfiConverterString.lift(uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_account_path(
+            FfiConverterTypeAddressType.lower(`addressType`),
             uniffiRustCallStatus,
         )
     })

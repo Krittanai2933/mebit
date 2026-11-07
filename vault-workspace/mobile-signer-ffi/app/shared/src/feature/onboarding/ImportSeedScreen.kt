@@ -105,6 +105,7 @@ import com.mebit.app.ui.theme.MbPage
 import com.mebit.app.ui.theme.MbPick
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbWhite
+import com.mebit.ffi.signer.hotAccountPath
 import org.jetbrains.compose.resources.painterResource
 
 // Penpot Organize > 1B.1 to 1B.4.5. The card's geometry is in SeedPopover.kt, next to the popover rules that use it.
@@ -631,7 +632,7 @@ internal fun FingerprintSheet(session: OnboardingSession, copy: FingerprintCopy,
                     letterSpacing = 2.sp,
                     modifier = Modifier.testTag("fingerprint"),
                 )
-                Text(session.derivationPath, color = MbSlate, fontSize = 12.sp)
+                Text(hotAccountPath(session.addressType), color = MbSlate, fontSize = 12.sp)
             }
             Spacer(modifier = Modifier.height(12.dp))
             Text(

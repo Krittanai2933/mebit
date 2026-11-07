@@ -1105,6 +1105,12 @@ public expect fun `fetchBtcThb`(): BtcPrice
 public expect fun `generateSoftwareMultisigKey`(`passphrase`: kotlin.String, `network`: KeyNetwork, `account`: kotlin.UInt): SoftwareAccountKey
 
 /**
+ * The account path the hot wallet derives `address_type`'s keys from, `m/{purpose}'/1'/0'` on either
+ * network, as the fingerprint sheets print it.
+ */
+public expect fun `hotAccountPath`(`addressType`: AddressType): kotlin.String
+
+/**
  * Post a transaction from `hot_prepare_send_at_rate` once. `txid` must be the id of the transaction in
  * `hex`, else it refuses before posting, so nothing else can go out under a saved guard.
  *

@@ -1330,6 +1330,8 @@ internal val UniffiVTableCallbackInterfacePairingCodesUniffiByValue.`uniffiFree`
 
 
 
+
+
 internal object UniffiLib {
     init {
             uniffiCallbackInterfacePairingCodes.register(this)
@@ -1488,6 +1490,13 @@ internal object UniffiLib {
         `passphrase`,
         `network`,
         `account`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_func_hot_account_path(
+        `addressType`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_account_path(
+        `addressType`,
         uniffiCallStatus,
     )
     fun uniffi_mobile_signer_ffi_fn_func_hot_broadcast(
@@ -2078,6 +2087,9 @@ internal object UniffiLib {
     )
     fun uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_generate_software_multisig_key(
+    )
+    fun uniffi_mobile_signer_ffi_checksum_func_hot_account_path(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_account_path(
     )
     fun uniffi_mobile_signer_ffi_checksum_func_hot_broadcast(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_broadcast(
@@ -4036,6 +4048,19 @@ public actual fun `generateSoftwareMultisigKey`(`passphrase`: kotlin.String, `ne
             FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
             FfiConverterUInt.lower(`account`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The account path the hot wallet derives `address_type`'s keys from, `m/{purpose}'/1'/0'` on either
+ * network, as the fingerprint sheets print it.
+ */
+public actual fun `hotAccountPath`(`addressType`: AddressType): kotlin.String {
+    return FfiConverterString.lift(uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_account_path(
+            FfiConverterTypeAddressType.lower(`addressType`),
             uniffiRustCallStatus,
         )
     })

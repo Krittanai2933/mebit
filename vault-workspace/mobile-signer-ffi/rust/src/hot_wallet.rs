@@ -688,6 +688,13 @@ pub fn hot_receive_address(
     Ok(account.key(Chain::External, index)?.address.to_string())
 }
 
+/// The account path the hot wallet derives `address_type`'s keys from, `m/{purpose}'/1'/0'` on either
+/// network, as the fingerprint sheets print it.
+#[uniffi::export]
+pub fn hot_account_path(address_type: AddressType) -> String {
+    format!("m/{}", address_type.account_path())
+}
+
 /// Confirmed + mempool balance for receive index 0 via Esplora.
 #[uniffi::export]
 pub fn hot_wallet_snapshot(
@@ -9103,6 +9110,15 @@ mod tests {
                 chain as u32
             );
         }
+    }
+
+    // What the fingerprint sheets print for each type: the account path `TYPE_VECTORS` were derived at.
+    #[test]
+    fn each_type_prints_its_hot_wallet_account_path() {
+        assert_eq!(
+            AddressType::ALL.map(hot_account_path),
+            ["m/44'/1'/0'", "m/49'/1'/0'", "m/84'/1'/0'", "m/86'/1'/0'"]
+        );
     }
 
     // The published first mainnet address of `abandon_about` at m/{purpose}'/0'/0'/0/0, which embit reproduces too.
