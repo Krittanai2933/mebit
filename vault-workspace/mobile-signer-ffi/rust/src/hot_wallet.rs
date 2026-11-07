@@ -1814,6 +1814,11 @@ pub fn hot_prepare_cancel(
 /// 100,000 tries Bitcoin Core's wallet allows its own coin search.
 const BUMP_SEARCH_COINS: usize = 16;
 
+#[cfg(test)]
+thread_local! {
+    static SETS_TRIED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 /// A `kind` replacement of `earlier_hex`, signed and not yet broadcast, with the fee it pays, the change
 /// it put into that fee and, for a fee bump, what it cut from the destination's amount. The bytes,
 /// their shape and the rate are checked before any network call, the change, the coins and the earlier
@@ -2008,6 +2013,8 @@ fn signed_replacement(
                             (set.count_ones(), std::cmp::Reverse(set.reverse_bits()))
                         });
                         let found = sets.into_iter().find(|&set| {
+                            #[cfg(test)]
+                            SETS_TRIED.with(|n| n.set(n.get() + 1));
                             let (with, without) = sizes[set.count_ones() as usize];
                             let left = holds(set).saturating_sub(amount);
                             settle(left, with, without, change_floor, &fee, &least).is_ok()
@@ -5204,9 +5211,11 @@ mod tests {
                 let digit = char::from(b'2' + i as u8);
                 fake.fund(&addr(Chain::External, 1 + i as u32), *value, digit);
             }
+            SETS_TRIED.with(|n| n.set(0));
             let bump = fake
                 .replacement(&serialize_hex(earlier), rate, Replacement::FeeBump)
                 .unwrap_or_else(|e| panic!("spares {spares:?}: {e:?}"));
+            assert!(SETS_TRIED.with(|n| n.get()) > 0, "spares {spares:?}");
             assert_outputs(&bump.tx, &[(SOMEONE, amount)]);
             assert_eq!(
                 (bump.fee_sats, bump.amount_cut_sats, bump.tx.vsize()),
@@ -5434,7 +5443,7 @@ mod tests {
     }
 
     // 300 coins of 10,000 paid at 1 sat/vB, bumped to 2 with 16 spare coins of 1,000: no set of them pays,
-    // so the bump refuses as the walk left it, without trying the 65,535 sets.
+    // so the bump refuses as the walk left it, with none of the 65,535 sets tried.
     #[test]
     fn a_fee_bump_no_set_of_spare_coins_can_pay_refuses_without_the_search() {
         let held = |fake: &mut Fake| {
@@ -5458,25 +5467,15 @@ mod tests {
             );
             fake.utxos
                 .insert(addr(Chain::External, 1), format!("[{}]", coins.join(",")));
-            let mut best = Duration::MAX;
-            let mut got = None;
-            for _ in 0..5 {
-                let start = Instant::now();
-                got = Some(fake.replacement(&serialize_hex(&earlier), 2, Replacement::FeeBump));
-                best = best.min(start.elapsed());
-            }
-            (got.unwrap().map(|b| b.fee_sats), best)
+            SETS_TRIED.with(|n| n.set(0));
+            fake.replacement(&serialize_hex(&earlier), 2, Replacement::FeeBump)
+                .map(|b| b.fee_sats)
         };
-        let (_, alone_took) = bump(0);
-        let (refused, took) = bump(16);
         assert_refused(
-            refused,
+            bump(16),
             "insufficient funds: have 3016000 confirmed, need 3021651",
         );
-        assert!(
-            took.saturating_sub(alone_took) < Duration::from_millis(10),
-            "16 spare coins took {took:?}, none {alone_took:?}"
-        );
+        assert_eq!(SETS_TRIED.with(|n| n.get()), 0);
     }
 
     #[test]
