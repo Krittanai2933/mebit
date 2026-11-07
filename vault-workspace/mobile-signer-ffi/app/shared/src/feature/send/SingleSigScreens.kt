@@ -10,7 +10,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -21,8 +23,10 @@ import com.mebit.app.feature.onboarding.LockWords
 import com.mebit.app.getPlatform
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.QuoteCache
+import com.mebit.app.data.QuoteLoad
 import com.mebit.app.data.Replacement
 import com.mebit.app.data.SendDraft
+import com.mebit.app.data.SendQuote
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.data.FeeQuestion
@@ -32,6 +36,7 @@ import com.mebit.ffi.signer.PreparedSend
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.background
@@ -97,8 +102,17 @@ fun S5ReviewSignScreen(
             wallet.dropHeldReplacement()
         }
     }
-    val total = draft.amountSats + draft.feeSats
-    val question = wallet.heldQuestion(draft)
+    var retries by remember { mutableIntStateOf(0) }
+    val request = draft.request
+    var load by remember(request) { mutableStateOf<QuoteLoad>(QuoteLoad.Loading) }
+    LaunchedEffect(request, retries) {
+        load = QuoteLoad.Loading
+        // IO, as the detail screen does: a back cannot stop this blocking call.
+        load = withContext(Dispatchers.IO) { wallet.quote(session, request) }
+    }
+    // Review signs only what it quoted, so no quote, no Sign.
+    val shown = (load as? QuoteLoad.Quoted)?.quote
+    val question = shown?.let { wallet.heldQuestion(it) }
 
     /** One attempt: [step] signs or posts and answers whether the payment is out. A payment held for the fee question is neither out nor failed. */
     fun attemptTo(step: suspend () -> Boolean) {
@@ -128,29 +142,32 @@ fun S5ReviewSignScreen(
                 },
                 primaryTag = "cta_s5_sign",
                 onPrimary = {
-                    attemptTo {
-                        // Face ID first when the app lock is on; nothing is signed on a refusal.
-                        refused = !confirm()
-                        if (refused) return@attemptTo false
-                        notSigned = !withContext(Dispatchers.Default) { wallet.prepare(session, draft.amountSats, draft.rateSatVb, draft.destination, sendAll = draft.isSendAll) }
-                        if (notSigned) return@attemptTo false
-                        // A payment Review asks about waits for the card below, which posts or lets the payment go. The demo mock held nothing and is out.
-                        if (wallet.heldQuestion(draft) != null) return@attemptTo false
-                        if (wallet.heldSend == null) return@attemptTo true
-                        failed = !withContext(Dispatchers.Default) { wallet.post(session) }
-                        !failed
+                    shown?.let { quoted ->
+                        attemptTo {
+                            // Face ID first when the app lock is on; nothing is signed on a refusal.
+                            refused = !confirm()
+                            if (refused) return@attemptTo false
+                            val r = quoted.request
+                            notSigned = !withContext(Dispatchers.Default) { wallet.prepare(session, r.amountSats, r.rateSatVb, r.destination, sendAll = r.sendAll) }
+                            if (notSigned) return@attemptTo false
+                            // A payment Review asks about waits for the card below, which posts or lets the payment go. The demo mock held nothing and is out.
+                            if (wallet.heldQuestion(quoted) != null) return@attemptTo false
+                            if (wallet.heldSend == null) return@attemptTo true
+                            failed = !withContext(Dispatchers.Default) { wallet.post(session) }
+                            !failed
+                        }
                     }
                 },
                 linkLabel = "ยกเลิก",
                 linkTag = "cta_s5_cancel",
                 onLink = leave,
-                enabled = !attempt.running && wallet.balanceKnown && wallet.unconfirmedSend == null && wallet.heldSend == null && !reposted,
+                enabled = shown != null && !attempt.running && wallet.balanceKnown && wallet.unconfirmedSend == null && wallet.heldSend == null && !reposted,
                 linkColor = MbBody,
             )
         },
     ) {
         Spacer(modifier = Modifier.height(27.dp))
-        SendSummary(draft, quote)
+        SendSummary(draft, shown, quote)
         Spacer(modifier = Modifier.height(14.dp))
         val rows = RoundedCornerShape(20.dp)
         Column(
@@ -158,12 +175,19 @@ fun S5ReviewSignScreen(
         ) {
             ReviewRow("จาก", "กระเป๋าใช้จ่าย")
             ReviewDivider()
-            ReviewRow("ค่าธรรมเนียม", reviewFeeText(draft.feeSats, quote))
+            ReviewRow(
+                "ค่าธรรมเนียม",
+                when (load) {
+                    QuoteLoad.Loading -> "กำลังคำนวณ…"
+                    is QuoteLoad.Failed -> "—"
+                    is QuoteLoad.Quoted -> realFeeText(shown?.feeSats ?: 0, quote)
+                },
+            )
             ReviewDivider()
-            ReviewRow("หักจากกระเป๋ารวม", "${formatBtcCompact(total)} BTC", bold = true)
+            ReviewRow("หักจากกระเป๋ารวม", shown?.let { "${formatBtcCompact(it.totalSats)} BTC" } ?: "—", bold = true)
             ReviewDivider()
             // A scan that has not found the whole wallet leaves no balance to take the payment from.
-            ReviewRow("คงเหลือ", if (wallet.balanceKnown) "${formatBtcCompact((wallet.balanceSats - total).coerceAtLeast(0))} BTC" else "—")
+            ReviewRow("คงเหลือ", if (wallet.balanceKnown && shown != null) "${formatBtcCompact((wallet.balanceSats - shown.totalSats).coerceAtLeast(0))} BTC" else "—")
         }
         question?.let { (held, why) ->
             HighFeeConfirm(
@@ -176,24 +200,33 @@ fun S5ReviewSignScreen(
                         !failed
                     }
                 },
-                onCancel = { wallet.dropHeldSend() },
+                onCancel = {
+                    wallet.dropHeldSend()
+                    // The coins can have changed, so Review quotes again before the next sign.
+                    retries++
+                },
             )
         }
-        reviewIssue(refused, failed && !reposted, wallet.unconfirmedSend != null, wallet.lastError, notSigned && !reposted)?.let {
+        reviewIssue(refused, failed && !reposted, wallet.unconfirmedSend != null, wallet.lastError, notSigned && !reposted, (load as? QuoteLoad.Failed)?.line)?.let {
             Spacer(modifier = Modifier.height(20.dp))
             IssueBanner(it.title, it.message, it.tag)
+            if (it.retry) {
+                Spacer(modifier = Modifier.height(6.dp))
+                LinkRow("ลองอีกครั้ง", "cta_s5_requote") { retries++ }
+            }
         }
         // The guard of this screen's own post has no answer yet, and only a guard of unknown outcome takes a retry, a replacement or a clear.
         if (!attempt.running) UnconfirmedClearControl(wallet, session, draft, quote, repost, scope, confirmRepost, confirmReplacement)
         RepostedNote(repost, wallet)
-        if (total > wallet.spendableSats) {
+        if (shown != null && shown.totalSats > wallet.spendableSats) {
             Spacer(modifier = Modifier.height(12.dp))
             Text("ยอดไม่พอ", color = MaterialTheme.colorScheme.error)
         }
     }
 }
 
-internal data class ReviewIssue(val title: String, val message: String, val tag: String) {
+/** [retry] offers ลองอีกครั้ง under the banner. */
+internal data class ReviewIssue(val title: String, val message: String, val tag: String, val retry: Boolean = false) {
     companion object {
         val SignRefused = ReviewIssue("ส่งไม่สำเร็จ", "ยืนยันตัวตนไม่สำเร็จ ลองอีกครั้ง · ยังไม่มีอะไรถูกเซ็นหรือส่ง", "sign_refused")
         val BroadcastFailed = ReviewIssue("ส่งไม่สำเร็จ", "ลองอีกครั้ง · ตรวจยอดคงเหลือก่อนส่งซ้ำ", "error")
@@ -204,6 +237,9 @@ internal data class ReviewIssue(val title: String, val message: String, val tag:
 
         /** A sign the core or the wallet refused, nothing signed or posted, with the wallet's [line] for why, a limit of the network included. */
         fun notSigned(line: String) = ReviewIssue("ยังไม่ได้ส่ง", line, "not_signed")
+
+        /** Review could not quote the payment, so it shows no fee and Sign stays off. [line] says why. Draft copy awaiting design review. */
+        fun notQuoted(line: String) = ReviewIssue("ยังคำนวณค่าธรรมเนียมไม่ได้", line, "not_quoted", retry = true)
     }
 }
 
@@ -228,9 +264,9 @@ internal class SignAttempt {
     }
 }
 
-/** The held payment and why Review asks before posting it ([feeQuestion] against what the screen showed), or null when it posts at once. */
-private fun SingleSigWallet.heldQuestion(draft: SendDraft): Pair<PreparedSend, FeeQuestion>? =
-    heldSend?.prepared?.let { held -> feeQuestion(held, draft)?.let { held to it } }
+/** The held payment and why Review asks before posting it ([feeQuestion] against the quote it showed), or null when it posts at once. */
+private fun SingleSigWallet.heldQuestion(shown: SendQuote): Pair<PreparedSend, FeeQuestion>? =
+    heldSend?.prepared?.let { held -> feeQuestion(held, shown)?.let { held to it } }
 
 /**
  * The question the Review screen asks about the signed payment, worded by [question]: the real fee, what leaves and the total, a
@@ -269,20 +305,24 @@ private fun HighFeeConfirm(held: PreparedSend, question: FeeQuestion, quote: Fia
  * A payment that may be out ([unconfirmedSend]) wins over everything, because sending again could pay twice. A refusal wins over a
  * failed broadcast, because nothing was signed. [failure] is the wallet's line for the failed attempt, so a guard the phone could not
  * keep ([GUARD_NOT_SAVED]) names its own reason, and so does a sign that [notSigned] refused. That one has no line when the user left
- * while it ran, and then there is nothing to say.
+ * while it ran, and then there is nothing to say. A quote that failed ([notQuoted], its line) comes last, because nothing was signed.
  */
-internal fun reviewIssue(refused: Boolean, failed: Boolean, unconfirmedSend: Boolean = false, failure: String? = null, notSigned: Boolean = false): ReviewIssue? = when {
+internal fun reviewIssue(refused: Boolean, failed: Boolean, unconfirmedSend: Boolean = false, failure: String? = null, notSigned: Boolean = false, notQuoted: String? = null): ReviewIssue? = when {
     unconfirmedSend -> ReviewIssue.BroadcastUnknown
     refused -> ReviewIssue.SignRefused
     notSigned && failure != null -> ReviewIssue.notSigned(failure)
     failed && failure == GUARD_NOT_SAVED -> ReviewIssue.GuardNotSaved
     failed -> ReviewIssue.BroadcastFailed
+    notQuoted != null -> ReviewIssue.notQuoted(notQuoted)
     else -> null
 }
 
-/** Penpot 4.5: what leaves, in the first 4 decimals, its baht when there is a price, and where to. */
+/** Penpot 4.5: what leaves, in the first 4 decimals, its baht when there is a price, and where to. [shown] is Review's quote once it came. */
 @Composable
-private fun SendSummary(draft: SendDraft, quote: FiatQuote?) {
+private fun SendSummary(draft: SendDraft, shown: SendQuote?, quote: FiatQuote?) {
+    val amountSats = shown?.amountSats ?: draft.amountSats
+    // Send all before its quote: the Send screen's one-coin estimate, which the quote replaces with what leaves. Open item 76.
+    val estimate = draft.isSendAll && shown == null
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -293,16 +333,20 @@ private fun SendSummary(draft: SendDraft, quote: FiatQuote?) {
             .testTag("send_summary"),
     ) {
         Spacer(modifier = Modifier.height(20.dp))
-        // Send all: the core spends every coin and takes the real fee off the amount, so the amount here is the one-coin estimate. Open item 76.
-        Text(if (draft.isSendAll) "ส่งทั้งหมด · จำนวนโดยประมาณ" else "ส่ง", color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
+        val label = when {
+            estimate -> "ส่งทั้งหมด · จำนวนโดยประมาณ"
+            draft.isSendAll -> "ส่งทั้งหมด"
+            else -> "ส่ง"
+        }
+        Text(label, color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
         Row(verticalAlignment = Alignment.Bottom) {
-            Text((if (draft.isSendAll) "≈ " else "") + formatBtcCompact(draft.amountSats), color = MbWhite, fontSize = 38.sp, fontWeight = FontWeight.Bold, lineHeight = 50.sp, modifier = Modifier.testTag("send_amount"))
+            Text((if (estimate) "≈ " else "") + formatBtcCompact(amountSats), color = MbWhite, fontSize = 38.sp, fontWeight = FontWeight.Bold, lineHeight = 50.sp, modifier = Modifier.testTag("send_amount"))
             Spacer(modifier = Modifier.width(8.dp))
             Text("BTC", color = MbWhite.copy(alpha = 0.8f), fontSize = 15.sp, fontWeight = FontWeight.Bold, lineHeight = 20.sp, modifier = Modifier.padding(bottom = 5.dp))
         }
         // The room stays when there is no price, so the card keeps its height.
         Box(modifier = Modifier.fillMaxWidth().height(34.dp)) {
-            fiatLine(draft.amountSats, quote)?.let {
+            fiatLine(amountSats, quote)?.let {
                 Text(it, color = SummaryGold, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 19.sp, modifier = Modifier.testTag("send_fiat"))
             }
         }

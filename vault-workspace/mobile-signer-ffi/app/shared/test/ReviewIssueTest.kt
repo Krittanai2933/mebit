@@ -71,6 +71,22 @@ class ReviewIssueTest {
         assertEquals(ReviewIssue.BroadcastUnknown, reviewIssue(refused = false, failed = false, unconfirmedSend = true, failure = line, notSigned = true))
     }
 
+    // A quote that failed leaves Review with no fee to show and nothing to sign, so it says why and offers to quote again, below every
+    // issue of a sign or a post.
+    @Test
+    fun aQuoteThatFailedSaysWhyOffersARetryAndYieldsToEveryOtherIssue() {
+        val line = "ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง"
+        val issue = reviewIssue(refused = false, failed = false, notQuoted = line)
+        assertEquals("ยังคำนวณค่าธรรมเนียมไม่ได้", issue?.title)
+        assertEquals(line, issue?.message)
+        assertEquals("not_quoted", issue?.tag)
+        assertEquals(true, issue?.retry, "the retry under the banner")
+        assertEquals(ReviewIssue.BroadcastUnknown, reviewIssue(refused = false, failed = false, unconfirmedSend = true, notQuoted = line))
+        assertEquals(ReviewIssue.SignRefused, reviewIssue(refused = true, failed = false, notQuoted = line))
+        assertEquals(ReviewIssue.BroadcastFailed, reviewIssue(refused = false, failed = true, notQuoted = line))
+        assertEquals(false, ReviewIssue.BroadcastFailed.retry, "only a failed quote offers the retry")
+    }
+
     @Test
     fun anUnknownOutcomeIsNeverHeadlinedAsAFailureBecauseThePaymentMayBeOut() {
         assertEquals("ส่งไม่สำเร็จ", ReviewIssue.BroadcastFailed.title)

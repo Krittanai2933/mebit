@@ -15,12 +15,14 @@ import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.MobileSignerException
 import com.mebit.ffi.signer.PreparedSend
+import com.mebit.ffi.signer.QuotedSend
 import com.mebit.ffi.signer.hotBroadcast
 import com.mebit.ffi.signer.hotFeeTiers
 import com.mebit.ffi.signer.hotPrepareCancel
 import com.mebit.ffi.signer.hotPrepareFeeBump
 import com.mebit.ffi.signer.hotPrepareSendAll
 import com.mebit.ffi.signer.hotPrepareSendAtRate
+import com.mebit.ffi.signer.hotQuoteSend
 import com.mebit.ffi.signer.hotReceiveAddress
 import com.mebit.ffi.signer.hotTxDetail
 import com.mebit.ffi.signer.hotTypicalVsize
@@ -33,7 +35,7 @@ import kotlin.time.Clock
  * Single-sig hot wallet surface for Movie Page S*.
  * Live path uses the session's address type + Esplora (hot_* UniFFI). Demo path keeps offline fixtures.
  *
- * [prepareAtRate], [prepareAll], [postHex], [snapshot], [fetchHistory], [receiveAddressOf], [fetchFeeTiers], [fetchDetail], [bumpAtRate] and [cancelAtRate] are the hot_* calls. Tests pass fakes, so they need no native library or network.
+ * [prepareAtRate], [prepareAll], [quoteSend], [postHex], [snapshot], [fetchHistory], [receiveAddressOf], [fetchFeeTiers], [fetchDetail], [bumpAtRate] and [cancelAtRate] are the hot_* calls. Tests pass fakes, so they need no native library or network.
  * [nowSeconds] is the phone clock in Unix seconds, which [lastSentAtSeconds] reads when a payment goes out.
  */
 class SingleSigWallet(
@@ -48,6 +50,7 @@ class SingleSigWallet(
     private val fetchDetail: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType, txid: String) -> HotTxDetail? = ::hotTxDetail,
     private val bumpAtRate: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType, earlierHex: String, feeRateSatVb: ULong) -> PreparedSend = ::hotPrepareFeeBump,
     private val cancelAtRate: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType, earlierHex: String, feeRateSatVb: ULong) -> PreparedSend = ::hotPrepareCancel,
+    private val quoteSend: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType, destination: String, amountSats: ULong?, feeRateSatVb: ULong) -> QuotedSend = ::hotQuoteSend,
 ) {
     /** What the wallet is. A real key is only ever [Live] or [Unavailable], so a real wallet never looks like the demo. */
     enum class WalletMode {
@@ -249,11 +252,34 @@ class SingleSigWallet(
     }
 
     /**
+     * What [prepare] would sign for [request] now, read without signing ([hotQuoteSend]), so Review shows the payment's own fee, amount
+     * and total before the owner check. [prepare]'s preconditions answer [QuoteLoad.Failed] with [prepare]'s line, and so does a refusal
+     * of the core, never an estimate. The demo's quote is the demo mock's payment. Writes no wallet state, because Review owns the
+     * answer, so a Review left mid-call leaves nothing behind. Blocks on the network, so call it off the main thread.
+     */
+    fun quote(session: OnboardingSession, request: SendRequest, network: KeyNetwork = KeyNetwork.TEST): QuoteLoad.Done {
+        if (unconfirmedSend != null) return QuoteLoad.Failed(EARLIER_UNSETTLED)
+        if (session.words.size >= 12 && !(live && balanceKnown)) return QuoteLoad.Failed(BALANCE_UNKNOWN)
+        if (session.words.size < 12) {
+            val vsize = hotTypicalVsize(session.addressType)
+            val demo = QuotedSend((request.rateSatVb * vsize.toLong()).toULong(), request.amountSats.toULong(), 0uL, vsize)
+            return QuoteLoad.Quoted(SendQuote(request, demo))
+        }
+        return try {
+            val amountSats = request.amountSats.toULong().takeUnless { request.sendAll }
+            val quoted = quoteSend(session.words, session.passphrase, network, session.addressType, request.destination, amountSats, request.rateSatVb.toULong())
+            QuoteLoad.Quoted(SendQuote(request, quoted))
+        } catch (e: Exception) {
+            QuoteLoad.Failed(sendErrorThai(e.message))
+        }
+    }
+
+    /**
      * Signs [amountSats] to [destination] at [feeRateSatVb] and holds the result in [heldSend], with no guard written and nothing posted,
-     * so the Review screen can read the real fee and ask before [post]. The fee the transaction pays is its size times the rate, so a
-     * payment that needs many coins pays more than the estimate the screens showed, and [PreparedSend.feeSats] is what it pays.
+     * so the Review screen can compare it with its [quote] and ask before [post] when they differ. The chain can move between the two,
+     * so [PreparedSend.feeSats] is what the payment pays.
      * With [sendAll] the core spends every coin and pays the destination the balance less the real fee, so [amountSats] is only the
-     * estimate the screens showed and [PreparedSend.amountSats] is what leaves.
+     * estimate the Send screen showed and [PreparedSend.amountSats] is what leaves.
      * A payment already held is replaced, because nothing of it was posted or guarded. The demo mock pays at once and holds nothing.
      * False, with no error, when [dropHeldSend] ran while the core was signing: the user left, so the payment is let go, not held.
      */
@@ -274,7 +300,7 @@ class SingleSigWallet(
         }
         // A real key never takes the mock below, which would show a made-up payment as sent, and never pays from a scan that has not found the whole wallet.
         if (session.words.size >= 12 && !(live && balanceKnown)) {
-            lastError = "ยังดึงยอดคงเหลือไม่ได้ จึงยังส่งไม่ได้"
+            lastError = BALANCE_UNKNOWN
             return false
         }
         if (session.words.size < 12 || !live) {
@@ -440,7 +466,7 @@ class SingleSigWallet(
         val hex = pending.hex ?: return false
         if (kind == Replacement.FeeBump && pending.holdsCancel) return false
         if (session.words.size < 12 || !(live && balanceKnown)) {
-            lastError = "ยังดึงยอดคงเหลือไม่ได้ จึงยังส่งไม่ได้"
+            lastError = BALANCE_UNKNOWN
             return false
         }
         val sign = when (kind) {
@@ -614,8 +640,11 @@ fun figuresKnown(mode: SingleSigWallet.WalletMode, scan: HotScan): Boolean = whe
 /** Home's red line for a snapshot whose scan a host lied in, or null. */
 fun scanErrorThai(scan: HotScan): String? = ABNORMAL_HISTORY.takeIf { scan == HotScan.UNVERIFIED }
 
-/** [SingleSigWallet.prepare] and [SingleSigWallet.post] while an earlier payment may be out. */
+/** [SingleSigWallet.quote], [SingleSigWallet.prepare] and [SingleSigWallet.post] while an earlier payment may be out. */
 private const val EARLIER_UNSETTLED = "การส่งครั้งก่อนยังยืนยันไม่ได้ จึงยังส่งใหม่ไม่ได้"
+
+/** [SingleSigWallet.quote], [SingleSigWallet.prepare] and [SingleSigWallet.prepareReplacement] for a real key whose balance is not known. */
+private const val BALANCE_UNKNOWN = "ยังดึงยอดคงเหลือไม่ได้ จึงยังส่งไม่ได้"
 
 /** [SingleSigWallet.post] when the guard file could not take the payment's guard ([Claim.NotSaved]), so nothing was posted. Review shows it too. */
 internal const val GUARD_NOT_SAVED = "บันทึกสถานะการส่งไม่ได้ จึงยังไม่ส่ง ลองใหม่ภายหลัง"
@@ -623,23 +652,6 @@ internal const val GUARD_NOT_SAVED = "บันทึกสถานะการ
 /** [sendErrorThai] for a failed read of the wallet: its generic fallback would say a send failed when only a fetch did. */
 fun readErrorThai(message: String?): String =
     sendErrorThai(message).takeUnless { it == SEND_FALLBACK } ?: "ดึงข้อมูลกระเป๋าไม่สำเร็จ ลองใหม่ภายหลัง"
-
-/**
- * An absolute surprise worth one tap: a fee this many sats over the estimate is questioned however large the payment, about 30 baht
- * at today's price. Below it, a fee over twice the estimate is questioned only when it also eats a tenth of the amount.
- */
-const val FEE_SURPRISE_SATS = 1_000L
-
-/**
- * Whether the Review screen asks before posting a payment whose real fee is [feeSats] when it showed [shownFeeSats] (the rate times
- * [SendDraft.typicalVsize]) and [amountSats] is what the destination gets. The fee must be more than twice what was shown, and either more
- * than a tenth of the amount or at least [FEE_SURPRISE_SATS] over the estimate. Twice alone would stop for an ordinary four-coin
- * payment (345 sat on 10,000 sat at 1 sat/vB, 204 sat over), which is not worth a tap. A tenth alone would ask about every small
- * payment, whose fee is a large share by nature even when it is exactly what was shown, and would let a fee hundreds of times the
- * estimate through on a large payment, which the absolute threshold catches.
- */
-fun feeNeedsConfirmation(feeSats: Long, shownFeeSats: Long, amountSats: Long): Boolean =
-    feeSats > 2 * shownFeeSats && (feeSats * 10 > amountSats || feeSats - shownFeeSats >= FEE_SURPRISE_SATS)
 
 /** Review asks above this rate. The core refuses only above the network's 10,000 sat/vB. */
 const val HIGH_FEE_RATE = 2_000L
@@ -655,11 +667,8 @@ enum class FeeReason(val title: String) {
     /** A fixed amount whose fee is more than the amount. The fee is paid on top, so the destination still gets all of it. */
     AboveAmount("ค่าธรรมเนียมสูงกว่าจำนวนที่ส่ง"),
 
-    /** A fixed amount whose real fee is far above the estimate Review showed ([feeNeedsConfirmation]). */
-    AboveEstimate("ค่าธรรมเนียมจริงสูงกว่าที่แสดง"),
-
-    /** Send all whose real fee is far above the estimate, or whose amount is [FEE_SURPRISE_SATS] or more under what Review showed. */
-    SendAllBelowShown("ค่าธรรมเนียมจริงสูงกว่าที่แสดง"),
+    /** The signed payment's fee, amount or folded change is not what Review's [SendQuote] showed, because the wallet's coins changed between the two. */
+    Changed("ค่าธรรมเนียมเปลี่ยนจากที่แสดง"),
 
     /** Change the network refuses as an output (below its dust floor), or too little to pay for its own, went into the fee ([PreparedSend.dustChangeSats]). */
     ChangeToFee("เงินทอนรวมเข้าค่าธรรมเนียม"),
@@ -678,32 +687,26 @@ data class FeeQuestion(val reasons: List<FeeReason>, val rateSatVb: Long, val du
     private fun line(reason: FeeReason): String = when (reason) {
         FeeReason.HighRate -> "อัตรา ${thousands(rateSatVb)} sat/vB สูงกว่าปกติมาก ค่าธรรมเนียมจึงสูง"
         FeeReason.AboveAmount -> "ผู้รับได้ครบตามจำนวน แต่ค่าธรรมเนียมเครือข่ายมากกว่าเงินที่ส่ง"
-        FeeReason.AboveEstimate -> "กระเป๋านี้ต้องรวมหลายเหรียญ ธุรกรรมจึงใหญ่กว่าปกติ"
-        FeeReason.SendAllBelowShown -> "กระเป๋านี้ต้องรวมหลายเหรียญ ธุรกรรมจึงใหญ่กว่าปกติ จำนวนที่ส่งลดลงจากที่แสดงเพราะหักค่าธรรมเนียมจริงแล้ว"
+        FeeReason.Changed -> "เหรียญในกระเป๋าเปลี่ยนระหว่างที่เปิดหน้านี้ ค่าธรรมเนียมจริงจึงต่างจากที่แสดง" + if (sendAll) " จำนวนที่ส่งจึงเปลี่ยนด้วย" else ""
         FeeReason.ChangeToFee -> "เศษ ${thousands(dustChangeSats)} sat ทอนกลับเข้ากระเป๋าไม่ได้ จึงรวมเข้าในค่าธรรมเนียม"
     }
 }
 
 /**
- * Why the Review screen asks before posting [held], the payment the core signed for [draft], or null when it posts at once. A fixed
- * amount asks when [feeNeedsConfirmation] holds against the estimate Review showed and when the fee is more than the amount. Send all
- * asks on the first, and when what leaves is [FEE_SURPRISE_SATS] or more under the amount it showed, because the amount absorbs the fee
- * and the spendable balance can have moved since the snapshot. Send all never asks about the fee against the amount, which the core never refused.
- * Change that went into the fee asks with its own reason, and the estimate rule judges the fee without it, so it never reads as several coins.
+ * Why the Review screen asks before posting [held], the payment the core signed for [shown]'s request, or null when it posts at once.
+ * It posts at once only when [held] pays exactly what [shown] showed and no other reason holds, because the user decided the fee they
+ * saw is the fee that goes: any difference, higher or lower, asks. A rate above [HIGH_FEE_RATE], a fixed amount whose fee is above it,
+ * and change that went into the fee ask with their own reasons, as before the quote existed.
  */
-fun feeQuestion(held: PreparedSend, draft: SendDraft): FeeQuestion? {
-    val feeSats = held.feeSats.toLong()
-    val amountSats = held.amountSats.toLong()
-    val dustSats = held.dustChangeSats.toLong()
-    val aboveEstimate = feeNeedsConfirmation(feeSats - dustSats, draft.feeSats, amountSats)
+fun feeQuestion(held: PreparedSend, shown: SendQuote): FeeQuestion? {
+    val request = shown.request
     val reasons = listOfNotNull(
-        FeeReason.HighRate.takeIf { draft.rateSatVb > HIGH_FEE_RATE },
-        FeeReason.AboveAmount.takeIf { !draft.isSendAll && feeSats > amountSats },
-        FeeReason.AboveEstimate.takeIf { !draft.isSendAll && aboveEstimate },
-        FeeReason.SendAllBelowShown.takeIf { draft.isSendAll && (aboveEstimate || draft.amountSats - amountSats >= FEE_SURPRISE_SATS) },
-        FeeReason.ChangeToFee.takeIf { dustSats > 0 },
+        FeeReason.HighRate.takeIf { request.rateSatVb > HIGH_FEE_RATE },
+        FeeReason.AboveAmount.takeIf { !request.sendAll && held.feeSats > held.amountSats },
+        FeeReason.Changed.takeIf { !shown.matches(held) },
+        FeeReason.ChangeToFee.takeIf { held.dustChangeSats > 0uL },
     )
-    return if (reasons.isEmpty()) null else FeeQuestion(reasons, draft.rateSatVb, dustSats, draft.isSendAll)
+    return if (reasons.isEmpty()) null else FeeQuestion(reasons, request.rateSatVb, held.dustChangeSats.toLong(), request.sendAll)
 }
 
 /** What the card of a signed fee bump or cancel says about its fee beyond the fee row, or null: a rate above [HIGH_FEE_RATE] and the change it put into the fee. */
@@ -752,6 +755,35 @@ data class LiveFeeTiers(val slow: Long, val normal: Long, val fast: Long, val li
 
 /** One fee tile: the tier's board copy, its rate and the estimate in sats. */
 data class FeeTile(val tier: FeeTier, val satPerVb: Long, val feeSats: Long)
+
+/**
+ * One payment as Review quotes and signs it, as the draft asked when Review opened. With [sendAll], [amountSats] is the Send screen's
+ * estimate, which the core replaces with the balance less the real fee.
+ */
+data class SendRequest(val destination: String, val amountSats: Long, val rateSatVb: Long, val sendAll: Boolean)
+
+/** What Review shows for [request]: the fee, amount and folded change the core would sign for it on the chain as [quoted] read it. */
+data class SendQuote(val request: SendRequest, val quoted: QuotedSend) {
+    val feeSats: Long get() = quoted.feeSats.toLong()
+    val amountSats: Long get() = quoted.amountSats.toLong()
+    val totalSats: Long get() = feeSats + amountSats
+
+    /** Whether [held] pays exactly what this quote showed. */
+    fun matches(held: PreparedSend): Boolean =
+        held.feeSats == quoted.feeSats && held.amountSats == quoted.amountSats && held.dustChangeSats == quoted.dustChangeSats
+}
+
+/** Review's quote. [SingleSigWallet.quote] answers only [Done], and [Loading] is the screen's own, as with [TxDetailLoad]. */
+sealed interface QuoteLoad {
+    data object Loading : QuoteLoad
+
+    sealed interface Done : QuoteLoad
+
+    data class Quoted(val quote: SendQuote) : Done
+
+    /** [line] is Thai: [sendErrorThai] of the core's refusal, or the line [SingleSigWallet.prepare] gives the same precondition. */
+    data class Failed(val line: String) : Done
+}
 
 /** What the detail screen knows beyond its row. [SingleSigWallet.detail] answers only [Done], and [Loading] is the screen's own. */
 sealed interface TxDetailLoad {
@@ -819,7 +851,7 @@ class SendDraft(addressType: AddressType = AddressType.NATIVE_SEGWIT) {
     var amountSats: Long by mutableStateOf(0L)
         private set
 
-    /** The estimate for [tier]: its rate times [typicalVsize]. What the Send and Review screens show and what the balance check uses. */
+    /** The Send screen's estimate for [tier], its rate times [typicalVsize], which its tiles show and its balance check uses. Review shows a [SendQuote] instead. */
     var feeSats: Long by mutableStateOf(LiveFeeTiers.DEFAULT.estimate(FeeTier.Normal, typicalVsize))
         private set
     var tier: FeeTier by mutableStateOf(FeeTier.Normal)
@@ -838,6 +870,9 @@ class SendDraft(addressType: AddressType = AddressType.NATIVE_SEGWIT) {
 
     /** True while the amount is send all and above zero. The payment then spends every coin and the core sets the amount from the real fee, so [amountSats] is an estimate. */
     val isSendAll: Boolean get() = sendAllMarked && amountSats > 0
+
+    /** What Review quotes and signs for this draft now. */
+    val request: SendRequest get() = SendRequest(destination, amountSats, rateSatVb, isSendAll)
     var destination: String by mutableStateOf("")
     var amountText: String by mutableStateOf("")
         private set

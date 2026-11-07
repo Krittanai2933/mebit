@@ -38,17 +38,16 @@ class SendTextTest {
     }
 
     @Test
-    fun reviewFeeIsAnEstimateOfSatsThenBaht() {
-        assertEquals("≈ 1,128 sat · ฿41", reviewFeeText(1_128, boardPrice))
-        assertEquals("≈ 564 sat · ฿20", reviewFeeText(564, boardPrice))
-        assertEquals("≈ 12,345 sat · ฿445", reviewFeeText(12_345, boardPrice))
+    fun theFeeIsSatsThenBaht() {
+        assertEquals("1,128 sat · ฿41", realFeeText(1_128, boardPrice))
+        assertEquals("564 sat · ฿20", realFeeText(564, boardPrice))
+        assertEquals("12,345 sat · ฿445", realFeeText(12_345, boardPrice))
     }
 
     @Test
-    fun reviewFeeIsJustSatsWithoutAPrice() {
-        assertEquals("≈ 1,128 sat", reviewFeeText(1_128, null))
-        assertEquals("≈ 564 sat", reviewFeeText(564, null))
-        assertEquals("≈ 1,234,567 sat", reviewFeeText(1_234_567, null))
+    fun theFeeIsJustSatsWithoutAPrice() {
+        assertEquals("1,128 sat", realFeeText(1_128, null))
+        assertEquals("1,234,567 sat", realFeeText(1_234_567, null))
     }
 
     @Test
@@ -66,8 +65,8 @@ class SendTextTest {
 
     @Test
     fun aZeroFeeNeedsNoPriceToBeZeroBaht() {
-        assertEquals("≈ 0 sat · ฿0", reviewFeeText(0, null))
-        assertEquals("≈ 0 sat · ฿0", reviewFeeText(0, boardPrice))
+        assertEquals("0 sat · ฿0", realFeeText(0, null))
+        assertEquals("0 sat · ฿0", realFeeText(0, boardPrice))
         assertEquals("฿0 · 8 sat/vB", slipFeeText(0, 8, null))
         assertEquals("฿0 · 8 sat/vB", slipFeeText(0, 8, boardPrice))
     }

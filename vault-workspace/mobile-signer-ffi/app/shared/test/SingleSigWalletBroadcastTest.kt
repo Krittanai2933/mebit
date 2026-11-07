@@ -15,6 +15,7 @@ import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.MobileSignerException
 import com.mebit.ffi.signer.PreparedSend
+import com.mebit.ffi.signer.QuotedSend
 import com.mebit.ffi.signer.SoftwareAccountKey
 import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.update
@@ -61,6 +62,12 @@ private data class PrepareAllCall(val words: List<String>, val passphrase: Strin
 
 private data class PostCall(val network: KeyNetwork, val hex: String, val txid: String)
 
+private data class QuoteCall(val words: List<String>, val passphrase: String, val network: KeyNetwork, val destination: String, val amountSats: ULong?, val feeRateSatVb: ULong)
+
+/** Review's quote that shows exactly what [held] pays, at [rateSatVb]. A test changes one figure of [held] first to make the two differ. */
+private fun quoteOf(held: PreparedSend, rateSatVb: Long = 8, sendAll: Boolean = false) =
+    SendQuote(SendRequest(DESTINATION, held.amountSats.toLong(), rateSatVb, sendAll), QuotedSend(held.feeSats, held.amountSats, held.dustChangeSats, 141uL))
+
 /** What the send screens read after a broadcast. */
 private data class Seen(val returned: Boolean, val txid: String, val error: String?, val balanceSats: Long, val receiveAddress: String)
 
@@ -78,6 +85,8 @@ internal fun SingleSigWallet.broadcast(session: OnboardingSession, amountSats: L
 private class FakeHot(val guards: FakePlainFile = FakePlainFile(), val fingerprint: String = TEST_CHECK) {
     var prepareResult: (feeRateSatVb: ULong) -> PreparedSend = { rate -> PreparedSend(TXID, "hex-1", rate * 141uL, 100_000uL) }
     var prepareAllResult: (feeRateSatVb: ULong) -> PreparedSend = { rate -> PreparedSend(TXID, "hex-all", rate * 178uL, 1_000_000uL - rate * 178uL) }
+    var quoteResult: (amountSats: ULong?, feeRateSatVb: ULong) -> QuotedSend = { amount, rate -> QuotedSend(rate * 141uL, amount ?: (1_000_000uL - rate * 110uL), 0uL, 141uL) }
+    val quotes = mutableListOf<QuoteCall>()
     var postResult: () -> HotSendResult = { HotSendResult(TXID) }
     var snapshotResult: () -> HotWalletSnapshot = { HotWalletSnapshot("tb1qbefore", 1_000_000uL, 1_000_000uL, KeyNetwork.TEST, HotScan.COMPLETE) }
     var clock = SENT_AT
@@ -108,6 +117,10 @@ private class FakeHot(val guards: FakePlainFile = FakePlainFile(), val fingerpri
         fetchHistory = { _, _, _, _ -> if (historyFails) throw IllegalStateException("history unreadable") else history },
         nowSeconds = { clock },
         receiveAddressOf = { _, _, _, _, _ -> "tb1qoffline" },
+        quoteSend = { words, passphrase, network, _, destination, amountSats, feeRateSatVb ->
+            quotes += QuoteCall(words, passphrase, network, destination, amountSats, feeRateSatVb)
+            quoteResult(amountSats, feeRateSatVb)
+        },
     )
 
     /** A 12-word session saved on [store] and bound through a working snapshot: the wallet is live with 1,000,000 sats. */
@@ -181,6 +194,7 @@ private fun walletThatMustNotCallHot(nowSeconds: () -> Long = { 0L }) = SingleSi
     snapshot = { _, _, _, _ -> fail("snapshot ran") },
     fetchHistory = { _, _, _, _ -> fail("history ran") },
     nowSeconds = nowSeconds,
+    quoteSend = { _, _, _, _, _, _, _ -> fail("quote ran") },
 )
 
 /** The demo fixture holds 1,250,000 sats: a payment above that is refused, one within it is deducted with its fee under a mock txid. */
@@ -743,7 +757,7 @@ class SingleSigWalletBroadcastTest {
         hot.prepareResult = { signed }
         assertTrue(hot.wallet.prepare(session, 10_000, 8, DESTINATION))
         assertEquals(HeldSend(signed, KeyNetwork.TEST), hot.wallet.heldSend)
-        assertTrue(feeNeedsConfirmation(2_760, SendDraft().feeSats, 10_000), "what the Review screen asks about")
+        assertEquals(listOf(FeeReason.Changed), feeQuestion(signed, quoteOf(signed.copy(feeSats = 1_128uL)))?.reasons, "a fee Review's quote did not show")
         assertEquals(writes, hot.store.writes.size, "the phone was written before the user confirmed")
         assertEquals(0, hot.guards.writes, "the guard file was written before the user confirmed")
         assertNull(hot.wallet.unconfirmedSend, "a guard before the user confirmed")
@@ -826,23 +840,56 @@ class SingleSigWalletBroadcastTest {
         assertEquals(listOf(PostCall(KeyNetwork.MAIN, "hex-1", TXID)), hot.posts)
     }
 
-    // More than twice what was shown, and then either more than a tenth of what the destination gets or a thousand sats over.
+    // The user's rule of 8 Nov: the fee Review shows is the fee that goes. Review shows the core's quote, so a payment that pays exactly
+    // what it showed posts at once, and any difference asks first: one sat more or less in the fee, in what a send all leaves, or in the
+    // change folded into the fee.
     @Test
-    fun theFeeQuestionNeedsOverTwiceTheEstimateAndThenATenthOfTheAmountOrAThousandSatsOver() {
-        // 1 sat/vB shows 141. Four coins and change are 345 sat: over twice, but 3.45% of 10,000, so no question.
-        assertFalse(feeNeedsConfirmation(345, 141, 10_000), "the ordinary four-coin payment")
-        assertFalse(feeNeedsConfirmation(1_000, 141, 10_000), "exactly a tenth")
-        assertTrue(feeNeedsConfirmation(1_001, 141, 10_000), "just over a tenth")
-        assertFalse(feeNeedsConfirmation(282, 141, 1_000), "exactly twice, and a large share of a small payment")
-        assertTrue(feeNeedsConfirmation(283, 141, 1_000), "just over twice, and a large share")
-        // 8 sat/vB shows 1,128. 2,760 is four coins and change.
-        assertTrue(feeNeedsConfirmation(2_760, 1_128, 100_000), "2.76% of the amount, but 1,632 sat over the estimate")
-        assertTrue(feeNeedsConfirmation(2_760, 1_128, 10_000), "27.6% of the amount")
-        assertFalse(feeNeedsConfirmation(2_256, 1_128, 1_000), "exactly twice")
-        assertFalse(feeNeedsConfirmation(1_128, 1_128, 546), "what was shown, on a dust-limit amount")
-        // Send all: the amount is what leaves after the fee.
-        assertTrue(feeNeedsConfirmation(314, 141, 2_000), "send all of 2,314 sat over four coins")
-        assertFalse(feeNeedsConfirmation(314, 141, 9_686), "send all of 10,000 sat over four coins")
+    fun reviewPostsAtOnceOnlyWhenThePaymentIsTheQuoteAndAsksOnAnyDifference() {
+        val held = PreparedSend(TXID, "h", 1_128uL, 100_000uL)
+        assertNull(feeQuestion(held, quoteOf(held)), "exactly what Review showed")
+        assertEquals(listOf(FeeReason.Changed), feeQuestion(held, quoteOf(held.copy(feeSats = 1_127uL)))?.reasons, "a fee one sat above the quote")
+        assertEquals(listOf(FeeReason.Changed), feeQuestion(held, quoteOf(held.copy(feeSats = 1_129uL)))?.reasons, "a fee one sat under the quote")
+        val all = PreparedSend(TXID, "h", 1_128uL, 998_872uL)
+        assertNull(feeQuestion(all, quoteOf(all, sendAll = true)), "send all leaving what Review showed")
+        assertEquals(listOf(FeeReason.Changed), feeQuestion(all, quoteOf(all.copy(amountSats = 998_873uL), sendAll = true))?.reasons, "send all leaving one sat less")
+        assertEquals(listOf(FeeReason.Changed), feeQuestion(all, quoteOf(all.copy(amountSats = 998_871uL), sendAll = true))?.reasons, "send all leaving one sat more")
+        val folded = PreparedSend(TXID, "h", 434uL, 9_566uL, 293uL)
+        assertEquals(listOf(FeeReason.Changed, FeeReason.ChangeToFee), feeQuestion(folded, quoteOf(folded.copy(dustChangeSats = 292uL)))?.reasons, "folded change the quote did not show")
+    }
+
+    // Review quotes the draft's payment through the core call the sign makes, a send all with no amount, and the quote holds, writes and
+    // posts nothing, so a Review left during it leaves nothing behind.
+    @Test
+    fun aQuoteAsksTheCoreForTheDraftsPaymentAndHoldsWritesAndPostsNothing() {
+        val hot = FakeHot()
+        val session = hot.goLive()
+        val writes = hot.store.writes.size
+        val fixed = assertIs<QuoteLoad.Quoted>(hot.wallet.quote(session, SendRequest(DESTINATION, 100_000, 8, sendAll = false))).quote
+        assertEquals(QuotedSend(1_128uL, 100_000uL, 0uL, 141uL), fixed.quoted)
+        val all = assertIs<QuoteLoad.Quoted>(hot.wallet.quote(session, SendRequest(DESTINATION, 998_872, 8, sendAll = true))).quote
+        assertEquals(999_120L, all.amountSats, "send all reads what leaves from the core, not the draft's estimate")
+        assertEquals(
+            listOf(QuoteCall(WORDS, PASSPHRASE, KeyNetwork.TEST, DESTINATION, 100_000uL, 8uL), QuoteCall(WORDS, PASSPHRASE, KeyNetwork.TEST, DESTINATION, null, 8uL)),
+            hot.quotes,
+        )
+        assertNull(hot.wallet.heldSend, "a quote held a payment")
+        assertNull(hot.wallet.lastError)
+        assertEquals(emptyList<PrepareCall>(), hot.prepares, "a quote signed")
+        assertEquals(emptyList<PostCall>(), hot.posts)
+        assertEquals(writes, hot.store.writes.size)
+        assertEquals(0, hot.guards.writes)
+    }
+
+    // The demo has no core to ask, so its quote is the mock payment it then makes: the rate times the type's typical size.
+    @Test
+    fun theDemoQuoteIsWhatTheDemoMockPays() {
+        val wallet = walletThatMustNotCallHot()
+        val session = OnboardingSession()
+        wallet.bindSession(session)
+        val quote = assertIs<QuoteLoad.Quoted>(wallet.quote(session, SendRequest(DESTINATION, 100_000, 15, sendAll = false))).quote
+        assertEquals(2_115L, quote.feeSats)
+        assertTrue(wallet.broadcast(session, 100_000, 15, DESTINATION))
+        assertEquals(quote.feeSats to quote.amountSats, wallet.lastFeeSats to wallet.lastAmountSats)
     }
 
     @Test
@@ -862,23 +909,21 @@ class SingleSigWalletBroadcastTest {
         assertEquals(LiveFeeTiers.DEFAULT, wallet.feeTiers())
     }
 
-    // V1 of the 2026-11-05 interrogate. The card asked only when the fee was also over a tenth of the amount, so a fee hundreds of
-    // times the estimate on a large payment was posted with no question. Fast shows 15 x 141 = 2,115; the core charged these for
-    // 1,000 dust coins, or 300 coins of 10,000, listed before 1 BTC.
+    // A quote that fails shows no fee at all, never an estimate, so Review has nothing to sign and keeps Sign off. It says why: the core's
+    // refusal in Thai, or the precondition prepare would refuse with.
     @Test
-    fun aFeeAThousandSatsOrMoreAboveTheEstimateIsQuestionedHoweverLargeThePayment() {
-        assertTrue(feeNeedsConfirmation(1_022_115, 2_115, 50_000_000), "483x the estimate on 0.5 BTC")
-        assertTrue(feeNeedsConfirmation(1_021_650, 2_115, 99_524_350), "send all, 483x")
-        assertTrue(feeNeedsConfirmation(308_115, 2_115, 50_000_000), "145x")
-        assertTrue(feeNeedsConfirmation(307_650, 2_115, 102_692_350), "send all, 145x")
-        assertTrue(feeNeedsConfirmation(164_328, 1_128, 4_835_672), "145x at 8 sat/vB")
-        assertTrue(feeNeedsConfirmation(2_082, 141, 117_918), "send all over 30 coins at 1 sat/vB")
-        assertTrue(feeNeedsConfirmation(5_377, 141, 150_000), "100 dust coins listed first at 1 sat/vB")
-        assertTrue(feeNeedsConfirmation(1_141, 141, 50_000_000), "exactly 1,000 sat over")
-        assertFalse(feeNeedsConfirmation(1_140, 141, 50_000_000), "999 sat over, a small share")
-        assertFalse(feeNeedsConfirmation(345, 141, 10_000), "the ordinary four-coin payment, 204 sat over")
-        assertFalse(feeNeedsConfirmation(4_230, 2_115, 50_000_000), "2,115 sat over but exactly twice")
-        assertTrue(feeNeedsConfirmation(4_231, 2_115, 50_000_000), "just over twice")
+    fun aFailedQuoteIsNoFigureButTheReasonPrepareWouldGive() {
+        val hot = FakeHot()
+        val session = hot.goLive()
+        val request = SendRequest(DESTINATION, 2_000_000, 8, sendAll = false)
+        hot.quoteResult = { _, _ -> throw MobileSignerException.InvalidPsbtJson("invalid PSBT json: insufficient funds: have 1000000 confirmed, need 2001128") }
+        assertEquals(QuoteLoad.Failed("ยอดที่ยืนยันแล้วไม่พอ รอให้เงินที่เพิ่งได้รับยืนยันก่อน"), hot.wallet.quote(session, request))
+        hot.snapshotResult = { throw IllegalStateException("esplora get: timed out") }
+        hot.wallet.bindSession(session)
+        assertEquals(QuoteLoad.Failed(NOT_LIVE), hot.wallet.quote(session, request), "a wallet whose balance is not known")
+        val guarded = FakeHot()
+        assertEquals(QuoteLoad.Failed(EARLIER_UNSETTLED), guarded.wallet.quote(guarded.unknownSend(), request), "a payment that may be out")
+        assertEquals(1, hot.quotes.size, "a precondition asked the core")
     }
 
     // V6. A post while another payment's guard was set posted anyway and erased that guard. A bind after a restart brings in a guard
@@ -928,61 +973,38 @@ class SingleSigWalletBroadcastTest {
         assertEquals("hex-next", hot.wallet.heldSend?.prepared?.hex)
     }
 
-    // V1. The whole Review decision for send all: the fee rule, and the amount that leaves against the one Review showed, because
-    // the amount absorbs the fee and the spendable balance can have moved since the snapshot.
-    @Test
-    fun reviewAsksWhenSendAllWouldLeaveAThousandSatsLessThanItShowed() {
-        val draft = SendDraft()
-        AmountEntry(draft).sendAll(1_000_000)
-        assertEquals(998_872L, draft.amountSats, "what Review shows at the normal tier")
-        assertNull(feeQuestion(PreparedSend(TXID, "h", 1_128uL, 998_872uL), draft), "exactly what was shown")
-        assertNull(feeQuestion(PreparedSend(TXID, "h", 1_128uL, 997_873uL), draft), "999 sat under")
-        assertEquals(listOf(FeeReason.SendAllBelowShown), feeQuestion(PreparedSend(TXID, "h", 1_128uL, 997_872uL), draft)?.reasons, "1,000 sat under")
-        assertEquals(listOf(FeeReason.SendAllBelowShown), feeQuestion(PreparedSend(TXID, "h", 1_021_650uL, 99_524_350uL), draft)?.reasons, "the fee rule through the same door")
-        // A fixed amount is paid as asked, so only the fee rules speak.
-        val fixed = SendDraft()
-        fixed.setAmountInSats(100_000)
-        assertNull(feeQuestion(PreparedSend(TXID, "h", 1_128uL, 99_000uL), fixed))
-        assertEquals(listOf(FeeReason.AboveEstimate), feeQuestion(PreparedSend(TXID, "h", 2_760uL, 100_000uL), fixed)?.reasons)
-    }
-
     // Item 85. The core used to refuse a fixed amount whose fee was more than the amount, with a generic banner. It signs it now, the fee
-    // being paid on top, and Review asks once on the same card. Each row is the draft Review showed and the payment the core signed.
+    // being paid on top, and Review asks once on the same card, even when the payment is exactly the quote.
     @Test
     fun aFeeAboveTheAmountAsksOnceInsteadOfBeingRefused() {
-        fun fixed(amountSats: Long, ratesSatVb: Long = 8) = SendDraft().apply {
-            takeTiers(LiveFeeTiers(ratesSatVb, ratesSatVb, ratesSatVb, live = true))
-            setAmountInSats(amountSats)
-        }
-        assertEquals(listOf(FeeReason.AboveAmount), feeQuestion(PreparedSend(TXID, "h", 14_241uL, 1_000uL), fixed(1_000, 101))?.reasons, "1,000 sat at 101 sat/vB, the iPhone payment")
-        assertNull(feeQuestion(PreparedSend(TXID, "h", 1_128uL, 1_128uL), fixed(1_128)), "a fee equal to the amount")
-        assertEquals(listOf(FeeReason.AboveAmount), feeQuestion(PreparedSend(TXID, "h", 1_128uL, 1_127uL), fixed(1_127))?.reasons, "a fee one sat over the amount")
-        assertEquals(listOf(FeeReason.AboveAmount), feeQuestion(PreparedSend(TXID, "h", 1_128uL, 546uL), fixed(546))?.reasons, "a dust-limit amount, where the estimate rule is quiet")
-        assertEquals(listOf(FeeReason.AboveAmount, FeeReason.AboveEstimate), feeQuestion(PreparedSend(TXID, "h", 2_760uL, 1_000uL), fixed(1_000))?.reasons, "four coins on a small amount, one card")
-        assertEquals(listOf(FeeReason.AboveEstimate), feeQuestion(PreparedSend(TXID, "h", 2_760uL, 10_000uL), fixed(10_000))?.reasons, "four coins, the fee still under the amount")
+        fun asked(held: PreparedSend, rateSatVb: Long = 8) = feeQuestion(held, quoteOf(held, rateSatVb))?.reasons
+        assertEquals(listOf(FeeReason.AboveAmount), asked(PreparedSend(TXID, "h", 14_241uL, 1_000uL), 101), "1,000 sat at 101 sat/vB, the iPhone payment")
+        assertNull(asked(PreparedSend(TXID, "h", 1_128uL, 1_128uL)), "a fee equal to the amount")
+        assertEquals(listOf(FeeReason.AboveAmount), asked(PreparedSend(TXID, "h", 1_128uL, 1_127uL)), "a fee one sat over the amount")
+        assertEquals(listOf(FeeReason.AboveAmount), asked(PreparedSend(TXID, "h", 1_128uL, 546uL)), "a dust-limit amount")
+        val moreCoins = PreparedSend(TXID, "h", 2_760uL, 1_000uL)
+        assertEquals(listOf(FeeReason.AboveAmount, FeeReason.Changed), feeQuestion(moreCoins, quoteOf(moreCoins.copy(feeSats = 1_128uL)))?.reasons, "more coins than the quote on a small amount, one card")
     }
 
     // Send all takes the fee out of the balance and the core never refused it for the fee, so a fee above what leaves asks nothing new.
     @Test
     fun sendAllNeverAsksForAFeeAboveWhatLeaves() {
-        val draft = SendDraft()
-        draft.takeTiers(LiveFeeTiers(20, 20, 20, live = true))
-        AmountEntry(draft).sendAll(4_000)
-        assertEquals(1_180L, draft.amountSats, "what Review shows at 20 sat/vB over the typical size")
-        assertNull(feeQuestion(PreparedSend(TXID, "h", 2_200uL, 1_800uL), draft), "one coin and one output, the fee above what leaves")
+        val held = PreparedSend(TXID, "h", 2_200uL, 1_800uL)
+        assertNull(feeQuestion(held, quoteOf(held, rateSatVb = 20, sendAll = true)), "one coin and one output, the fee above what leaves")
     }
 
     // The card is worded by its reasons. Parts are asserted, not whole strings, so design review can edit the words.
     @Test
-    fun eachFeeQuestionIsTitledByItsReasonAndNamesManyCoinsOnlyWhenTheFeeWasFarAboveWhatWasShown() {
-        fun card(vararg reasons: FeeReason) = FeeQuestion(reasons.toList(), rateSatVb = 8, dustChangeSats = 0, sendAll = FeeReason.SendAllBelowShown in reasons)
+    fun eachFeeQuestionIsTitledByItsReasonAndSaysTheCoinsChangedOnlyWhenThePaymentIsNotTheQuote() {
+        fun card(vararg reasons: FeeReason, sendAll: Boolean = false) = FeeQuestion(reasons.toList(), rateSatVb = 8, dustChangeSats = 0, sendAll = sendAll)
         val aboveAmount = card(FeeReason.AboveAmount)
-        val both = card(FeeReason.AboveAmount, FeeReason.AboveEstimate)
+        val both = card(FeeReason.AboveAmount, FeeReason.Changed)
         for (q in listOf(aboveAmount, both)) assertTrue("จำนวนที่ส่ง" in q.title, "$q is titled by the fee against the amount")
-        for (q in listOf(card(FeeReason.AboveEstimate), card(FeeReason.SendAllBelowShown))) assertFalse("จำนวนที่ส่ง" in q.title, "$q is titled by the fee against the estimate")
-        for (q in listOf(card(FeeReason.AboveEstimate), card(FeeReason.SendAllBelowShown), both)) assertTrue("หลายเหรียญ" in q.message, "$q names the coins")
-        assertFalse("หลายเหรียญ" in aboveAmount.message, "a one-coin payment pays the fee Review showed")
-        assertEquals("ส่งจริง", card(FeeReason.SendAllBelowShown).amountLabel)
+        assertFalse("จำนวนที่ส่ง" in card(FeeReason.Changed).title, "a changed payment is titled by the change")
+        for (q in listOf(card(FeeReason.Changed), both)) assertTrue("เปลี่ยน" in q.message, "$q says the coins changed")
+        assertFalse("เปลี่ยน" in aboveAmount.message, "a payment that is the quote changed nothing")
+        assertTrue("จำนวนที่ส่ง" in card(FeeReason.Changed, sendAll = true).message, "send all says what leaves changed too")
+        assertEquals("ส่งจริง", card(FeeReason.Changed, sendAll = true).amountLabel)
         assertEquals("ส่ง", both.amountLabel)
     }
 
@@ -990,47 +1012,26 @@ class SingleSigWalletBroadcastTest {
     // core used to refuse the payment, and Review showed the generic failure banner. Review asks once and names the sats.
     @Test
     fun changeInTheFeeAsksAndNamesTheSats() {
-        val draft = SendDraft().apply {
-            takeTiers(LiveFeeTiers(1, 1, 1, live = true))
-            setAmountInSats(9_566)
-        }
-        val question = feeQuestion(PreparedSend(TXID, "h", 434uL, 9_566uL, 293uL), draft)
-        assertEquals(listOf(FeeReason.ChangeToFee), question?.reasons)
+        val held = PreparedSend(TXID, "h", 434uL, 9_566uL, 293uL)
+        val question = feeQuestion(held, quoteOf(held, rateSatVb = 1))
+        assertEquals(listOf(FeeReason.ChangeToFee), question?.reasons, "folded change the quote showed asks only for itself")
         assertEquals("เงินทอนรวมเข้าค่าธรรมเนียม", question?.title)
         assertTrue("293 sat" in question?.message.orEmpty(), "the line names the sats: ${question?.message}")
-        assertNull(feeQuestion(PreparedSend(TXID, "h", 141uL, 9_565uL, 0uL), draft), "change at the floor is ordinary change")
-    }
-
-    // A fold on a small payment makes the fee three times the estimate. Judged with the change in it, the estimate rule would say the
-    // wallet combined several coins, which is false, so it judges the fee without the change.
-    @Test
-    fun dustIsNotReadAsSeveralCoins() {
-        val draft = SendDraft().apply {
-            takeTiers(LiveFeeTiers(1, 1, 1, live = true))
-            setAmountInSats(1_000)
-        }
-        val question = feeQuestion(PreparedSend(TXID, "h", 434uL, 1_000uL, 293uL), draft)
-        assertEquals(listOf(FeeReason.ChangeToFee), question?.reasons)
-        assertFalse("หลายเหรียญ" in question?.message.orEmpty())
+        val ordinary = PreparedSend(TXID, "h", 141uL, 9_565uL, 0uL)
+        assertNull(feeQuestion(ordinary, quoteOf(ordinary, rateSatVb = 1)), "change at the floor is ordinary change")
     }
 
     // Each line is true alone, so the card lists every reason that holds, titled by the one with the most money at stake.
     @Test
     fun reasonsCombineOnOneCardTitledByTheFirst() {
-        val draft = SendDraft().apply {
-            takeTiers(LiveFeeTiers(1, 1, 1, live = true))
-            setAmountInSats(1_000)
-        }
-        val question = feeQuestion(PreparedSend(TXID, "h", 1_200uL, 1_000uL, 200uL), draft)
-        assertEquals(listOf(FeeReason.AboveAmount, FeeReason.AboveEstimate, FeeReason.ChangeToFee), question?.reasons)
+        val small = PreparedSend(TXID, "h", 1_200uL, 1_000uL, 200uL)
+        val question = feeQuestion(small, quoteOf(small.copy(feeSats = 141uL, dustChangeSats = 0uL), rateSatVb = 1))
+        assertEquals(listOf(FeeReason.AboveAmount, FeeReason.Changed, FeeReason.ChangeToFee), question?.reasons)
         assertEquals("ค่าธรรมเนียมสูงกว่าจำนวนที่ส่ง", question?.title)
         assertEquals(1, Regex("ตรวจค่าธรรมเนียมก่อนส่ง").findAll(question?.message.orEmpty()).count(), "one closing line")
         // A tier above 2,000 sat/vB on a payment whose fee is above its amount, with change in the fee: the rate titles the card.
-        val high = SendDraft().apply {
-            takeTiers(LiveFeeTiers(2_001, 2_001, 2_001, live = true))
-            setAmountInSats(100_000)
-        }
-        val all = feeQuestion(PreparedSend(TXID, "h", 282_341uL, 100_000uL, 200uL), high)
+        val high = PreparedSend(TXID, "h", 282_341uL, 100_000uL, 200uL)
+        val all = feeQuestion(high, quoteOf(high, rateSatVb = 2_001))
         assertEquals(listOf(FeeReason.HighRate, FeeReason.AboveAmount, FeeReason.ChangeToFee), all?.reasons)
         assertEquals("อัตราค่าธรรมเนียมสูงกว่า 2,000 sat/vB", all?.title)
         assertTrue("2,001 sat/vB" in all?.message.orEmpty(), "the line names the rate: ${all?.message}")
@@ -1040,13 +1041,12 @@ class SingleSigWalletBroadcastTest {
     // once above 2,000. A tier of exactly 2,000 asks nothing.
     @Test
     fun aRateAbove2000AsksAndOneAtItDoesNot() {
-        fun at(rateSatVb: Long) = SendDraft().apply {
-            takeTiers(LiveFeeTiers(rateSatVb, rateSatVb, rateSatVb, live = true))
-            setAmountInSats(1_000_000)
+        fun asked(rateSatVb: Long): List<FeeReason>? {
+            val held = PreparedSend(TXID, "h", (rateSatVb * 141).toULong(), 1_000_000uL)
+            return feeQuestion(held, quoteOf(held, rateSatVb))?.reasons
         }
-        fun asked(draft: SendDraft) = feeQuestion(PreparedSend(TXID, "h", draft.feeSats.toULong(), 1_000_000uL), draft)?.reasons
-        assertEquals(listOf(FeeReason.HighRate), asked(at(2_001)))
-        assertNull(asked(at(2_000)))
+        assertEquals(listOf(FeeReason.HighRate), asked(2_001))
+        assertNull(asked(2_000))
     }
 
     // A fee bump that folds its change, or one asked above 2,000 sat/vB, says so on its card. One that keeps its change at an ordinary
