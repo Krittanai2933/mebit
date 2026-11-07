@@ -1,6 +1,6 @@
 # Movie Page import seed
 
-A user who already has a wallet taps นำเข้ากระเป๋าเดิม, fills 24 words by typing with suggestions or by pasting, may add an English-only passphrase, imports the key, and goes on to App Lock and the first-run home without a backup step.
+A user who already has a wallet taps นำเข้ากระเป๋าเดิม, fills 24 words by typing with suggestions or by pasting, may add an English-only passphrase, imports the key, picks its address type, and goes on to App Lock and the first-run home without a backup step.
 
 ## Sub-features
 
@@ -8,7 +8,7 @@ A user who already has a wallet taps นำเข้ากระเป๋าเ�
 - `mp-import-suggest` shows a popover as wide as a slot with the first 4 matching words and a "+N" count of the rest, under the slot being typed. On slot 24 it lists the first 4 of the 8 valid 24th words. It opens upward when below would pass the card's bottom (boards 1B.2.1 to 1B.3.1).
 - `mp-import-errors` shows the invalid-word and invalid-checksum warnings and keeps นำเข้ากุญแจ disabled.
 - `mp-import-passphrase` takes an English-only passphrase in a sheet, then shows a fingerprint check after the import.
-- `mp-import-done` goes to App Lock and then Home with no backup screens.
+- `mp-import-done` goes to [Address Type](./movie-page-address-type.md), then App Lock and Home, with no backup screens.
 
 ## How to get to it (user POV)
 
@@ -33,8 +33,8 @@ Preconditions:
 - **Fix the last word.** Tap another slot first, then the slot to fix: `verify.sh ios-tap "id:seed_slot_22"`, `verify.sh ios-type "id:seed_slot_23" "art${nl}"`. The first key typed into a slot that already holds a word replaces that word. Typing into the slot that already has the keyboard puts the letters inside the old word. Then `verify.sh ios-gone "id:seed_warning"`. Shot `mp-import-filled`: slot 24 reads `art`, the button is navy.
 - **Wrong 24th word while typing.** After `verify.sh ios-type "id:seed_slot_0" "${all23}"`, `verify.sh ios-type "id:seed_slot_23" "a"` lists only `art` and shows no warning. `verify.sh ios-type "id:seed_slot_23" "c"` makes it `ac`, which no valid last word starts with: slot 24 turns orange and "Checksum ไม่ถูกต้อง" shows above the keyboard (`verify.sh ios-see "id:seed_warning"`). Shot `mp-import-wrong24` (board 1B.4.2). The return then puts the keyboard away and the warning under the grid reads "ไม่อยู่ในรายการคำ BIP39", because `ac` is not a word.
 - **Passphrase.** `id:seed_passphrase` is the Passphrase checkbox row inside the card. `verify.sh ios-tap "id:seed_passphrase"`, `verify.sh ios-see "id:sheet_passphrase"`, `verify.sh ios-type "id:seed_passphrase_field" "TREZOR${nl}"`. The return closes the sheet. Shot `mp-import-passphrase`: the same row in the card becomes board 1B.4.3's status row (a green check circle, "Passphrase · ตั้งแล้ว", `id:seed_passphrase_edit` (แก้ไข) on its right), the card grows from 357 to 374 dp while the CTA stays pinned, and nothing shows under the card. A tap on แก้ไข reopens `id:sheet_passphrase`. A tap on the green check circle (`id:seed_passphrase`) clears the passphrase, as ไม่มี passphrase does. In the sheet `id:seed_passphrase_eye` shows a slashed eye (description "แสดง passphrase") while the text is hidden, and an open eye (description "ซ่อน passphrase") after a tap shows the text. The slashed eye is a hand-drawn guess, not a Penpot export. A Thai character typed into the field is dropped and the helper line turns orange.
-- **Import with a passphrase.** `verify.sh ios-tap "id:cta_import_seed"`, `verify.sh ios-see "id:sheet_fingerprint"`, `verify.sh ios-see "88BCA92B"`. Shot `mp-import-fingerprint`. `verify.sh ios-tap "id:cta_fingerprint_ok"` goes to `id:screen_onboarding/app-lock`.
-- **Import with no passphrase.** `verify.sh ios-tap "id:cta_import_seed"` on the valid phrase goes straight to `id:screen_onboarding/app-lock`, and `verify.sh ios-gone "id:sheet_fingerprint"` passes.
+- **Import with a passphrase.** `verify.sh ios-tap "id:cta_import_seed"`, `verify.sh ios-see "id:screen_onboarding/address-type"`, `verify.sh ios-tap "id:cta_address_type"`, `verify.sh ios-see "id:sheet_fingerprint"`. Shot `mp-import-fingerprint`: `88BCA92B` over the chosen type's path (`m/84'/1'/0'` for the default). `verify.sh ios-tap "id:cta_fingerprint_ok"` goes to `id:screen_onboarding/app-lock`. ไม่ตรง · แก้ไข (`id:cta_fingerprint_reject`) returns to the filled Import Seed. See [address type](./movie-page-address-type.md).
+- **Import with no passphrase.** `verify.sh ios-tap "id:cta_import_seed"` on the valid phrase goes to `id:screen_onboarding/address-type`, and `verify.sh ios-tap "id:cta_address_type"` goes straight to `id:screen_onboarding/app-lock` with no fingerprint sheet.
 - **Home.** Enable the lock as in [Movie Page app lock](./movie-page-app-lock.md), then `verify.sh ios-see "id:screen_home/first-run"`. Shot `mp-import-home`: the hero reads 0.0000 BTC for the empty testnet wallet, and there is no backup warning.
 
 ## Gotchas
