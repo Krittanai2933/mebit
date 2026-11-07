@@ -111,7 +111,8 @@ fun MebitNavHost(
     val vaultDraft = remember { VaultDraft() }
     val singleSig = remember { SingleSigWallet() }
     val quotes = remember { liveQuoteCache() }
-    val sendDraft = remember { SendDraft() }
+    // The type changes only in first setup or with another wallet, before any payment of it, so a new draft loses nothing.
+    val sendDraft = remember(session.addressType) { SendDraft(session.addressType) }
     val multisigSend = remember { MultisigSendDraft() }
     // Import Seed's words and passphrase. They outlive the detour to Address Type and back, and a fresh draft replaces them once
     // the import goes on to the lock step or the user leaves Import Seed by its back chip. Memory only: never rememberSaveable,

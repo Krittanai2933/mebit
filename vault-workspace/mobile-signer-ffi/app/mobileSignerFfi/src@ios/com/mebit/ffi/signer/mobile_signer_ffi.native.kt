@@ -1332,6 +1332,8 @@ internal val UniffiVTableCallbackInterfacePairingCodesUniffiByValue.`uniffiFree`
 
 
 
+
+
 internal object UniffiLib {
     init {
             uniffiCallbackInterfacePairingCodes.register(this)
@@ -1620,6 +1622,13 @@ internal object UniffiLib {
         `network`,
         `addressType`,
         `txid`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_func_hot_typical_vsize(
+        `addressType`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Long = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_typical_vsize(
+        `addressType`,
         uniffiCallStatus,
     )
     fun uniffi_mobile_signer_ffi_fn_func_hot_use_state_dir(
@@ -2117,6 +2126,9 @@ internal object UniffiLib {
     )
     fun uniffi_mobile_signer_ffi_checksum_func_hot_tx_detail(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_tx_detail(
+    )
+    fun uniffi_mobile_signer_ffi_checksum_func_hot_typical_vsize(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_typical_vsize(
     )
     fun uniffi_mobile_signer_ffi_checksum_func_hot_use_state_dir(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_use_state_dir(
@@ -4272,6 +4284,20 @@ public actual fun `hotTxDetail`(`mnemonicWords`: List<kotlin.String>, `passphras
             FfiConverterTypeKeyNetwork.lower(`network`),
             FfiConverterTypeAddressType.lower(`addressType`),
             FfiConverterString.lower(`txid`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The virtual size the Send and Review screens price a payment of an `address_type` wallet at: one
+ * of its coins paying an address of the same type, with change, as `signed_payment` builds it. Native
+ * SegWit's is 141, the size every estimate used before the other types.
+ */
+public actual fun `hotTypicalVsize`(`addressType`: AddressType): kotlin.ULong {
+    return FfiConverterULong.lift(uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_typical_vsize(
+            FfiConverterTypeAddressType.lower(`addressType`),
             uniffiRustCallStatus,
         )
     })

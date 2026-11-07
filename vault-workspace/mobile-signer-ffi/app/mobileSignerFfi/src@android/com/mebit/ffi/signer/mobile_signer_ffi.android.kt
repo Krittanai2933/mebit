@@ -1064,6 +1064,8 @@ internal typealias UniffiVTableCallbackInterfacePairingCodesUniffiByValue = Unif
 
 
 
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -1155,6 +1157,9 @@ internal object IntegrityCheckingUniffiLib : Library {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_tx_detail() != 25710.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_typical_vsize() != 5835.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_use_state_dir() != 46375.toShort()) {
@@ -1261,6 +1266,9 @@ internal object IntegrityCheckingUniffiLib : Library {
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_hot_tx_detail(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_hot_typical_vsize(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_hot_use_state_dir(
@@ -1517,6 +1525,11 @@ internal object UniffiLib : Library {
         `txid`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_hot_typical_vsize(
+        `addressType`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Long
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_func_hot_use_state_dir(
         `dir`: RustBufferByValue,
@@ -3940,6 +3953,20 @@ public actual fun `hotTxDetail`(`mnemonicWords`: List<kotlin.String>, `passphras
             FfiConverterTypeKeyNetwork.lower(`network`),
             FfiConverterTypeAddressType.lower(`addressType`),
             FfiConverterString.lower(`txid`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The virtual size the Send and Review screens price a payment of an `address_type` wallet at: one
+ * of its coins paying an address of the same type, with change, as `signed_payment` builds it. Native
+ * SegWit's is 141, the size every estimate used before the other types.
+ */
+public actual fun `hotTypicalVsize`(`addressType`: AddressType): kotlin.ULong {
+    return FfiConverterULong.lift(uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_typical_vsize(
+            FfiConverterTypeAddressType.lower(`addressType`),
             uniffiRustCallStatus,
         )
     })

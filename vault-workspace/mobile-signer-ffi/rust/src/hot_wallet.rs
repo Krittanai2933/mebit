@@ -695,6 +695,15 @@ pub fn hot_account_path(address_type: AddressType) -> String {
     format!("m/{}", address_type.account_path())
 }
 
+/// The virtual size the Send and Review screens price a payment of an `address_type` wallet at: one
+/// of its coins paying an address of the same type, with change, as `signed_payment` builds it. Native
+/// SegWit's is 141, the size every estimate used before the other types.
+#[uniffi::export]
+pub fn hot_typical_vsize(address_type: AddressType) -> u64 {
+    let script = address_type.script_len();
+    vsize(&[address_type.input_weight()], &[script, script])
+}
+
 /// Confirmed + mempool balance for receive index 0 via Esplora.
 #[uniffi::export]
 pub fn hot_wallet_snapshot(
@@ -9225,6 +9234,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    // The round-2 review's fee repro: the Send and Review screens priced every type at Native SegWit's 141 vB, so Review
+    // showed 1,128 at 8 sat/vB where a Legacy payment signed 1,784. They now price a payment at `hot_typical_vsize`, the size
+    // one coin of the type signs paying an address of its own type with change, so Review's fee for that payment is the fee
+    // signed and Native SegWit stays at 141. A send all of that coin is smaller, so it never sends less than Review showed.
+    // The app's SendDraftTest pins these fees and amounts.
+    #[test]
+    fn each_types_typical_size_is_what_one_coin_paying_its_own_type_signs() {
+        assert_eq!(
+            AddressType::ALL.map(hot_typical_vsize),
+            [226, 166, 141, 154]
+        );
+        let mut sent_all = Vec::new();
+        for address_type in AddressType::ALL {
+            let mut fake = Fake::new();
+            fake.address_type = address_type;
+            let own = own_as(address_type, Chain::External, 0).address.to_string();
+            fake.fund_raw(&own, 100_000, 100_000, '1');
+            let same_type =
+                Account::new(&abandon_about(), "TREZOR", Network::Testnet4, address_type)
+                    .unwrap()
+                    .key(Chain::External, 0)
+                    .unwrap()
+                    .address
+                    .to_string();
+            let typical = hot_typical_vsize(address_type);
+            let (payment, fee) = fake.send_at(&same_type, 30_000, 8).unwrap();
+            assert_eq!(
+                (
+                    payment.input.len(),
+                    payment.output.len(),
+                    payment.vsize() as u64,
+                    fee
+                ),
+                (1, 2, typical, 8 * typical),
+                "{address_type:?}"
+            );
+            let (all, fee) = fake.send_all_at(SOMEONE, 8).unwrap();
+            assert!(fee <= 8 * typical, "{address_type:?}: send all paid {fee}");
+            sent_all.push(all.output[0].value.to_sat());
+        }
+        assert_eq!(sent_all, [98_488, 98_936, 99_120, 99_208]);
     }
 
     // The round-1 review's repro: a host lists a coin of 100,000 sats at 60,000. The legacy sighash commits to no value,

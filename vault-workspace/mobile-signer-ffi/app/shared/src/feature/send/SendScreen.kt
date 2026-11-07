@@ -157,7 +157,7 @@ fun S4SendScreen(
             Text("ค่าธรรมเนียมเครือข่าย", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp)
             Spacer(modifier = Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                (draft.tiers ?: LiveFeeTiers.DEFAULT).tiles().forEach { tile ->
+                (draft.tiers ?: LiveFeeTiers.DEFAULT).tiles(draft.typicalVsize).forEach { tile ->
                     FeeCard(tile, selected = tile.tier == draft.tier, quote, modifier = Modifier.weight(1f)) { entry.chooseTier(tile.tier, wallet.spendableSats) }
                 }
             }

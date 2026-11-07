@@ -743,7 +743,7 @@ class SingleSigWalletBroadcastTest {
         hot.prepareResult = { signed }
         assertTrue(hot.wallet.prepare(session, 10_000, 8, DESTINATION))
         assertEquals(HeldSend(signed, KeyNetwork.TEST), hot.wallet.heldSend)
-        assertTrue(feeNeedsConfirmation(2_760, 8 * TYPICAL_VSIZE, 10_000), "what the Review screen asks about")
+        assertTrue(feeNeedsConfirmation(2_760, SendDraft().feeSats, 10_000), "what the Review screen asks about")
         assertEquals(writes, hot.store.writes.size, "the phone was written before the user confirmed")
         assertEquals(0, hot.guards.writes, "the guard file was written before the user confirmed")
         assertNull(hot.wallet.unconfirmedSend, "a guard before the user confirmed")
@@ -1044,8 +1044,9 @@ class SingleSigWalletBroadcastTest {
             takeTiers(LiveFeeTiers(rateSatVb, rateSatVb, rateSatVb, live = true))
             setAmountInSats(1_000_000)
         }
-        assertEquals(listOf(FeeReason.HighRate), feeQuestion(PreparedSend(TXID, "h", (2_001L * TYPICAL_VSIZE).toULong(), 1_000_000uL), at(2_001))?.reasons)
-        assertNull(feeQuestion(PreparedSend(TXID, "h", (2_000L * TYPICAL_VSIZE).toULong(), 1_000_000uL), at(2_000)))
+        fun asked(draft: SendDraft) = feeQuestion(PreparedSend(TXID, "h", draft.feeSats.toULong(), 1_000_000uL), draft)?.reasons
+        assertEquals(listOf(FeeReason.HighRate), asked(at(2_001)))
+        assertNull(asked(at(2_000)))
     }
 
     // A fee bump that folds its change, or one asked above 2,000 sat/vB, says so on its card. One that keeps its change at an ordinary

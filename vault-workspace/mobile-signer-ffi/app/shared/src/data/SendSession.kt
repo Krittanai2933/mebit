@@ -23,6 +23,7 @@ import com.mebit.ffi.signer.hotPrepareSendAll
 import com.mebit.ffi.signer.hotPrepareSendAtRate
 import com.mebit.ffi.signer.hotReceiveAddress
 import com.mebit.ffi.signer.hotTxDetail
+import com.mebit.ffi.signer.hotTypicalVsize
 import com.mebit.ffi.signer.hotWalletHistory
 import com.mebit.ffi.signer.hotWalletSnapshot
 import com.mebit.app.feature.send.thousands
@@ -267,7 +268,6 @@ class SingleSigWallet(
         lastError = null
         heldSend = null
         val epoch = heldEpoch
-        val feeSats = feeRateSatVb * TYPICAL_VSIZE
         if (unconfirmedSend != null) {
             lastError = EARLIER_UNSETTLED
             return false
@@ -278,6 +278,7 @@ class SingleSigWallet(
             return false
         }
         if (session.words.size < 12 || !live) {
+            val feeSats = feeRateSatVb * hotTypicalVsize(session.addressType).toLong()
             if (amountSats + feeSats > balanceSats) {
                 lastError = "ยอดไม่พอ"
                 return false
@@ -623,9 +624,6 @@ internal const val GUARD_NOT_SAVED = "บันทึกสถานะการ
 fun readErrorThai(message: String?): String =
     sendErrorThai(message).takeUnless { it == SEND_FALLBACK } ?: "ดึงข้อมูลกระเป๋าไม่สำเร็จ ลองใหม่ภายหลัง"
 
-/** A typical 1-input, 2-output P2WPKH payment. The screens show rate times this as the estimate; the core charges rate times the real size. */
-const val TYPICAL_VSIZE = 141L
-
 /**
  * An absolute surprise worth one tap: a fee this many sats over the estimate is questioned however large the payment, about 30 baht
  * at today's price. Below it, a fee over twice the estimate is questioned only when it also eats a tenth of the amount.
@@ -634,7 +632,7 @@ const val FEE_SURPRISE_SATS = 1_000L
 
 /**
  * Whether the Review screen asks before posting a payment whose real fee is [feeSats] when it showed [shownFeeSats] (the rate times
- * [TYPICAL_VSIZE]) and [amountSats] is what the destination gets. The fee must be more than twice what was shown, and either more
+ * [SendDraft.typicalVsize]) and [amountSats] is what the destination gets. The fee must be more than twice what was shown, and either more
  * than a tenth of the amount or at least [FEE_SURPRISE_SATS] over the estimate. Twice alone would stop for an ordinary four-coin
  * payment (345 sat on 10,000 sat at 1 sat/vB, 204 sat over), which is not worth a tap. A tenth alone would ask about every small
  * payment, whose fee is a large share by nature even when it is exactly what was shown, and would let a fee hundreds of times the
@@ -727,10 +725,7 @@ fun amountCutLine(held: SingleSigWallet.HeldReplacement): String? =
 enum class FeeTier(val label: String, val eta: String, val satPerVb: Long) {
     Slow("ช้า", "~1 ชม.", 4),
     Normal("ปกติ", "~30 นาที", 8),
-    Fast("เร็ว", "~10 นาที", 15);
-
-    /** The board's estimate: the fixed rate times the typical size. */
-    val sats: Long get() = satPerVb * TYPICAL_VSIZE
+    Fast("เร็ว", "~10 นาที", 15)
 }
 
 /** The sat/vB of each tier. [live] is true when they came from the node's view of the mempool and false for the fixed board rates. */
@@ -741,11 +736,11 @@ data class LiveFeeTiers(val slow: Long, val normal: Long, val fast: Long, val li
         FeeTier.Fast -> fast
     }
 
-    /** The fee the screens show for [tier], in sats: the rate times the typical size. */
-    fun estimate(tier: FeeTier): Long = rate(tier) * TYPICAL_VSIZE
+    /** The fee the screens show for [tier] on a payment of [vsize] vB, in sats: the rate times the size. */
+    fun estimate(tier: FeeTier, vsize: Long): Long = rate(tier) * vsize
 
-    /** The three tiles of the Send screen, in board order. */
-    fun tiles(): List<FeeTile> = FeeTier.entries.map { FeeTile(it, rate(it), estimate(it)) }
+    /** The three tiles of the Send screen, in board order, for a payment of [vsize] vB. */
+    fun tiles(vsize: Long): List<FeeTile> = FeeTier.entries.map { FeeTile(it, rate(it), estimate(it, vsize)) }
 
     companion object {
         val DEFAULT = LiveFeeTiers(FeeTier.Slow.satPerVb, FeeTier.Normal.satPerVb, FeeTier.Fast.satPerVb, live = false)
@@ -816,12 +811,16 @@ fun sendIssue(addressOk: Boolean?, amountSats: Long, feeSats: Long, balanceSats:
     else -> null
 }
 
-class SendDraft {
+/** One payment from a wallet of [addressType]. */
+class SendDraft(addressType: AddressType = AddressType.NATIVE_SEGWIT) {
+    /** The size every estimate prices a payment at, from the core that signs it ([hotTypicalVsize]). Native SegWit's is 141 vB. */
+    val typicalVsize: Long = hotTypicalVsize(addressType).toLong()
+
     var amountSats: Long by mutableStateOf(0L)
         private set
 
-    /** The estimate for [tier]: its rate times [TYPICAL_VSIZE]. What the Send and Review screens show and what the balance check uses. */
-    var feeSats: Long by mutableStateOf(FeeTier.Normal.sats)
+    /** The estimate for [tier]: its rate times [typicalVsize]. What the Send and Review screens show and what the balance check uses. */
+    var feeSats: Long by mutableStateOf(LiveFeeTiers.DEFAULT.estimate(FeeTier.Normal, typicalVsize))
         private set
     var tier: FeeTier by mutableStateOf(FeeTier.Normal)
         private set
@@ -877,7 +876,7 @@ class SendDraft {
 
     fun chooseTier(next: FeeTier) {
         tier = next
-        feeSats = (tiers ?: LiveFeeTiers.DEFAULT).estimate(next)
+        feeSats = (tiers ?: LiveFeeTiers.DEFAULT).estimate(next, typicalVsize)
     }
 
     /** Takes the fetched rates and works the estimate for the chosen tier out again. Not `setTiers`: that is the private setter's name on the JVM. */

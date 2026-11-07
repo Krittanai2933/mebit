@@ -1,8 +1,10 @@
 package com.mebit.app.data
 
+import com.mebit.ffi.signer.AddressType
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class SendDraftTest {
     @Test
@@ -41,13 +43,30 @@ class SendDraftTest {
 
     @Test
     fun feeTiersAreRateTimesTheTypicalSize() {
-        assertEquals(listOf(564L, 1_128L, 2_115L), FeeTier.entries.map { it.sats })
+        val native = SendDraft().typicalVsize
+        assertEquals(listOf(564L, 1_128L, 2_115L), LiveFeeTiers.DEFAULT.tiles(native).map { it.feeSats }, "Native SegWit's board estimates as before")
         assertEquals(LiveFeeTiers(4, 8, 15, live = false), LiveFeeTiers.DEFAULT, "the board's rates until the live ones arrive")
         assertEquals(
             listOf(FeeTile(FeeTier.Slow, 1, 141), FeeTile(FeeTier.Normal, 1, 141), FeeTile(FeeTier.Fast, 2, 282)),
-            LiveFeeTiers(1, 1, 2, live = true).tiles(),
+            LiveFeeTiers(1, 1, 2, live = true).tiles(native),
             "an empty testnet4 mempool, as the user's node reports it",
         )
+    }
+
+    // The round-2 review's repro, turned green. Review priced every type at Native SegWit's 141 vB, so a Legacy payment signed
+    // 1,784 where Review showed 1,128, and a Legacy send all showed 98,872 and sent 98,488. The fees and amounts below are what
+    // the core signs from one 100,000-sat coin at 8 sat/vB in hot_wallet.rs each_types_typical_size_is_what_one_coin_paying_its_own_type_signs:
+    // 30,000 to an address of the wallet's own type with change, and a send all to a P2WPKH address.
+    @Test
+    fun reviewShowsTheFeeEachAddressTypeSignsAndNoSendAllShowsMoreThanItSends() {
+        val signed = mapOf(AddressType.LEGACY to 1_808L, AddressType.NESTED_SEGWIT to 1_328L, AddressType.NATIVE_SEGWIT to 1_128L, AddressType.TAPROOT to 1_232L)
+        val sentAll = mapOf(AddressType.LEGACY to 98_488L, AddressType.NESTED_SEGWIT to 98_936L, AddressType.NATIVE_SEGWIT to 99_120L, AddressType.TAPROOT to 99_208L)
+        for (type in AddressType.entries) {
+            assertEquals(signed[type], SendDraft(type).feeSats, "$type: Review's fee at the Normal tier")
+            val all = SendDraft(type)
+            AmountEntry(all).sendAll(100_000)
+            assertTrue(all.amountSats <= sentAll.getValue(type), "$type: send all shows ${all.amountSats} and sends ${sentAll[type]}")
+        }
     }
 
     @Test
@@ -90,6 +109,6 @@ class SendDraftTest {
         draft.reset()
         assertEquals("", draft.destination)
         assertEquals(0L, draft.amountSats)
-        assertEquals(FeeTier.Normal.sats, draft.feeSats)
+        assertEquals(1_128L, draft.feeSats)
     }
 }

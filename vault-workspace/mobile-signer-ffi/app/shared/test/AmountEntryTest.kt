@@ -213,7 +213,7 @@ class AmountEntryTest {
         assertEquals(138_812L, draft.amountSats)
         entry.chooseTier(FeeTier.Slow, 3_120_000)
         assertEquals(138_812L, draft.amountSats)
-        assertEquals(FeeTier.Slow.sats, draft.feeSats)
+        assertEquals(564L, draft.feeSats)
     }
 
     @Test

@@ -1229,6 +1229,13 @@ public expect fun `hotReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `pas
 public expect fun `hotTxDetail`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType, `txid`: kotlin.String): HotTxDetail?
 
 /**
+ * The virtual size the Send and Review screens price a payment of an `address_type` wallet at: one
+ * of its coins paying an address of the same type, with change, as `signed_payment` builds it. Native
+ * SegWit's is 141, the size every estimate used before the other types.
+ */
+public expect fun `hotTypicalVsize`(`addressType`: AddressType): kotlin.ULong
+
+/**
  * Keeps each wallet's scan in `dir`, app storage that no backup copies, so the first sync after a restart
  * asks only what can have changed. Call it once at app start. Without it scans live in memory only.
  */

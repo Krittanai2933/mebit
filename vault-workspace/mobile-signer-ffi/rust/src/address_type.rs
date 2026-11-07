@@ -78,6 +78,20 @@ impl AddressType {
         }
     }
 
+    /// How many bytes the output script that pays one of this type's addresses takes.
+    pub(crate) const fn script_len(self) -> usize {
+        match self {
+            // OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG
+            Self::Legacy => 25,
+            // OP_HASH160 <20> OP_EQUAL
+            Self::NestedSegwit => 23,
+            // OP_0 <20>
+            Self::NativeSegwit => 22,
+            // OP_1 <32>
+            Self::Taproot => 34,
+        }
+    }
+
     /// Whether a signature of this type commits to the value of the coin it spends. The legacy sighash
     /// does not, so a coin listed at another value still signs a valid payment at another fee; in the
     /// other types a wrong value only makes the signature invalid.
