@@ -185,9 +185,22 @@ fun ImportSeedScreen(
     }
 
     when (sheet) {
-        ImportSheet.Passphrase -> PassphraseSheet(draft, guard) { sheet = null }
+        ImportSheet.Passphrase -> PassphraseSheet(
+            value = draft.passphrase,
+            rejected = draft.passphraseRejected,
+            onEdit = draft::editPassphrase,
+            copy = ImportPassphraseCopy,
+            guard = guard,
+            onUse = { sheet = null },
+            onNone = {
+                draft.clearPassphrase()
+                sheet = null
+            },
+            onDismiss = { sheet = null },
+        )
         ImportSheet.Fingerprint -> FingerprintSheet(
             session = session,
+            copy = ImportFingerprintCopy,
             onConfirm = {
                 session.acceptStagedKey()
                 sheet = null
@@ -301,7 +314,7 @@ private const val PASSPHRASE_SET_GROWTH = 17
 
 /** Board 1B.1's empty Passphrase box, and board 1B.4.3's status row once set: a green check (tap clears), "ตั้งแล้ว", and an edit link. */
 @Composable
-private fun PassphraseOption(set: Boolean, onOpen: () -> Unit, onClear: () -> Unit) {
+internal fun PassphraseOption(set: Boolean, onOpen: () -> Unit, onClear: () -> Unit) {
     Row(modifier = Modifier.fillMaxWidth().height(if (set) 46.dp else SEED_SLOT.dp), verticalAlignment = Alignment.CenterVertically) {
         Row(
             modifier = Modifier
@@ -498,21 +511,39 @@ private fun SeedStatusRow(draft: ImportSeedDraft, pinned: Boolean = false) {
     }
 }
 
+/** What a passphrase sheet says: Import asks for the passphrase of an old wallet, Create sets one for a new wallet (Penpot 1B.4.7 and 1.4.2). */
+internal class PassphraseCopy(val body: String, val warning: String, val none: String)
+
+internal val ImportPassphraseCopy = PassphraseCopy(
+    body = "ถ้าตอนสร้างกระเป๋าเดิมคุณตั้ง passphrase ไว้ ต้องใส่ให้ตรงทุกตัวอักษร ถ้าไม่ได้ตั้ง กดข้ามได้เลย",
+    warning = "ผิดแม้ตัวเดียวจะได้กระเป๋าอีกใบที่ว่างเปล่า · เงินไม่หาย แต่ mebit ตรวจให้ไม่ได้",
+    none = "ไม่มี passphrase",
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PassphraseSheet(draft: ImportSeedDraft, guard: CaptureGuard, onDone: () -> Unit) {
+internal fun PassphraseSheet(
+    value: String,
+    rejected: Boolean,
+    onEdit: (String) -> Unit,
+    copy: PassphraseCopy,
+    guard: CaptureGuard,
+    onUse: () -> Unit,
+    onNone: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     var reveal by remember { mutableStateOf(false) }
     ModalBottomSheet(
-        onDismissRequest = onDone,
+        onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = MbWhite,
         modifier = Modifier.testTag("sheet_passphrase"),
     ) {
         Column(modifier = Modifier.hideWhen(guard).fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 24.dp).imePadding()) {
-            Text("Passphrase (คำที่ 25)", color = MbNavyInk, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            Text("Passphrase", color = MbNavyInk, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "ถ้าตอนสร้างกระเป๋าเดิมคุณตั้ง passphrase ไว้ ต้องใส่ให้ตรงทุกตัวอักษร ถ้าไม่ได้ตั้ง กดข้ามได้เลย",
+                copy.body,
                 color = MbBody,
                 fontSize = 13.sp,
                 lineHeight = 19.5.sp,
@@ -530,8 +561,8 @@ private fun PassphraseSheet(draft: ImportSeedDraft, guard: CaptureGuard, onDone:
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 BasicTextField(
-                    value = draft.passphrase,
-                    onValueChange = draft::editPassphrase,
+                    value = value,
+                    onValueChange = onEdit,
                     singleLine = true,
                     textStyle = TextStyle(color = MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
                     cursorBrush = SolidColor(MbNavy),
@@ -542,7 +573,7 @@ private fun PassphraseSheet(draft: ImportSeedDraft, guard: CaptureGuard, onDone:
                         keyboardType = KeyboardType.Ascii,
                         imeAction = ImeAction.Done,
                     ),
-                    keyboardActions = KeyboardActions(onDone = { if (draft.passphrase.isNotEmpty()) onDone() }),
+                    keyboardActions = KeyboardActions(onDone = { if (value.isNotEmpty()) onUse() }),
                     modifier = Modifier.weight(1f).testTag("seed_passphrase_field"),
                 )
                 Image(
@@ -554,14 +585,14 @@ private fun PassphraseSheet(draft: ImportSeedDraft, guard: CaptureGuard, onDone:
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 "ใส่ได้เฉพาะตัวอักษรอังกฤษ ตัวเลข และสัญลักษณ์",
-                color = if (draft.passphraseRejected) MbEyebrow else MbBody,
+                color = if (rejected) MbEyebrow else MbBody,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Light,
                 modifier = Modifier.testTag("seed_passphrase_hint"),
             )
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                "ผิดแม้ตัวเดียวจะได้กระเป๋าอีกใบที่ว่างเปล่า · เงินไม่หาย แต่ mebit ตรวจให้ไม่ได้",
+                copy.warning,
                 color = MbEyebrow,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -572,24 +603,31 @@ private fun PassphraseSheet(draft: ImportSeedDraft, guard: CaptureGuard, onDone:
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             )
             Spacer(modifier = Modifier.height(16.dp))
-            PrimaryCta("ใช้ passphrase นี้", "cta_passphrase_use", onDone, enabled = draft.passphrase.isNotEmpty())
+            PrimaryCta("ใช้ passphrase นี้", "cta_passphrase_use", onUse, enabled = value.isNotEmpty())
             TextButton(
-                onClick = {
-                    draft.clearPassphrase()
-                    onDone()
-                },
+                onClick = onNone,
                 contentPadding = PaddingValues(0.dp),
                 modifier = Modifier.fillMaxWidth().height(40.dp).testTag("cta_passphrase_none"),
             ) {
-                Text("ไม่มี passphrase", color = MbNavy, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text(copy.none, color = MbNavy, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }
 }
 
+/** What the fingerprint sheet says: Import compares with the old wallet (1B.4.4), Create asks the user to write it down (1.5.4). */
+internal class FingerprintCopy(val title: String, val body: String, val ok: String, val reject: String)
+
+internal val ImportFingerprintCopy = FingerprintCopy(
+    title = "ตรวจ fingerprint ก่อนไปต่อ",
+    body = "เทียบกับกระเป๋าเดิมของคุณ (ถ้ามีค่านี้) ถ้าไม่ตรง แปลว่า passphrase หรือ 24 คำยังไม่ถูก",
+    ok = "ตรงกัน · ไปต่อ",
+    reject = "ไม่ตรง · แก้ไข",
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FingerprintSheet(session: OnboardingSession, onConfirm: () -> Unit, onReject: () -> Unit) {
+internal fun FingerprintSheet(session: OnboardingSession, copy: FingerprintCopy, onConfirm: () -> Unit, onReject: () -> Unit) {
     ModalBottomSheet(
         onDismissRequest = onReject,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -597,7 +635,7 @@ private fun FingerprintSheet(session: OnboardingSession, onConfirm: () -> Unit, 
         modifier = Modifier.testTag("sheet_fingerprint"),
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 24.dp)) {
-            Text("ตรวจ fingerprint ก่อนไปต่อ", color = MbNavyInk, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            Text(copy.title, color = MbNavyInk, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             Spacer(modifier = Modifier.height(14.dp))
             Column(
                 modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MbPage).padding(vertical = 12.dp),
@@ -615,19 +653,19 @@ private fun FingerprintSheet(session: OnboardingSession, onConfirm: () -> Unit, 
             }
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                "เทียบกับกระเป๋าเดิมของคุณ (ถ้ามีค่านี้) ถ้าไม่ตรง แปลว่า passphrase หรือ 24 คำยังไม่ถูก",
+                copy.body,
                 color = MbBody,
                 fontSize = 13.sp,
                 lineHeight = 19.5.sp,
             )
             Spacer(modifier = Modifier.height(16.dp))
-            PrimaryCta("ตรงกัน · ไปต่อ", "cta_fingerprint_ok", onConfirm)
+            PrimaryCta(copy.ok, "cta_fingerprint_ok", onConfirm)
             TextButton(
                 onClick = onReject,
                 contentPadding = PaddingValues(0.dp),
                 modifier = Modifier.fillMaxWidth().height(40.dp).testTag("cta_fingerprint_reject"),
             ) {
-                Text("ไม่ตรง · แก้ไข", color = MbNavy, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text(copy.reject, color = MbNavy, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }

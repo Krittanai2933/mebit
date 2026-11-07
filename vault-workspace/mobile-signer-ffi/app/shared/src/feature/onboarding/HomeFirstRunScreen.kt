@@ -81,6 +81,8 @@ fun HomeFirstRunScreen(
 ) {
     // The snapshot is a blocking network call: keep it off the main thread.
     LaunchedEffect(session.words, session.fingerprint, session.passphrase) {
+        // Home shows the wallet from here on, so it may receive coins and its passphrase is final.
+        session.endFirstSetup()
         if (session.words.isNotEmpty()) withContext(Dispatchers.Default) { wallet.bindSession(session) }
     }
     Column(

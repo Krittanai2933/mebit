@@ -53,6 +53,10 @@ class OnboardingSession(
         private set
     var appLockEnabled: Boolean by mutableStateOf(false)
         private set
+
+    /** From a Create in this run until Home first shows the wallet. Only then may the new key take a passphrase, because a wallet Home has shown may hold coins. */
+    var inFirstSetup: Boolean by mutableStateOf(false)
+        private set
     var lastError: String? by mutableStateOf(null)
         private set
 
@@ -117,7 +121,35 @@ class OnboardingSession(
             lastError = e.message
             return
         }
+        inFirstSetup = true
         persist(fresh = true)
+    }
+
+    /**
+     * Penpot 1.4.2: re-derives the key just created from the same words with [passphrase], during first setup only, and
+     * replaces the saved copy through the single write point. An empty passphrase gives the original key back. The words
+     * do not change, but the new key has not been checked, so Verify Words runs again. A failed Replace leaves the earlier
+     * copy on the phone, which [proveSavedCopy] catches at App Lock.
+     */
+    fun changeNewKeyPassphrase(passphrase: String) {
+        lastError = null
+        if (!inFirstSetup || imported || words.isEmpty() || held == Held.Staged || held == Held.Stale) return
+        if (passphrase == this.passphrase) return
+        val kept = held
+        val key = try {
+            restoreKey(words, passphrase, network, 0u)
+        } catch (e: Exception) {
+            lastError = e.message
+            return
+        }
+        applyKey(key, passphrase, network)
+        held = kept // the copy on the phone is still there, so this save must be a Replace of it, not a Create
+        persist()
+    }
+
+    /** Home has shown the wallet, so its key is final. */
+    fun endFirstSetup() {
+        inFirstSetup = false
     }
 
     /**
@@ -185,6 +217,7 @@ class OnboardingSession(
         backupConfirmed = false
         imported = false
         appLockEnabled = false
+        inFirstSetup = false
         lastError = null
         network = KeyNetwork.TEST
         recordGuard = null

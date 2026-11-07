@@ -33,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.OnboardingSession
+import com.mebit.app.data.englishOnly
 import com.mebit.app.data.PairedDevice
 import com.mebit.app.data.SaveState
 import com.mebit.app.data.StartNotice
@@ -374,6 +375,11 @@ fun BackupWordsScreen(
     onOpenCatalog: () -> Unit,
 ) {
     val guard = rememberCaptureGuard()
+    // Penpot 1.4 and 1.4.1: a passphrase for the key just created, offered in first setup only.
+    val offerPassphrase = session.inFirstSetup && !session.imported
+    var sheetOpen by remember { mutableStateOf(false) }
+    var typed by remember { mutableStateOf("") }
+    var rejected by remember { mutableStateOf(false) }
     MebitScreen(
         eyebrow = "BACKUP · ขั้น 2 / 3",
         title = "จด 24 คำนี้ลงกระดาษ",
@@ -386,7 +392,26 @@ fun BackupWordsScreen(
         },
     ) {
         Spacer(modifier = Modifier.height(19.dp))
-        WordGrid(session.words, Modifier.hideWhen(guard))
+        val passphraseRow: (@Composable () -> Unit)? = if (offerPassphrase) {
+            {
+                PassphraseOption(
+                    set = session.passphrase.isNotEmpty(),
+                    onOpen = {
+                        typed = session.passphrase
+                        rejected = false
+                        sheetOpen = true
+                    },
+                    onClear = { session.changeNewKeyPassphrase("") },
+                )
+            }
+        } else {
+            null
+        }
+        WordGrid(session.words, Modifier.hideWhen(guard), passphraseSet = session.passphrase.isNotEmpty(), passphrase = passphraseRow)
+        session.lastError?.let {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("error"))
+        }
         Spacer(modifier = Modifier.height(14.dp))
         if (guard.screenshotTaken) {
             IssueBanner("ถ่ายภาพหน้าจอ seed แล้ว", "สร้าง seed ใหม่ อย่าใช้ seed นี้", "screenshot_taken")
@@ -396,22 +421,76 @@ fun BackupWordsScreen(
         // Not on board 1.4. A user who reads the words here is the one who must know the words are the only recovery.
         DeleteWarning(session, "backup_delete_warning")
     }
+    if (sheetOpen) {
+        PassphraseSheet(
+            value = typed,
+            rejected = rejected,
+            onEdit = { raw ->
+                typed = englishOnly(raw)
+                rejected = typed.length != raw.length
+            },
+            copy = CreatePassphraseCopy,
+            guard = guard,
+            onUse = {
+                session.changeNewKeyPassphrase(typed)
+                sheetOpen = false
+            },
+            onNone = {
+                session.changeNewKeyPassphrase("")
+                sheetOpen = false
+            },
+            onDismiss = { sheetOpen = false },
+        )
+    }
 }
 
-/** Penpot 1.4: the phrase in three columns of eight, numbered down each column like the Import grid. */
+/** Penpot 1.4.2: the user sets a passphrase for a new wallet, so the text differs from Import's. */
+private val CreatePassphraseCopy = PassphraseCopy(
+    body = "passphrase คือคำที่ 25 ที่คุณตั้งเอง ใช้คู่กับ 24 คำ ตอนกู้กระเป๋าต้องใส่ให้ตรงทุกตัวอักษร ไม่ตั้งก็ได้",
+    warning = "ลืม passphrase จะกู้กระเป๋านี้ไม่ได้ · จดไว้คู่กับ 24 คำ",
+    none = "ไม่ตั้ง passphrase",
+)
+
+/** Penpot 1.5.4: a new wallet has nothing to compare with, so the user writes the fingerprint down. */
+private val CreateFingerprintCopy = FingerprintCopy(
+    title = "จด fingerprint นี้ไว้",
+    body = "ค่านี้มาจาก 24 คำกับ passphrase ของคุณ จดไว้คู่กับ 24 คำ ตอนกู้กระเป๋า ถ้าได้ค่าไม่ตรง แปลว่า passphrase หรือ 24 คำพิมพ์ผิด",
+    ok = "จดแล้ว · ไปต่อ",
+    reject = "แก้ passphrase",
+)
+
+/**
+ * Penpot 1.4: the phrase in three columns of eight, numbered down each column like the Import grid. With [passphrase] the
+ * row sits 15 under the grid and the card grows to 357, and to 374 once set (1.4.1), as the Import card does.
+ */
 @Composable
-private fun WordGrid(words: List<String>, modifier: Modifier = Modifier) {
+private fun WordGrid(words: List<String>, modifier: Modifier = Modifier, passphraseSet: Boolean = false, passphrase: (@Composable () -> Unit)? = null) {
     val card = RoundedCornerShape(20.dp)
-    Row(
+    val height = when {
+        passphrase == null -> 320
+        passphraseSet -> 374
+        else -> 357
+    }
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            .height(320.dp)
+            .height(height.dp)
             .clip(card)
             .background(MbWhite)
             .border(1.dp, MbBorder, card)
             .padding(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        WordColumns(words)
+        if (passphrase != null) {
+            Spacer(modifier = Modifier.height(15.dp))
+            passphrase()
+        }
+    }
+}
+
+@Composable
+private fun WordColumns(words: List<String>) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         repeat(3) { column ->
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 repeat(8) { row ->
@@ -467,6 +546,23 @@ fun VerifyWordsScreen(
     val quiz = remember(session.words) { verifyQuestions(session.words) }
     val picks = remember(quiz) { mutableStateListOf<String?>().apply { repeat(quiz.size) { add(null) } } }
     var wrong by remember { mutableStateOf(false) }
+    // Penpot 1.5.4: a key with a passphrase from first setup shows its fingerprint to write down before the lock step.
+    var showFingerprint by remember { mutableStateOf(false) }
+    val done = { if (session.inFirstSetup && session.passphrase.isNotEmpty()) showFingerprint = true else onVerified() }
+    if (showFingerprint) {
+        FingerprintSheet(
+            session = session,
+            copy = CreateFingerprintCopy,
+            onConfirm = {
+                showFingerprint = false
+                onVerified()
+            },
+            onReject = {
+                showFingerprint = false
+                onBack?.invoke()
+            },
+        )
+    }
     MebitScreen(
         eyebrow = "BACKUP · ขั้น 2 / 3",
         title = "ยืนยันว่าจดถูก",
@@ -476,7 +572,7 @@ fun VerifyWordsScreen(
         tag = "screen_onboarding/verify-words",
         bottom = {
             if (quiz.isEmpty()) {
-                PrimaryCta("ต่อไป", "cta_skip_verify", onVerified)
+                PrimaryCta("ต่อไป", "cta_skip_verify", done)
             } else {
                 BottomActions(
                     primaryLabel = "ยืนยัน",
@@ -484,7 +580,7 @@ fun VerifyWordsScreen(
                     onPrimary = {
                         if (quiz.indices.all { picks[it] == quiz[it].answer }) {
                             session.markBackupConfirmed()
-                            onVerified()
+                            done()
                         } else {
                             wrong = true
                         }

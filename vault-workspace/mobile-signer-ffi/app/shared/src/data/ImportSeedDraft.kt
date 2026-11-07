@@ -151,9 +151,8 @@ class ImportSeedDraft(
         accept(pick ?: if (active == LAST) text else return)
     }
 
-    /** Keeps printable ASCII only: the passphrase field is English-only. */
     fun editPassphrase(raw: String) {
-        val kept = raw.filter { it in ' '..'~' }
+        val kept = englishOnly(raw)
         passphraseRejected = kept.length != raw.length
         passphrase = kept
     }
@@ -183,3 +182,6 @@ class ImportSeedDraft(
         val WHITESPACE = Regex("\\s+")
     }
 }
+
+/** Keeps printable ASCII only: a passphrase field is English-only, on Import and on Create. */
+fun englishOnly(raw: String): String = raw.filter { it in ' '..'~' }
