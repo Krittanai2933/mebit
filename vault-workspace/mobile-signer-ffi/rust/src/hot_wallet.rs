@@ -1070,15 +1070,17 @@ pub struct PreparedSend {
     /// The signed transaction, consensus-encoded, for `hot_broadcast`.
     pub hex: String,
     /// The fee the transaction pays, in sats, its inputs less its outputs: its virtual size times the
-    /// rate asked for, rounded up, plus `dust_change_sats`. A fee bump or a cancel pays what
-    /// `hot_prepare_fee_bump` says.
+    /// rate asked for, rounded up, plus `dust_change_sats`, or less where that would pass the
+    /// network's 10,000 sat/vB and change at its dust floor takes the rest. A fee bump or a cancel
+    /// pays what `hot_prepare_fee_bump` says.
     pub fee_sats: u64,
     /// What `destination` is paid, in sats: the amount asked for, or for `hot_prepare_send_all`
     /// the whole balance less `fee_sats`, which is only known once the coins are. For a fee bump it
     /// is what the earlier payment's destination gets, and for a cancel what comes back to this wallet.
     pub amount_sats: u64,
-    /// Change below the change address's dust floor, which the network would refuse as an output, so
-    /// it is part of `fee_sats` instead, in sats. 0 when there was none.
+    /// What was left for change but could not be an output, in sats: change below the change
+    /// address's dust floor, which the network would refuse, or too little to pay for a change output
+    /// at the rate asked. It is part of `fee_sats` instead. 0 when there was none.
     #[uniffi(default = 0)]
     pub dust_change_sats: u64,
     /// How much less a fee bump's destination gets than in the payment it replaces, in sats, because
@@ -1092,16 +1094,22 @@ pub struct PreparedSend {
 /// network use is the Esplora lookups of the scan. The app saves the `txid` as its payment guard
 /// before it calls `hot_broadcast`, so a kill between the two can never lead to a second payment.
 ///
-/// The fee is the size of the transaction as built times the rate, so a payment that needs more
-/// coins pays more, never a fixed sum that falls under the rate. The answer's `fee_sats` is that
-/// fee, and the app compares it with the estimate its screens showed and asks the user when it is
-/// much higher. Refuses, before signing, a rate outside 1 to 10,000 sat/vB (the network's limit),
-/// an amount below the dust floor of the destination's script (294 sats for P2WPKH up to 546 for
-/// P2PKH, the outputs the network refuses) and an amount that overflows u64 with its fee, and after
-/// signing a fee above 10,000 sat/vB times the signed transaction's virtual size. Change below the
-/// change address's floor (294 sats) would be refused by the network too, so it goes into the fee
-/// and the answer's `dust_change_sats` names it. A fee above the amount is signed, because the fee is
-/// paid on top and the destination still gets the amount, so the app asks the user before it posts.
+/// Coins are added largest first, one at a time, until they pay the amount and the fee of the
+/// transaction they make, so any payment some of the coins can make is signed. The fee is the size
+/// of the transaction as built times the rate, so a payment that needs more coins pays more, never a
+/// fixed sum that falls under the rate. The answer's `fee_sats` is that fee, and the app compares it
+/// with the estimate its screens showed and asks the user when it is much higher. Refuses, before
+/// signing, a rate outside 1 to 10,000 sat/vB (the network's limit), an amount below the dust floor
+/// of the destination's script (294 sats for P2WPKH up to 546 for P2PKH, the outputs the network
+/// refuses), an amount that overflows u64 with its fee, coins that cannot pay it (`insufficient
+/// funds:`) and a payment that needs more than the network's 100,000 vB (`too many coins:`), and
+/// after signing a fee above 10,000 sat/vB times the signed transaction's virtual size. Change below
+/// the change address's dust floor would be refused by the network too, and change too small to pay
+/// for its own output costs more than it returns, so either goes into the fee and the answer's
+/// `dust_change_sats` names it. Where that would pass 10,000 sat/vB, the change stays at exactly its
+/// floor and the fee is the rest, under the rate asked. A fee above the amount is signed, because
+/// the fee is paid on top and the destination still gets the amount, so the app asks the user before
+/// it posts.
 /// Only confirmed coins of receive addresses are spent; the wallet's own unconfirmed change is spent
 /// too. About 40 Esplora calls for a fresh wallet, so call it off the main thread.
 #[uniffi::export]
@@ -1152,7 +1160,8 @@ fn prepared(signed: Signed) -> PreparedSend {
 /// `destination` the whole balance less the fee, with no change, and post nothing. The fee is the
 /// size of that transaction times `fee_rate_sat_vb`, so it and the amount are only known once the
 /// coins are: the answer's `amount_sats` is what leaves. Refuses, before signing, a rate outside
-/// 1 to 10,000 sat/vB, a wallet with nothing confirmed to spend, and a balance that would leave
+/// 1 to 10,000 sat/vB, a wallet with nothing confirmed to spend, coins that need more than the
+/// network's 100,000 vB in one transaction (`too many coins:`), and a balance that would leave
 /// less than the destination's dust floor after the fee, and after signing what
 /// `hot_prepare_send_at_rate` refuses past the network's limit. The same scan as
 /// `hot_prepare_send_at_rate`, so call it off the main thread.
@@ -1266,10 +1275,12 @@ enum Settle {
 }
 
 /// Why some coins do not settle, in rising order so the worst of several is the one reported: a
-/// smaller amount clears `Funds` and a lower rate `Limit`.
+/// smaller amount clears `Funds`, fewer coins `Size` and a lower rate `Limit`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Short {
     Funds,
+    /// No transaction of these coins fits the network's 100,000 vB, and every coin more grows it.
+    Size,
     /// Into the fee would make `fee` on `vsize`, past the network's limit, and change at its floor
     /// would pay less than the node takes.
     Limit {
@@ -1289,7 +1300,12 @@ fn settle(
     fee: impl Fn(u64) -> u64,
     least: impl Fn(u64) -> u64,
 ) -> Result<Settle, Short> {
-    let change = left.checked_sub(fee(with));
+    if without > MAX_STANDARD_VSIZE {
+        return Err(Short::Size);
+    }
+    let change = left
+        .checked_sub(fee(with))
+        .filter(|_| with <= MAX_STANDARD_VSIZE);
     if let Some(change) = change.filter(|c| *c >= floor) {
         return Ok(Settle::Change(change));
     }
@@ -1298,7 +1314,10 @@ fn settle(
     }
     if left > MAX_FEE_RATE * without {
         return match left.checked_sub(floor) {
-            Some(paid) if (least(with)..=MAX_FEE_RATE * with).contains(&paid) => {
+            Some(paid)
+                if with <= MAX_STANDARD_VSIZE
+                    && (least(with)..=MAX_FEE_RATE * with).contains(&paid) =>
+            {
                 Ok(Settle::FloorChange(floor))
             }
             _ => Err(Short::Limit {
@@ -1310,12 +1329,53 @@ fn settle(
     Ok(change.map_or(Settle::Fit(left - fee(without)), Settle::Fold))
 }
 
-/// The change output's script: P2WPKH, 22 bytes.
-const P2WPKH_SCRIPT: usize = 22;
+/// Bitcoin Core's MAX_STANDARD_TX_WEIGHT, 400,000 WU: the network refuses a larger transaction as
+/// non-standard.
+const MAX_STANDARD_VSIZE: u64 = 100_000;
 
-/// How many times the coin selection is redone for a fee that grew with the inputs it chose.
-/// Each pass adds at least one input, so a payment over many small coins can run out of passes.
-const FEE_PASSES: usize = 4;
+/// The coins a payment of `amount` to a `dest`-byte script at `rate` spends, as a count from the
+/// front of `coins`, and how its leftover settles with change to `change`. `coins` are each a value
+/// and how it is spent, in the order to try them. It adds one coin at a time and stops at the fewest
+/// whose leftover is change or change below its floor, and else takes the fewest that settle another
+/// way, so every payment the old four passes signed keeps its coins, change and fee. It refuses
+/// nothing a set of these coins could pay: a set that pays a no-change transaction at the rate asked
+/// has a prefix as short that pays at least as much.
+fn select(
+    coins: &[(u64, InputWeightPrediction)],
+    amount: u64,
+    rate: u64,
+    dest: usize,
+    change: &Script,
+) -> Result<(usize, Settle), Short> {
+    let (floor, scripts) = (dust_floor(change), [dest, change.len()]);
+    let (mut have, mut spends, mut fallback, mut short) = (0u64, Vec::new(), None, Short::Funds);
+    for (value, spend) in coins {
+        have = have.saturating_add(*value);
+        spends.push(*spend);
+        let Some(left) = have.checked_sub(amount) else {
+            continue;
+        };
+        let (with, without) = (vsize(&spends, &scripts), vsize(&spends, &scripts[..1]));
+        match settle(
+            left,
+            with,
+            without,
+            floor,
+            |size| rate * size,
+            |size| MIN_FEE_RATE * size,
+        ) {
+            Ok(settled @ (Settle::Change(_) | Settle::Fold(_))) => {
+                return Ok((spends.len(), settled));
+            }
+            Ok(settled) => {
+                fallback.get_or_insert((spends.len(), settled));
+            }
+            Err(Short::Size) => return fallback.ok_or(short.max(Short::Size)),
+            Err(why) => short = short.max(why),
+        }
+    }
+    fallback.ok_or(short)
+}
 
 fn check_rate(rate_sat_vb: u64) -> Result<(), MobileSignerError> {
     if rate_sat_vb < MIN_FEE_RATE {
@@ -1497,10 +1557,10 @@ fn full_size(
 /// A payment from the coins of every used address, each input signed with its own key, any change
 /// paid to the first unused internal (change) address, not yet broadcast, with the fee it pays.
 /// The amount, the rate, the destination and the sum of the amount and the smallest payment's fee
-/// (which must fit u64) are checked before any network call. Change below its floor goes into the
-/// fee. A fee above the amount is signed, because the fee is paid on top and the destination
-/// still gets the amount. Every refusal is an error, never a changed payment. The used-address set
-/// may come from a sync `synced` shares.
+/// (which must fit u64) are checked before any network call. `select` picks the coins and how what
+/// they hold beyond the amount settles. A fee above the amount is signed, because the fee is paid on
+/// top and the destination still gets the amount. Every refusal is an error, never a changed
+/// payment. The used-address set may come from a sync `synced` shares.
 #[allow(clippy::too_many_arguments)]
 fn signed_payment(
     source: &dyn ChainSource,
@@ -1522,25 +1582,17 @@ fn signed_payment(
         ));
     }
     check_rate(rate_sat_vb)?;
-    // The destination first, then change; the slice to one output drops the change.
-    let outputs = [dest.script_pubkey().len(), P2WPKH_SCRIPT];
-    // The rate is at most 10,000 and the size a few thousand vB, so the product fits u64.
-    let fee_for = |inputs: usize, change: bool| {
-        rate_sat_vb
-            * vsize(
-                &vec![OWN_SPEND; inputs],
-                &outputs[..if change { 2 } else { 1 }],
-            )
-    };
-    let fee_checked = |fee_sats: u64| -> Result<u64, MobileSignerError> {
-        amount_sats.checked_add(fee_sats).ok_or_else(|| {
+    let dest_len = dest.script_pubkey().len();
+    // The amount and the fee of `inputs` coins and one output, the smallest payment of them. The rate
+    // is at most 10,000, so the fee fits u64; the sum may not.
+    let need = |inputs: usize| {
+        let fee = rate_sat_vb * vsize(&vec![OWN_SPEND; inputs.max(1)], &[dest_len]);
+        amount_sats.checked_add(fee).ok_or_else(|| {
             MobileSignerError::InvalidPsbtJson("amount plus fee does not fit u64".into())
         })
     };
-    // The smallest payment is one input and change. An amount that overflows u64 with that fee is
-    // refused before any lookup.
-    let mut fee_sats = fee_for(1, true);
-    fee_checked(fee_sats)?;
+    // An amount that overflows u64 with the fee of one coin is refused before any lookup.
+    need(1)?;
 
     check_network(network)?;
     let wallet = complete(synced(source, words, passphrase, network, clock, store)?)?;
@@ -1553,56 +1605,45 @@ fn signed_payment(
             .then(a.txid.cmp(&b.txid))
             .then(a.vout.cmp(&b.vout))
     });
-    // The fee depends on how many coins pay it, and the coins on the fee, so the selection is
-    // redone until the fee covers the coins it chose. A fee the coins over-cover (the change
-    // vanished and the transaction shrank) is kept: it is at least the rate.
-    let mut passes = 0;
-    let (selected, change) = loop {
-        let need = fee_checked(fee_sats)?;
-        if have < need {
+    let change_script = wallet.next_unused(Chain::Internal).address.script_pubkey();
+    let coins: Vec<(u64, InputWeightPrediction)> = spendable
+        .iter()
+        .map(|(u, _)| (u.value, OWN_SPEND))
+        .collect();
+    let (count, settled) = match select(&coins, amount_sats, rate_sat_vb, dest_len, &change_script)
+    {
+        Ok(found) => found,
+        Err(Short::Funds) => {
+            let need = need(spendable.len())?;
             return refuse(format!(
                 "insufficient funds: have {have} confirmed, need {need}"
             ));
         }
-        let mut selected = Vec::new();
-        let mut total = 0u64;
-        for (utxo, owner) in &spendable {
-            total = total.checked_add(utxo.value).ok_or_else(coins_overflow)?;
-            selected.push((utxo, *owner));
-            if total >= need {
-                break;
-            }
-        }
-        let change = total - need;
-        let real = fee_for(selected.len(), change > 0);
-        if real <= fee_sats {
-            break (selected, change);
-        }
-        passes += 1;
-        if passes == FEE_PASSES {
+        Err(Short::Size) => {
             return refuse(format!(
-                "fee did not settle in {FEE_PASSES} passes, send a smaller amount"
+                "too many coins: this amount needs more than the network's {MAX_STANDARD_VSIZE} vB, send a smaller amount"
             ));
         }
-        fee_sats = real;
+        Err(Short::Limit { fee, vsize: size }) => return refuse(above_limit(fee, size)),
     };
-    // The network refuses change below its floor as an output, so it goes into the fee, as Bitcoin
-    // Core's wallet does, and the answer names it for Review.
-    let change_script = wallet.next_unused(Chain::Internal).address.script_pubkey();
-    let kept = change >= dust_floor(&change_script);
+    let selected: Vec<(&Utxo, &OwnKey)> = spendable[..count].iter().map(|(u, k)| (u, *k)).collect();
+    let left = selected.iter().map(|(u, _)| u.value).sum::<u64>() - amount_sats;
+    // Change the network would refuse as an output, or too little to pay for its own, goes into the
+    // fee, as Bitcoin Core's wallet does, and the answer names it for Review.
+    let (change, dust_change_sats) = match settled {
+        Settle::Change(change) | Settle::FloorChange(change) => (Some(change), 0),
+        Settle::Fold(dust) | Settle::Fit(dust) => (None, dust),
+    };
     let mut outputs = vec![TxOut {
         value: Amount::from_sat(amount_sats),
         script_pubkey: dest.script_pubkey(),
     }];
-    if kept {
-        outputs.push(TxOut {
-            value: Amount::from_sat(change),
-            script_pubkey: change_script,
-        });
-    }
-    let dust_change_sats = if kept { 0 } else { change };
+    outputs.extend(change.map(|value| TxOut {
+        value: Amount::from_sat(value),
+        script_pubkey: change_script,
+    }));
     let tx = signed(&selected, outputs)?;
-    let fee_sats = fee_sats + dust_change_sats;
+    let fee_sats = left - change.unwrap_or(0);
     check_node_rate(fee_sats, tx.vsize() as u64).map_err(MobileSignerError::InvalidPsbtJson)?;
     Ok(Signed {
         tx,
@@ -1636,16 +1677,21 @@ fn signed_send_all(
     let (spendable, have) = spendable_coins(source, &wallet)?;
     // One input and one output is the smallest this transaction can be, so a wallet with nothing
     // to spend is short by that fee and the destination's dust floor.
-    let fee_sats = rate_sat_vb
-        * vsize(
-            &vec![OWN_SPEND; spendable.len().max(1)],
-            &[dest.script_pubkey().len()],
-        );
+    let size = vsize(
+        &vec![OWN_SPEND; spendable.len().max(1)],
+        &[dest.script_pubkey().len()],
+    );
+    let fee_sats = rate_sat_vb * size;
     let floor = dust_floor(&dest.script_pubkey());
     if spendable.is_empty() {
         return refuse(format!(
             "insufficient funds: have {have} confirmed, need {}",
             fee_sats + floor
+        ));
+    }
+    if size > MAX_STANDARD_VSIZE {
+        return refuse(format!(
+            "too many coins: the whole balance needs more than the network's {MAX_STANDARD_VSIZE} vB, send a fixed amount"
         ));
     }
     let amount_sats = match have.checked_sub(fee_sats) {
@@ -1915,6 +1961,9 @@ fn signed_replacement(
                     }
                     return Err(match short {
                         Short::Limit { fee: paid, vsize } => fail(above_limit(paid, vsize)),
+                        Short::Size => fail(format!(
+                            "too many coins: no fee bump fits the network's {MAX_STANDARD_VSIZE} vB"
+                        )),
                         Short::Funds => MobileSignerError::InvalidPsbtJson(format!(
                             "insufficient funds: have {have} confirmed, need {}",
                             amount.saturating_add(fee(with))
@@ -3090,6 +3139,8 @@ mod tests {
 
     // A real testnet address that is not the wallet's: the coinbase payee of the recording.
     const SOMEONE: &str = REAL_COINBASE_PAYEE;
+    /// A P2WPKH output's script, this wallet's change and `SOMEONE`: 22 bytes.
+    const P2WPKH_SCRIPT: usize = 22;
     /// Stands in for the private node of a build, so the tests read the same with or without one.
     const OWN_NODE_FIXTURE: &str = "http://node.internal:8889/api";
     /// The reads of one proof of use, which are the address's history page and the tip, then the raw
@@ -3485,7 +3536,7 @@ mod tests {
         assert!(fake.history().unwrap().is_empty());
         match fake.send(SOMEONE, 1_000, 1) {
             Err(MobileSignerError::InvalidPsbtJson(m)) => {
-                assert_eq!(m, "insufficient funds: have 0 confirmed, need 1141")
+                assert_eq!(m, "insufficient funds: have 0 confirmed, need 1110")
             }
             other => panic!("expected insufficient funds, got {other:?}"),
         }
@@ -3983,9 +4034,11 @@ mod tests {
         assert_eq!(fake.requests(), 0);
     }
 
-    // Each pass adds at least one input, so coins that barely cover their own cost run it out.
+    // 1,400 coins of 137 sats each add 69 sats beyond their own input at 1 sat/vB, too little to pay 100,000: the four
+    // passes ran out first ("fee did not settle"), and the walk names the funds it needs. Over 1,000-sat coins the
+    // payment the third pass settled signs the same: 12 inputs and change, 889 sats.
     #[test]
-    fn a_fee_that_does_not_settle_in_four_passes_is_refused() {
+    fn coins_that_barely_pay_for_their_own_inputs_fall_short_and_twelve_1000_sat_coins_pay() {
         let mut fake = Fake::new();
         let coins: Vec<String> = (0..1_400u32).map(|i| coin('a', i, 137, true)).collect();
         fake.stats
@@ -3994,9 +4047,8 @@ mod tests {
             .insert(addr(Chain::External, 0), format!("[{}]", coins.join(",")));
         assert_refused(
             fake.send(SOMEONE, 100_000, 1),
-            "fee did not settle in 4 passes, send a smaller amount",
+            "insufficient funds: have 191800 confirmed, need 195244",
         );
-        // Over 1,000-sat coins the third pass settles: 12 inputs and change, 889 sats at 1 sat/vB.
         let mut many = Fake::new();
         for i in 0..12u32 {
             many.stats
@@ -4010,6 +4062,261 @@ mod tests {
         assert_eq!((tx.input.len(), tx.output.len()), (12, 2));
         assert_eq!(fee, vsize(&[OWN_SPEND; 12], &[P2WPKH_SCRIPT; 2]));
         assert_eq!(fee_paid(&many, &tx), 889);
+    }
+
+    // Research section 2. Ten confirmed 2,000-sat coins at 20 sat/vB: the four passes refused 2,000, 3,000 and 5,000
+    // with "fee did not settle". One coin at a time pays 2,000 with 6 coins and 380 change, 3,000 with 7 and 20 into the
+    // fee, and 5,000 with all 10 and no room for change, so 560 goes into the fee. 1,000 pays as before; 6,000 is more
+    // than the coins can pay.
+    #[test]
+    fn ten_2000_sat_coins_at_20_sat_vb_pay_every_amount_the_coins_can() {
+        let mut fake = Fake::new();
+        for (i, digit) in "0123456789".chars().enumerate() {
+            fake.fund(&addr(Chain::External, i as u32), 2_000, digit);
+        }
+        let change = addr(Chain::Internal, 0);
+        for (amount, inputs, kept, fee, dust) in [
+            (1_000, 4, None, 7_000, 100),
+            (2_000, 6, Some(380), 9_620, 0),
+            (3_000, 7, None, 11_000, 20),
+            (5_000, 10, None, 15_000, 560),
+        ] {
+            let paid = fake.payment(SOMEONE, amount, 20).unwrap();
+            let mut outputs = vec![(SOMEONE, amount)];
+            outputs.extend(kept.map(|sats| (change.as_str(), sats)));
+            assert_outputs(&paid.tx, &outputs);
+            assert_eq!(
+                (paid.tx.input.len(), paid.fee_sats, paid.dust_change_sats),
+                (inputs, fee, dust),
+                "{amount}"
+            );
+            assert_eq!(fee_paid(&fake, &paid.tx), fee, "{amount}");
+        }
+        assert_refused(
+            fake.send(SOMEONE, 6_000, 20),
+            "insufficient funds: have 20000 confirmed, need 20440",
+        );
+    }
+
+    /// A seeded xorshift, so a random test runs the same cases every time.
+    fn xorshift(mut state: u64) -> impl FnMut(u64) -> u64 {
+        move |n| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % n
+        }
+    }
+
+    /// The script of each address of `destinations`, in its order: P2WPKH, P2TR, P2WSH, P2SH, P2PKH.
+    fn scripts() -> Vec<ScriptBuf> {
+        destinations()
+            .iter()
+            .map(|(_, a)| {
+                Address::from_str(a)
+                    .unwrap()
+                    .assume_checked()
+                    .script_pubkey()
+            })
+            .collect()
+    }
+
+    // A payment some set of the coins can make is never refused. A set can pay when it covers the amount and a payment of
+    // its size with no change at the rate asked, the smallest it can make, and the walk pays if and only if some set can,
+    // over wallets of 1 to 7 coins, every destination and change type, and rates up to the 9,900 sat/vB fast tier, where
+    // putting the leftover into the fee can pass the network's 10,000 sat/vB. What it pays stays within the network's
+    // limits, and only change at its floor pays under the rate asked.
+    #[test]
+    fn the_walk_pays_if_and_only_if_some_set_of_the_coins_can() {
+        let scripts = scripts();
+        let mut rnd = xorshift(0x9E37_79B9_7F4A_7C15);
+        let (mut paid, mut refused, mut under_rate) = (0, 0, 0);
+        for case in 0..30_000 {
+            let n = 1 + rnd(7) as usize;
+            let scale = [3_000, 60_000, 3_000_000][rnd(3) as usize];
+            let mut coins: Vec<u64> = (0..n).map(|_| 300 + rnd(scale)).collect();
+            coins.sort_by(|a, b| b.cmp(a));
+            let rates = [
+                1, 2, 7, 30, 400, 3_000, 7_000, 7_800, 8_500, 9_000, 9_500, 9_900,
+            ];
+            let rate = rates[rnd(rates.len() as u64) as usize];
+            let (dest, change) = (&scripts[rnd(5) as usize], &scripts[rnd(5) as usize]);
+            let amount = dust_floor(dest) + rnd(coins.iter().sum());
+            let size = |k: usize, outputs: &[usize]| vsize(&vec![OWN_SPEND; k], outputs);
+            let can = (1..1u32 << n).any(|set| {
+                let sum: u64 = (0..n).filter(|i| set >> i & 1 == 1).map(|i| coins[i]).sum();
+                sum >= amount + rate * size(set.count_ones() as usize, &[dest.len()])
+            });
+            let spends: Vec<_> = coins.iter().map(|value| (*value, OWN_SPEND)).collect();
+            let walked = select(&spends, amount, rate, dest.len(), change);
+            let case =
+                format!("case {case}: coins {coins:?} amount {amount} rate {rate}: {walked:?}");
+            assert_eq!(walked.is_ok(), can, "{case}");
+            let Ok((k, settled)) = walked else {
+                refused += 1;
+                continue;
+            };
+            paid += 1;
+            let left = coins[..k].iter().sum::<u64>() - amount;
+            let (fee, vb) = match settled {
+                Settle::Change(sats) | Settle::FloorChange(sats) => {
+                    assert!(sats >= dust_floor(change), "{case}");
+                    (left - sats, size(k, &[dest.len(), change.len()]))
+                }
+                Settle::Fold(_) | Settle::Fit(_) => (left, size(k, &[dest.len()])),
+            };
+            assert!((vb..=MAX_FEE_RATE * vb).contains(&fee), "{case}");
+            if fee < rate * vb {
+                assert!(matches!(settled, Settle::FloorChange(_)), "{case}");
+                under_rate += 1;
+            }
+        }
+        assert!(
+            paid > 10_000 && refused > 5_000 && under_rate > 20,
+            "{paid} paid, {refused} refused, {under_rate} under the rate"
+        );
+    }
+
+    /// The four passes `select` replaced, as they were at a2f06ac, over coin values largest first and sizes from
+    /// `vsize`: the coins they spend, the change they keep and the fee, or None where they refused, the node's limit
+    /// included.
+    fn four_passes(
+        coins: &[u64],
+        amount: u64,
+        rate: u64,
+        dest: usize,
+    ) -> Option<(usize, Option<u64>, u64)> {
+        let outputs = [dest, P2WPKH_SCRIPT];
+        let fee_for = |inputs: usize, change: bool| {
+            rate * vsize(
+                &vec![OWN_SPEND; inputs],
+                &outputs[..if change { 2 } else { 1 }],
+            )
+        };
+        let have: u64 = coins.iter().sum();
+        let mut fee_sats = fee_for(1, true);
+        let mut passes = 0;
+        let (count, change) = loop {
+            let need = amount + fee_sats;
+            if have < need {
+                return None;
+            }
+            let (mut count, mut total) = (0, 0);
+            for value in coins {
+                total += value;
+                count += 1;
+                if total >= need {
+                    break;
+                }
+            }
+            let change = total - need;
+            let real = fee_for(count, change > 0);
+            if real <= fee_sats {
+                break (count, change);
+            }
+            passes += 1;
+            if passes == 4 {
+                return None;
+            }
+            fee_sats = real;
+        };
+        let kept = change >= 294;
+        let fee = fee_sats + if kept { 0 } else { change };
+        let size = vsize(
+            &vec![OWN_SPEND; count],
+            &outputs[..if kept { 2 } else { 1 }],
+        );
+        check_node_rate(fee, size).ok()?;
+        Some((count, kept.then_some(change), fee))
+    }
+
+    // Every payment the four passes signed signs the same coins, change and fee: where they signed, the walk stops at
+    // the same coin and keeps or folds the same change, over wallets of 1 to 8 confirmed coins and rates up to 9,900.
+    #[test]
+    fn every_payment_the_four_passes_signed_signs_the_same_transaction() {
+        let change = own(Chain::Internal, 0).address.script_pubkey();
+        let mut rnd = xorshift(0x2545_F491_4F6C_DD1D);
+        let mut compared = 0;
+        for case in 0..40_000 {
+            let n = 1 + rnd(8) as usize;
+            let scale = [1_000, 20_000, 500_000, 5_000_000][rnd(4) as usize];
+            let mut coins: Vec<u64> = (0..n).map(|_| 200 + rnd(scale)).collect();
+            coins.sort_by(|a, b| b.cmp(a));
+            let rates = [1, 2, 3, 5, 10, 20, 50, 100, 1_000, 5_000, 9_900];
+            let rate = rates[rnd(rates.len() as u64) as usize];
+            let amount = 294 + rnd(coins.iter().sum());
+            let Some(before) = four_passes(&coins, amount, rate, P2WPKH_SCRIPT) else {
+                continue;
+            };
+            let spends: Vec<_> = coins.iter().map(|value| (*value, OWN_SPEND)).collect();
+            let case =
+                format!("case {case}: coins {coins:?} amount {amount} rate {rate}: {before:?}");
+            let (k, settled) = select(&spends, amount, rate, P2WPKH_SCRIPT, &change).expect(&case);
+            let left = coins[..k].iter().sum::<u64>() - amount;
+            let now = match settled {
+                Settle::Change(sats) => (k, Some(sats), left - sats),
+                Settle::Fold(_) => (k, None, left),
+                other => panic!("{case}: the walk settles {other:?}"),
+            };
+            assert_eq!(now, before, "{case}");
+            compared += 1;
+        }
+        assert!(compared > 15_000, "{compared} payments compared");
+    }
+
+    // The change floor follows the change script: P2WPKH 294, P2TR and P2WSH 330, P2SH 540, P2PKH 546, and so does the
+    // change output's size. One 100,000-sat coin to P2WPKH at 1 sat/vB: change at its floor is an output, and one sat
+    // less goes into the fee.
+    #[test]
+    fn change_one_sat_under_its_scripts_floor_goes_into_the_fee_and_change_at_it_stays() {
+        let coin = [(100_000, OWN_SPEND)];
+        let floors_and_sizes = [(294, 141), (330, 153), (330, 153), (540, 142), (546, 144)];
+        for (change, (floor, size)) in scripts().iter().zip(floors_and_sizes) {
+            let at_floor = 100_000 - size - floor;
+            assert_eq!(
+                select(&coin, at_floor, 1, P2WPKH_SCRIPT, change),
+                Ok((1, Settle::Change(floor))),
+                "{change}"
+            );
+            assert_eq!(
+                select(&coin, at_floor + 1, 1, P2WPKH_SCRIPT, change),
+                Ok((1, Settle::Fold(floor - 1))),
+                "{change}"
+            );
+        }
+    }
+
+    // Bitcoin Core refuses a transaction above 400,000 WU (100,000 vB) as non-standard. 1,600 coins of 2,000 sats pay
+    // 2,900,000 only with 1,502 inputs, 102,211 vB, and a send all of them is 108,844 vB: both are refused before any
+    // signing, where both were signed and then refused by the network. 1,469 inputs and change are 99,967 vB and pay;
+    // 1,470 inputs and one output are already 100,004.
+    #[test]
+    fn a_payment_or_send_all_above_100000_vb_is_refused_before_signing() {
+        let mut fake = Fake::new();
+        let coins: Vec<String> = (0..1_600u32).map(|i| coin('a', i, 2_000, true)).collect();
+        fake.stats
+            .insert(addr(Chain::External, 0), used_stats(2_000 * 1_600));
+        fake.utxos
+            .insert(addr(Chain::External, 0), format!("[{}]", coins.join(",")));
+        assert_refused(
+            fake.send(SOMEONE, 2_900_000, 1),
+            "too many coins: this amount needs more than the network's 100000 vB, send a smaller amount",
+        );
+        assert_refused(
+            fake.send_all_at(SOMEONE, 1),
+            "too many coins: the whole balance needs more than the network's 100000 vB, send a fixed amount",
+        );
+        let change = own(Chain::Internal, 0).address.script_pubkey();
+        let coins = vec![(2_000, OWN_SPEND); 1_600];
+        let amount = 1_469 * 2_000 - 99_967 - 294;
+        assert_eq!(
+            select(&coins, amount, 1, P2WPKH_SCRIPT, &change),
+            Ok((1_469, Settle::Change(294)))
+        );
+        assert_eq!(
+            select(&coins, amount + 2_000, 1, P2WPKH_SCRIPT, &change),
+            Err(Short::Size)
+        );
     }
 
     // Finding 8. Before, the total wrapped in release and panicked in debug.
@@ -4116,7 +4423,7 @@ mod tests {
         assert!(signed_by(&tx, 0, 3_000, &own(Chain::Internal, 0)));
         assert_refused(
             fake.send(SOMEONE, 4_000, 2),
-            "insufficient funds: have 3000 confirmed, need 4282",
+            "insufficient funds: have 3000 confirmed, need 4220",
         );
     }
 
@@ -4535,9 +4842,9 @@ mod tests {
     }
 
     // Bitcoin Core refuses a fee above 10,000 sat/vB times the signed transaction's own size, the size the fee
-    // was built for, and change put into the fee raises the fee. One coin
-    // and one output is 110 vB signed: change of 100 sats folded at 7,000 sat/vB pays 987,100, under
-    // 1,100,000, and at 8,000 sat/vB pays 1,128,100, over it.
+    // was built for, and change put into the fee raises the fee. One coin and one output is 110 vB signed: change
+    // of 100 sats folded at 7,000 sat/vB pays 987,100, under 1,100,000, and at 8,000 sat/vB would pay 1,128,100,
+    // over it, so the change stays at its 294-sat floor and the fee is the rest, 1,127,806 on 141 vB.
     #[test]
     fn the_networks_rate_limit_holds_on_the_rate_asked_and_on_the_signed_bytes() {
         assert!(check_rate(10_000).is_ok());
@@ -4554,15 +4861,22 @@ mod tests {
         fake.fund(&addr(Chain::External, 0), 2_000_000, '1');
         let signed = fake.ready(SOMEONE, 2_000_000 - 141 * 7_000 - 100, 7_000);
         assert_eq!((signed.fee_sats, signed.dust_change_sats), (987_100, 100));
-        let refused = fake.send(SOMEONE, 2_000_000 - 141 * 8_000 - 100, 8_000);
-        match refused {
-            Err(MobileSignerError::InvalidPsbtJson(m)) => assert!(
-                m.starts_with("fee 1128100 for ")
-                    && m.ends_with(" vB is above the network's 10000 sat/vB limit"),
-                "{m}"
+        let floored = fake
+            .payment(SOMEONE, 2_000_000 - 141 * 8_000 - 100, 8_000)
+            .unwrap();
+        assert_outputs(
+            &floored.tx,
+            &[(SOMEONE, 871_900), (&addr(Chain::Internal, 0), 294)],
+        );
+        assert_eq!(
+            (
+                floored.fee_sats,
+                floored.dust_change_sats,
+                floored.tx.vsize()
             ),
-            other => panic!("expected the node's limit, got {other:?}"),
-        }
+            (1_127_806, 0, 141)
+        );
+        assert_eq!(fee_paid(&fake, &floored.tx), 1_127_806);
         // A fee bump at 9,000 sat/vB that folded 100 sats of change would pay 1,269,100 on 110 vB, over the limit, so
         // the change stays at its 294-sat floor and the fee is the rest, 1,268,806 on 141 vB: under the 9,000 asked and
         // above what rules 3, 4 and 6 ask.
@@ -5055,7 +5369,7 @@ mod tests {
         fake.utxos.clear();
         assert_refused(
             fake.send(SOMEONE, 2_000, 1),
-            "insufficient funds: have 0 confirmed, need 2141",
+            "insufficient funds: have 0 confirmed, need 2110",
         );
         assert_eq!(fake.requests(), before + 8);
     }
@@ -8039,7 +8353,7 @@ mod tests {
         only.fund_unconfirmed(&addr(Chain::Internal, 0), 5_000, 'e');
         assert_refused(
             only.send(SOMEONE, 1_000, 1),
-            "insufficient funds: have 0 confirmed, need 1141",
+            "insufficient funds: have 0 confirmed, need 1110",
         );
         assert_eq!(only.snapshot("").unwrap().spendable_sats, 0);
     }

@@ -571,6 +571,8 @@ fun sendErrorThai(message: String?): String {
     return when {
         m.startsWith("amount ") && floor != null -> "เครือข่ายไม่รับยอดส่งที่ต่ำกว่า $floor sat สำหรับที่อยู่ปลายทางนี้"
         m.startsWith("insufficient funds") -> "ยอดที่ยืนยันแล้วไม่พอ รอให้เงินที่เพิ่งได้รับยืนยันก่อน"
+        // hot_prepare_send_at_rate and hot_prepare_send_all: the coins need more than the network's 100,000 vB in one transaction.
+        m.startsWith("too many coins") -> "ต้องรวมเหรียญเกินขนาดที่เครือข่ายรับในธุรกรรมเดียว (100,000 vB) ส่งจำนวนที่น้อยลง"
         // hot_prepare_send_all: the balance less the real fee would be below the destination's floor.
         m.startsWith("the whole balance ") && floor != null -> "ยอดทั้งหมดหลังหักค่าธรรมเนียมต่ำกว่า $floor sat ซึ่งเครือข่ายไม่รับสำหรับที่อยู่ปลายทางนี้"
         m.startsWith("fee ") && " is below " in m -> "ค่าธรรมเนียมต่ำเกินไปสำหรับธุรกรรมนี้ เลือกระดับที่สูงขึ้น"
@@ -660,7 +662,7 @@ enum class FeeReason(val title: String) {
     /** Send all whose real fee is far above the estimate, or whose amount is [FEE_SURPRISE_SATS] or more under what Review showed. */
     SendAllBelowShown("ค่าธรรมเนียมจริงสูงกว่าที่แสดง"),
 
-    /** Change below its dust floor, which the network refuses as an output, went into the fee ([PreparedSend.dustChangeSats]). */
+    /** Change the network refuses as an output (below its dust floor), or too little to pay for its own, went into the fee ([PreparedSend.dustChangeSats]). */
     ChangeToFee("เงินทอนรวมเข้าค่าธรรมเนียม"),
 }
 
@@ -679,7 +681,7 @@ data class FeeQuestion(val reasons: List<FeeReason>, val rateSatVb: Long, val du
         FeeReason.AboveAmount -> "ผู้รับได้ครบตามจำนวน แต่ค่าธรรมเนียมเครือข่ายมากกว่าเงินที่ส่ง"
         FeeReason.AboveEstimate -> "กระเป๋านี้ต้องรวมหลายเหรียญ ธุรกรรมจึงใหญ่กว่าปกติ"
         FeeReason.SendAllBelowShown -> "กระเป๋านี้ต้องรวมหลายเหรียญ ธุรกรรมจึงใหญ่กว่าปกติ จำนวนที่ส่งลดลงจากที่แสดงเพราะหักค่าธรรมเนียมจริงแล้ว"
-        FeeReason.ChangeToFee -> "เงินทอน ${thousands(dustChangeSats)} sat ต่ำกว่าขั้นต่ำที่เครือข่ายรับ จึงรวมเข้าในค่าธรรมเนียมแทนการทอนกลับเข้ากระเป๋า"
+        FeeReason.ChangeToFee -> "เศษ ${thousands(dustChangeSats)} sat ทอนกลับเข้ากระเป๋าไม่ได้ จึงรวมเข้าในค่าธรรมเนียม"
     }
 }
 

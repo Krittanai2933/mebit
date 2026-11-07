@@ -1140,10 +1140,10 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_fee_bump() != 51592.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_all() != 45269.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_all() != 35787.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate() != 35871.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_send_at_rate() != 24181.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_receive_address() != 37856.toShort()) {
@@ -3792,7 +3792,8 @@ public actual fun `hotPrepareFeeBump`(`mnemonicWords`: List<kotlin.String>, `pas
  * `destination` the whole balance less the fee, with no change, and post nothing. The fee is the
  * size of that transaction times `fee_rate_sat_vb`, so it and the amount are only known once the
  * coins are: the answer's `amount_sats` is what leaves. Refuses, before signing, a rate outside
- * 1 to 10,000 sat/vB, a wallet with nothing confirmed to spend, and a balance that would leave
+ * 1 to 10,000 sat/vB, a wallet with nothing confirmed to spend, coins that need more than the
+ * network's 100,000 vB in one transaction (`too many coins:`), and a balance that would leave
  * less than the destination's dust floor after the fee, and after signing what
  * `hot_prepare_send_at_rate` refuses past the network's limit. The same scan as
  * `hot_prepare_send_at_rate`, so call it off the main thread.
@@ -3816,16 +3817,22 @@ public actual fun `hotPrepareSendAll`(`mnemonicWords`: List<kotlin.String>, `pas
  * network use is the Esplora lookups of the scan. The app saves the `txid` as its payment guard
  * before it calls `hot_broadcast`, so a kill between the two can never lead to a second payment.
  *
- * The fee is the size of the transaction as built times the rate, so a payment that needs more
- * coins pays more, never a fixed sum that falls under the rate. The answer's `fee_sats` is that
- * fee, and the app compares it with the estimate its screens showed and asks the user when it is
- * much higher. Refuses, before signing, a rate outside 1 to 10,000 sat/vB (the network's limit),
- * an amount below the dust floor of the destination's script (294 sats for P2WPKH up to 546 for
- * P2PKH, the outputs the network refuses) and an amount that overflows u64 with its fee, and after
- * signing a fee above 10,000 sat/vB times the signed transaction's virtual size. Change below the
- * change address's floor (294 sats) would be refused by the network too, so it goes into the fee
- * and the answer's `dust_change_sats` names it. A fee above the amount is signed, because the fee is
- * paid on top and the destination still gets the amount, so the app asks the user before it posts.
+ * Coins are added largest first, one at a time, until they pay the amount and the fee of the
+ * transaction they make, so any payment some of the coins can make is signed. The fee is the size
+ * of the transaction as built times the rate, so a payment that needs more coins pays more, never a
+ * fixed sum that falls under the rate. The answer's `fee_sats` is that fee, and the app compares it
+ * with the estimate its screens showed and asks the user when it is much higher. Refuses, before
+ * signing, a rate outside 1 to 10,000 sat/vB (the network's limit), an amount below the dust floor
+ * of the destination's script (294 sats for P2WPKH up to 546 for P2PKH, the outputs the network
+ * refuses), an amount that overflows u64 with its fee, coins that cannot pay it (`insufficient
+ * funds:`) and a payment that needs more than the network's 100,000 vB (`too many coins:`), and
+ * after signing a fee above 10,000 sat/vB times the signed transaction's virtual size. Change below
+ * the change address's dust floor would be refused by the network too, and change too small to pay
+ * for its own output costs more than it returns, so either goes into the fee and the answer's
+ * `dust_change_sats` names it. Where that would pass 10,000 sat/vB, the change stays at exactly its
+ * floor and the fee is the rest, under the rate asked. A fee above the amount is signed, because
+ * the fee is paid on top and the destination still gets the amount, so the app asks the user before
+ * it posts.
  * Only confirmed coins of receive addresses are spent; the wallet's own unconfirmed change is spent
  * too. About 40 Esplora calls for a fresh wallet, so call it off the main thread.
  */
