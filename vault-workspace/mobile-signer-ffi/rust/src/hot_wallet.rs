@@ -1304,9 +1304,10 @@ fn settle(
     if without > MAX_STANDARD_VSIZE {
         return Err(Short::Size);
     }
+    // A fee bump's rules 3 and 4 can ask a fee above the limit, and the node refuses that change.
     let change = left
         .checked_sub(fee(with))
-        .filter(|_| with <= MAX_STANDARD_VSIZE);
+        .filter(|_| with <= MAX_STANDARD_VSIZE && fee(with) <= MAX_FEE_RATE * with);
     if let Some(change) = change.filter(|c| *c >= floor) {
         return Ok(Settle::Change(change));
     }
@@ -1975,6 +1976,20 @@ fn signed_replacement(
                     if !searched {
                         searched = true;
                         let spares = &more[..more.len().min(BUMP_SEARCH_COINS)];
+                        // Every coin spends as `OWN_SPEND`, so a set's sizes depend only on its count.
+                        let sizes: Vec<(u64, u64)> = (0..=spares.len())
+                            .map(|count| {
+                                let spends = vec![OWN_SPEND; spent.len() + count];
+                                (vsize(&spends, &scripts), vsize(&spends, &scripts[..1]))
+                            })
+                            .collect();
+                        // A set that settles holds its no-change fee, and no set of a count holds more
+                        // than the largest coins of that count.
+                        let hopeless = (1..=spares.len()).all(|count| {
+                            let most =
+                                total + spares[..count].iter().map(|(u, _)| u.value).sum::<u64>();
+                            most.saturating_sub(amount) < fee(sizes[count].1)
+                        });
                         let coins = |set: u32| {
                             (0..spares.len())
                                 .filter(move |i| set >> i & 1 == 1)
@@ -1983,15 +1998,17 @@ fn signed_replacement(
                         // The walk summed every spare coin with checks, so no set of them overflows.
                         let holds =
                             |set: u32| total + coins(set).map(|(u, _)| u.value).sum::<u64>();
-                        let mut sets: Vec<u32> = (1..1 << spares.len()).collect();
+                        let mut sets: Vec<u32> = if hopeless {
+                            Vec::new()
+                        } else {
+                            (1..1 << spares.len()).collect()
+                        };
                         // Fewest coins first, then in lexicographic order of the coins largest first.
                         sets.sort_by_key(|set| {
                             (set.count_ones(), std::cmp::Reverse(set.reverse_bits()))
                         });
                         let found = sets.into_iter().find(|&set| {
-                            let spends = vec![OWN_SPEND; spent.len() + set.count_ones() as usize];
-                            let (with, without) =
-                                (vsize(&spends, &scripts), vsize(&spends, &scripts[..1]));
+                            let (with, without) = sizes[set.count_ones() as usize];
                             let left = holds(set).saturating_sub(amount);
                             settle(left, with, without, change_floor, &fee, &least).is_ok()
                         });
@@ -5390,6 +5407,76 @@ mod tests {
             "replace: fee 1829294 for 178 vB is above the network's 10000 sat/vB limit",
         );
         assert!(took < Duration::from_secs(2), "{took:?}");
+    }
+
+    // An earlier payment at 9,999.5 sat/vB (fee 1,409,930 on 141 vB): rules 3 and 4 ask its change 500 to pay
+    // 1,410,071 on 141 vB, above the limit, so the bump adds the spare coin instead of a change the node refuses.
+    #[test]
+    fn a_fee_bump_adds_a_spare_coin_where_its_change_would_pay_above_the_limit() {
+        let value = 100_000 + 500 + 1_409_930;
+        let earlier = hand_made('1', value, 100_000, 500);
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), value, '1');
+        fake.fund(&addr(Chain::External, 1), 700_000, '2');
+        let bump = fake
+            .replacement(&serialize_hex(&earlier), 10_000, Replacement::FeeBump)
+            .unwrap();
+        assert_eq!(
+            (
+                bump.fee_sats,
+                bump.amount_cut_sats,
+                bump.tx.vsize(),
+                bump.tx.input.len()
+            ),
+            (2_090_000, 0, 209, 2)
+        );
+        assert_replaces(&fake, &earlier, &bump.tx);
+    }
+
+    // 300 coins of 10,000 paid at 1 sat/vB, bumped to 2 with 16 spare coins of 1,000: no set of them pays,
+    // so the bump refuses as the walk left it, without trying the 65,535 sets.
+    #[test]
+    fn a_fee_bump_no_set_of_spare_coins_can_pay_refuses_without_the_search() {
+        let held = |fake: &mut Fake| {
+            let coins: Vec<String> = (0..300).map(|i| coin('1', i, 10_000, true)).collect();
+            fake.stats
+                .insert(addr(Chain::External, 0), used_stats(3_000_000));
+            fake.utxos
+                .insert(addr(Chain::External, 0), format!("[{}]", coins.join(",")));
+        };
+        let mut alone = Fake::new();
+        held(&mut alone);
+        let fee = vsize(&[OWN_SPEND; 300], &[P2WPKH_SCRIPT, P2WPKH_SCRIPT]);
+        let earlier = alone.send(SOMEONE, 3_000_000 - fee - 1_000, 1).unwrap();
+        let bump = |spares: u32| {
+            let mut fake = Fake::new();
+            held(&mut fake);
+            let coins: Vec<String> = (0..spares).map(|i| coin('5', i, 1_000, true)).collect();
+            fake.stats.insert(
+                addr(Chain::External, 1),
+                used_stats(1_000 * u64::from(spares)),
+            );
+            fake.utxos
+                .insert(addr(Chain::External, 1), format!("[{}]", coins.join(",")));
+            let mut best = Duration::MAX;
+            let mut got = None;
+            for _ in 0..5 {
+                let start = Instant::now();
+                got = Some(fake.replacement(&serialize_hex(&earlier), 2, Replacement::FeeBump));
+                best = best.min(start.elapsed());
+            }
+            (got.unwrap().map(|b| b.fee_sats), best)
+        };
+        let (_, alone_took) = bump(0);
+        let (refused, took) = bump(16);
+        assert_refused(
+            refused,
+            "insufficient funds: have 3016000 confirmed, need 3021651",
+        );
+        assert!(
+            took.saturating_sub(alone_took) < Duration::from_millis(10),
+            "16 spare coins took {took:?}, none {alone_took:?}"
+        );
     }
 
     #[test]
