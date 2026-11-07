@@ -34,6 +34,7 @@ use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv, Xpub};
 use bitcoin::consensus::encode::{deserialize_hex, serialize_hex};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::{All, Message, Secp256k1};
+use bitcoin::transaction::{InputWeightPrediction, predict_weight};
 use bitcoin::{
     Address, Amount, CompressedPublicKey, Network, OutPoint, PrivateKey, Script, ScriptBuf,
     Sequence, Transaction, TxIn, TxOut, Txid, Witness, sighash::EcdsaSighashType,
@@ -1232,15 +1233,17 @@ fn check_node_rate(fee_sats: u64, vsize: u64) -> Result<(), String> {
     Ok(())
 }
 
-/// Virtual size, rounded up, of a transaction spending `inputs` P2WPKH coins to outputs whose
-/// scripts are `output_scripts` bytes long: 10.5 vB overhead (version, locktime, counts, segwit
-/// marker and flag), 68 vB per input, and 8 + 1 + the script per output (value, length, script).
-/// A taproot or P2WSH output is 43 vB and a P2WPKH one 31, so sizing every output as P2WPKH paid
-/// under the rate.
-fn vsize(inputs: usize, output_scripts: &[usize]) -> u64 {
-    let outputs: u64 = output_scripts.iter().map(|len| 9 + *len as u64).sum();
-    let twice = 21 + 136 * inputs as u64 + 2 * outputs;
-    twice.div_ceil(2)
+/// How this wallet's keys spend a coin: BIP-84, a 72-byte signature and a compressed key. The one
+/// place coin selection learns the script type; an address-type setting replaces it and the sighash
+/// in `signed`.
+const OWN_SPEND: InputWeightPrediction = InputWeightPrediction::P2WPKH_MAX;
+
+/// Virtual size, rounded up, of a transaction spending coins spent as `inputs` to outputs whose
+/// scripts are `output_scripts` bytes long, every count at its real varint width: from 253 inputs
+/// the input count takes 3 bytes. An upper bound for what `signed` builds, which can come out a
+/// vbyte under where a signature is short.
+fn vsize(inputs: &[InputWeightPrediction], output_scripts: &[usize]) -> u64 {
+    predict_weight(inputs.iter().copied(), output_scripts.iter().copied()).to_vbytes_ceil()
 }
 
 /// The change output's script: P2WPKH, 22 bytes.
@@ -1420,7 +1423,11 @@ fn signed_payment(
     let outputs = [dest.script_pubkey().len(), P2WPKH_SCRIPT];
     // The rate is at most 10,000 and the size a few thousand vB, so the product fits u64.
     let fee_for = |inputs: usize, change: bool| {
-        rate_sat_vb * vsize(inputs, &outputs[..if change { 2 } else { 1 }])
+        rate_sat_vb
+            * vsize(
+                &vec![OWN_SPEND; inputs],
+                &outputs[..if change { 2 } else { 1 }],
+            )
     };
     let fee_checked = |fee_sats: u64| -> Result<u64, MobileSignerError> {
         amount_sats.checked_add(fee_sats).ok_or_else(|| {
@@ -1526,7 +1533,11 @@ fn signed_send_all(
     let (spendable, have) = spendable_coins(source, &wallet)?;
     // One input and one output is the smallest this transaction can be, so a wallet with nothing
     // to spend is short by that fee and the destination's dust floor.
-    let fee_sats = rate_sat_vb * vsize(spendable.len().max(1), &[dest.script_pubkey().len()]);
+    let fee_sats = rate_sat_vb
+        * vsize(
+            &vec![OWN_SPEND; spendable.len().max(1)],
+            &[dest.script_pubkey().len()],
+        );
     let floor = dust_floor(&dest.script_pubkey());
     if spendable.is_empty() {
         return refuse(format!(
@@ -1718,7 +1729,7 @@ fn signed_replacement(
     // Rules 3 and 4 ask at least the earlier fee plus the new size at the 1 sat/vB incremental relay
     // rate. The size is an upper bound, so the real rate is at least `rate`.
     let fee_for = |inputs: usize, scripts: &[usize]| {
-        let size = vsize(inputs, scripts);
+        let size = vsize(&vec![OWN_SPEND; inputs], scripts);
         (rate * size).max(old_fee.saturating_add(size))
     };
     // One output to `script`, worth `have` less the fee of a transaction of `inputs` and that output.
@@ -1802,7 +1813,7 @@ fn signed_replacement(
         .try_fold(have, |left, o| left.checked_sub(o.value.to_sat()))
         .unwrap_or(0);
     let scripts: Vec<usize> = tx.output.iter().map(|o| o.script_pubkey.len()).collect();
-    let estimated = vsize(tx.input.len(), &scripts);
+    let estimated = vsize(&vec![OWN_SPEND; tx.input.len()], &scripts);
     let first = &tx.output[0].script_pubkey;
     let checks = [
         (
@@ -3629,9 +3640,9 @@ mod tests {
     // Findings 5 and 7. One P2WPKH input and two outputs is 141 vB; one output is 110 vB.
     #[test]
     fn the_fee_is_the_size_of_the_transaction_as_built_times_the_rate() {
-        assert_eq!(vsize(1, &[P2WPKH_SCRIPT; 2]), 141);
-        assert_eq!(vsize(1, &[P2WPKH_SCRIPT]), 110);
-        assert_eq!(vsize(11, &[P2WPKH_SCRIPT]), 790);
+        assert_eq!(vsize(&[OWN_SPEND], &[P2WPKH_SCRIPT; 2]), 141);
+        assert_eq!(vsize(&[OWN_SPEND], &[P2WPKH_SCRIPT]), 110);
+        assert_eq!(vsize(&[OWN_SPEND; 11], &[P2WPKH_SCRIPT]), 790);
         let mut fake = Fake::new();
         for i in 0..3u32 {
             fake.fund(&addr(Chain::External, i), 4_000, char::from(b'1' + i as u8));
@@ -3641,7 +3652,7 @@ mod tests {
             assert_eq!((tx.input.len(), tx.output.len()), (inputs, 2));
             assert_eq!(
                 fee,
-                2 * vsize(inputs, &[P2WPKH_SCRIPT; 2]),
+                2 * vsize(&vec![OWN_SPEND; inputs], &[P2WPKH_SCRIPT; 2]),
                 "{inputs} inputs"
             );
             assert_eq!(fee_paid(&fake, &tx), fee, "{inputs} inputs");
@@ -3664,12 +3675,24 @@ mod tests {
                 (coins, 2),
                 "{coins} coins"
             );
-            assert_eq!(fee, 2 * vsize(coins, &[P2WPKH_SCRIPT; 2]), "{coins} coins");
+            assert_eq!(
+                fee,
+                2 * vsize(&vec![OWN_SPEND; coins], &[P2WPKH_SCRIPT; 2]),
+                "{coins} coins"
+            );
             assert_eq!(fee_paid(&fake, &tx), fee, "{coins} coins");
         }
         let mut big = Fake::new();
         big.fund(&addr(Chain::External, 0), 1_000_000, '1');
         assert_eq!(big.send_at(SOMEONE, 600_000, 2_000).unwrap().1, 282_000);
+    }
+
+    // From 253 inputs the input count is a 3-byte varint, so one more coin adds 70 vB, not 68. The 1-byte count paid
+    // 2 vB times the rate under it, at 1 sat/vB under the minimum relay fee.
+    #[test]
+    fn the_size_counts_the_three_byte_input_count_from_253_inputs() {
+        assert_eq!(vsize(&[OWN_SPEND; 252], &[P2WPKH_SCRIPT]), 17_178);
+        assert_eq!(vsize(&[OWN_SPEND; 253], &[P2WPKH_SCRIPT]), 17_248);
     }
 
     // The stuck-payment bug: the node reports 1 sat/vB, the app asked for 1 x 141 sats, and any
@@ -3749,7 +3772,11 @@ mod tests {
                 (coins, 1),
                 "{coins} coins"
             );
-            assert_eq!(fee, 2 * vsize(coins, &[P2WPKH_SCRIPT]), "{coins} coins");
+            assert_eq!(
+                fee,
+                2 * vsize(&vec![OWN_SPEND; coins], &[P2WPKH_SCRIPT]),
+                "{coins} coins"
+            );
             assert_eq!(fee_paid(&fake, &tx), fee, "{coins} coins");
             assert_outputs(&tx, &[(SOMEONE, 4_000 * coins as u64 - fee)]);
             for i in 0..coins {
@@ -3861,7 +3888,7 @@ mod tests {
         }
         let (tx, fee) = many.send_at(SOMEONE, 10_210, 1).unwrap();
         assert_eq!((tx.input.len(), tx.output.len()), (12, 2));
-        assert_eq!(fee, vsize(12, &[P2WPKH_SCRIPT; 2]));
+        assert_eq!(fee, vsize(&[OWN_SPEND; 12], &[P2WPKH_SCRIPT; 2]));
         assert_eq!(fee_paid(&many, &tx), 889);
     }
 
@@ -7391,7 +7418,7 @@ mod tests {
         )
         .tiers()
         .fast_sat_vb;
-        let estimate = vsize(2, &[P2WPKH_SCRIPT]) as usize;
+        let estimate = vsize(&[OWN_SPEND; 2], &[P2WPKH_SCRIPT]) as usize;
         let mut under_estimate = 0;
         for second in 0..20 {
             let mut fake = Fake::new();
