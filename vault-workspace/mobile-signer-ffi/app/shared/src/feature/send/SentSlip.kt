@@ -32,8 +32,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
@@ -41,10 +39,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.FiatQuote
@@ -53,8 +48,8 @@ import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.data.rememberFiatQuote
-import com.mebit.app.encodePng
 import com.mebit.app.formatThaiDateTime
+import com.mebit.app.imageOfCard
 import com.mebit.app.rememberSharer
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_tick_white
@@ -67,8 +62,8 @@ import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 
 internal val SlipPage = Color(0xFFEFF4FA)
-private val SlipNavy = Color(0xFF073453)
-private val SlipMuted = Color(0xFF687E90)
+internal val SlipNavy = Color(0xFF073453)
+internal val SlipMuted = Color(0xFF687E90)
 private val SlipFiat = Color(0xFF56748A)
 private val SlipHairline = Color(0xFFEDF2F6)
 
@@ -101,11 +96,8 @@ fun SentSlip(wallet: SingleSigWallet, draft: SendDraft, quotes: QuoteCache, onHo
                         scope.launch {
                             // shortcut: a share that fails does nothing, because the board has no error for it and a crash right after a payment is worse. Add one when it does.
                             try {
-                                frame.record(density = Density(1f), layoutDirection = LayoutDirection.Ltr, size = slipShareSize(card.size)) {
-                                    drawSlipShare { drawLayer(card) }
-                                }
                                 val name = if (wallet.lastTxid.isEmpty()) "mebit-slip" else "mebit-slip-" + wallet.lastTxid.take(8)
-                                sharer.image(frame.toImageBitmap().encodePng(), name)
+                                sharer.imageOfCard(card, frame, SlipPage, name)
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (_: Exception) {
@@ -127,18 +119,6 @@ fun SentSlip(wallet: SingleSigWallet, draft: SendDraft, quotes: QuoteCache, onHo
         }
         DebugLink(onClick = onOpenCatalog)
     }
-}
-
-/** Pixels of [SlipPage] around the card in the shared picture, so the card's rounded corners show the page and not transparency. */
-internal const val SLIP_SHARE_MARGIN = 32
-
-/** The shared picture's size in pixels for a card of size [card]. */
-internal fun slipShareSize(card: IntSize) = IntSize(card.width + 2 * SLIP_SHARE_MARGIN, card.height + 2 * SLIP_SHARE_MARGIN)
-
-/** Fills the scope with [SlipPage] and draws [card] [SLIP_SHARE_MARGIN] pixels in from the top left. */
-internal fun DrawScope.drawSlipShare(card: DrawScope.() -> Unit) {
-    drawRect(SlipPage)
-    translate(SLIP_SHARE_MARGIN.toFloat(), SLIP_SHARE_MARGIN.toFloat(), card)
 }
 
 @Composable

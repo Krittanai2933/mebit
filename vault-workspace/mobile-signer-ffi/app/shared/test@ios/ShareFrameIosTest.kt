@@ -12,20 +12,22 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
+import com.mebit.app.drawShareFrame
 import com.mebit.app.encodePng
+import com.mebit.app.shareFrameSize
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import org.jetbrains.skia.Image
 
 private val CARD = Color(0xFF123456)
 
-class SlipShareImageIosTest {
+class ShareFrameIosTest {
     /** The share picture of a 40 x 20 card whose content is [card], drawn into a bitmap and read back through the PNG encoder the share sheet uses. */
     private fun picture(card: DrawScope.() -> Unit): ImageBitmap {
-        val size = slipShareSize(IntSize(40, 20))
+        val size = shareFrameSize(IntSize(40, 20))
         val bitmap = ImageBitmap(size.width, size.height)
         CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, Canvas(bitmap), Size(size.width.toFloat(), size.height.toFloat())) {
-            drawSlipShare(card)
+            drawShareFrame(SlipPage, card)
         }
         return Image.makeFromEncoded(bitmap.encodePng()).toComposeImageBitmap()
     }
@@ -34,7 +36,7 @@ class SlipShareImageIosTest {
 
     @Test
     fun theMarginIs32PixelsOnEverySide() {
-        assertEquals(IntSize(104, 84), slipShareSize(IntSize(40, 20)))
+        assertEquals(IntSize(104, 84), shareFrameSize(IntSize(40, 20)))
         val shared = picture { drawRect(CARD, size = Size(40f, 20f)) }
         assertEquals(IntSize(104, 84), IntSize(shared.width, shared.height))
     }
