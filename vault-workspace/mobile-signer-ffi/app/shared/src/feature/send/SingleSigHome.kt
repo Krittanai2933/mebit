@@ -1,5 +1,11 @@
 package com.mebit.app.feature.send
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -20,6 +26,7 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsTopHeight
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,9 +34,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshState
+import androidx.compose.material3.pulltorefresh.pullToRefresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableIntStateOf
@@ -37,18 +46,24 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.OnboardingSession
@@ -88,7 +103,7 @@ private val FiatGold = Color(0xFFEEB42A)
  * counterparty, so a row says only รับ or ส่งออก).
  * A key whose balance could not be fetched shows a dash and a retry line in place of a number, and a key whose
  * first fetch is still running shows a dash and "กำลังดึงยอด…". The whole page scrolls, the navy block with it,
- * so a short phone or a large font still reaches the rows.
+ * so a short phone or a large font still reaches the rows. The pull follows Organize 3.6.3 and 3.6.4 in place of Material's indicator.
  */
 @Composable
 fun S1HomeSingleSigScreen(
@@ -149,13 +164,23 @@ internal fun SingleSigHome(
     // A key of 12 or more words is a real one, yet the wallet says Demo until its first bind ends. Read from the session, this holds on the first frame, before any bind has started.
     val loading = session.words.size >= 12 && wallet.mode == WalletMode.Demo
     val rows = if (wallet.mode == WalletMode.Live) homeRows(wallet.history) else emptyList()
-    PullToRefreshBox(
-        isRefreshing = pulled,
-        onRefresh = {
-            pulled = true
-            retries = afterPull(retries, binding)
-        },
-        modifier = Modifier.fillMaxSize().background(MbPage).testTag(tag),
+    val pull = remember { RowsPullState() }
+    // Derived, so a drag recomposes the page only when one of these flips and not on every frame.
+    val armed by remember { derivedStateOf { pull.distanceFraction > 1f } }
+    val open by remember { derivedStateOf { pull.distanceFraction > 0f } }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MbPage)
+            .testTag(tag)
+            .pullToRefresh(
+                isRefreshing = pulled,
+                state = pull,
+                onRefresh = {
+                    pulled = true
+                    retries = afterPull(retries, binding)
+                },
+            ),
     ) {
         Column(
             modifier = Modifier
@@ -231,28 +256,115 @@ internal fun SingleSigHome(
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(it, color = MbBody, fontSize = 10.sp, lineHeight = 13.sp, modifier = Modifier.testTag("debug_failure"))
             }
-            if (rows.isNotEmpty()) {
+            if (rows.isNotEmpty() || open || pulled) {
                 Spacer(modifier = Modifier.height(24.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("ธุรกรรมล่าสุด", color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 14.sp, modifier = Modifier.weight(1f).testTag("home_tx_label"))
-                    if (homeHasMoreHistory(wallet.history)) {
-                        Text(
-                            "ดูทั้งหมด",
-                            color = MbNavy,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            lineHeight = 14.sp,
-                            modifier = Modifier.clickable(role = Role.Button, onClick = onHistory).padding(vertical = 8.dp).testTag("cta_s1_history"),
-                        )
+                val hasMore = homeHasMoreHistory(wallet.history)
+                val end = txHeaderEnd(pulled, armed, hasMore)
+                Box {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("ธุรกรรมล่าสุด", color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 14.sp, modifier = Modifier.weight(1f).testTag("home_tx_label"))
+                        if (hasMore) {
+                            Text(
+                                "ดูทั้งหมด",
+                                color = MbNavy,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                lineHeight = 14.sp,
+                                // Hidden, not removed, so the status over it moves nothing below.
+                                modifier = (if (end == TxHeaderEnd.SeeAll) Modifier.clickable(role = Role.Button, onClick = onHistory) else Modifier.alpha(0f).clearAndSetSemantics { })
+                                    .padding(vertical = 8.dp)
+                                    .testTag("cta_s1_history"),
+                            )
+                        }
+                    }
+                    if (end == TxHeaderEnd.Armed || end == TxHeaderEnd.Refreshing) {
+                        Row(
+                            modifier = Modifier.matchParentSize().wrapContentHeight(align = Alignment.CenterVertically, unbounded = true),
+                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (end == TxHeaderEnd.Refreshing) {
+                                RefreshSpinner()
+                                Spacer(modifier = Modifier.width(11.dp))
+                            }
+                            Text("กำลังอัปเดต…", color = MbBody, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, lineHeight = 13.2.sp, modifier = Modifier.testTag("home_refresh_status"))
+                        }
                     }
                 }
-                Spacer(modifier = Modifier.height(16.dp))
+                PullGap(pull)
                 rows.forEachIndexed { index, row -> HomeTxRowItem(row, Modifier.testTag("home_tx_$index")) { onOpenTx(row.tx) } }
             }
         }
         // Once the navy block has scrolled up, the status bar still needs a navy ground for its white icons.
         Box(modifier = Modifier.fillMaxWidth().windowInsetsTopHeight(WindowInsets.safeDrawing).background(MbNavy))
         DebugLink(onClick = onOpenCatalog)
+    }
+}
+
+/**
+ * How far the rows are pulled open, in Material's threshold units: 0 at rest and 1 where letting go refreshes. A refresh shows in the
+ * header (3.6.4), so it closes the gap to 0 and ignores the snaps Material's node makes after every scroll while it holds the offset at
+ * the threshold. On release past the threshold the node calls onRefresh and animateToHidden at once, then recomposition calls animateToThreshold.
+ */
+private class RowsPullState : PullToRefreshState {
+    private val fraction = Animatable(0f)
+    private var refreshing = false
+    override val distanceFraction: Float get() = fraction.value
+    override val isAnimating: Boolean get() = fraction.isRunning
+    override suspend fun snapTo(targetValue: Float) { if (!refreshing) fraction.snapTo(targetValue) }
+    override suspend fun animateToThreshold() { refreshing = true; fraction.animateTo(0f) }
+    override suspend fun animateToHidden() { refreshing = false; fraction.animateTo(0f) }
+}
+
+/** The right end of the transactions header: 3.6.4's spinner while a pull refreshes, 3.6.3's text once the pull would refresh, else the link. */
+internal enum class TxHeaderEnd { None, SeeAll, Armed, Refreshing }
+
+internal fun txHeaderEnd(refreshing: Boolean, armed: Boolean, hasMore: Boolean): TxHeaderEnd = when {
+    refreshing -> TxHeaderEnd.Refreshing
+    armed -> TxHeaderEnd.Armed
+    hasMore -> TxHeaderEnd.SeeAll
+    else -> TxHeaderEnd.None
+}
+
+/** The gap under the header that the pull opens, with 3.6.3's badge centred in it. */
+@Composable
+private fun PullGap(pull: RowsPullState) {
+    val fraction = pull.distanceFraction
+    Box(modifier = Modifier.fillMaxWidth().height(16.dp + 64.dp * fraction), contentAlignment = Alignment.Center) {
+        if (fraction > 0f) {
+            val grown = minOf(fraction, 1f)
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .graphicsLayer { alpha = grown; scaleX = grown; scaleY = grown }
+                    .background(MbWhite, CircleShape)
+                    .border(0.75.dp, MbBorder, CircleShape)
+                    .testTag("home_pull_badge"),
+                contentAlignment = Alignment.Center,
+            ) {
+                PullArc(boxSize = 24.dp, circle = 18.dp, sweep = 270f * grown)
+            }
+        }
+    }
+}
+
+/** 3.6.4's spinner, turning once a second. The turn is read in the layer, so it redraws without recomposing the page. */
+@Composable
+private fun RefreshSpinner() {
+    val turn by rememberInfiniteTransition().animateFloat(0f, 360f, infiniteRepeatable(tween(1_000, easing = LinearEasing)))
+    PullArc(boxSize = 18.dp, circle = 13.5.dp, sweep = 270f, modifier = Modifier.graphicsLayer { rotationZ = turn })
+}
+
+/** The track circle with the navy arc on it, clockwise from 12 o'clock. */
+@Composable
+private fun PullArc(boxSize: Dp, circle: Dp, sweep: Float, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(boxSize)) {
+        val stroke = 2.5.dp.toPx()
+        val diameter = circle.toPx()
+        val topLeft = Offset((size.width - diameter) / 2, (size.height - diameter) / 2)
+        val arcSize = Size(diameter, diameter)
+        drawArc(MbBorder, 0f, 360f, useCenter = false, topLeft = topLeft, size = arcSize, style = Stroke(stroke))
+        drawArc(MbNavy, -90f, sweep, useCenter = false, topLeft = topLeft, size = arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
     }
 }
 
