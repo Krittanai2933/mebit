@@ -177,10 +177,10 @@ fun S5ReviewSignScreen(
             ReviewDivider()
             ReviewRow(
                 "ค่าธรรมเนียม",
-                when (load) {
+                when (val state = load) {
                     QuoteLoad.Loading -> "กำลังคำนวณ…"
                     is QuoteLoad.Failed -> "—"
-                    is QuoteLoad.Quoted -> realFeeText(shown?.feeSats ?: 0, quote)
+                    is QuoteLoad.Quoted -> realFeeText(state.quote.feeSats, quote)
                 },
             )
             ReviewDivider()
