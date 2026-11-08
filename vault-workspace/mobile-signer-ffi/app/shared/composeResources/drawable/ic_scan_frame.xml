@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penpot Organize > 4.4.2 Send · scan QR > Scan frame corners. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="272dp"
+    android:height="272dp"
+    android:viewportWidth="272"
+    android:viewportHeight="272">
+    <path
+        android:pathData="M2,30 L2,14 C2,7.373 7.373,2 14,2 L30,2 M242,2 L258,2 C264.627,2 270,7.373 270,14 L270,30 M270,242 L270,258 C270,264.627 264.627,270 258,270 L242,270 M30,270 L14,270 C7.373,270 2,264.627 2,258 L2,242"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"/>
+</vector>

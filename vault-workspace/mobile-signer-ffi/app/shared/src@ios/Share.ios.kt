@@ -17,6 +17,7 @@ import platform.Foundation.dataWithBytes
 import platform.UIKit.UIActivityViewController
 import platform.UIKit.UIApplication
 import platform.UIKit.UIImage
+import platform.UIKit.UIViewController
 import platform.UIKit.popoverPresentationController
 
 @OptIn(ExperimentalForeignApi::class)
@@ -29,8 +30,7 @@ private object IosSharer : Sharer {
     }
 
     private fun present(item: Any) {
-        val root = UIApplication.sharedApplication.keyWindow?.rootViewController ?: return
-        val top = generateSequence(root) { it.presentedViewController }.last()
+        val top = topViewController() ?: return
         val sheet = UIActivityViewController(activityItems = listOf(item), applicationActivities = null)
         // iPad shows the sheet as a popover, and presenting a popover with no anchor raises an exception.
         sheet.popoverPresentationController?.let { popover ->
@@ -40,6 +40,11 @@ private object IosSharer : Sharer {
         }
         top.presentViewController(sheet, animated = true, completion = null)
     }
+}
+
+internal fun topViewController(): UIViewController? {
+    val root = UIApplication.sharedApplication.keyWindow?.rootViewController ?: return null
+    return generateSequence(root) { it.presentedViewController }.last()
 }
 
 @Composable

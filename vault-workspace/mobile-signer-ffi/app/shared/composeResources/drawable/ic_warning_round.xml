@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penpot Organize > 4.4.8 Send · scan failed > Warning icon. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="32dp"
+    android:height="32dp"
+    android:viewportWidth="32"
+    android:viewportHeight="32">
+    <!-- The board's 28 pt icon inset by 2, because its 4 pt stroke reaches past the 28 pt box. -->
+    <group android:translateX="2" android:translateY="2">
+    <path
+        android:pathData="M12.25,3.5 C12.6077,2.8711 13.2759,2.4805 14,2.4805 C14.7241,2.4805 15.3923,2.8711 15.75,3.5 L26.25,22.3125 C26.6331,22.9375 26.6448,23.7227 26.2805,24.3613 C25.9165,25 25.2341,25.3867 24.5,25.375 L3.5,25.375 C2.7659,25.3867 2.0835,25 1.7195,24.3613 C1.3552,23.7227 1.3669,22.9375 1.75,22.3125 Z"
+        android:strokeColor="#C2700F"
+        android:strokeWidth="4"
+        android:strokeLineJoin="round"/>
+    <path
+        android:pathData="M14,10.0625 L14,16.1875"
+        android:strokeColor="#C2700F"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"/>
+    <path
+        android:pathData="M12.994,20.125 A1.006,1.006 0 1,0 15.006,20.125 A1.006,1.006 0 1,0 12.994,20.125 Z"
+        android:fillColor="#C2700F"/>
+    </group>
+</vector>

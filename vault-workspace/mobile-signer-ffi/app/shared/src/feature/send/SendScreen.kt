@@ -59,11 +59,11 @@ import com.mebit.app.data.Replacement
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SendIssue
 import com.mebit.app.data.SingleSigWallet
+import com.mebit.app.data.acceptsScan
 import com.mebit.app.data.bahtText
 import com.mebit.app.data.enterDestination
 import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.data.rememberFiatQuote
-import com.mebit.app.data.scanOutcome
 import com.mebit.app.data.sendIssue
 import com.mebit.app.rememberCameraAvailable
 import com.mebit.app.ui.components.KeyboardDismissBox
@@ -89,8 +89,8 @@ private val SelectedFee = Color(0xFFFFF8EF)
 
 /**
  * Penpot 4.4 Send, with 4.4.1 (address filled), 4.4.3 (amount in baht), 4.4.4 (send all), 4.4.5 (send all in baht),
- * 4.4.6 (insufficient funds) and 4.4.7 (invalid address) as states of it. The scan chip opens [QrScanSheet], which has
- * no board (open item 59), and hides on a device without a camera. The ฿ unit toggle, the baht lines and the fee
+ * 4.4.6 (insufficient funds) and 4.4.7 (invalid address) as states of it. The scan chip opens [QrScanSheet], Penpot 4.4.2
+ * with 4.4.8 as its dialog, and hides on a device without a camera. The ฿ unit toggle, the baht lines and the fee
  * prices in baht need a price from [quotes]. Without one the screen is BTC and sats only. A balance that could not be
  * fetched closes review with a panel of its own, which has no board.
  */
@@ -125,9 +125,10 @@ fun S4SendScreen(
     var scanning by remember { mutableStateOf(false) }
     if (scanning) {
         QrScanSheet(
-            onText = { scanned ->
+            accepts = { acceptsScan(it) { address -> isValidAddress(address, KeyNetwork.TEST) } },
+            onAddress = { scanned ->
                 scanning = false
-                enter(scanOutcome(scanned) { isValidAddress(it, KeyNetwork.TEST) }.text)
+                enter(scanned)
             },
             onClose = { scanning = false },
         )
