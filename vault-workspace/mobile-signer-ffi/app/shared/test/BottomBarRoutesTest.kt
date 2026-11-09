@@ -1,0 +1,37 @@
+package com.mebit.app.navigation
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+
+class BottomBarRoutesTest {
+    private val withBar = mapOf(
+        MovieRoute.S1HomeSingleSig to BarTab.Wallets,
+        MovieRoute.VaultList to BarTab.Wallets,
+        MovieRoute.VaultDetail to BarTab.Wallets,
+        MovieRoute.Keyring to BarTab.Keys,
+        MovieRoute.T15KeyringEmpty to BarTab.Keys,
+        MovieRoute.T15UnverifiedFirst to BarTab.Keys,
+        MovieRoute.T15DeleteBlocked to BarTab.Keys,
+        MovieRoute.T20VaultActions to BarTab.None,
+    )
+
+    @Test
+    fun exactlyTheseRoutesShowTheBarWithTheirTab() {
+        val actual = MovieRoute.entries.filter { it.bar != null }.associateWith { it.bar }
+        assertEquals(withBar, actual)
+    }
+
+    @Test
+    fun noBarBeforeAWalletExistsOrOnReceiveAndSend() {
+        listOf(
+            MovieRoute.Welcome,
+            MovieRoute.KeySource,
+            MovieRoute.ImportSeed,
+            MovieRoute.HomeFirstRun,
+            MovieRoute.S3Receive,
+            MovieRoute.ChooseWalletReceive,
+            MovieRoute.ChooseWalletSend,
+        ).forEach { assertNull(it.bar, it.name) }
+    }
+}

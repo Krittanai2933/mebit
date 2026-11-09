@@ -19,6 +19,7 @@ data class CreatedVault(
     val address: String,
     val bsms: String,
     val keyFingerprints: List<String>,
+    val hasMockKey: Boolean = false,
 )
 
 /**
@@ -97,7 +98,8 @@ class VaultDraft {
         if (address.isBlank() || bsms.isBlank()) {
             if (!buildReview(store)) return false
         }
-        val fps = selectedIds.mapNotNull { id -> store.keys.find { it.id == id }?.fingerprint }
+        val picked = selectedIds.mapNotNull { id -> store.keys.find { it.id == id } }
+        val fps = picked.map { it.fingerprint }
         fps.forEach { store.markUsedInVault(it) }
         val vault = CreatedVault(
             id = "vault_${created.size + 1}",
@@ -108,6 +110,7 @@ class VaultDraft {
             address = address,
             bsms = bsms,
             keyFingerprints = fps,
+            hasMockKey = picked.any { it.isMock },
         )
         created.add(vault)
         selectedVaultId = vault.id

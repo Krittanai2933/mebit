@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penpot Organize, 4.3.0 Receive choose wallet, the vault's icon. Black: tinted where it is used. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="22"
+    android:viewportHeight="22">
+    <path
+        android:pathData="M11,22C11,22 22,17.6 22,9.9L22,3.3L11,0L0,3.3L0,9.9C0,17.6 11,22 11,22ZM6.875,11L9.625,13.2L15.125,8.8"
+        android:strokeColor="#000000"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+</vector>

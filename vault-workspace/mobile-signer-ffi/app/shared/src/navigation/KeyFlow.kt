@@ -18,6 +18,9 @@ fun routeAfterVerify(flow: KeyFlow): MovieRoute = when (flow) {
     KeyFlow.Keyring -> MovieRoute.Keyring
 }
 
+/** After a backup: first setup goes on to the address type, a wallet opened later returns to its Home. */
+internal fun routeAfterBackup(inFirstSetup: Boolean): MovieRoute = if (inFirstSetup) MovieRoute.AddressType else MovieRoute.HomeFirstRun
+
 fun routeBeforeVerify(source: KeySourceLabel, flow: KeyFlow): MovieRoute = when (source) {
     KeySourceLabel.Jade, KeySourceLabel.TrezorSafe7 -> MovieRoute.HardwareWallet
     KeySourceLabel.MebitOther -> MovieRoute.PairMebitOther

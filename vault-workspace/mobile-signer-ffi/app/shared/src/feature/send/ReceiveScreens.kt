@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -58,6 +59,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.QrCode
+import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SingleSigWallet
@@ -166,6 +168,53 @@ fun S3ReceiveScreen(
     onSend: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
+) = ReceiveLayout(
+    eyebrow = "RECEIVE · กระเป๋าใช้จ่าย",
+    tag = "screen_send/s3",
+    address = wallet.receiveAddress,
+    addressIsReal = wallet.addressIsReal,
+    freshNote = wallet.mode == WalletMode.Live,
+    onSend = onSend,
+    onBack = onBack,
+    onOpenCatalog = onOpenCatalog,
+)
+
+/** Penpot 4.3.1 Receive for one vault: its QR and address. A vault has one address today, so the board's fresh-address line is left out, and a vault with a stand-in key gets no QR, as the demo wallet gets none. */
+@Composable
+fun VaultReceiveScreen(
+    vault: CreatedVault?,
+    onSend: () -> Unit,
+    onBack: (() -> Unit)?,
+    onOpenCatalog: () -> Unit,
+) {
+    if (vault == null) {
+        MebitScreen(eyebrow = "RECEIVE · VAULT", title = null, onBack = onBack, onOpenCatalog = onOpenCatalog, tag = "screen_vaults/receive") {
+            Text("ยังไม่มี Vault · สร้างก่อน", color = MaterialTheme.colorScheme.error)
+        }
+        return
+    }
+    ReceiveLayout(
+        eyebrow = "RECEIVE · ${vault.name}",
+        tag = "screen_vaults/receive",
+        address = vault.address,
+        addressIsReal = !vault.hasMockKey,
+        freshNote = false,
+        onSend = onSend,
+        onBack = onBack,
+        onOpenCatalog = onOpenCatalog,
+    )
+}
+
+@Composable
+private fun ReceiveLayout(
+    eyebrow: String,
+    tag: String,
+    address: String,
+    addressIsReal: Boolean,
+    freshNote: Boolean,
+    onSend: () -> Unit,
+    onBack: (() -> Unit)?,
+    onOpenCatalog: () -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
     val sharer = rememberSharer()
@@ -182,7 +231,7 @@ fun S3ReceiveScreen(
     }
     val copyLabel = if (copied) "คัดลอกแล้ว" else "คัดลอกที่อยู่"
     val copy = {
-        clipboard.setText(AnnotatedString(wallet.receiveAddress))
+        clipboard.setText(AnnotatedString(address))
         copied = true
     }
     val share = { send: suspend () -> Unit ->
@@ -198,14 +247,14 @@ fun S3ReceiveScreen(
         }
     }
     MebitScreen(
-        eyebrow = "RECEIVE · กระเป๋าใช้จ่าย",
+        eyebrow = eyebrow,
         title = null,
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
-        tag = "screen_send/s3",
+        tag = tag,
         bottom = {
             Spacer(modifier = Modifier.height(12.dp))
-            if (wallet.addressIsReal) {
+            if (addressIsReal) {
                 Row(modifier = Modifier.fillMaxWidth()) {
                     Box(modifier = Modifier.weight(1f)) {
                         PrimaryCta(label = copyLabel, tag = "cta_s3_copy", onClick = copy, height = 52.dp)
@@ -228,7 +277,7 @@ fun S3ReceiveScreen(
                 // 40 dp, not the 38 under the single 54 dp button: this row is 2 dp shorter and the board puts its top at y 732.
                 Spacer(modifier = Modifier.height(40.dp))
             } else {
-                PrimaryCta(label = copyLabel, tag = "cta_s3_copy", onClick = copy, enabled = wallet.receiveAddress.isNotEmpty())
+                PrimaryCta(label = copyLabel, tag = "cta_s3_copy", onClick = copy, enabled = address.isNotEmpty())
                 Spacer(modifier = Modifier.height(38.dp))
             }
         },
@@ -241,19 +290,19 @@ fun S3ReceiveScreen(
             .clip(card)
             .background(MbWhite)
             .border(1.dp, MbBorder, card)
-        if (wallet.addressIsReal) {
+        if (addressIsReal) {
             Column(
                 modifier = Modifier.fillMaxWidth().heightIn(min = 335.dp).then(cardLook).padding(horizontal = 32.dp, vertical = 24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 QrCode(
-                    text = wallet.receiveAddress,
+                    text = address,
                     modifier = Modifier.size(196.dp).semantics { contentDescription = "QR ของที่อยู่รับเงิน" }.testTag("ss_receive_qr"),
                     dark = MbNavy,
                 )
                 Spacer(modifier = Modifier.height(18.8.dp))
-                ReceiveAddress(wallet.receiveAddress)
-                if (wallet.mode == WalletMode.Live) {
+                ReceiveAddress(address)
+                if (freshNote) {
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
                         text = "ที่อยู่ใหม่ทุกครั้งเพื่อความเป็นส่วนตัว ที่อยู่เก่ายังรับได้",
@@ -270,7 +319,7 @@ fun S3ReceiveScreen(
                 modifier = Modifier.fillMaxWidth().then(cardLook).padding(horizontal = 32.dp, vertical = 28.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                ReceiveAddress(wallet.receiveAddress)
+                ReceiveAddress(address)
             }
         }
         Spacer(modifier = Modifier.height(14.dp))
@@ -286,13 +335,13 @@ fun S3ReceiveScreen(
                 Text("ถ้าเลือก BEP20 หรือ ERC20 เหรียญจะไม่เข้ากระเป๋านี้", color = MbEyebrow, fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 15.sp)
             }
         }
-        if (wallet.addressIsReal) SharePicture(wallet.receiveAddress, pictureLayer)
+        if (addressIsReal) SharePicture(address, pictureLayer)
     }
     if (choosing) {
         ShareChoiceSheet(
             onDismiss = { choosing = false },
-            onAddress = { share { sharer.text(wallet.receiveAddress) } },
-            onQr = { share { sharer.imageOfCard(pictureLayer, frame, MbPage, "mebit-receive-" + wallet.receiveAddress.takeLast(8)) } },
+            onAddress = { share { sharer.text(address) } },
+            onQr = { share { sharer.imageOfCard(pictureLayer, frame, MbPage, "mebit-receive-" + address.takeLast(8)) } },
         )
     }
 }

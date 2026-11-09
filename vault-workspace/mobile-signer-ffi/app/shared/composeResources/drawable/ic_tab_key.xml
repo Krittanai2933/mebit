@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penpot Organize, Bitcoin bottom bar, Tab / Keys. Black: tinted where it is used. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="22"
+    android:viewportHeight="22">
+    <path
+        android:pathData="M14.667,1.834C17.233,1.834 19.25,3.85 19.25,6.416C19.25,8.983 17.233,11 14.667,11C13.933,11 13.2,10.816 12.558,10.449L9.167,13.842L9.167,16.5L6.417,16.5L6.417,19.25L2.75,19.25L2.75,15.584L10.45,7.883C10.175,7.426 10.083,6.967 10.083,6.416C10.083,3.85 12.1,1.834 14.667,1.834L14.667,1.834"
+        android:strokeColor="#000000"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+    <path
+        android:pathData="M14.2,5.9a0.9,0.9 0 1,0 1.8,0a0.9,0.9 0 1,0 -1.8,0Z"
+        android:strokeColor="#000000"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+</vector>

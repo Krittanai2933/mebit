@@ -13,6 +13,12 @@ class KeyFlowTest {
     )
 
     @Test
+    fun aBackupGoesOnToTheAddressTypeOnlyInFirstSetup() {
+        assertEquals(MovieRoute.AddressType, routeAfterBackup(inFirstSetup = true))
+        assertEquals(MovieRoute.HomeFirstRun, routeAfterBackup(inFirstSetup = false))
+    }
+
+    @Test
     fun keySourceStartsOnboardingFromEitherFlow() {
         KeyFlow.entries.forEach { flow ->
             assertEquals(KeyFlow.Onboarding, keyFlowAfter(MovieRoute.KeySource, flow), flow.name)

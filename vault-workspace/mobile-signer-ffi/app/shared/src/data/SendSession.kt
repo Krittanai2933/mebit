@@ -954,6 +954,13 @@ class MultisigSendDraft {
     var broadcastTxid: String by mutableStateOf("")
         private set
 
+    /** Empties the recipient and amount, so a send opened from a vault starts blank. */
+    fun startForm() {
+        destination = ""
+        amountSats = 0L
+        lastError = null
+    }
+
     fun resetSignatures(vault: CreatedVault) {
         this.vault = vault
         signed.clear()

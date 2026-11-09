@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -65,6 +67,7 @@ fun MebitScreen(
     subtitle: String? = null,
     dark: Boolean = false,
     bottom: (@Composable ColumnScope.() -> Unit)? = null,
+    headerContent: (@Composable RowScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val bg = if (dark) MbNavy else MbPage
@@ -89,7 +92,9 @@ fun MebitScreen(
                     BackChip(onClick = onBack, dark = dark)
                     Spacer(modifier = Modifier.width(12.dp))
                 }
-                if (eyebrow != null) {
+                if (headerContent != null) {
+                    headerContent()
+                } else if (eyebrow != null) {
                     Text(
                         text = eyebrow.uppercase(),
                         color = eyebrowColor,
@@ -365,6 +370,9 @@ fun BottomActions(
  */
 fun Modifier.coversScreen(): Modifier = semantics { dialog() }.pointerInput(Unit) {}
 
+/** How far the debug link rises, so the bottom bar's orange button does not cover it. */
+val LocalDebugLinkLift = compositionLocalOf { 0.dp }
+
 /** Debug-only link floating in the home-indicator inset, so it takes no layout space: the bottom block then ends where the boards end it. Nothing in a release build. */
 @Composable
 fun BoxScope.DebugLink(onClick: () -> Unit, dark: Boolean = false) {
@@ -376,6 +384,7 @@ fun BoxScope.DebugLink(onClick: () -> Unit, dark: Boolean = false) {
         modifier = Modifier
             .align(Alignment.BottomCenter)
             .windowInsetsPadding(WindowInsets.systemBars)
+            .padding(bottom = LocalDebugLinkLift.current)
             .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 2.dp)
             .testTag("open_catalog"),

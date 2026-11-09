@@ -1,27 +1,39 @@
 package com.mebit.app.feature.send
 
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.KeySourceLabel
 import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.MultisigSendDraft
 import com.mebit.app.data.TESTNET_MULTISIG_ACCOUNT
+import com.mebit.app.data.formatBtc
+import com.mebit.app.data.parseBtc
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
+import com.mebit.app.ui.theme.MbBody
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.PairingCodes
 import com.mebit.ffi.signer.WalletKind
 import com.mebit.ffi.signer.WalletLink
+import com.mebit.ffi.signer.isValidAddress
 import com.mebit.ffi.signer.scanWallets
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
@@ -35,6 +47,9 @@ fun M1SendVaultScreen(
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
+    var amountText by remember { mutableStateOf(if (draft.amountSats > 0) formatBtc(draft.amountSats) else "") }
+    val sats = parseBtc(amountText)
+    val canContinue = draft.destination.isNotEmpty() && sats != null && isValidAddress(draft.destination, KeyNetwork.TEST)
     MebitScreen(
         eyebrow = "SEND · VAULT",
         title = "ส่งจาก Vault",
@@ -50,13 +65,30 @@ fun M1SendVaultScreen(
         Text("${vault.name} · ${vault.m}-of-${vault.n}", style = MaterialTheme.typography.bodyLarge)
         Text(vault.address, style = MaterialTheme.typography.bodySmall)
         Spacer(modifier = Modifier.height(12.dp))
-        Text("ถึง · ${draft.destination}")
-        Text("จำนวน · ${draft.amountSats} sats")
+        OutlinedTextField(
+            value = draft.destination,
+            onValueChange = { draft.destination = it.filterNot(Char::isWhitespace) },
+            label = { Text("ส่งไปที่") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().testTag("m1_address"),
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = amountText,
+            onValueChange = { amountText = it },
+            label = { Text("จำนวน (BTC)") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth().testTag("m1_amount"),
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text("โหมดทดลอง · ยังไม่ส่งเงินจริง", color = MbBody, fontSize = 12.sp, modifier = Modifier.testTag("m1_demo_note"))
         Spacer(modifier = Modifier.height(20.dp))
         PrimaryCta("ต่อไป · เก็บลายเซ็น", "cta_m1_collect", {
+            draft.amountSats = sats ?: return@PrimaryCta
             draft.resetSignatures(vault)
             onContinue()
-        })
+        }, enabled = canContinue)
     }
 }
 

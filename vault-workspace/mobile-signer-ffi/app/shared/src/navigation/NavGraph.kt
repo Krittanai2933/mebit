@@ -1,5 +1,6 @@
 package com.mebit.app.navigation
 
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -7,6 +8,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -18,6 +21,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -35,11 +39,13 @@ import com.mebit.app.data.MultisigSendDraft
 import com.mebit.app.data.Replacement
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
+import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.data.StartNotice
 import com.mebit.app.data.VaultDraft
 import com.mebit.app.data.ffiImportSeedDraft
 import com.mebit.app.data.liveQuoteCache
 import com.mebit.app.data.pairedDevice
+import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.feature.keys.AddKeyScreen
 import com.mebit.app.feature.keys.HardwareWalletScreen
 import com.mebit.app.feature.keys.KeyringFirstVaultScreen
@@ -56,6 +62,7 @@ import com.mebit.app.feature.onboarding.AddressTypeScreen
 import com.mebit.app.feature.onboarding.BackupWordsScreen
 import com.mebit.app.feature.onboarding.HomeFirstRunScreen
 import com.mebit.app.feature.onboarding.HwBackupConfirmScreen
+import com.mebit.app.feature.onboarding.heroBalanceText
 import com.mebit.app.feature.onboarding.ImportSeedScreen
 import com.mebit.app.feature.onboarding.KeyCreatedScreen
 import com.mebit.app.feature.onboarding.KeySourceScreen
@@ -83,13 +90,22 @@ import com.mebit.app.feature.send.S5ReviewSignScreen
 import com.mebit.app.feature.send.S6SentScreen
 import com.mebit.app.feature.send.S7HistoryScreen
 import com.mebit.app.feature.send.S8TxDetailScreen
+import com.mebit.app.feature.send.ChooseWalletScreen
 import com.mebit.app.feature.send.DEMO_TX
+import com.mebit.app.feature.send.VaultReceiveScreen
+import com.mebit.app.feature.send.WalletChoice
+import com.mebit.app.feature.send.fiatLine
+import com.mebit.app.feature.send.homeBalanceText
+import com.mebit.app.feature.send.walletChoices
 import com.mebit.app.feature.send.M1SendVaultScreen
 import com.mebit.app.feature.send.M2CollectSignaturesScreen
 import com.mebit.app.feature.send.M3SignOnJadeScreen
 import com.mebit.app.feature.send.M4ReadyToBroadcastScreen
 import com.mebit.app.rememberBiometrics
 import com.mebit.app.rememberIsDebugBuild
+import com.mebit.app.ui.components.LocalDebugLinkLift
+import com.mebit.app.ui.components.MebitBottomBar
+import com.mebit.app.ui.components.bottomBarHeight
 import com.mebit.app.ui.components.coversScreen
 import com.mebit.app.ui.theme.MbPage
 import com.mebit.ffi.signer.HotTx
@@ -165,8 +181,37 @@ fun MebitNavHost(
         if (at >= 0) while (backStack.lastIndex > at) backStack.removeAt(backStack.lastIndex)
     }
 
-    // A backup started from the Home banner returns there. The create flow goes on to the address type.
-    fun afterBackup() = if (MovieRoute.HomeFirstRun in backStack) navigate(MovieRoute.HomeFirstRun) else chooseAddressType()
+    // A bar tab is a root. The stack below it goes, so the tab has no back chip, as its board has none.
+    fun openTab(route: MovieRoute) {
+        navigate(route)
+        backStack.removeRange(0, backStack.lastIndex)
+    }
+
+    // A backup started from the Home banner returns there. The create flow goes on to the address type. A tab clears the stack, so the session says which.
+    fun afterBackup() = navigate(routeAfterBackup(session.inFirstSetup))
+
+    fun openReceive(choice: WalletChoice) = when (choice) {
+        WalletChoice.Spending -> navigate(if (session.backupConfirmed) MovieRoute.S3Receive else MovieRoute.S2ReceiveBackupGate)
+        is WalletChoice.Vault -> {
+            vaultDraft.selectVault(choice.vault.id)
+            navigate(MovieRoute.VaultReceive)
+        }
+    }
+
+    fun openSend(choice: WalletChoice) = when (choice) {
+        WalletChoice.Spending -> {
+            sendDraft.reset()
+            navigate(MovieRoute.S4Send)
+        }
+        is WalletChoice.Vault -> {
+            vaultDraft.selectVault(choice.vault.id)
+            multisigSend.startForm()
+            navigate(MovieRoute.M1SendVault)
+        }
+    }
+
+    // A real key reads Demo until its first bind ends, so its balance stays a dash until then, as on Home.
+    fun spendingKnown() = singleSig.balanceKnown && !(session.words.size >= 12 && singleSig.mode == WalletMode.Demo)
 
     // Once onboarding is over the words open past the Spending PIN where it guards the session, and as before elsewhere.
     fun openWords() {
@@ -195,371 +240,411 @@ fun MebitNavHost(
     val debugBuild = rememberIsDebugBuild()
     val openCatalog = { if (debugBuild) catalogOpen = true }
 
-    when (current) {
-        MovieRoute.Welcome -> WelcomeScreen(
-            onCreate = { navigate(MovieRoute.KeySource) },
-            onImport = { navigate(MovieRoute.ImportSeed) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-            notice = startNotice,
-        )
-        MovieRoute.KeySource -> KeySourceScreen(
-            session = session,
-            onPhone = { navigate(MovieRoute.KeyCreated) },
-            onHardware = { navigate(MovieRoute.HardwareWallet) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.ImportSeed -> ImportSeedScreen(
-            session = session,
-            draft = importDraft,
-            // An import skips backup: the user typed the words from their own record.
-            onRestored = { chooseAddressType() },
-            onBack = onBack?.let { back ->
-                {
-                    importDraft = ffiImportSeedDraft()
-                    back()
+    val bar = current.bar
+    CompositionLocalProvider(LocalDebugLinkLift provides if (bar != null) 22.dp else 0.dp) {
+        Box(Modifier.fillMaxSize().background(MbPage)) {
+            val inset = if (bar != null) bottomBarHeight() else 0.dp
+            Box(Modifier.fillMaxSize().padding(bottom = inset).consumeWindowInsets(PaddingValues(bottom = inset))) {
+                when (current) {
+                    MovieRoute.Welcome -> WelcomeScreen(
+                        onCreate = { navigate(MovieRoute.KeySource) },
+                        onImport = { navigate(MovieRoute.ImportSeed) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                        notice = startNotice,
+                    )
+                    MovieRoute.KeySource -> KeySourceScreen(
+                        session = session,
+                        onPhone = { navigate(MovieRoute.KeyCreated) },
+                        onHardware = { navigate(MovieRoute.HardwareWallet) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.ImportSeed -> ImportSeedScreen(
+                        session = session,
+                        draft = importDraft,
+                        // An import skips backup: the user typed the words from their own record.
+                        onRestored = { chooseAddressType() },
+                        onBack = onBack?.let { back ->
+                            {
+                                importDraft = ffiImportSeedDraft()
+                                back()
+                            }
+                        },
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.KeyCreated -> KeyCreatedScreen(
+                        session = session,
+                        onBackup = { navigate(MovieRoute.BackupWords) },
+                        onSkip = { chooseAddressType() },
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.BackupWords -> BackupWordsScreen(
+                        session = session,
+                        onVerifiedReady = { navigate(MovieRoute.VerifyWords) },
+                        onSkip = { afterBackup() },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.VerifyWords -> VerifyWordsScreen(
+                        session = session,
+                        onVerified = { afterBackup() },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.AddressType -> AddressTypeScreen(
+                        session = session,
+                        onContinue = {
+                            importDraft = ffiImportSeedDraft()
+                            lockStep()
+                        },
+                        // A cold start restores Address Type alone, so Backup Words is pushed when the stack does not hold it.
+                        onEditPassphrase = { if (MovieRoute.BackupWords in backStack) backTo(MovieRoute.BackupWords) else navigate(MovieRoute.BackupWords) },
+                        onRejectImport = { backTo(MovieRoute.ImportSeed) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.AppLock -> AppLockScreen(
+                        session = session,
+                        biometrics = biometrics,
+                        mode = LockMode.Enable,
+                        // A lock removed while this screen showed leaves the phone with no owner check, so its PIN comes before Home.
+                        onDone = { navigate(if (biometrics.needsPin) MovieRoute.SpendingPin else MovieRoute.HomeFirstRun) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.SpendingPin -> SpendingPinScreen(
+                        session = session,
+                        onDone = { navigate(MovieRoute.HomeFirstRun) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.HomeFirstRun -> HomeFirstRunScreen(
+                        session = session,
+                        wallet = singleSig,
+                        onSingleSig = { navigate(MovieRoute.S1HomeSingleSig) },
+                        onVault = { navigate(MovieRoute.KeyringFirstVault) },
+                        onBackup = { openWords() },
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.HwBackupConfirm -> HwBackupConfirmScreen(
+                        device = pairedDevice(keyring.keys),
+                        onDone = {
+                            session.markBackupConfirmed()
+                            navigate(MovieRoute.HomeFirstRun)
+                        },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.AddKey -> AddKeyScreen(
+                        store = keyring,
+                        onThisDevice = { navigate(MovieRoute.VerifyKey) },
+                        onMebitOther = { navigate(MovieRoute.PairMebitOther) },
+                        onHardware = { navigate(MovieRoute.HardwareWallet) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.PairMebitOther -> PairMebitOtherScreen(
+                        store = keyring,
+                        onPaired = { navigate(MovieRoute.VerifyKey) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.HardwareWallet -> HardwareWalletScreen(
+                        store = keyring,
+                        onEnrolled = { navigate(MovieRoute.VerifyKey) },
+                        onUnsupported = { model ->
+                            unsupportedModel = model
+                            navigate(MovieRoute.T13UnsupportedModel)
+                        },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.VerifyKey -> VerifyKeyScreen(
+                        store = keyring,
+                        onMatched = { navigate(routeAfterVerify(keyFlow)) },
+                        onMismatch = { source ->
+                            verifyRetryRoute = routeBeforeVerify(source, keyFlow)
+                            navigate(MovieRoute.T14VerifyMismatch)
+                        },
+                        onReconnect = { source -> returnToKeySource(routeBeforeVerify(source, keyFlow)) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.Keyring -> KeyringScreen(
+                        store = keyring,
+                        onAddKey = { navigate(MovieRoute.AddKey) },
+                        onFirstVault = { navigate(MovieRoute.KeyringFirstVault) },
+                        onDeleteBlocked = { navigate(MovieRoute.T15DeleteBlocked) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.KeyringFirstVault -> KeyringFirstVaultScreen(
+                        store = keyring,
+                        onContinuePolicy = { navigate(MovieRoute.Policy) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.Policy -> PolicyScreen(
+                        draft = vaultDraft,
+                        onContinue = { navigate(MovieRoute.ChooseKeys) },
+                        onDecaying = { navigate(MovieRoute.T16PolicyDecaying) },
+                        onInvalidMn = { navigate(MovieRoute.T16InvalidMn) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.ChooseKeys -> ChooseKeysScreen(
+                        draft = vaultDraft,
+                        store = keyring,
+                        onContinue = { navigate(MovieRoute.Review) },
+                        onCountMismatch = { navigate(MovieRoute.T17CountMismatch) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.Review -> ReviewScreen(
+                        draft = vaultDraft,
+                        store = keyring,
+                        onCreated = { navigate(MovieRoute.VaultCreated) },
+                        onBackendError = { navigate(MovieRoute.T18BackendError) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.VaultCreated -> VaultCreatedScreen(
+                        draft = vaultDraft,
+                        onOpenVaults = { navigate(MovieRoute.VaultList) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.VaultList -> VaultListScreen(
+                        draft = vaultDraft,
+                        hasSpendingKey = session.words.size >= 12,
+                        spendingBalance = heroBalanceText(singleSig.balanceSats, spendingKnown()),
+                        onOpenSpending = { navigate(MovieRoute.S1HomeSingleSig) },
+                        onOpenKeyring = { openTab(MovieRoute.Keyring) },
+                        onOpenDetail = { navigate(MovieRoute.VaultDetail) },
+                        onCreate = { navigate(MovieRoute.KeyringFirstVault) },
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.VaultDetail -> VaultDetailScreen(
+                        draft = vaultDraft,
+                        onReceive = { navigate(MovieRoute.VaultReceive) },
+                        onSend = {
+                            multisigSend.startForm()
+                            navigate(MovieRoute.M1SendVault)
+                        },
+                        onActions = { navigate(MovieRoute.T20VaultActions) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.T13UnsupportedModel -> T13UnsupportedModelScreen(
+                        model = unsupportedModel,
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.T14VerifyMismatch -> T14VerifyMismatchScreen(
+                        onBack = { returnToKeySource(verifyRetryRoute) },
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.T15KeyringEmpty -> T15KeyringEmptyScreen(
+                        onAddKey = { navigate(MovieRoute.AddKey) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.T15UnverifiedFirst -> T15UnverifiedFirstScreen(
+                        onVerify = { navigate(MovieRoute.VerifyKey) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.T15DeleteBlocked -> T15DeleteBlockedScreen(
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.T16PolicyDecaying -> T16PolicyDecayingScreen(
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.T16InvalidMn -> T16InvalidMnScreen(
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.T17CountMismatch -> T17CountMismatchScreen(
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.T18BackendError -> T18BackendErrorScreen(
+                        onRetry = { navigate(MovieRoute.Review) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.T20VaultActions -> T20VaultActionsScreen(
+                        draft = vaultDraft,
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.S1HomeSingleSig -> S1HomeSingleSigScreen(
+                        wallet = singleSig,
+                        session = session,
+                        quotes = quotes,
+                        onReceive = { openReceive(WalletChoice.Spending) },
+                        onSend = { openSend(WalletChoice.Spending) },
+                        onVault = { navigate(MovieRoute.KeyringFirstVault) },
+                        onHistory = { navigate(MovieRoute.S7History) },
+                        onOpenTx = openTx,
+                        onOpenCatalog = openCatalog,
+                        onChangePin = if (session.pin.isSet) ({ scope.launch { biometrics.changePin("เปลี่ยน PIN") } }) else null,
+                    )
+                    MovieRoute.S7History -> S7HistoryScreen(
+                        wallet = singleSig,
+                        onOpenTx = openTx,
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.S8TxDetail -> S8TxDetailScreen(
+                        tx = openedTx,
+                        wallet = singleSig,
+                        session = session,
+                        quotes = quotes,
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.S2ReceiveBackupGate -> S2ReceiveBackupGateScreen(
+                        wallet = singleSig,
+                        session = session,
+                        quotes = quotes,
+                        onBackedUp = { navigate(MovieRoute.S3Receive) },
+                        onGoBackup = { openWords() },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.S3Receive -> S3ReceiveScreen(
+                        wallet = singleSig,
+                        session = session,
+                        onSend = { openSend(WalletChoice.Spending) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.S4Send -> S4SendScreen(
+                        wallet = singleSig,
+                        session = session,
+                        draft = sendDraft,
+                        quotes = quotes,
+                        confirmRepost = confirmRepost,
+                        confirmReplacement = confirmReplacement,
+                        onContinue = { navigate(MovieRoute.S5ReviewSign) },
+                        onReceive = { openReceive(WalletChoice.Spending) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.S5ReviewSign -> S5ReviewSignScreen(
+                        wallet = singleSig,
+                        session = session,
+                        draft = sendDraft,
+                        quotes = quotes,
+                        confirm = { appLock.confirm(biometrics, session.appLockEnabled, "ยืนยันการเซ็นส่งเงิน") },
+                        confirmRepost = confirmRepost,
+                        confirmReplacement = confirmReplacement,
+                        onSigned = { navigate(MovieRoute.S6SentSlip) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.S6Sent -> S6SentScreen(
+                        wallet = singleSig,
+                        draft = sendDraft,
+                        quotes = quotes,
+                        variant = "default",
+                        onHome = { navigate(MovieRoute.S1HomeSingleSig) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.S6SentSlip -> S6SentScreen(
+                        wallet = singleSig,
+                        draft = sendDraft,
+                        quotes = quotes,
+                        variant = "slip",
+                        onHome = { navigate(MovieRoute.S1HomeSingleSig) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.S6SentBlock -> S6SentScreen(
+                        wallet = singleSig,
+                        draft = sendDraft,
+                        quotes = quotes,
+                        variant = "block",
+                        onHome = { navigate(MovieRoute.S1HomeSingleSig) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.S6SentPoster -> S6SentScreen(
+                        wallet = singleSig,
+                        draft = sendDraft,
+                        quotes = quotes,
+                        variant = "poster",
+                        onHome = { navigate(MovieRoute.S1HomeSingleSig) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.M1SendVault -> M1SendVaultScreen(
+                        vault = vaultDraft.selectedVault(),
+                        draft = multisigSend,
+                        onContinue = { navigate(MovieRoute.M2CollectSignatures) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.M2CollectSignatures -> M2CollectSignaturesScreen(
+                        store = keyring,
+                        draft = multisigSend,
+                        onSignJade = { navigate(MovieRoute.M3SignOnJade) },
+                        onReady = { navigate(MovieRoute.M4ReadyToBroadcast) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.M3SignOnJade -> M3SignOnJadeScreen(
+                        draft = multisigSend,
+                        onSigned = { navigate(MovieRoute.M2CollectSignatures) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.ChooseWalletReceive, MovieRoute.ChooseWalletSend -> {
+                        val send = current == MovieRoute.ChooseWalletSend
+                        val quote = rememberFiatQuote(quotes)
+                        ChooseWalletScreen(
+                            send = send,
+                            choices = walletChoices(session.words.size >= 12, vaultDraft.created),
+                            spendingBalance = homeBalanceText(singleSig.balanceSats, spendingKnown(), loading = false),
+                            spendingBaht = if (singleSig.mode == WalletMode.Live && singleSig.balanceKnown) fiatLine(singleSig.balanceSats, quote) else null,
+                            onChoose = { if (send) openSend(it) else openReceive(it) },
+                            onSwitch = { backStack[backStack.lastIndex] = if (send) MovieRoute.ChooseWalletReceive else MovieRoute.ChooseWalletSend },
+                            onBack = onBack,
+                            onOpenCatalog = openCatalog,
+                        )
+                    }
+                    MovieRoute.VaultReceive -> VaultReceiveScreen(
+                        vault = vaultDraft.selectedVault(),
+                        onSend = {
+                            multisigSend.startForm()
+                            navigate(MovieRoute.M1SendVault)
+                        },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.M4ReadyToBroadcast -> M4ReadyToBroadcastScreen(
+                        draft = multisigSend,
+                        onBroadcast = { navigate(MovieRoute.VaultDetail) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
                 }
-            },
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.KeyCreated -> KeyCreatedScreen(
-            session = session,
-            onBackup = { navigate(MovieRoute.BackupWords) },
-            onSkip = { chooseAddressType() },
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.BackupWords -> BackupWordsScreen(
-            session = session,
-            onVerifiedReady = { navigate(MovieRoute.VerifyWords) },
-            onSkip = { afterBackup() },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.VerifyWords -> VerifyWordsScreen(
-            session = session,
-            onVerified = { afterBackup() },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.AddressType -> AddressTypeScreen(
-            session = session,
-            onContinue = {
-                importDraft = ffiImportSeedDraft()
-                lockStep()
-            },
-            // A cold start restores Address Type alone, so Backup Words is pushed when the stack does not hold it.
-            onEditPassphrase = { if (MovieRoute.BackupWords in backStack) backTo(MovieRoute.BackupWords) else navigate(MovieRoute.BackupWords) },
-            onRejectImport = { backTo(MovieRoute.ImportSeed) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.AppLock -> AppLockScreen(
-            session = session,
-            biometrics = biometrics,
-            mode = LockMode.Enable,
-            // A lock removed while this screen showed leaves the phone with no owner check, so its PIN comes before Home.
-            onDone = { navigate(if (biometrics.needsPin) MovieRoute.SpendingPin else MovieRoute.HomeFirstRun) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.SpendingPin -> SpendingPinScreen(
-            session = session,
-            onDone = { navigate(MovieRoute.HomeFirstRun) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.HomeFirstRun -> HomeFirstRunScreen(
-            session = session,
-            wallet = singleSig,
-            onSingleSig = { navigate(MovieRoute.S1HomeSingleSig) },
-            onVault = { navigate(MovieRoute.KeyringFirstVault) },
-            onBackup = { openWords() },
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.HwBackupConfirm -> HwBackupConfirmScreen(
-            device = pairedDevice(keyring.keys),
-            onDone = {
-                session.markBackupConfirmed()
-                navigate(MovieRoute.HomeFirstRun)
-            },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.AddKey -> AddKeyScreen(
-            store = keyring,
-            onThisDevice = { navigate(MovieRoute.VerifyKey) },
-            onMebitOther = { navigate(MovieRoute.PairMebitOther) },
-            onHardware = { navigate(MovieRoute.HardwareWallet) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.PairMebitOther -> PairMebitOtherScreen(
-            store = keyring,
-            onPaired = { navigate(MovieRoute.VerifyKey) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.HardwareWallet -> HardwareWalletScreen(
-            store = keyring,
-            onEnrolled = { navigate(MovieRoute.VerifyKey) },
-            onUnsupported = { model ->
-                unsupportedModel = model
-                navigate(MovieRoute.T13UnsupportedModel)
-            },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.VerifyKey -> VerifyKeyScreen(
-            store = keyring,
-            onMatched = { navigate(routeAfterVerify(keyFlow)) },
-            onMismatch = { source ->
-                verifyRetryRoute = routeBeforeVerify(source, keyFlow)
-                navigate(MovieRoute.T14VerifyMismatch)
-            },
-            onReconnect = { source -> returnToKeySource(routeBeforeVerify(source, keyFlow)) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.Keyring -> KeyringScreen(
-            store = keyring,
-            onAddKey = { navigate(MovieRoute.AddKey) },
-            onFirstVault = { navigate(MovieRoute.KeyringFirstVault) },
-            onDeleteBlocked = { navigate(MovieRoute.T15DeleteBlocked) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.KeyringFirstVault -> KeyringFirstVaultScreen(
-            store = keyring,
-            onContinuePolicy = { navigate(MovieRoute.Policy) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.Policy -> PolicyScreen(
-            draft = vaultDraft,
-            onContinue = { navigate(MovieRoute.ChooseKeys) },
-            onDecaying = { navigate(MovieRoute.T16PolicyDecaying) },
-            onInvalidMn = { navigate(MovieRoute.T16InvalidMn) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.ChooseKeys -> ChooseKeysScreen(
-            draft = vaultDraft,
-            store = keyring,
-            onContinue = { navigate(MovieRoute.Review) },
-            onCountMismatch = { navigate(MovieRoute.T17CountMismatch) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.Review -> ReviewScreen(
-            draft = vaultDraft,
-            store = keyring,
-            onCreated = { navigate(MovieRoute.VaultCreated) },
-            onBackendError = { navigate(MovieRoute.T18BackendError) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.VaultCreated -> VaultCreatedScreen(
-            draft = vaultDraft,
-            onOpenVaults = { navigate(MovieRoute.VaultList) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.VaultList -> VaultListScreen(
-            draft = vaultDraft,
-            onOpenDetail = { navigate(MovieRoute.VaultDetail) },
-            onCreate = { navigate(MovieRoute.KeyringFirstVault) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.VaultDetail -> VaultDetailScreen(
-            draft = vaultDraft,
-            onReceive = { /* address on this screen is the receive path */ },
-            onSend = { navigate(MovieRoute.M1SendVault) },
-            onActions = { navigate(MovieRoute.T20VaultActions) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.T13UnsupportedModel -> T13UnsupportedModelScreen(
-            model = unsupportedModel,
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.T14VerifyMismatch -> T14VerifyMismatchScreen(
-            onBack = { returnToKeySource(verifyRetryRoute) },
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.T15KeyringEmpty -> T15KeyringEmptyScreen(
-            onAddKey = { navigate(MovieRoute.AddKey) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.T15UnverifiedFirst -> T15UnverifiedFirstScreen(
-            onVerify = { navigate(MovieRoute.VerifyKey) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.T15DeleteBlocked -> T15DeleteBlockedScreen(
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.T16PolicyDecaying -> T16PolicyDecayingScreen(
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.T16InvalidMn -> T16InvalidMnScreen(
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.T17CountMismatch -> T17CountMismatchScreen(
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.T18BackendError -> T18BackendErrorScreen(
-            onRetry = { navigate(MovieRoute.Review) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.T20VaultActions -> T20VaultActionsScreen(
-            draft = vaultDraft,
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.S1HomeSingleSig -> S1HomeSingleSigScreen(
-            wallet = singleSig,
-            session = session,
-            quotes = quotes,
-            onReceive = { navigate(if (session.backupConfirmed) MovieRoute.S3Receive else MovieRoute.S2ReceiveBackupGate) },
-            onSend = {
-                sendDraft.reset()
-                navigate(MovieRoute.S4Send)
-            },
-            onVault = { navigate(MovieRoute.KeyringFirstVault) },
-            onHistory = { navigate(MovieRoute.S7History) },
-            onOpenTx = openTx,
-            onOpenCatalog = openCatalog,
-            onChangePin = if (session.pin.isSet) ({ scope.launch { biometrics.changePin("เปลี่ยน PIN") } }) else null,
-        )
-        MovieRoute.S7History -> S7HistoryScreen(
-            wallet = singleSig,
-            onOpenTx = openTx,
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.S8TxDetail -> S8TxDetailScreen(
-            tx = openedTx,
-            wallet = singleSig,
-            session = session,
-            quotes = quotes,
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.S2ReceiveBackupGate -> S2ReceiveBackupGateScreen(
-            wallet = singleSig,
-            session = session,
-            quotes = quotes,
-            onBackedUp = { navigate(MovieRoute.S3Receive) },
-            onGoBackup = { openWords() },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.S3Receive -> S3ReceiveScreen(
-            wallet = singleSig,
-            session = session,
-            onSend = {
-                sendDraft.reset()
-                navigate(MovieRoute.S4Send)
-            },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.S4Send -> S4SendScreen(
-            wallet = singleSig,
-            session = session,
-            draft = sendDraft,
-            quotes = quotes,
-            confirmRepost = confirmRepost,
-            confirmReplacement = confirmReplacement,
-            onContinue = { navigate(MovieRoute.S5ReviewSign) },
-            onReceive = { navigate(if (session.backupConfirmed) MovieRoute.S3Receive else MovieRoute.S2ReceiveBackupGate) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.S5ReviewSign -> S5ReviewSignScreen(
-            wallet = singleSig,
-            session = session,
-            draft = sendDraft,
-            quotes = quotes,
-            confirm = { appLock.confirm(biometrics, session.appLockEnabled, "ยืนยันการเซ็นส่งเงิน") },
-            confirmRepost = confirmRepost,
-            confirmReplacement = confirmReplacement,
-            onSigned = { navigate(MovieRoute.S6SentSlip) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.S6Sent -> S6SentScreen(
-            wallet = singleSig,
-            draft = sendDraft,
-            quotes = quotes,
-            variant = "default",
-            onHome = { navigate(MovieRoute.S1HomeSingleSig) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.S6SentSlip -> S6SentScreen(
-            wallet = singleSig,
-            draft = sendDraft,
-            quotes = quotes,
-            variant = "slip",
-            onHome = { navigate(MovieRoute.S1HomeSingleSig) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.S6SentBlock -> S6SentScreen(
-            wallet = singleSig,
-            draft = sendDraft,
-            quotes = quotes,
-            variant = "block",
-            onHome = { navigate(MovieRoute.S1HomeSingleSig) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.S6SentPoster -> S6SentScreen(
-            wallet = singleSig,
-            draft = sendDraft,
-            quotes = quotes,
-            variant = "poster",
-            onHome = { navigate(MovieRoute.S1HomeSingleSig) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.M1SendVault -> M1SendVaultScreen(
-            vault = vaultDraft.selectedVault(),
-            draft = multisigSend,
-            onContinue = { navigate(MovieRoute.M2CollectSignatures) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.M2CollectSignatures -> M2CollectSignaturesScreen(
-            store = keyring,
-            draft = multisigSend,
-            onSignJade = { navigate(MovieRoute.M3SignOnJade) },
-            onReady = { navigate(MovieRoute.M4ReadyToBroadcast) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.M3SignOnJade -> M3SignOnJadeScreen(
-            draft = multisigSend,
-            onSigned = { navigate(MovieRoute.M2CollectSignatures) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
-        MovieRoute.M4ReadyToBroadcast -> M4ReadyToBroadcastScreen(
-            draft = multisigSend,
-            onBroadcast = { navigate(MovieRoute.VaultDetail) },
-            onBack = onBack,
-            onOpenCatalog = openCatalog,
-        )
+            }
+            if (bar != null) {
+                MebitBottomBar(
+                    selected = bar,
+                    onWallets = { openTab(MovieRoute.VaultList) },
+                    onKeys = { openTab(MovieRoute.Keyring) },
+                    onReceiveSend = { navigate(MovieRoute.ChooseWalletReceive) },
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
+            }
+        }
     }
 
     if (catalogOpen) {

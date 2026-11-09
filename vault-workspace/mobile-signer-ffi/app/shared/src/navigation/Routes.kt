@@ -1,10 +1,15 @@
 package com.mebit.app.navigation
 
+/** Which tab the bottom bar lights on a screen. [None] shows the bar with no tab lit. */
+enum class BarTab { Wallets, Keys, None }
+
 enum class MovieRoute(
     val path: String,
     val eyebrow: String,
     val titleTh: String,
     val bodyTh: String,
+    /** Null means the screen has no bottom bar. */
+    val bar: BarTab? = null,
 ) {
     Welcome(
         "welcome",
@@ -101,6 +106,7 @@ enum class MovieRoute(
         "KEYRING",
         "คลังกุญแจ",
         "กุญแจที่ยืนยันแล้ว",
+        BarTab.Keys,
     ),
     KeyringFirstVault(
         "keys/keyring-first-vault",
@@ -137,12 +143,14 @@ enum class MovieRoute(
         "VAULTS",
         "Vault ของคุณ",
         "personal_custody",
+        BarTab.Wallets,
     ),
     VaultDetail(
         "vaults/detail",
         "VAULT DETAIL",
         "รายละเอียด Vault",
         "รับ · ส่ง",
+        BarTab.Wallets,
     ),
     T13UnsupportedModel(
         "critical/t13",
@@ -161,18 +169,21 @@ enum class MovieRoute(
         "KEYRING",
         "ยังไม่มีกุญแจในคลัง",
         "เพิ่มกุญแจก่อน",
+        BarTab.Keys,
     ),
     T15UnverifiedFirst(
         "critical/t15-unverified",
         "KEYRING",
         "กุญแจยังไม่ยืนยัน",
         "ยืนยัน fingerprint ก่อน",
+        BarTab.Keys,
     ),
     T15DeleteBlocked(
         "critical/t15-delete",
         "KEYRING",
         "ลบกุญแจไม่ได้",
         "ยังถูกใช้ใน Vault",
+        BarTab.Keys,
     ),
     T16PolicyDecaying(
         "critical/t16-decaying",
@@ -203,12 +214,14 @@ enum class MovieRoute(
         "VAULT ACTIONS",
         "การกระทำของ Vault",
         "BSMS · health check",
+        BarTab.None,
     ),
     S1HomeSingleSig(
         "send/s1",
         "SINGLE-SIG",
         "กระเป๋าใช้จ่าย",
         "Home กุญแจเดียว",
+        BarTab.Wallets,
     ),
     S2ReceiveBackupGate(
         "send/s2",
@@ -293,6 +306,24 @@ enum class MovieRoute(
         "READY TO BROADCAST",
         "พร้อมส่งธุรกรรม",
         "ลายเซ็นครบแล้ว",
+    ),
+    ChooseWalletReceive(
+        "wallets/choose-receive",
+        "RECEIVE · เลือกกระเป๋า",
+        "เลือกกระเป๋า",
+        "รับเข้ากระเป๋าที่เลือก",
+    ),
+    ChooseWalletSend(
+        "wallets/choose-send",
+        "SEND · เลือกกระเป๋า",
+        "เลือกกระเป๋า",
+        "ส่งจากกระเป๋าที่เลือก",
+    ),
+    VaultReceive(
+        "vaults/receive",
+        "RECEIVE",
+        "รับเข้า Vault",
+        "ที่อยู่รับของ Vault",
     ),
     ;
 

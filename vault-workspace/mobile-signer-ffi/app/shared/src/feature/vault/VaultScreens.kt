@@ -4,9 +4,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -15,13 +24,28 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import com.mebit.app.data.CustodyPolicy
 import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.VaultDraft
+import com.mebit.app.resources.Res
+import com.mebit.app.resources.mebit_logo_dark
 import com.mebit.app.ui.components.InfoCard
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
+import com.mebit.app.ui.theme.MbBorder
+import com.mebit.app.ui.theme.MbBtcOrange
+import com.mebit.app.ui.theme.MbNavy
+import com.mebit.app.ui.theme.MbNavyInk
+import com.mebit.app.ui.theme.MbSlate
+import com.mebit.app.ui.theme.MbWhite
+import org.jetbrains.compose.resources.painterResource
 
 @Composable
 fun PolicyScreen(
@@ -202,42 +226,94 @@ fun VaultCreatedScreen(
     }
 }
 
+/**
+ * Penpot 3.5: the spending wallet when the phone holds a real key, then the vaults. Left out: the total line, because the app
+ * cannot read a vault's balance, so a vault shows a dash.
+ */
 @Composable
 fun VaultListScreen(
     draft: VaultDraft,
+    hasSpendingKey: Boolean,
+    spendingBalance: String,
+    onOpenSpending: () -> Unit,
+    onOpenKeyring: () -> Unit,
     onOpenDetail: () -> Unit,
     onCreate: () -> Unit,
-    onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
     MebitScreen(
-        eyebrow = "VAULTS",
+        eyebrow = null,
         title = "Vault ของคุณ",
-        onBack = onBack,
+        onBack = null,
         onOpenCatalog = onOpenCatalog,
-        subtitle = "personal_custody",
         tag = "screen_vaults",
+        headerContent = {
+            Image(painterResource(Res.drawable.mebit_logo_dark), contentDescription = "mebit", modifier = Modifier.size(width = 74.dp, height = 19.dp))
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                text = "คลังกุญแจ",
+                color = MbNavy,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clickable(role = Role.Button, onClick = onOpenKeyring).testTag("cta_vaults_keyring"),
+            )
+        },
     ) {
-        if (draft.created.isEmpty()) {
-            Text("ยังไม่มี Vault", modifier = Modifier.testTag("vaults_empty"))
-        } else {
-            draft.created.forEach { vault ->
-                Text(vault.name, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "${vault.m}-of-${vault.n} · ${vault.address.take(16)}…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                SecondaryCta("เปิด ${vault.name}", "cta_open_${vault.id}", {
+        if (hasSpendingKey) {
+            WalletListCard(
+                kind = "SINGLE-SIG",
+                name = "กระเป๋าใช้จ่าย",
+                detail = "กุญแจเดียว · iPhone ของฉัน",
+                balance = spendingBalance,
+                dark = false,
+                tag = "card_spending",
+                onClick = onOpenSpending,
+            )
+            Spacer(modifier = Modifier.height(11.dp))
+        }
+        draft.created.forEach { vault ->
+            WalletListCard(
+                kind = "MULTISIG ${vault.m}-of-${vault.n}",
+                name = vault.name,
+                detail = "ต้องเซ็น ${vault.m} จาก ${vault.n} กุญแจ",
+                balance = "—",
+                dark = true,
+                tag = "cta_open_${vault.id}",
+                onClick = {
                     draft.selectVault(vault.id)
                     onOpenDetail()
-                })
-                Spacer(modifier = Modifier.height(12.dp))
-            }
+                },
+            )
+            Spacer(modifier = Modifier.height(11.dp))
         }
-        Spacer(modifier = Modifier.height(8.dp))
-        PrimaryCta("สร้าง Vault ใหม่", "cta_new_vault", onCreate)
+        if (!hasSpendingKey && draft.created.isEmpty()) {
+            Text("ยังไม่มี Vault", modifier = Modifier.testTag("vaults_empty"))
+        }
+        Spacer(modifier = Modifier.height(23.dp))
+        SecondaryCta("ประกอบ Vault ใหม่", "cta_new_vault", onCreate)
+    }
+}
+
+@Composable
+private fun WalletListCard(kind: String, name: String, detail: String, balance: String, dark: Boolean, tag: String, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(20.dp)
+    val ink = if (dark) MbWhite else MbNavyInk
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(105.dp)
+            .shadow(4.dp, shape, clip = false)
+            .clip(shape)
+            .background(if (dark) MbNavy else MbWhite)
+            .border(1.dp, if (dark) MbNavy else MbBorder, shape)
+            .clickable(role = Role.Button, onClick = onClick)
+            .testTag(tag),
+    ) {
+        Box(Modifier.offset(x = 18.dp, y = 21.dp).size(8.dp).background(if (dark) MbBtcOrange else MbNavy, RoundedCornerShape(4.dp)))
+        Text(kind, color = if (dark) MbWhite.copy(alpha = 0.72f) else MbSlate, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.offset(x = 32.dp, y = 16.dp))
+        Text(name, color = ink, fontSize = 17.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.offset(x = 32.dp, y = 39.dp))
+        Text(detail, color = if (dark) MbWhite.copy(alpha = 0.66f) else MbSlate, fontSize = 11.5.sp, fontWeight = FontWeight.Light, modifier = Modifier.offset(x = 32.dp, y = 70.dp))
+        Text(balance, color = ink, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.TopEnd).padding(end = 18.dp, top = 70.dp))
     }
 }
 

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penpot Organize, 4.3.0 Receive choose wallet, the spending wallet's icon. Black: tinted where it is used. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="22"
+    android:viewportHeight="22">
+    <path
+        android:pathData="M22,6.111L22,2.444C22,1.095 20.906,0 19.556,0L3.667,0C1.642,0 0,1.642 0,3.667C0,5.691 1.642,7.333 3.667,7.333L22,7.333L22,22L3.667,22C1.642,22 0,20.358 0,18.333L0,3.667M22,11L15.889,11L15.889,17.111L22,17.111"
+        android:strokeColor="#000000"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+</vector>

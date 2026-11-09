@@ -103,7 +103,7 @@ private val FiatGold = Color(0xFFEEB42A)
 private val TxListMaxHeight = 301.5.dp
 
 /**
- * Penpot 4.1 Home · single-sig. Left out: the bottom tabs (the app has no tab navigation), the settings gear and
+ * Penpot 4.1 Home · single-sig. Left out: the settings gear and
  * the key-details link (no screens behind them yet), and the names in the transaction rows (the wallet knows no
  * counterparty, so a row says only รับ or ส่งออก).
  * A key whose balance could not be fetched shows a dash and a retry line in place of a number, and a key whose
