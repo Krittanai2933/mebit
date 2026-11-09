@@ -26,7 +26,7 @@ data class CreatedVault(
  * Policy → choose keys → review → BSMS file export (no QR).
  * personal_custody only; decaying/timelock surface as T16 boards.
  */
-class VaultDraft {
+class VaultDraft(private val book: SavedVaults = SavedVaults.memoryOnly()) {
     var m: Int by mutableStateOf(2)
     var n: Int by mutableStateOf(3)
     var policy: CustodyPolicy by mutableStateOf(CustodyPolicy.PersonalCustody)
@@ -37,7 +37,7 @@ class VaultDraft {
         private set
     var bsms: String by mutableStateOf("")
         private set
-    val created = mutableStateListOf<CreatedVault>()
+    val created: List<CreatedVault> get() = book.current.vaults
     var selectedVaultId: String? by mutableStateOf(null)
 
     fun selectVault(id: String) {
@@ -100,10 +100,10 @@ class VaultDraft {
         }
         val picked = selectedIds.mapNotNull { id -> store.keys.find { it.id == id } }
         val fps = picked.map { it.fingerprint }
-        fps.forEach { store.markUsedInVault(it) }
+        // Built here, not inside the edit, because an edit can run again later and these fields are the draft's live state.
         val vault = CreatedVault(
-            id = "vault_${created.size + 1}",
-            name = "Vault ${created.size + 1}",
+            id = "",
+            name = "",
             m = m,
             n = n,
             policy = policy,
@@ -112,8 +112,11 @@ class VaultDraft {
             keyFingerprints = fps,
             hasMockKey = picked.any { it.isMock },
         )
-        created.add(vault)
-        selectedVaultId = vault.id
+        book.edit { b ->
+            val number = b.vaults.size + 1 // vaults are never removed, so this count is unique
+            b.copy(vaults = b.vaults + vault.copy(id = "vault_$number", name = "Vault $number"))
+        }
+        selectedVaultId = created.lastOrNull()?.id
         return true
     }
 

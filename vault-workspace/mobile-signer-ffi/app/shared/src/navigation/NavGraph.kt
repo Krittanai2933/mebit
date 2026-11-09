@@ -37,6 +37,7 @@ import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.OwnerCheck
 import com.mebit.app.data.MultisigSendDraft
 import com.mebit.app.data.Replacement
+import com.mebit.app.data.SavedVaults
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
@@ -44,6 +45,7 @@ import com.mebit.app.data.StartNotice
 import com.mebit.app.data.VaultDraft
 import com.mebit.app.data.ffiImportSeedDraft
 import com.mebit.app.data.liveQuoteCache
+import com.mebit.app.data.ownKey
 import com.mebit.app.data.pairedDevice
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.feature.keys.AddKeyScreen
@@ -109,7 +111,9 @@ import com.mebit.app.ui.components.bottomBarHeight
 import com.mebit.app.ui.components.coversScreen
 import com.mebit.app.ui.theme.MbPage
 import com.mebit.ffi.signer.HotTx
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val ImplementedRoutes = MovieRoute.entries.toSet()
 
@@ -120,11 +124,12 @@ fun MebitNavHost(
     session: OnboardingSession = remember { OnboardingSession() },
     start: MovieRoute = MovieRoute.start,
     startNotice: StartNotice? = null,
+    vaults: SavedVaults = remember { SavedVaults.memoryOnly() },
 ) {
     val backStack = remember { mutableStateListOf(start) }
     var catalogOpen by remember { mutableStateOf(false) }
-    val keyring = remember { KeyringStore() }
-    val vaultDraft = remember { VaultDraft() }
+    val keyring = remember(vaults, session) { KeyringStore(book = vaults, ownKey = { session.ownKey() }) }
+    val vaultDraft = remember(vaults) { VaultDraft(vaults) }
     val singleSig = remember { SingleSigWallet() }
     val quotes = remember { liveQuoteCache() }
     // The type changes only in first setup or with another wallet, before any payment of it, so a new draft loses nothing.
@@ -151,11 +156,12 @@ fun MebitNavHost(
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { appLock.onBackground() }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { appLock.onForeground(biometrics.locksWhenAway) }
 
+    // This host exists only once the wallet is open or there is none, so the book is read after the owner check. Keyed on saved so keys added before a Create in this run are saved when it lands.
+    LaunchedEffect(vaults, session.saved) { withContext(Dispatchers.Default) { vaults.sync() } }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { scope.launch(Dispatchers.Default) { vaults.sync() } }
+
     fun navigate(route: MovieRoute) {
         keyFlow = keyFlowAfter(route, keyFlow)
-        if (route == MovieRoute.Keyring || route == MovieRoute.KeyringFirstVault) {
-            keyring.importVerifiedFromOnboarding(session)
-        }
         if (backStack.lastOrNull() != route) backStack.add(route)
     }
 
@@ -373,6 +379,7 @@ fun MebitNavHost(
                     )
                     MovieRoute.Keyring -> KeyringScreen(
                         store = keyring,
+                        vaults = vaults,
                         onAddKey = { navigate(MovieRoute.AddKey) },
                         onFirstVault = { navigate(MovieRoute.KeyringFirstVault) },
                         onDeleteBlocked = { navigate(MovieRoute.T15DeleteBlocked) },
@@ -417,6 +424,7 @@ fun MebitNavHost(
                     )
                     MovieRoute.VaultList -> VaultListScreen(
                         draft = vaultDraft,
+                        vaults = vaults,
                         hasSpendingKey = session.words.size >= 12,
                         spendingBalance = heroBalanceText(singleSig.balanceSats, spendingKnown()),
                         onOpenSpending = { navigate(MovieRoute.S1HomeSingleSig) },
@@ -669,9 +677,6 @@ fun MebitNavHost(
                             .fillMaxWidth()
                             .clickable {
                                 catalogOpen = false
-                                if (route == MovieRoute.T15DeleteBlocked && keyring.keys.isNotEmpty()) {
-                                    keyring.markUsedInVault(keyring.keys.first().fingerprint)
-                                }
                                 navigate(route)
                             }
                             .padding(horizontal = 24.dp, vertical = 12.dp)

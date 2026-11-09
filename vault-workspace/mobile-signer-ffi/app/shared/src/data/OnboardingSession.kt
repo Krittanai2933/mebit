@@ -34,6 +34,7 @@ class OnboardingSession(
     private val forgetScans: () -> Unit = { hotForgetScanState() },
     private val payments: PendingPayments = PendingPayments(null),
     val pin: SpendingPin = SpendingPin(),
+    private val forgetVaults: () -> Unit = {},
 ) {
     var words: List<String> by mutableStateOf(emptyList())
         private set
@@ -332,6 +333,7 @@ class OnboardingSession(
         return when (val r = wallet?.forget() ?: EraseResult.Erased) {
             EraseResult.Erased -> {
                 forgetScans()
+                forgetVaults()
                 clear()
                 true
             }

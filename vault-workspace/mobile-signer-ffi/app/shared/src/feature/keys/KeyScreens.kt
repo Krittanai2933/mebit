@@ -55,6 +55,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.KeySourceLabel
 import com.mebit.app.data.KeyringStore
+import com.mebit.app.data.SavedVaults
+import com.mebit.app.data.VaultsNotice
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
@@ -284,6 +286,7 @@ fun VerifyKeyScreen(
 @Composable
 fun KeyringScreen(
     store: KeyringStore,
+    vaults: SavedVaults,
     onAddKey: () -> Unit,
     onFirstVault: () -> Unit,
     onDeleteBlocked: () -> Unit,
@@ -297,6 +300,7 @@ fun KeyringScreen(
         onOpenCatalog = onOpenCatalog,
         tag = "screen_keys/keyring",
     ) {
+        VaultsNotice(vaults)
         if (store.keys.isEmpty()) {
             Text(
                 text = "ยังไม่มีกุญแจในคลัง",
@@ -316,9 +320,11 @@ fun KeyringScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(modifier = Modifier.height(4.dp))
-                SecondaryCta("ลบ ${key.label}", "cta_delete_${key.id}", {
-                    if (!store.tryDelete(key.id)) onDeleteBlocked()
-                })
+                if (store.canDelete(key)) {
+                    SecondaryCta("ลบ ${key.label}", "cta_delete_${key.id}", {
+                        if (!store.tryDelete(key.id)) onDeleteBlocked()
+                    })
+                }
                 Spacer(modifier = Modifier.height(12.dp))
             }
         }

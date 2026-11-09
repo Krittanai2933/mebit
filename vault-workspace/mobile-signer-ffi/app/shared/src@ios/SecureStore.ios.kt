@@ -161,6 +161,7 @@ private object KeychainStore : SecureStore {
         if (EVALUATE_BEFORE_READ) {
             if (!awaitActive()) return ReadResult.Cancelled
             ownerCheck(context, reason)?.let { return it }
+            KeychainVaults.ownerPassed(context)
         }
         return coroutineScope {
             // The Keychain call blocks while the OS sheet is up, so it runs off the caller's thread.

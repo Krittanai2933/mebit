@@ -32,7 +32,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.CustodyPolicy
 import com.mebit.app.data.KeyringStore
+import com.mebit.app.data.SavedVaults
 import com.mebit.app.data.VaultDraft
+import com.mebit.app.data.VaultsNotice
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.mebit_logo_dark
 import com.mebit.app.ui.components.InfoCard
@@ -233,6 +235,7 @@ fun VaultCreatedScreen(
 @Composable
 fun VaultListScreen(
     draft: VaultDraft,
+    vaults: SavedVaults,
     hasSpendingKey: Boolean,
     spendingBalance: String,
     onOpenSpending: () -> Unit,
@@ -259,6 +262,7 @@ fun VaultListScreen(
             )
         },
     ) {
+        VaultsNotice(vaults)
         if (hasSpendingKey) {
             WalletListCard(
                 kind = "SINGLE-SIG",

@@ -1,7 +1,6 @@
 package com.mebit.app.data
 
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.mebit.ffi.signer.BleException
@@ -41,7 +40,6 @@ data class SavedKey(
     val derivationPath: String,
     val source: KeySourceLabel,
     val verified: Boolean,
-    val usedInVault: Boolean = false,
     val isMock: Boolean = false,
 )
 
@@ -63,15 +61,23 @@ sealed interface HardwareScan {
 enum class EnrollResult { Enrolled, UnsupportedModel, Failed }
 
 /**
- * In-memory keyring for Movie Page 01–05 / T13–T15.
- * Only [commitPending] after VerifyKey match may add a verified key.
+ * Keyring for Movie Page 01–05 / T13–T15, kept across restarts in [book]. Only [confirmFingerprint] after a VerifyKey match may add a verified key.
  *
- * [scan] lists the wallets of one kind in range. Tests pass a fake, so they need no Bluetooth.
+ * [scan] lists the wallets of one kind in range. Tests pass a fake, so they need no Bluetooth. [ownKey] is the wallet's own key, or null when there is none.
  */
 class KeyringStore(
     private val scan: suspend (WalletKind) -> List<FoundWallet> = { scanWallets(it) },
+    private val book: SavedVaults = SavedVaults.memoryOnly(),
+    private val ownKey: () -> SavedKey? = { null },
 ) {
-    val keys = mutableStateListOf<SavedKey>()
+    /** The wallet's own key first, then every saved key. Read-only, because [SavedVaults.edit] is the only way to change what is saved. */
+    val keys: List<SavedKey>
+        get() {
+            val saved = book.current.keys
+            val own = ownKey()?.takeUnless { o -> saved.any { it.fingerprint.equals(o.fingerprint, ignoreCase = true) } }
+            return listOfNotNull(own) + saved
+        }
+
     var pending: PendingKey? by mutableStateOf(null)
         private set
     var lastError: String? by mutableStateOf(null)
@@ -103,6 +109,7 @@ class KeyringStore(
                 xpub = key.xpub,
                 derivationPath = key.derivationPath,
                 source = KeySourceLabel.ThisDevice,
+                isMock = true, // its words are dropped here, so nothing can ever sign with it until part 3 gives it a wallet
             )
         } catch (e: Exception) {
             lastError = e.message
@@ -265,18 +272,20 @@ class KeyringStore(
         }
         val name = label?.trim()?.takeIf { it.isNotEmpty() } ?: p.label
         val savedLabel = if (p.isMock && !name.endsWith(" · จำลอง")) "$name · จำลอง" else name
-        keys.add(
-            SavedKey(
-                id = "key_${keys.size + 1}_${p.fingerprint}",
-                label = savedLabel,
-                fingerprint = p.fingerprint,
-                xpub = p.xpub,
-                derivationPath = p.derivationPath,
-                source = p.source,
-                verified = true,
-                isMock = p.isMock,
-            ),
-        )
+        book.edit { b ->
+            b.copy(
+                keys = b.keys + SavedKey(
+                    id = "key_${b.keys.size + 1}_${p.fingerprint}",
+                    label = savedLabel,
+                    fingerprint = p.fingerprint,
+                    xpub = p.xpub,
+                    derivationPath = p.derivationPath,
+                    source = p.source,
+                    verified = true,
+                    isMock = p.isMock,
+                ),
+            )
+        }
         pending = null
         return true
     }
@@ -286,38 +295,22 @@ class KeyringStore(
         clearError()
     }
 
-    fun importVerifiedFromOnboarding(session: OnboardingSession) {
-        if (session.fingerprint.isBlank()) return
-        if (keys.any { it.fingerprint.equals(session.fingerprint, ignoreCase = true) }) return
-        keys.add(
-            SavedKey(
-                id = "onboard_${session.fingerprint}",
-                label = "มือถือ · onboarding",
-                fingerprint = session.fingerprint,
-                xpub = session.xpub,
-                derivationPath = session.derivationPath,
-                source = KeySourceLabel.ThisDevice,
-                verified = session.backupConfirmed,
-            ),
-        )
-    }
-
-    fun markUsedInVault(fingerprint: String) {
-        val i = keys.indexOfFirst { it.fingerprint.equals(fingerprint, ignoreCase = true) }
-        if (i >= 0) keys[i] = keys[i].copy(usedInVault = true)
-    }
-
     fun tryDelete(id: String): Boolean {
         val key = keys.find { it.id == id } ?: return false
-        if (key.usedInVault) {
+        if (inVault(key)) {
             lastError = "ลบไม่ได้ · กุญแจยังถูกใช้ใน Vault"
             return false
         }
-        keys.removeAll { it.id == id }
+        book.edit { b -> b.copy(keys = b.keys.filterNot { it.id == id }) }
         return true
     }
 
     fun verifiedCount(): Int = keys.count { it.verified }
+
+    /** The wallet's own key comes from the session and has no saved row to remove. */
+    fun canDelete(key: SavedKey): Boolean = key.id != ownKey()?.id
+
+    private fun inVault(key: SavedKey) = book.current.vaults.any { v -> v.keyFingerprints.any { it.equals(key.fingerprint, ignoreCase = true) } }
 }
 
 /** BIP-48 P2WSH account on testnet. Coin type 1, account 0, script type 2. */

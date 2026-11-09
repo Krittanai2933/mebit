@@ -6,11 +6,14 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.PendingPayments
+import com.mebit.app.data.SavedVaults
 import com.mebit.app.data.SavedWallet
 import com.mebit.app.data.rememberSavedWallet
+import com.mebit.app.data.vaultsOwner
 import com.mebit.app.feature.onboarding.UnlockScreen
 import com.mebit.app.plainFile
 import com.mebit.app.rememberScanStateDir
+import com.mebit.app.rememberVaultsStorage
 import com.mebit.ffi.signer.hotUseStateDir
 
 /**
@@ -23,9 +26,15 @@ fun WalletGate(wallet: SavedWallet = rememberSavedWallet()) {
     // Before any screen asks the core about the wallet, so its first sync after a restart reads the scan file.
     val scanDir = rememberScanStateDir()
     remember(scanDir) { scanDir?.let(::hotUseStateDir) }
+    val storage = rememberVaultsStorage()
     // One wallet under both, because the gate's forget erases through the session. The pay-twice guard file sits beside the scan files.
-    val session = remember(wallet, scanDir) { OnboardingSession(wallet, payments = PendingPayments(scanDir?.let { plainFile("$it/pending-payment") })) }
+    val session = remember(wallet, scanDir, storage) {
+        OnboardingSession(wallet, payments = PendingPayments(scanDir?.let { plainFile("$it/pending-payment") }), forgetVaults = { storage?.delete() })
+    }
+    val vaults = remember(session, storage) { SavedVaults(storage, owner = { session.vaultsOwner() }) }
     val gate = remember(wallet) { WalletGateState(wallet, session) }
+    // Welcome means this phone holds no wallet, so what the store holds is nobody's now, as after a reinstall, which a Keychain item survives.
+    remember(gate) { if (gate.boot == Boot.Onboarding) storage?.delete() }
 
     // A failed save is tried again when the app comes back, for example once the user has set a passcode. Not while Locked or
     // Broken: a session with nothing in it has nothing to flush there, and if the iOS store ever falls back to the Keychain's
@@ -35,8 +44,8 @@ fun WalletGate(wallet: SavedWallet = rememberSavedWallet()) {
     }
 
     when (val boot = gate.boot) {
-        Boot.Onboarding -> MebitNavHost(session, MovieRoute.start, gate.notice)
-        is Boot.Open -> MebitNavHost(session, boot.route)
+        Boot.Onboarding -> MebitNavHost(session, MovieRoute.start, gate.notice, vaults)
+        is Boot.Open -> MebitNavHost(session, boot.route, vaults = vaults)
         Boot.Locked, is Boot.Broken -> UnlockScreen(gate)
     }
 }

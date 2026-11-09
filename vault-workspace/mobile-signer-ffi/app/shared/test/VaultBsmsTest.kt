@@ -35,8 +35,7 @@ class VaultBsmsTest {
 
     @Test
     fun unknownFingerprintStaysABareXpub() {
-        val store = KeyringStore()
-        store.keys.add(savedKey("k1", fingerprint = "", xpub = tpubA))
+        val store = keyringHolding(savedKey("k1", fingerprint = "", xpub = tpubA))
         val draft = VaultDraft()
         assertTrue(draft.setMn(1, 1))
         draft.toggleKey("k1")
@@ -47,12 +46,11 @@ class VaultBsmsTest {
     }
 }
 
-private fun keyring(fingerprintA: String, fingerprintB: String): KeyringStore {
-    val store = KeyringStore()
-    store.keys.add(savedKey("k1", fingerprintA, tpubA))
-    store.keys.add(savedKey("k2", fingerprintB, tpubB))
-    return store
-}
+private fun keyring(fingerprintA: String, fingerprintB: String): KeyringStore =
+    keyringHolding(savedKey("k1", fingerprintA, tpubA), savedKey("k2", fingerprintB, tpubB))
+
+private fun keyringHolding(vararg keys: SavedKey): KeyringStore =
+    KeyringStore(book = SavedVaults.memoryOnly().also { book -> book.edit { it.copy(keys = keys.toList()) } })
 
 private fun savedKey(id: String, fingerprint: String, xpub: String) = SavedKey(
     id = id,
