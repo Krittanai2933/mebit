@@ -27,6 +27,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -97,13 +99,16 @@ import org.jetbrains.compose.resources.painterResource
 
 private val FiatGold = Color(0xFFEEB42A)
 
+// Four and a half rows at the 67 dp pitch, so a fifth row peeks out to show the box scrolls.
+private val TxListMaxHeight = 301.5.dp
+
 /**
  * Penpot 4.1 Home · single-sig. Left out: the bottom tabs (the app has no tab navigation), the settings gear and
  * the key-details link (no screens behind them yet), and the names in the transaction rows (the wallet knows no
  * counterparty, so a row says only รับ or ส่งออก).
  * A key whose balance could not be fetched shows a dash and a retry line in place of a number, and a key whose
- * first fetch is still running shows a dash and "กำลังดึงยอด…". The whole page scrolls, the navy block with it,
- * so a short phone or a large font still reaches the rows. The pull follows Organize 3.6.3 and 3.6.4 in place of Material's indicator.
+ * first fetch is still running shows a dash and "กำลังดึงยอด…". The page scrolls, the navy block with it, and the transactions scroll
+ * inside a box four and a half rows tall. A drag scrolls the box, then the page, before it can pull. The pull follows Organize 3.6.3 and 3.6.4 in place of Material's indicator.
  */
 @Composable
 fun S1HomeSingleSigScreen(
@@ -163,7 +168,7 @@ internal fun SingleSigHome(
     val quote = rememberFiatQuote(quotes)
     // A key of 12 or more words is a real one, yet the wallet says Demo until its first bind ends. Read from the session, this holds on the first frame, before any bind has started.
     val loading = session.words.size >= 12 && wallet.mode == WalletMode.Demo
-    val rows = if (wallet.mode == WalletMode.Live) homeRows(wallet.history) else emptyList()
+    val rows = if (wallet.mode == WalletMode.Live) historyRows(wallet.history) else emptyList()
     val pull = remember { RowsPullState() }
     // Derived, so a drag recomposes the page only when one of these flips and not on every frame.
     val armed by remember { derivedStateOf { pull.distanceFraction > 1f } }
@@ -292,7 +297,11 @@ internal fun SingleSigHome(
                     }
                 }
                 PullGap(pull)
-                rows.forEachIndexed { index, row -> HomeTxRowItem(row, Modifier.testTag("home_tx_$index")) { onOpenTx(row.tx) } }
+                LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = TxListMaxHeight).testTag("home_tx_list")) {
+                    itemsIndexed(rows, key = { _, row -> row.tx.txid }) { index, row ->
+                        HomeTxRowItem(row, Modifier.testTag("home_tx_$index")) { onOpenTx(row.tx) }
+                    }
+                }
             }
         }
         // Once the navy block has scrolled up, the status bar still needs a navy ground for its white icons.

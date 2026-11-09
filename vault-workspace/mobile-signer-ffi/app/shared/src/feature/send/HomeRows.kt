@@ -52,7 +52,7 @@ internal fun homeRows(history: List<HotTx>, limit: Int = HOME_ROW_LIMIT, timeZon
 internal fun historyRows(history: List<HotTx>, timeZoneId: String? = null): List<HomeTxRow> =
     homeRows(history, limit = history.size, timeZoneId = timeZoneId)
 
-/** True when Home hides rows, which is when it offers the link to the full history. */
+/** True when there are more rows than the four the box on Home shows whole, which is when Home offers the link to the full history. */
 internal fun homeHasMoreHistory(history: List<HotTx>): Boolean = history.size > HOME_ROW_LIMIT
 
 /**
