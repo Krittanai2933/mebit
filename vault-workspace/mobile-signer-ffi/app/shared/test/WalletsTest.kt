@@ -13,7 +13,7 @@ import com.mebit.app.navigation.Boot
 import com.mebit.app.navigation.MovieRoute
 import com.mebit.app.navigation.Stop
 import com.mebit.app.navigation.WalletGateState
-import com.mebit.app.navigation.endAdd
+import com.mebit.app.navigation.endSetup
 import com.mebit.app.walletName
 import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotWalletSnapshot
@@ -267,8 +267,8 @@ class WalletsTest {
         gate.unlock("test")
         val open = assertIs<Boot.Open>(gate.boot)
         assertSame(P2, open.place)
-        assertEquals(MovieRoute.HomeFirstRun, open.route, "the wallet not backed up lands on first-run Home")
-        assertEquals(Stop(MovieRoute.HomeFirstRun, P2), Stop(open.route, open.place))
+        assertEquals(MovieRoute.VaultList, open.route, "the wallet not backed up lands on the Wallet list")
+        assertEquals(Stop(MovieRoute.VaultList, P2), Stop(open.route, open.place))
     }
 
     @Test
@@ -505,19 +505,51 @@ class WalletsTest {
     }
 
     @Test
-    fun aWalletAddedFromTheKeyringCannotChangeItsKeyOnceTheKeyringShowsIt(): Unit = runBlocking {
+    fun everySetupEndsOnTheWalletListAndItsKeyIsFinalFromThere(): Unit = runBlocking {
         val phone = ShelfPhone().saved(P1, 1)
         phone.nextWords = words(5)
         val wallets = phone.unlocked()
         val w = assertNotNull(wallets.beginAdd())
         w.session.generateThisDevice()
-        w.session.markBackupConfirmed()
         w.session.confirmAddressType()
-        val stack = listOf(MovieRoute.VaultList, MovieRoute.Keyring, MovieRoute.AddKey, MovieRoute.KeyCreated, MovieRoute.BackupWords, MovieRoute.VerifyWords, MovieRoute.AddressType)
-        assertEquals(MovieRoute.Keyring, endAdd(stack, w.session))
+        assertTrue(w.session.inFirstSetup)
+        assertEquals(MovieRoute.VaultList, endSetup(w.session))
+        assertFalse(w.session.inFirstSetup)
         val key = w.session.fingerprint // a vault may use it from here on
         w.session.changeNewKeyPassphrase("later") // Backup Words' passphrase row
-        assertEquals(key, w.session.fingerprint, "a key the Keyring has shown must stay")
+        assertEquals(key, w.session.fingerprint, "a key the list has shown must stay")
+    }
+
+    @Test
+    fun theWalletListReadsAWalletWhoseSetupJustEnded(): Unit = runBlocking {
+        val fresh = ShelfPhone().apply { nextWords = words(5) }
+        val first = fresh.launch()
+        first.at(P1).session.generateThisDevice()
+        first.at(P1).session.confirmAddressType()
+        endSetup(first.at(P1).session)
+        first.refreshBalances()
+        assertEquals(listOf(check(words(5))), fresh.binds, "a first wallet on a fresh phone")
+
+        val phone = ShelfPhone().saved(P1, 1)
+        val wallets = phone.unlocked()
+        wallets.refreshBalances()
+        phone.binds.clear()
+        phone.nextWords = words(6)
+        val w = assertNotNull(wallets.beginAdd())
+        w.session.generateThisDevice()
+        w.session.confirmAddressType()
+        endSetup(w.session)
+        wallets.refreshBalances()
+        assertEquals(listOf(check(words(6))), phone.binds, "a second wallet beside one read a moment ago")
+    }
+
+    @Test
+    fun theWalletInUseIsReadFirstSoAnotherScanThatStopsThePassCannotLeaveItUnbound(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P1, 1).saved(P2, 2)
+        val wallets = phone.unlocked()
+        phone.scanResult = HotScan.CONTINUING
+        wallets.refreshBalances(first = P2)
+        assertEquals(listOf(check(words(2))), phone.binds)
     }
 
     @Test

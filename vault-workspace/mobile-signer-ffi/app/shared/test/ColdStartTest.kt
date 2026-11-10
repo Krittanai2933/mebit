@@ -32,16 +32,13 @@ class ColdStartTest {
     }
 
     @Test
-    fun startRouteSendsAnUnbackedWalletToFirstRunAndABackedUpOneToS1() {
-        assertEquals(MovieRoute.HomeFirstRun, startRoute(backupConfirmed = false, addressTypeConfirmed = true))
-        assertEquals(MovieRoute.S1HomeSingleSig, startRoute(backupConfirmed = true, addressTypeConfirmed = true))
+    fun aWalletPastAddressTypeOpensTheWalletList() {
+        assertEquals(MovieRoute.VaultList, startRoute(addressTypeConfirmed = true))
     }
 
-    // A restart while the user was choosing never finalizes the type: the wallet opens on Address Type, whatever its backup.
+    // A restart while the user was choosing never finalizes the type: the wallet opens on Address Type.
     @Test
     fun startRouteSendsAWalletWithAnUnconfirmedAddressTypeBackToAddressType() {
-        for (backup in listOf(false, true)) {
-            assertEquals(MovieRoute.AddressType, startRoute(backupConfirmed = backup, addressTypeConfirmed = false), "backup $backup")
-        }
+        assertEquals(MovieRoute.AddressType, startRoute(addressTypeConfirmed = false))
     }
 }

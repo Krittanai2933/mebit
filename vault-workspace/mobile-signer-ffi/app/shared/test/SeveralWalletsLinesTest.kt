@@ -6,8 +6,6 @@ import com.mebit.app.data.Cause
 import com.mebit.app.data.UnlockResult
 import com.mebit.app.data.addRefusalLine
 import com.mebit.app.data.unopenedNotice
-import com.mebit.app.navigation.MovieRoute
-import com.mebit.app.navigation.routeAfterAdd
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -57,16 +55,5 @@ class SeveralWalletsLinesTest {
             "เปิด กระเป๋า 2, กระเป๋า 4 ไม่ได้ในตอนนี้ กระเป๋าอื่นใช้ได้ตามปกติ",
             unopenedNotice(linkedMapOf(Place.parse(2)!! to broken, Place.parse(4)!! to broken)),
         )
-    }
-
-    @Test
-    fun anAddFromTheKeyringReturnsThereAndAnyOtherEndsOnTheWalletsHome() {
-        val fromKeyring = listOf(MovieRoute.Keyring, MovieRoute.AddKey, MovieRoute.KeyCreated, MovieRoute.AddressType)
-        assertEquals(MovieRoute.Keyring, routeAfterAdd(fromKeyring, backedUp = true))
-        assertEquals(MovieRoute.Keyring, routeAfterAdd(fromKeyring, backedUp = false))
-        val fromList = listOf(MovieRoute.VaultList, MovieRoute.AddKey, MovieRoute.KeyCreated, MovieRoute.AddressType)
-        assertEquals(MovieRoute.S1HomeSingleSig, routeAfterAdd(fromList, backedUp = true))
-        assertEquals(MovieRoute.HomeFirstRun, routeAfterAdd(fromList, backedUp = false))
-        assertEquals(MovieRoute.HomeFirstRun, routeAfterAdd(listOf(MovieRoute.AddKey, MovieRoute.KeyCreated), backedUp = false), "Add Key at the bottom has nothing below it")
     }
 }

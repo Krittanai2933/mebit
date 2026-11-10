@@ -9,14 +9,8 @@ class KeyFlowTest {
         MovieRoute.AddKey,
         MovieRoute.Keyring,
         MovieRoute.KeyringFirstVault,
-        MovieRoute.HomeFirstRun,
+        MovieRoute.VaultList,
     )
-
-    @Test
-    fun aBackupGoesOnToTheAddressTypeOnlyInFirstSetup() {
-        assertEquals(MovieRoute.AddressType, routeAfterBackup(inFirstSetup = true))
-        assertEquals(MovieRoute.HomeFirstRun, routeAfterBackup(inFirstSetup = false))
-    }
 
     @Test
     fun keySourceStartsOnboardingFromEitherFlow() {
@@ -26,7 +20,7 @@ class KeyFlowTest {
     }
 
     @Test
-    fun theKeyringScreensAndHomeEndOnboardingEvenFromIt() {
+    fun theKeyringScreensAndTheWalletListEndOnboardingEvenFromIt() {
         keyringScreens.forEach { route ->
             KeyFlow.entries.forEach { flow ->
                 assertEquals(KeyFlow.Keyring, keyFlowAfter(route, flow), "${route.name} from ${flow.name}")
@@ -41,12 +35,6 @@ class KeyFlowTest {
                 assertEquals(flow, keyFlowAfter(route, flow), "${route.name} from ${flow.name}")
             }
         }
-    }
-
-    @Test
-    fun aMatchedFingerprintGoesToTheBackupStepOnlyInOnboarding() {
-        assertEquals(MovieRoute.HwBackupConfirm, routeAfterVerify(KeyFlow.Onboarding))
-        assertEquals(MovieRoute.Keyring, routeAfterVerify(KeyFlow.Keyring))
     }
 
     @Test

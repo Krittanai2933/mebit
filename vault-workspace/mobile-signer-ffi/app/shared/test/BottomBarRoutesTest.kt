@@ -28,10 +28,14 @@ class BottomBarRoutesTest {
             MovieRoute.Welcome,
             MovieRoute.KeySource,
             MovieRoute.ImportSeed,
-            MovieRoute.HomeFirstRun,
             MovieRoute.S3Receive,
             MovieRoute.ChooseWalletReceive,
             MovieRoute.ChooseWalletSend,
         ).forEach { assertNull(it.bar, it.name) }
+    }
+
+    @Test
+    fun theBarsTwoTabsAreTheOnlyScreensThatClearTheStack() {
+        assertEquals(listOf(MovieRoute.Keyring, MovieRoute.VaultList), MovieRoute.entries.filter { it.tab })
     }
 }

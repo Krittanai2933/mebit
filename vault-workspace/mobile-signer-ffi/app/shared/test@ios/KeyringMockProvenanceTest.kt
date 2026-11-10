@@ -17,7 +17,6 @@ class KeyringMockProvenanceTest {
             assertTrue(store.confirmFingerprint(store.pending!!.fingerprint, "กุญแจบ้าน"))
             assertTrue(store.keys.last().isMock)
             assertEquals("กุญแจบ้าน · จำลอง", store.keys.last().label)
-            assertEquals("จำลอง", pairedDevice(store.keys)?.status)
         }
         store.startHardwareMock(KeySourceLabel.Jade)
         assertTrue(store.confirmFingerprint(store.pending!!.fingerprint))

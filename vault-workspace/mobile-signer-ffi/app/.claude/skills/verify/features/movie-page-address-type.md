@@ -43,11 +43,11 @@ wallet.
   `verify.sh ios-tap "id:cta_import_seed"`, the screen, Nested SegWit, `cta_address_type`, then
   `verify.sh ios-see "id:sheet_fingerprint"`. Shot `mp-type-fingerprint`: `88BCA92B` over `m/49'/1'/0'`. The path line
   follows the chosen type. `verify.sh ios-tap "id:cta_fingerprint_ok"` goes to App Lock.
-- **Receive.** After App Lock and home: `verify.sh ios-tap "id:cta_singlesig"`, `verify.sh ios-tap "id:cta_s1_receive"`,
+- **Receive.** After App Lock and the Wallet list: `verify.sh ios-tap "id:card_spending"`, `verify.sh ios-tap "id:cta_s1_receive"`,
   `verify.sh ios-see "id:screen_send/s3"`. The address starts with the chosen type's prefix. Check it against an
   independent derivation, never against the app itself.
-- **Cold start.** As in [wallet restart](./wallet-restart.md). After the unlock the app opens on the single-sig screen
-  (`id:screen_send/s1`), not the first-run home. Receive shows the same address.
+- **Cold start.** As in [wallet restart](./wallet-restart.md). After the unlock the app opens on the Wallet list
+  (`id:screen_vaults`), and the card opens `id:screen_send/s1`. Receive shows the same address.
 - **Restart before ต่อไป.** Enrol Face ID as in [app lock](./movie-page-app-lock.md), then `verify.sh ios-tap
   "id:cta_create"`, `verify.sh ios-tap "id:cta_phone"`, `verify.sh ios-tap "id:cta_skip_backup"`, `verify.sh ios-see
   "id:screen_onboarding/address-type"` and `verify.sh ios-tap "id:address_type_taproot"`. Then `xcrun simctl terminate
@@ -58,7 +58,7 @@ wallet.
   `mp-type-restart`: Taproot has the orange frame and the filled radio. `idb ui describe-all --udid $U --json` gives
   `address_type_taproot` alone the `Selected` trait. `verify.sh ios-tap "id:cta_address_type"` and `verify.sh ios-see
   "id:screen_onboarding/app-lock"`. Another `terminate`, `launch` and `pearl.match` then open
-  `id:screen_home/first-run`, because ต่อไป confirmed the type.
+  `id:screen_vaults`, because ต่อไป confirmed the type.
 - **Mainnet.** The app has no network switch and saves testnet wallets only, so no simulator run reaches the Mainnet
   rows. `AddressTypeScreenTest.onMainnetOnlyNativeSegwitsRowIsEnabled`, `AddressTypeChoiceTest.onMainnetATapOnATypeTheCoreRefusesChangesNothing`
   and the core's `the_rows_the_app_enables_are_the_accounts_the_core_derives` cover them.
@@ -73,7 +73,7 @@ wallet.
   draft survives ไม่ตรง · แก้ไข and the back chip.
 - Run `20261108-045750-ios` (iPhone 17 Pro, iOS 26.5, create, Taproot): after the kill, the relaunch and Face ID the app
   opened Address Type with Taproot selected and no back chip, ต่อไป reached App Lock, and a second cold start opened
-  first-run Home. The testnet rows were all enabled, as before.
+  the Wallet list. The testnet rows were all enabled, as before.
 - `verify.sh ios-see` takes no wait in seconds on iOS. `ios-see SELECTOR 30` stops with a usage line.
 - The first `ios-tap` on Welcome right after `ios-start` can land during the launch animation and do nothing. Tap again
   when the next screen does not show.

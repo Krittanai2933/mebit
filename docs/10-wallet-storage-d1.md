@@ -34,10 +34,10 @@ stateDiagram-v2
     Locked --> Onboarding: Forget, after a confirm and the owner check
     Broken --> Onboarding: Forget, after a confirm
     Onboarding --> [*]: nav host at Welcome
-    Open --> [*]: nav host at S1 Home, or first-run Home if not backed up
+    Open --> [*]: nav host at the Wallet list, or Address Type while the type is unconfirmed
 ```
 
-`coldStart(probe)` and `startRoute(backupConfirmed)` in `src/navigation/ColdStart.kt` are pure and total. An unknown error goes to Locked, never to Welcome, because it may hide a saved wallet. `AppLockState` did not change. It still means the in-session lock after 60 seconds away, and it starts unlocked because the nav host that owns it does not exist until the wallet is open.
+`coldStart(probe)` and `startRoute(addressTypeConfirmed)` in `src/navigation/ColdStart.kt` are pure and total. An unknown error goes to Locked, never to Welcome, because it may hide a saved wallet. `AppLockState` did not change. It still means the in-session lock after 60 seconds away, and it starts unlocked because the nav host that owns it does not exist until the wallet is open.
 
 The layers, from the platform up:
 

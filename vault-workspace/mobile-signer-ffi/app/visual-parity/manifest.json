@@ -25,8 +25,6 @@
     {"path": "onboarding/backup-words", "boardName": "00.2 Backup Words", "boardId": "bb000499-7ca1-801a-8008-d8fca7263616"},
     {"path": "onboarding/verify-words", "boardName": "00.3 Verify Words", "boardId": "bb000499-7ca1-801a-8008-d8fca72635e8"},
     {"path": "onboarding/app-lock", "boardName": "00.4 App Lock", "boardId": "bb000499-7ca1-801a-8008-d8fca72635c1"},
-    {"path": "home/first-run", "boardName": "00.5 Home · First Run", "boardId": "bb000499-7ca1-801a-8008-d8fca7263583"},
-    {"path": "onboarding/hw-backup-confirm", "boardName": "00.6 HW Backup Confirm", "boardId": "bb000499-7ca1-801a-8008-d8fca72634e5"},
     {"path": "keys/add", "boardName": "01 Add Key", "boardId": "bb000499-7ca1-801a-8008-d8fca725fed9"},
     {"path": "keys/pair-mebit", "boardName": "02 Pair Device · Bluetooth", "boardId": "bb000499-7ca1-801a-8008-d8fca7267d9a"},
     {"path": "keys/hardware", "boardName": "03 Hardware Wallet", "boardId": "bb000499-7ca1-801a-8008-d8fca7267dc0"},

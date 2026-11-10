@@ -303,6 +303,15 @@ internal fun hardwareName(source: KeySourceLabel): String = when (source) {
     KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")
 }
 
+internal fun hardwareMonogram(source: KeySourceLabel): String = when (source) {
+    KeySourceLabel.Jade -> "JD"
+    KeySourceLabel.TrezorSafe7 -> "TZ"
+    KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")
+}
+
+/** "7F2CA91B" becomes "7f2c a91b": lowercase, in groups of four. */
+internal fun fingerprintGroups(fingerprint: String): String = fingerprint.lowercase().chunked(4).joinToString(" ")
+
 internal fun hardwareSource(kind: WalletKind): KeySourceLabel = when (kind) {
     WalletKind.JADE -> KeySourceLabel.Jade
     WalletKind.TREZOR_SAFE7 -> KeySourceLabel.TrezorSafe7

@@ -10,6 +10,8 @@ enum class MovieRoute(
     val bodyTh: String,
     /** Null means the screen has no bottom bar. */
     val bar: BarTab? = null,
+    /** A tab of the bar. Opening it from anywhere makes it the only entry on the Back stack ([stackAfterOpen]), so it never has a back chip. */
+    val tab: Boolean = false,
 ) {
     Welcome(
         "welcome",
@@ -65,18 +67,6 @@ enum class MovieRoute(
         "ตั้ง PIN สำหรับส่งเงิน",
         "เครื่องที่ไม่มีรหัสล็อกหน้าจอ",
     ),
-    HomeFirstRun(
-        "home/first-run",
-        "HOME",
-        "จะเริ่มใช้แบบไหน",
-        "กระเป๋ากุญแจเดียว หรือ Vault",
-    ),
-    HwBackupConfirm(
-        "onboarding/hw-backup-confirm",
-        "HW BACKUP",
-        "ยืนยันสำรองบนอุปกรณ์",
-        "Jade / Trezor Safe 7 ผ่าน BLE",
-    ),
     AddKey(
         "keys/add",
         "ADD KEY",
@@ -107,6 +97,7 @@ enum class MovieRoute(
         "คลังกุญแจ",
         "กุญแจที่ยืนยันแล้ว",
         BarTab.Keys,
+        tab = true,
     ),
     KeyringFirstVault(
         "keys/keyring-first-vault",
@@ -140,10 +131,11 @@ enum class MovieRoute(
     ),
     VaultList(
         "vaults",
-        "VAULTS",
-        "Vault ของคุณ",
+        "WALLETS",
+        "Wallet ของคุณ",
         "personal_custody",
         BarTab.Wallets,
+        tab = true,
     ),
     VaultDetail(
         "vaults/detail",

@@ -11,14 +11,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -32,6 +31,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.mebit.app.Place
@@ -40,15 +41,22 @@ import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.SavedVaults
 import com.mebit.app.data.VaultDraft
 import com.mebit.app.data.VaultsNotice
-import com.mebit.app.feature.send.SpendingLine
+import com.mebit.app.data.OnboardingSession
+import com.mebit.app.data.formatBtcCompact
+import com.mebit.app.feature.onboarding.NotSavedNotice
+import com.mebit.app.feature.send.homeBalanceText
+import com.mebit.app.navigation.MovieRoute
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.mebit_logo_dark
 import com.mebit.app.ui.components.InfoCard
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
+import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbBtcOrange
+import com.mebit.app.ui.theme.MbEyebrow
+import com.mebit.app.ui.theme.MbIconWash
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbSlate
@@ -234,55 +242,78 @@ fun VaultCreatedScreen(
     }
 }
 
+/** A one-key wallet's card on Penpot 1.8. [known] is false until its balance is read, so the card shows a dash and the total adds no guess. */
+data class SpendingCard(val place: Place, val name: String, val sats: Long, val known: Boolean, val backedUp: Boolean) {
+    /** Penpot 1.3.3 and 1.8 put this tag at the card's top right while the words are not backed up. It is only a label, and the card still opens Home. */
+    val backupTag: String? get() = if (backedUp) null else "ยังไม่ได้สำรอง"
+}
+
+/** A card's amount, every sat that matters, and a dash until [known]. The card carries no unit. */
+internal fun cardBalanceText(sats: Long, known: Boolean): String = if (known) formatBtcCompact(sats) else "—"
+
 /**
- * Penpot 3.5: every individual wallet, then the vaults. Left out: the total line, because the app cannot read a vault's balance, so a
- * vault shows a dash. The two buttons under the list are two different things: a wallet is added through Add Key, a Vault is composed from keys.
+ * Penpot 1.8's total adds up every one-key wallet's balance, and is a dash while any is unknown, a wallet that did not open this run
+ * included ([walletUnopened]), so part of the money never reads as all of it. Null, so no line, while a vault is listed, because the app
+ * cannot read a vault's balance, and while no wallet is listed or waiting to open.
+ */
+internal fun spendingTotal(cards: List<SpendingCard>, vaultListed: Boolean, walletUnopened: Boolean): String? = when {
+    vaultListed -> null
+    walletUnopened -> "—"
+    cards.isEmpty() -> null
+    else -> homeBalanceText(cards.sumOf { it.sats }, cards.all { it.known }, loading = false)
+}
+
+/**
+ * Penpot 1.8 Wallet list: the title, the + that opens Policy, the total, one card per one-key wallet with its backup tag, then one card
+ * per vault. No back chip, no Keyring link, no buttons under the list. Kept though no board draws them: the vaults notice, the line for
+ * places that did not open, and [inUse]'s not-saved line, which tells the user straight after setup that this phone does not hold the key.
  */
 @Composable
 fun VaultListScreen(
     draft: VaultDraft,
     vaults: SavedVaults,
-    spending: List<SpendingLine>,
+    spending: List<SpendingCard>,
+    inUse: OnboardingSession,
     unopenedNotice: String?,
     onOpenSpending: (Place) -> Unit,
-    onAddWallet: () -> Unit,
-    onOpenKeyring: () -> Unit,
     onOpenDetail: () -> Unit,
     onCreate: () -> Unit,
     onOpenCatalog: () -> Unit,
 ) {
     MebitScreen(
         eyebrow = null,
-        title = "Vault ของคุณ",
+        // The title is drawn below so the + shares its row, as on the board.
+        title = null,
         onBack = null,
         onOpenCatalog = onOpenCatalog,
         tag = "screen_vaults",
         headerContent = {
             Image(painterResource(Res.drawable.mebit_logo_dark), contentDescription = "mebit", modifier = Modifier.size(width = 74.dp, height = 19.dp))
-            Spacer(modifier = Modifier.weight(1f))
-            Text(
-                text = "คลังกุญแจ",
-                color = MbNavy,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.clickable(role = Role.Button, onClick = onOpenKeyring).testTag("cta_vaults_keyring"),
-            )
         },
     ) {
+        Spacer(modifier = Modifier.height(3.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text(MovieRoute.VaultList.titleTh, color = MbNavyInk, fontSize = 28.sp, fontWeight = FontWeight.Medium, lineHeight = 34.sp, modifier = Modifier.weight(1f).testTag("title"))
+            AddButton(onCreate)
+        }
+        spendingTotal(spending, vaultListed = draft.created.isNotEmpty(), walletUnopened = unopenedNotice != null)?.let { TotalLine(it) }
+        Spacer(modifier = Modifier.height(16.dp))
         VaultsNotice(vaults)
         unopenedNotice?.let {
             Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.testTag("wallets_unopened"))
             Spacer(modifier = Modifier.height(12.dp))
         }
-        spending.forEach { line ->
+        NotSavedNotice(inUse, Modifier.padding(bottom = 12.dp))
+        spending.forEach { card ->
             WalletListCard(
                 kind = "SINGLE-SIG",
-                name = line.name,
+                name = card.name,
                 detail = "กุญแจเดียว · iPhone ของฉัน",
-                balance = line.balance,
+                balance = cardBalanceText(card.sats, card.known),
                 dark = false,
-                tag = if (line.place == Place.FIRST) "card_spending" else "card_spending_${line.place.number}",
-                onClick = { onOpenSpending(line.place) },
+                badge = card.backupTag,
+                tag = if (card.place == Place.FIRST) "card_spending" else "card_spending_${card.place.number}",
+                onClick = { onOpenSpending(card.place) },
             )
             Spacer(modifier = Modifier.height(11.dp))
         }
@@ -293,6 +324,7 @@ fun VaultListScreen(
                 detail = "ต้องเซ็น ${vault.m} จาก ${vault.n} กุญแจ",
                 balance = "—",
                 dark = true,
+                badge = null,
                 tag = "cta_open_${vault.id}",
                 onClick = {
                     draft.selectVault(vault.id)
@@ -302,29 +334,36 @@ fun VaultListScreen(
             Spacer(modifier = Modifier.height(11.dp))
         }
         if (spending.isEmpty() && draft.created.isEmpty()) {
-            Text("ยังไม่มี Vault", modifier = Modifier.testTag("vaults_empty"))
-        }
-        Spacer(modifier = Modifier.height(23.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-            ListButton("เพิ่มกระเป๋า", "cta_add_wallet", onAddWallet)
-            ListButton("ประกอบ Vault ใหม่", "cta_new_vault", onCreate)
+            Text("ยังไม่มี Wallet", modifier = Modifier.testTag("vaults_empty"))
         }
     }
 }
 
+/** Penpot 1.8's + is a 32 by 32 MbNavy circle with a white +, 29dp from the screen's right edge, so 9dp past the screen's own padding. */
 @Composable
-private fun RowScope.ListButton(label: String, tag: String, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(999.dp)
+private fun AddButton(onClick: () -> Unit) {
     Box(
-        modifier = Modifier.weight(1f).widthIn(max = 175.dp).height(52.dp).clip(shape).background(MbWhite).border(1.5.dp, MbNavy, shape).clickable(role = Role.Button, onClick = onClick).testTag(tag),
+        modifier = Modifier.padding(end = 9.dp).size(32.dp).clip(CircleShape).background(MbNavy).clickable(role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = "สร้าง Wallet" }.testTag("cta_vaults_add"),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = MbNavy, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
+        Box(Modifier.size(14.dp, 2.dp).background(MbWhite))
+        Box(Modifier.size(2.dp, 14.dp).background(MbWhite))
     }
 }
 
+/** "รวมทั้งหมด" in Light 13.5 MbBody, then [total] in SemiBold 14.5 MbNavyInk. */
 @Composable
-private fun WalletListCard(kind: String, name: String, detail: String, balance: String, dark: Boolean, tag: String, onClick: () -> Unit) {
+private fun TotalLine(total: String) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp).testTag("vaults_total")) {
+        Text("รวมทั้งหมด", color = MbBody, fontSize = 13.5.sp, fontWeight = FontWeight.Light)
+        Text(total, color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/** [badge] is a pill 24 tall at the card's top right, 13 from its top and 16 from its right edge. The card merges its children, so the pill has no test tag. */
+@Composable
+private fun WalletListCard(kind: String, name: String, detail: String, balance: String, dark: Boolean, badge: String?, tag: String, onClick: () -> Unit) {
     val shape = RoundedCornerShape(20.dp)
     val ink = if (dark) MbWhite else MbNavyInk
     Box(
@@ -343,6 +382,14 @@ private fun WalletListCard(kind: String, name: String, detail: String, balance: 
         Text(name, color = ink, fontSize = 17.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.offset(x = 32.dp, y = 39.dp))
         Text(detail, color = if (dark) MbWhite.copy(alpha = 0.66f) else MbSlate, fontSize = 11.5.sp, fontWeight = FontWeight.Light, modifier = Modifier.offset(x = 32.dp, y = 70.dp))
         Text(balance, color = ink, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.TopEnd).padding(end = 18.dp, top = 70.dp))
+        if (badge != null) {
+            Box(
+                modifier = Modifier.align(Alignment.TopEnd).padding(end = 16.dp, top = 13.dp).height(24.dp).clip(CircleShape).background(MbIconWash).padding(horizontal = 10.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(badge, color = MbEyebrow, fontSize = 10.5.sp, fontWeight = FontWeight.Medium)
+            }
+        }
     }
 }
 

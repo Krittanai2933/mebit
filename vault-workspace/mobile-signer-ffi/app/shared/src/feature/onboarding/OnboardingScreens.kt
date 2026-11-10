@@ -33,7 +33,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.OnboardingSession
-import com.mebit.app.data.PairedDevice
 import com.mebit.app.data.SaveState
 import com.mebit.app.data.StartNotice
 import com.mebit.app.resources.Res
@@ -52,7 +51,6 @@ import com.mebit.app.ui.theme.MbWhite
 import org.jetbrains.compose.resources.painterResource
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.mutableStateListOf
@@ -63,20 +61,16 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import com.mebit.app.data.VerifyQuestion
 import com.mebit.app.data.verifyQuestions
-import com.mebit.app.resources.ic_tick_white
 import com.mebit.app.ui.components.BottomActions
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbBtcOrange
 import com.mebit.app.ui.theme.MbChip
 import com.mebit.app.ui.theme.MbEyebrow
-import com.mebit.app.ui.theme.MbGreenWash
 import com.mebit.app.ui.theme.MbIconWash
 import com.mebit.app.ui.theme.MbMuted
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbPage
-import com.mebit.app.ui.theme.MbPick
 import com.mebit.app.ui.theme.MbSlate
-import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbBody
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.semantics.semantics
@@ -276,7 +270,7 @@ private fun DeleteWarning(session: OnboardingSession, tag: String) {
     )
 }
 
-/** Penpot 1.3 and 1.2.1 key card: monogram tile, name, one meta line and a status pill. */
+/** Penpot 1.3 key card: monogram tile, name, one meta line and a status pill. */
 @Composable
 private fun KeyCard(
     monogram: String,
@@ -604,87 +598,5 @@ private fun QuestionCard(question: VerifyQuestion, picked: String?, onPick: (Str
                 }
             }
         }
-    }
-}
-
-/**
- * Penpot 1.2.1. It follows Confirm Key, so [device] is the hardware key just saved. The debug catalog can
- * open it with none saved, and the card is then left out.
- */
-@Composable
-fun HwBackupConfirmScreen(
-    device: PairedDevice?,
-    onDone: () -> Unit,
-    onBack: (() -> Unit)?,
-    onOpenCatalog: () -> Unit,
-) {
-    var noted by remember { mutableStateOf(false) }
-    var kept by remember { mutableStateOf(false) }
-    val vendor = device?.vendor ?: "อุปกรณ์"
-    MebitScreen(
-        eyebrow = "HARDWARE WALLET · ขั้น 2 / 3",
-        title = "สำรอง seed แล้วหรือยัง",
-        onBack = onBack,
-        onOpenCatalog = onOpenCatalog,
-        subtitle = "seed ของอุปกรณ์อยู่บนตัวเครื่องเท่านั้น mebit มองไม่เห็นและกู้ให้ไม่ได้ ถ้าอุปกรณ์หายหรือพัง ต้องใช้ seed ที่จดไว้",
-        tag = "screen_onboarding/hw-backup-confirm",
-        // The board's link points at a how-to the app does not have, so it stays plain text.
-        bottom = {
-            BottomActions("ยืนยัน ไปต่อ", "cta_hw_backup_done", onDone, "ยังไม่ได้สำรอง · ดูวิธีตั้งค่าในคู่มือของ $vendor", "hw_backup_howto", null, enabled = noted && kept, linkColor = MbBody)
-        },
-    ) {
-        Spacer(modifier = Modifier.height(19.dp))
-        if (device != null) {
-            KeyCard(
-                monogram = device.monogram,
-                monogramInk = MbEyebrow,
-                title = device.name,
-                meta = device.meta,
-                metaTag = "hw_device_meta",
-                badge = device.status,
-                badgeInk = if (device.isMock) MbEyebrow else MbSuccess,
-                badgeBackground = if (device.isMock) MbIconWash else MbGreenWash,
-            )
-            Spacer(modifier = Modifier.height(20.dp))
-        }
-        val card = RoundedCornerShape(20.dp)
-        Column(
-            modifier = Modifier.fillMaxWidth().clip(card).background(MbWhite).border(1.dp, MbBorder, card).padding(horizontal = 16.dp, vertical = 17.dp),
-        ) {
-            CheckRow("จด seed ตอนตั้งค่าอุปกรณ์ครบทุกคำแล้ว", noted, "check_seed_noted") { noted = it }
-            Spacer(modifier = Modifier.height(17.dp))
-            Box(Modifier.padding(start = 38.dp).fillMaxWidth().height(1.dp).background(MbBorder))
-            Spacer(modifier = Modifier.height(16.dp))
-            CheckRow("เก็บกระดาษไว้คนละที่กับตัวอุปกรณ์", kept, "check_paper_apart") { kept = it }
-        }
-        Spacer(modifier = Modifier.height(14.dp))
-        Text(
-            text = "กระเป๋านี้รับเงินได้ทันที ส่งเงินต้องเชื่อม $vendor มาเซ็นทุกครั้ง มือถือไม่ได้ถือกุญแจ",
-            color = MbMuted,
-            fontSize = 13.sp,
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MbChip).padding(horizontal = 16.dp, vertical = 12.dp),
-        )
-    }
-}
-
-@Composable
-private fun CheckRow(label: String, checked: Boolean, tag: String, onChange: (Boolean) -> Unit) {
-    val box = RoundedCornerShape(7.dp)
-    Row(
-        modifier = Modifier.fillMaxWidth().toggleable(value = checked, role = Role.Checkbox, onValueChange = onChange).testTag(tag),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(24.dp)
-                .clip(box)
-                .background(if (checked) MbNavy else MbWhite)
-                .then(if (checked) Modifier else Modifier.border(1.5.dp, MbPick, box)),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (checked) Image(painterResource(Res.drawable.ic_tick_white), contentDescription = null, modifier = Modifier.size(24.dp))
-        }
-        Spacer(modifier = Modifier.width(14.dp))
-        Text(label, color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.Medium)
     }
 }

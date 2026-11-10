@@ -104,8 +104,8 @@ class WalletGateStateTest {
     @Test
     fun openedInstallsOnceAndOpensAtTheStartRoute(): Unit = runBlocking {
         val cases = listOf(
-            Triple("backed up", testRecord(passphrase = "a test passphrase", backupConfirmed = true, imported = true), MovieRoute.S1HomeSingleSig),
-            Triple("not backed up", testRecord(appLockEnabled = true), MovieRoute.HomeFirstRun),
+            Triple("backed up", testRecord(passphrase = "a test passphrase", backupConfirmed = true, imported = true), MovieRoute.VaultList),
+            Triple("not backed up", testRecord(appLockEnabled = true), MovieRoute.VaultList),
             Triple("address type not confirmed", testRecord(backupConfirmed = true, addressType = AddressType.TAPROOT, addressTypeConfirmed = false), MovieRoute.AddressType),
         )
         for ((case, record, route) in cases) {

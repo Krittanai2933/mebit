@@ -70,8 +70,8 @@ class OnboardingSession(
         private set
 
     /**
-     * From a Create or an Import in this run, or a cold start of a wallet whose address type is not confirmed, until Home first shows
-     * the wallet. Only then may the new key take a passphrase, or the wallet change its address type, because a wallet Home has shown
+     * From a Create or an Import in this run, or a cold start of a wallet whose address type is not confirmed, until its setup ends on
+     * the Wallet list. Only then may the new key take a passphrase, or the wallet change its address type, because a wallet the list has shown
      * may hold coins.
      */
     var inFirstSetup: Boolean by mutableStateOf(false)
@@ -210,7 +210,7 @@ class OnboardingSession(
         persist()
     }
 
-    /** Home has shown the wallet, so its key and its address type are final. */
+    /** The Wallet list has shown the wallet, so its key and its address type are final. */
     fun endFirstSetup() {
         inFirstSetup = false
     }
@@ -386,7 +386,7 @@ class OnboardingSession(
         appLockEnabled = record.appLockEnabled
         addressType = record.addressType
         addressTypeConfirmed = record.addressTypeConfirmed
-        // A type not yet confirmed means Home never showed the wallet, so setup goes on where it stopped.
+        // A type not yet confirmed means the Wallet list never showed the wallet, so setup goes on where it stopped.
         inFirstSetup = !record.addressTypeConfirmed
         held = Held.Copy(version)
         recordGuard = oldGuard

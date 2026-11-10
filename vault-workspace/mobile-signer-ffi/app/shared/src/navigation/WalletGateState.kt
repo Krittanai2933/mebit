@@ -40,7 +40,7 @@ class WalletGateState internal constructor(private val wallets: Wallets) {
             when (val every = wallets.unlockEvery(reason)) {
                 is Every.Refused -> lastAttempt = every.result // Cancelled, Denied, LockedOut and Unavailable stay locked with nothing installed
                 is Every.Broken -> boot = Boot.Broken(every.cause)
-                is Every.Open -> boot = Boot.Open(startRoute(every.resume.session.backupConfirmed, every.resume.session.addressTypeConfirmed), every.resume.place)
+                is Every.Open -> boot = Boot.Open(startRoute(every.resume.session.addressTypeConfirmed), every.resume.place)
             }
         } finally {
             busy = false

@@ -334,10 +334,10 @@ class Wallets internal constructor(
     /**
      * For a list on screen. One wallet at a time, never in parallel, and skips a wallet read in the last minute, so N wallets cost N
      * routine syncs at most per visit. A public host that limits one wallet would limit the next, so a scan that came back Continuing
-     * ends the pass, and Home's own retry goes on later.
+     * ends the pass, and Home's own retry goes on later. The wallet at [first] goes first, so the one in use is bound even when another scan stops the pass.
      */
-    suspend fun refreshBalances() {
-        for (w in listed) {
+    suspend fun refreshBalances(first: Place? = null) {
+        for (w in listed.sortedBy { it.place != first }) {
             if (!w.session.addressTypeConfirmed || w.chain.boundWithin(BALANCE_FRESH_SECONDS)) continue // an unfinished wallet has no final address type to scan
             withContext(Dispatchers.Default) { w.chain.bindSession(w.session) }
             if (w.chain.scan == HotScan.CONTINUING) return
