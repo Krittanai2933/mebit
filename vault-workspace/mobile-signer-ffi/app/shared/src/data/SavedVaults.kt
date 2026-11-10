@@ -215,7 +215,7 @@ internal fun OnboardingSession.ownKey(): SavedKey? = fingerprint.takeIf { it.isN
 /** The fingerprint of the wallet this session holds on the phone, or null while there is none. This is the one rule for whether the book may be saved. */
 internal fun OnboardingSession.vaultsOwner(): String? = fingerprint.takeIf { saved == SaveState.Saved && it.isNotBlank() }
 
-/** The extended keys in the descriptor line of [bsms], in order. Empty when the text is not the shape VaultDraft writes, which then fails the address check. */
+/** The extended keys in the descriptor line of [bsms], in order. Empty when the text is not the shape [walletBsms] writes, which then fails the address check. */
 private fun xpubsIn(bsms: String): List<String> =
     bsms.lines().getOrNull(1)?.substringAfter("sortedmulti(")?.substringBeforeLast("))")?.split(",")?.drop(1)?.map { it.substringAfterLast(']') }.orEmpty()
 

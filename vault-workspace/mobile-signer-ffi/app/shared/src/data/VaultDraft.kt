@@ -1,10 +1,8 @@
 package com.mebit.app.data
 
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.mebit.ffi.signer.computeVaultAddressMultisig
 
 enum class CustodyPolicy {
     PersonalCustody,
@@ -22,124 +20,26 @@ data class CreatedVault(
     val hasMockKey: Boolean = false,
 )
 
-/**
- * Policy → choose keys → review → BSMS file export (no QR).
- * personal_custody only; decaying/timelock surface as T16 boards.
- */
+/** The vaults in the book and the one the vault screens show (detail, Receive, Send, T20, Wallet Created). The wizard that makes one is [CreateWalletDraft]. */
 class VaultDraft(private val book: SavedVaults = SavedVaults.memoryOnly()) {
-    var m: Int by mutableStateOf(2)
-    var n: Int by mutableStateOf(3)
-    var policy: CustodyPolicy by mutableStateOf(CustodyPolicy.PersonalCustody)
-    val selectedIds = mutableStateListOf<String>()
-    var lastError: String? by mutableStateOf(null)
-        private set
-    var address: String by mutableStateOf("")
-        private set
-    var bsms: String by mutableStateOf("")
-        private set
     val created: List<CreatedVault> get() = book.current.vaults
     var selectedVaultId: String? by mutableStateOf(null)
 
+    /** The address [CreateWalletDraft.create] returned. A deferred book edit can replay and renumber the new vault, so an id alone may name an older one. */
+    private var createdAddress: String? by mutableStateOf(null)
+
     fun selectVault(id: String) {
         selectedVaultId = id
+        createdAddress = null
     }
 
-    fun selectedVault(): CreatedVault? = created.find { it.id == selectedVaultId } ?: created.lastOrNull()
-
-    fun setMn(newM: Int, newN: Int): Boolean {
-        lastError = null
-        if (newM < 1 || newN < 1 || newM > newN) {
-            lastError = "M / N ไม่ถูกต้อง · ต้อง 1 ≤ M ≤ N"
-            return false
-        }
-        m = newM
-        n = newN
-        while (selectedIds.size > n) selectedIds.removeAt(selectedIds.lastIndex)
-        return true
+    fun noteCreated(made: CreatedVault) {
+        selectedVaultId = made.id
+        createdAddress = made.address
     }
 
-    fun toggleKey(id: String) {
-        if (id in selectedIds) selectedIds.remove(id)
-        else if (selectedIds.size < n) selectedIds.add(id)
-    }
-
-    fun selectionComplete(): Boolean = selectedIds.size == n
-
-    fun buildReview(store: KeyringStore): Boolean {
-        lastError = null
-        if (!selectionComplete()) {
-            lastError = "จำนวนกุญแจไม่ตรง · เลือกให้ครบตาม N"
-            return false
-        }
-        val keys = selectedIds.mapNotNull { id -> store.keys.find { it.id == id && it.verified } }
-        if (keys.size != n) {
-            lastError = "ต้องใช้กุญแจที่ยืนยันแล้วเท่านั้น"
-            return false
-        }
-        return try {
-            val addr = computeVaultAddressMultisig(keys.map { it.xpub }, m.toUByte())
-            address = addr
-            bsms = buildBsms(m, n, keys, addr)
-            true
-        } catch (e: Exception) {
-            lastError = e.message ?: "สร้าง descriptor ไม่สำเร็จ"
-            address = ""
-            bsms = ""
-            false
-        }
-    }
-
-    fun commit(store: KeyringStore, forceFail: Boolean = false): Boolean {
-        lastError = null
-        if (forceFail) {
-            lastError = "สร้าง Vault ไม่สำเร็จ"
-            return false
-        }
-        if (address.isBlank() || bsms.isBlank()) {
-            if (!buildReview(store)) return false
-        }
-        val picked = selectedIds.mapNotNull { id -> store.keys.find { it.id == id } }
-        val fps = picked.map { it.fingerprint }
-        // Built here, not inside the edit, because an edit can run again later and these fields are the draft's live state.
-        val vault = CreatedVault(
-            id = "",
-            name = "",
-            m = m,
-            n = n,
-            policy = policy,
-            address = address,
-            bsms = bsms,
-            keyFingerprints = fps,
-            hasMockKey = picked.any { it.isMock },
-        )
-        book.edit { b ->
-            val number = b.vaults.size + 1 // vaults are never removed, so this count is unique
-            b.copy(vaults = b.vaults + vault.copy(id = "vault_$number", name = "Vault $number"))
-        }
-        selectedVaultId = created.lastOrNull()?.id
-        return true
-    }
-
-    private fun buildBsms(m: Int, n: Int, keys: List<SavedKey>, address: String): String {
-        require(keys.size == n)
-        val descriptor = "wsh(sortedmulti($m,${keys.joinToString(",") { descriptorKey(it) }}))"
-        val pathLines = keys.joinToString("\n") { "${it.fingerprint} ${it.derivationPath}" }
-        return listOf(
-            "BSMS 1.0",
-            descriptor,
-            pathLines,
-            "/0/*,/1/*",
-            "# mebit personal_custody · receive[0]=$address",
-            "# export=file · not QR",
-        ).joinToString("\n")
-    }
-
-    /** Key origin when the fingerprint and path are known. Otherwise the bare xpub. */
-    private fun descriptorKey(key: SavedKey): String {
-        val fingerprint = key.fingerprint.trim().lowercase()
-        val path = key.derivationPath.trim().removePrefix("m/")
-        val fingerprintOk = Regex("^[0-9a-f]{8}$").matches(fingerprint)
-        val pathOk = Regex("^\\d+'?(/\\d+'?)+$").matches(path)
-        return if (fingerprintOk && pathOk) "[$fingerprint/$path]${key.xpub}" else key.xpub
-    }
+    fun selectedVault(): CreatedVault? =
+        createdAddress?.let { address -> created.lastOrNull { it.address == address } }
+            ?: created.find { it.id == selectedVaultId }
+            ?: created.lastOrNull()
 }

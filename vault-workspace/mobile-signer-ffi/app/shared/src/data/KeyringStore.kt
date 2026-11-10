@@ -254,9 +254,11 @@ class KeyringStore(
         val name = label?.trim()?.takeIf { it.isNotEmpty() } ?: p.label
         val savedLabel = if (p.isMock && !name.endsWith(" · จำลอง")) "$name · จำลอง" else name
         book.edit { b ->
+            // The first number no saved key uses, because a size-based id repeats after a delete and Choose Keys counts picks by id.
+            val id = generateSequence(b.keys.size + 1) { it + 1 }.map { "key_${it}_${p.fingerprint}" }.first { candidate -> b.keys.none { it.id == candidate } }
             b.copy(
                 keys = b.keys + SavedKey(
-                    id = "key_${b.keys.size + 1}_${p.fingerprint}",
+                    id = id,
                     label = savedLabel,
                     fingerprint = p.fingerprint,
                     xpub = p.xpub,
@@ -302,6 +304,16 @@ internal fun hardwareName(source: KeySourceLabel): String = when (source) {
     KeySourceLabel.TrezorSafe7 -> "Trezor Safe 7"
     KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")
 }
+
+/** Penpot 2.2's card title for a source, which 2.1 and 3.2 repeat as the start of a key's line. */
+internal fun keySourceName(source: KeySourceLabel): String = when (source) {
+    KeySourceLabel.ThisDevice -> "mebit บนเครื่องนี้"
+    KeySourceLabel.MebitOther -> "mebit บนเครื่องอื่น"
+    KeySourceLabel.Jade, KeySourceLabel.TrezorSafe7 -> hardwareName(source)
+}
+
+/** "Jade · 7f2c a91b": the source, then the fingerprint in groups of four. The sub line on Penpot 3.2 and 2.1. */
+internal fun keyLine(key: SavedKey): String = "${keySourceName(key.source)} · ${fingerprintGroups(key.fingerprint)}"
 
 internal fun hardwareMonogram(source: KeySourceLabel): String = when (source) {
     KeySourceLabel.Jade -> "JD"

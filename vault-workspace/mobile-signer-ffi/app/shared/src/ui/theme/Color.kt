@@ -22,6 +22,10 @@ val MbWhite = Color(0xFFFFFFFF)
 val MbSlate = Color(0xFF8A93A1)
 val MbPick = Color(0xFFD5D9E0)
 val MbGreenWash = Color(0xFFE4F2EA)
+val MbWarmTint = Color(0xFFFFF8EF)
+val MbDisabledInk = Color(0xFFB4BAC4)
+val MbDisabledFill = Color(0xFFF2F4F7)
+val MbProgress = Color(0xFF2A5C82)
 
 /** Legacy brand tokens kept for non–Movie Page surfaces. */
 val MbTeal = Color(0xFF007368)

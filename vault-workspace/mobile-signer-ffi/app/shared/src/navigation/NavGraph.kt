@@ -34,6 +34,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mebit.app.Place
 import com.mebit.app.data.AppLockState
+import com.mebit.app.data.CreateWalletDraft
 import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.OwnerCheck
 import com.mebit.app.data.MultisigSendDraft
@@ -77,6 +78,7 @@ import com.mebit.app.feature.vault.ChooseKeysScreen
 import com.mebit.app.feature.vault.PolicyScreen
 import com.mebit.app.feature.vault.SpendingCard
 import com.mebit.app.feature.vault.ReviewScreen
+import com.mebit.app.feature.vault.ScriptTypeScreen
 import com.mebit.app.feature.vault.T16InvalidMnScreen
 import com.mebit.app.feature.vault.T16PolicyDecayingScreen
 import com.mebit.app.feature.vault.T17CountMismatchScreen
@@ -144,6 +146,8 @@ fun MebitNavHost(
     var catalogOpen by remember { mutableStateOf(false) }
     val keyring = remember(vaults, wallets) { KeyringStore(book = vaults, ownKeys = { wallets.ownKeys() }) }
     val vaultDraft = remember(vaults) { VaultDraft(vaults) }
+    // One draft per wizard run: it lives while Policy is on the Back stack.
+    val createDraft = remember(vaults, inCreateFlow(backStack)) { CreateWalletDraft(vaults) }
     val quotes = remember { liveQuoteCache() }
     val multisigSend = remember { MultisigSendDraft() }
     // Import Seed's words and passphrase. They outlive the detour to Address Type and back, and a fresh draft replaces them once
@@ -209,16 +213,21 @@ fun MebitNavHost(
         if (at >= 0) while (backStack.lastIndex > at) backStack.removeAt(backStack.lastIndex)
     }
 
+    // Every add ends here: back to Choose Keys when the add began there, else on [otherwise].
+    fun finishAdd(otherwise: MovieRoute) {
+        val next = stackAfterAdd(backStack, otherwise)
+        keyFlow = keyFlowAfter(next.last().route, keyFlow)
+        land(next)
+    }
+
     // App Lock is one setting for the phone, so only the wallet that made the phone's first choice runs this step.
     // After the first wallet's create or import comes App Lock on a phone with an owner check, else the Spending PIN, set before the list.
     // A later wallet's setup ends on the list here.
-    fun lockStep() = navigate(
-        when {
-            wallets.listed.size >= 2 -> endSetup(session)
-            biometrics.needsPin -> MovieRoute.SpendingPin
-            else -> MovieRoute.AppLock
-        },
-    )
+    fun lockStep() = when {
+        wallets.listed.size >= 2 -> finishAdd(endSetup(session))
+        biometrics.needsPin -> navigate(MovieRoute.SpendingPin)
+        else -> navigate(MovieRoute.AppLock)
+    }
 
     // The create flow goes on to the address type. A later backup returns to the screen that opened it.
     fun afterBackup() = land(stackAfterBackup(backStack, session.inFirstSetup))
@@ -252,7 +261,7 @@ fun MebitNavHost(
     // A real key reads Demo until its first bind ends, so its balance stays a dash until then, as on Home.
     fun spendingKnown(w: OpenWallet) = w.chain.balanceKnown && !(w.session.words.size >= 12 && w.chain.mode == WalletMode.Demo)
 
-    // The button on 3.5 opens Add Key, and its two wallet rows land here.
+    // Add Key's two wallet rows and Policy's single-sig start land here.
     fun addWallet(import: Boolean) {
         addLine = wallets.addRefusal()?.let(::addRefusalLine)
         val w = wallets.beginAdd() ?: return
@@ -375,13 +384,13 @@ fun MebitNavHost(
                         biometrics = biometrics,
                         mode = LockMode.Enable,
                         // A lock removed while this screen showed leaves the phone with no owner check, so its PIN comes before the list.
-                        onDone = { navigate(if (biometrics.needsPin) MovieRoute.SpendingPin else endSetup(session)) },
+                        onDone = { if (biometrics.needsPin) navigate(MovieRoute.SpendingPin) else finishAdd(endSetup(session)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
                     MovieRoute.SpendingPin -> SpendingPinScreen(
                         session = session,
-                        onDone = { navigate(endSetup(session)) },
+                        onDone = { finishAdd(endSetup(session)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
@@ -412,7 +421,7 @@ fun MebitNavHost(
                     )
                     MovieRoute.VerifyKey -> VerifyKeyScreen(
                         store = keyring,
-                        onMatched = { navigate(MovieRoute.Keyring) },
+                        onMatched = { finishAdd(MovieRoute.Keyring) },
                         onMismatch = { source ->
                             verifyRetryRoute = routeBeforeVerify(source, keyFlow)
                             navigate(MovieRoute.T14VerifyMismatch)
@@ -437,33 +446,45 @@ fun MebitNavHost(
                         onOpenCatalog = openCatalog,
                     )
                     MovieRoute.Policy -> PolicyScreen(
-                        draft = vaultDraft,
-                        onContinue = { navigate(MovieRoute.ChooseKeys) },
-                        onDecaying = { navigate(MovieRoute.T16PolicyDecaying) },
-                        onInvalidMn = { navigate(MovieRoute.T16InvalidMn) },
+                        draft = createDraft,
+                        line = addLine,
+                        onMultisig = { navigate(MovieRoute.ChooseKeys) },
+                        onSingleSig = { addWallet(import = false) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
                     MovieRoute.ChooseKeys -> ChooseKeysScreen(
-                        draft = vaultDraft,
-                        store = keyring,
+                        draft = createDraft,
+                        keys = keyring.keys,
+                        onAddKey = { navigate(MovieRoute.AddKey) },
+                        onContinue = { navigate(MovieRoute.ScriptType) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.ScriptType -> ScriptTypeScreen(
+                        network = session.network,
                         onContinue = { navigate(MovieRoute.Review) },
-                        onCountMismatch = { navigate(MovieRoute.T17CountMismatch) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
                     MovieRoute.Review -> ReviewScreen(
-                        draft = vaultDraft,
-                        store = keyring,
-                        onCreated = { navigate(MovieRoute.VaultCreated) },
-                        onBackendError = { navigate(MovieRoute.T18BackendError) },
+                        draft = createDraft,
+                        keys = keyring.keys,
+                        onCreate = { plan ->
+                            val made = createDraft.create(plan)
+                            if (made == null) {
+                                navigate(MovieRoute.T18BackendError)
+                            } else {
+                                vaultDraft.noteCreated(made)
+                                land(stackAfterCreate(backStack))
+                            }
+                        },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
                     MovieRoute.VaultCreated -> VaultCreatedScreen(
-                        draft = vaultDraft,
-                        onOpenVaults = { navigate(MovieRoute.VaultList) },
-                        onBack = onBack,
+                        vault = vaultDraft.selectedVault(),
+                        onOpenWallets = { navigate(MovieRoute.VaultList) },
                         onOpenCatalog = openCatalog,
                     )
                     MovieRoute.VaultList -> {

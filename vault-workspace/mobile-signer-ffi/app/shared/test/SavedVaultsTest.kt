@@ -7,7 +7,9 @@ import com.mebit.app.Why
 import com.mebit.app.WriteMode
 import com.mebit.app.navigation.Boot
 import com.mebit.app.navigation.WalletGateState
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
+import com.mebit.ffi.signer.generateSoftwareMultisigKey
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -21,22 +23,24 @@ class SavedVaultsTest {
     @Test
     fun aRestartBringsBackTheKeysAndVaults() {
         val storage = FakeVaultsStorage()
-        val first = SavedVaults(storage, owners = one { TEST_CHECK }) // the real derivation, so what VaultDraft writes must pass the check at the next start
+        val first = SavedVaults(storage, owners = one { TEST_CHECK }) // the real derivation, so what CreateWalletDraft writes must pass the check at the next start
         first.sync()
         val keyring = KeyringStore(book = first)
-        val draft = VaultDraft(first)
+        val draft = CreateWalletDraft(first)
+        val third = generateSoftwareMultisigKey("", KeyNetwork.TEST, 3u)
         enrol(keyring, "abcd0123", tpubA)
         enrol(keyring, "00ff00aa", tpubB)
-        assertTrue(draft.setMn(2, 2))
-        keyring.keys.forEach { draft.toggleKey(it.id) }
-        assertTrue(draft.commit(keyring))
+        enrol(keyring, third.masterFingerprint, third.xpub, third.derivationPath)
+        keyring.keys.forEach { draft.toggle(it.id, keyring.keys) }
+        val made = assertNotNull(draft.create(assertNotNull(draft.ready(keyring.keys))))
+        assertEquals("Wallet 1", made.name)
 
         val second = SavedVaults(storage, owners = one { TEST_CHECK })
         second.sync()
         assertEquals(VaultsHealth.Ok, second.health)
         assertEquals(first.current, second.current)
-        assertEquals(listOf("abcd0123", "00ff00aa"), KeyringStore(book = second).keys.map { it.fingerprint })
-        assertEquals(draft.address, VaultDraft(second).created.single().address)
+        assertEquals(listOf("abcd0123", "00ff00aa", third.masterFingerprint), KeyringStore(book = second).keys.map { it.fingerprint })
+        assertEquals(made.address, VaultDraft(second).created.single().address)
     }
 
     @Test
@@ -218,6 +222,35 @@ class SavedVaultsTest {
         assertEquals(VaultsHealth.Ok, vaults.health)
         assertEquals(1, storage.writes)
         assertEquals(vaults.current, opened(storage).current)
+    }
+
+    @Test
+    fun walletCreatedKeepsShowingTheWalletThisRunMadeAfterADeferredEditRenumbersIt() {
+        fun numbered(n: Int) = JADE.copy(id = "key_$n", fingerprint = "aaaa000$n", xpub = "xpub-$n")
+        fun create(book: SavedVaults, keys: List<SavedKey>): CreatedVault {
+            val draft = CreateWalletDraft(book, FAKE_DERIVE)
+            keys.forEach { draft.toggle(it.id, keys) }
+            return assertNotNull(draft.create(assertNotNull(draft.ready(keys))))
+        }
+        val storage = FakeVaultsStorage()
+        create(opened(storage), (1..3).map(::numbered))
+
+        storage.unreadable = true // this run's first read could not finish, so its create is queued
+        val vaults = opened(storage)
+        val vaultDraft = VaultDraft(vaults)
+        val made = create(vaults, (4..6).map(::numbered))
+        vaultDraft.noteCreated(made)
+        assertEquals(made.address, vaultDraft.selectedVault()?.address)
+
+        storage.unreadable = false
+        vaults.sync() // the replay over the stored book renumbers the new wallet from vault_1 to vault_2
+        assertEquals(listOf("vault_1", "vault_2"), vaults.current.vaults.map { it.id })
+        val shown = assertNotNull(vaultDraft.selectedVault())
+        assertEquals(made.address, shown.address, "Wallet Created still shows this run's wallet")
+        assertEquals(made.bsms, shown.bsms, "and exports its BSMS")
+
+        vaultDraft.selectVault("vault_1")
+        assertEquals("vault_1", vaultDraft.selectedVault()?.id, "a list tap still selects by id")
     }
 
     @Test
@@ -461,8 +494,8 @@ class SavedVaultsTest {
         assertEquals(TEST_CHECK, storedOwner(storage), "the book keeps its owner while that wallet stays")
     }
 
-    private fun enrol(keyring: KeyringStore, fingerprint: String, xpub: String) {
-        assertTrue(keyring.startMebitOtherFromPaste("$fingerprint\n$xpub\n$PATH"))
+    private fun enrol(keyring: KeyringStore, fingerprint: String, xpub: String, path: String = PATH) {
+        assertTrue(keyring.startMebitOtherFromPaste("$fingerprint\n$xpub\n$path"))
         assertTrue(keyring.confirmFingerprint(fingerprint))
     }
 

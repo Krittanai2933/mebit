@@ -16,12 +16,39 @@ internal fun stackAfterOpen(stack: List<Stop>, stop: Stop): List<Stop> = when {
 /**
  * The end of every phone wallet's setup, the first wallet's after App Lock or the Spending PIN and a later wallet's after Address Type,
  * backed up or not, begun on the Keyring or anywhere else. The wallet leaves first setup here, because the list shows it from now on and a
- * vault may use its key, so its passphrase and address type are final. Lands on the Wallet list, which [stackAfterOpen] makes the only entry.
+ * vault may use its key, so its passphrase and address type are final. Names the Wallet list, which [stackAfterAdd] opens as the only entry
+ * unless the add began on Choose Keys.
  */
 internal fun endSetup(session: OnboardingSession): MovieRoute {
     session.endFirstSetup()
     return MovieRoute.VaultList
 }
+
+/**
+ * Pure. Whether the create-wallet wizard is open, which is while its first screen, Policy, is on [stack]. NavGraph keeps one
+ * CreateWalletDraft exactly while this holds: the + starts a fresh one, the Add Key detour from Choose Keys keeps it, and Back,
+ * a tab and [stackAfterCreate] drop Policy and so the draft.
+ */
+internal fun inCreateFlow(stack: List<Stop>): Boolean = stack.any { it.route == MovieRoute.Policy }
+
+/**
+ * Pure. The Back stack once an add ends, by Confirm Key's match ([otherwise] is the Keyring) or by the end of a phone wallet's setup
+ * ([otherwise] is the Wallet list). An add opened from Choose Keys, the Stop right under the last Add Key, returns there with every
+ * Stop above it gone and each kept Stop on its own place, so the wizard is on screen again with its picks. Any other add opens
+ * [otherwise], a tab, as before. [stack] is never empty.
+ */
+internal fun stackAfterAdd(stack: List<Stop>, otherwise: MovieRoute): List<Stop> {
+    require(otherwise.tab) { "${otherwise.name} is not a tab" }
+    val add = stack.indexOfLast { it.route == MovieRoute.AddKey }
+    return if (add > 0 && stack[add - 1].route == MovieRoute.ChooseKeys) stack.take(add)
+    else stackAfterOpen(stack, Stop(otherwise, stack.last().place))
+}
+
+/**
+ * Pure. Wallet Created alone, at the place the wizard ended on. The wizard leaves the stack, so Wallet Created has no back chip (Penpot 3.5
+ * draws none) and nothing on the stack can reach Review and run "สร้าง Wallet" again.
+ */
+internal fun stackAfterCreate(stack: List<Stop>): List<Stop> = listOf(Stop(MovieRoute.VaultCreated, stack.last().place))
 
 /**
  * Pure. The Back stack once Backup Words or Verify Words ends, by a verify or a skip. In first setup the flow goes on to Address Type.

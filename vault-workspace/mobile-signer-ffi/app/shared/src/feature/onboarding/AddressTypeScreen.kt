@@ -24,7 +24,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -38,21 +37,23 @@ import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbBtcOrange
+import com.mebit.app.ui.theme.MbDisabledInk
 import com.mebit.app.ui.theme.MbEyebrow
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbSlate
+import com.mebit.app.ui.theme.MbWarmTint
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.hotAddressTypeEnabled
 
-private val SelectedRow = Color(0xFFFFF8EF)
-private val RadioRing = Color(0xFFB4BAC4)
-
 /** One row of Penpot 1.5.1: the type's name, its BIP and the first characters of its addresses on each network. */
 internal class AddressTypeRow(val type: AddressType, val label: String, val bip: String, private val mainnet: String, private val testnet: String) {
+    /** The first characters of this type's addresses on [network]. */
+    fun prefix(network: KeyNetwork) = if (network == KeyNetwork.MAIN) mainnet else testnet
+
     /** The detail line, with the prefixes of [network], so it agrees with the address Receive shows. */
-    fun detail(network: KeyNetwork) = "$bip · เริ่มด้วย ${if (network == KeyNetwork.MAIN) mainnet else testnet}"
+    fun detail(network: KeyNetwork) = "$bip · เริ่มด้วย ${prefix(network)}"
 
     /** Whether the core takes this type on [network], by the rule its accounts enforce ([hotAddressTypeEnabled]): on mainnet only Native SegWit. */
     fun enabled(network: KeyNetwork) = hotAddressTypeEnabled(type, network)
@@ -165,42 +166,51 @@ fun AddressTypeScreen(
 
 @Composable
 private fun TypeRow(row: AddressTypeRow, network: KeyNetwork, selected: Boolean, onSelect: () -> Unit) {
-    val shape = RoundedCornerShape(15.dp)
     // Read at render, so the rows follow the session's network.
     val enabled = row.enabled(network)
+    // The badge marks the default, so it stays on Native SegWit whatever is picked.
+    val badge = when {
+        row.type == AddressType.NATIVE_SEGWIT -> DEFAULT_BADGE
+        !enabled -> NOT_ON_MAINNET
+        else -> null
+    }
+    RadioRow(row.label, row.detail(network), badge, selected, enabled, "address_type_" + row.type.name.lowercase(), onSelect)
+}
+
+/** The tag after "Native SegWit" on Penpot 1.5.1 and 3.3. */
+internal const val DEFAULT_BADGE = "ค่าเริ่มต้น"
+
+/** Penpot 1.5.1's flat radio row, which Penpot 3.3 repeats: [label] with its optional [badge], [detail] under it and the radio at the end. */
+@Composable
+internal fun RadioRow(label: String, detail: String, badge: String?, selected: Boolean, enabled: Boolean, tag: String, onSelect: () -> Unit) {
+    val shape = RoundedCornerShape(15.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(72.dp)
             .clip(shape)
-            .background(if (selected) SelectedRow else MbWhite)
+            .background(if (selected) MbWarmTint else MbWhite)
             .border(if (selected) 1.5.dp else 1.dp, if (selected) MbBtcOrange else MbBorder, shape)
             .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onSelect)
             .padding(start = 18.dp, end = 18.dp)
-            .testTag("address_type_" + row.type.name.lowercase()),
+            .testTag(tag),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(row.label, color = if (enabled) MbNavyInk else MbSlate, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
-                // The badge marks the default, so it stays on Native SegWit whatever is picked.
-                val badge = when {
-                    row.type == AddressType.NATIVE_SEGWIT -> "ค่าเริ่มต้น"
-                    !enabled -> NOT_ON_MAINNET
-                    else -> null
-                }
+                Text(label, color = if (enabled) MbNavyInk else MbSlate, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
                 badge?.let {
                     Spacer(modifier = Modifier.width(11.dp))
                     Text(it, color = if (enabled) MbEyebrow else MbSlate, fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
             Spacer(modifier = Modifier.height(6.dp))
-            Text(row.detail(network), color = if (enabled) MbBody else MbSlate, fontSize = 11.2.sp)
+            Text(detail, color = if (enabled) MbBody else MbSlate, fontSize = 11.2.sp)
         }
         Box(
             modifier = Modifier
                 .size(18.dp)
-                .border(1.5.dp, if (selected) MbBtcOrange else if (enabled) RadioRing else MbBorder, CircleShape),
+                .border(1.5.dp, if (selected) MbBtcOrange else if (enabled) MbDisabledInk else MbBorder, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             if (selected) Box(Modifier.size(8.dp).clip(CircleShape).background(MbBtcOrange))

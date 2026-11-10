@@ -28,6 +28,41 @@ interface Sharer {
 @Composable
 expect fun rememberSharer(): Sharer
 
+/** How one save dialog or share sheet ended. */
+sealed interface ExportOutcome {
+    /** Saved, or handed to the share sheet (Android's chooser never says whether the user picked a target, so it counts as handed over). */
+    data object Done : ExportOutcome
+
+    /** The user closed the dialog or sheet without choosing. The screen says nothing. */
+    data object Cancelled : ExportOutcome
+
+    /** The file could not be written or the system UI could not open. [reason] is for logs, and the screen shows its own line. */
+    data class Failed(val reason: String) : ExportOutcome
+}
+
+/** Pure. The one rule both platforms map their answer through: an error wins, then a choice is Done and no choice is Cancelled. */
+internal fun exportOutcome(chose: Boolean, error: String?): ExportOutcome = when {
+    error != null -> ExportOutcome.Failed(error)
+    chose -> ExportOutcome.Done
+    else -> ExportOutcome.Cancelled
+}
+
+/** Saves or shares one small text file through the system UI. Get one from [rememberTextFileExport]. */
+interface TextFileExport {
+    /** The system save dialog for a file [name] holding [text]. */
+    fun save(name: String, text: String)
+
+    /** The share sheet with a file [name] holding [text]. */
+    fun share(name: String, text: String)
+}
+
+/**
+ * [onResult] runs on the main thread once per [TextFileExport.save] or [TextFileExport.share]. Composable because Android's save
+ * dialog needs an activity-result launcher made in composition.
+ */
+@Composable
+expect fun rememberTextFileExport(onResult: (ExportOutcome) -> Unit): TextFileExport
+
 /** This bitmap as PNG bytes. Throws [IllegalStateException] when the platform encoder fails. */
 expect fun ImageBitmap.encodePng(): ByteArray
 

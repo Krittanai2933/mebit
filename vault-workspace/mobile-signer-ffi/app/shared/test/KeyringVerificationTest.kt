@@ -63,6 +63,21 @@ class KeyringVerificationTest {
     }
 
     @Test
+    fun aKeyAddedAfterADeleteNeverRepeatsASavedId() {
+        val store = KeyringStore()
+        fun add(fingerprint: String) {
+            assertTrue(store.startMebitOtherFromPaste("$fingerprint\n$tpubA\nm/48'/1'/0'/2'"))
+            assertTrue(store.confirmFingerprint(fingerprint))
+        }
+        add("aaaa0001")
+        add("bbbb0002")
+        add("bbbb0002")
+        assertTrue(store.tryDelete(store.keys[1].id))
+        add("bbbb0002")
+        assertEquals(listOf("key_1_aaaa0001", "key_3_bbbb0002", "key_4_bbbb0002"), store.keys.map { it.id })
+    }
+
+    @Test
     fun pastedAndHardwareKeysDefaultToReal() {
         val pasted = staged().pending!!
         assertFalse(pasted.isMock)
