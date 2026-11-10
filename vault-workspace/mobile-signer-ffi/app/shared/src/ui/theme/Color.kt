@@ -26,6 +26,7 @@ val MbWarmTint = Color(0xFFFFF8EF)
 val MbDisabledInk = Color(0xFFB4BAC4)
 val MbDisabledFill = Color(0xFFF2F4F7)
 val MbProgress = Color(0xFF2A5C82)
+val MbAmberInk = Color(0xFFF8981C)
 
 /** Legacy brand tokens kept for non–Movie Page surfaces. */
 val MbTeal = Color(0xFF007368)

@@ -5,7 +5,7 @@ A phone holds up to ten individual wallets. The Wallet list (Penpot 1.8) shows e
 ## Sub-features
 
 - `sw-list` the Wallet list shows the title, a 32 by 32 + that opens Policy, the total and every wallet, then the vaults, with no buttons under them.
-- `sw-add-key` Add Key shows the group เพิ่มเป็นกระเป๋าใหม่ and the group เพิ่มเป็นกุญแจสำหรับ Vault.
+- `sw-add-key` Add Key shows one list of four cards, with the bar and the Keys tab lit. The first (this phone) and the last (import) add a wallet, and the middle two (another mebit phone, hardware) add a key for a Vault.
 - `sw-add-create` a second wallet is created with no App Lock step and ends on the Wallet list with กระเป๋า 2 as a card.
 - `sw-add-refused` an import of words already on the phone is refused, and a refused add shows one line on Add Key.
 - `sw-choose` the bar's list and the lists' balances show every wallet, and two Backs return to where the user started.
@@ -16,8 +16,8 @@ A phone holds up to ten individual wallets. The Wallet list (Penpot 1.8) shows e
 
 ## How to get to it (user POV)
 
-- Tab กุญแจ → เพิ่มกุญแจ → Add Key. A wallet added from here ends on the Wallet list.
-- Keyring → เพิ่มกุญแจอีก → Add Key. A wallet added from here ends on the Wallet list too.
+- Tab กุญแจ → the + on the title row → Add Key. A wallet added from here ends on the Wallet list.
+- Wallet list + → Policy → Choose Keys → เพิ่มกุญแจอีก → Add Key. A wallet added from here ends back on Choose Keys, see [vault](./movie-page-vault.md).
 - Home → รายละเอียด (key details) → ลบกระเป๋านี้ออกจากเครื่อง.
 - Cold start → the unlock screen → ใช้ 24 คำแทน → the Forget sheet.
 
@@ -29,12 +29,12 @@ Preconditions:
 - `.audit/several-wallets-sim/check.py all` runs every step below in order and prints one PASS or FAIL line for each. `check.py w4` runs one.
 
 - **List and +.** `verify.sh ios-tap "id:tab_wallets"`, `verify.sh ios-see "id:screen_vaults"`, then the title reads "Wallet ของคุณ", `id:cta_vaults_add` is 32 by 32 and `id:vaults_total` shows. `id:cta_add_wallet`, `id:cta_new_vault` and `id:cta_vaults_keyring` are gone. Shot `sw-list`.
-- **Add Key.** `verify.sh ios-tap "id:tab_keys"`, `verify.sh ios-tap "id:cta_keyring_add"`, `verify.sh ios-see "id:screen_keys/add"`. The wallet rows are `id:cta_add_this_device` and `id:cta_add_import`. The key rows are `id:cta_add_mebit_other` and `id:cta_add_hardware`. Shot `sw-add-key`.
+- **Add Key.** `verify.sh ios-tap "id:tab_keys"`, `verify.sh ios-tap "id:cta_keyring_add"`, `verify.sh ios-see "id:screen_keys/add"`. The cards, top down, are `id:cta_add_this_device` (a wallet), `id:cta_add_mebit_other` (a key), `id:cta_add_hardware` (a key) and `id:cta_add_import` (a wallet), and `id:tab_keys` shows. Shot `sw-add-key`.
 - **Create a second wallet.** `verify.sh ios-tap "id:cta_add_this_device"`, `id:cta_skip_backup`, `id:cta_address_type`. No App Lock screen shows. `verify.sh ios-see "id:screen_vaults"`, `verify.sh ios-gone "id:back"`, and `id:card_spending_2` carries the tag ยังไม่ได้สำรอง. `verify.sh ios-tap "id:card_spending_2"` opens Home named กระเป๋า 2. Shot `sw-home-2`.
 - **Two cards.** `id:card_spending` and `id:card_spending_2` on 3.5, each with its own name and balance. Shot `sw-list-two`.
 - **The bar's list.** `verify.sh ios-tap "id:tab_receive_send"` shows `id:choose_spending` and `id:choose_spending_2`. A pick pushes that wallet's screen, and `verify.sh ios-tap "id:back"` twice returns to the Home the user started from.
 - **Refused import.** Add Key → `id:cta_add_import` → type the words of a wallet already on the phone → import. The screen stays on Import Seed and `id:error` shows a line.
-- **Keyring and vault.** `id:tab_keys` lists `id:key_onboard_<fingerprint>` once per wallet. Choose Keys offers `id:pick_onboard_<fingerprint>` for each.
+- **Keyring and vault.** `id:tab_keys` lists `id:key_onboard_<fingerprint>` once per wallet, each a card named มือถือ plus the wallet's name with the pill ยืนยันแล้ว, or an amber ยังไม่ยืนยัน and a place at the top of the list while the wallet's backup is not done. Choose Keys offers `id:pick_onboard_<fingerprint>` for each.
 - **Blocked and remove.** On a wallet whose key a vault uses, `id:key_details_toggle` shows `id:remove_blocked`. On another, it shows `id:cta_remove_wallet`, which opens the sheet (`id:dialog_remove_wallet`) with `id:cta_remove_confirm` and `id:cta_remove_cancel`. Confirm asks the owner and ends on 3.5 with the other wallet. Shot `sw-remove-sheet`.
 - **Forget.** `xcrun simctl terminate`, `xcrun simctl launch`, `notifyutil -p com.apple.BiometricKit_Sim.pearl.nomatch`, tap Cancel at (201, 519), `verify.sh ios-tap "id:cta_unlock_forget"`. The sheet title reads ลบกระเป๋าทั้งหมดออกจากเครื่องนี้ไหม. After the confirm and the owner check, Welcome shows and a relaunch still shows Welcome.
 

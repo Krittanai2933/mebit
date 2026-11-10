@@ -3,6 +3,7 @@ package com.mebit.app.feature.keys
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -12,6 +13,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -20,6 +22,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,9 +33,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import com.mebit.app.data.fingerprintGroups
 import com.mebit.app.data.hardwareName
+import com.mebit.app.data.keyBadge
+import com.mebit.app.data.keyLine
+import com.mebit.app.data.keyMonogram
+import com.mebit.app.data.keyringOrder
+import com.mebit.app.data.keyringSubtitle
+import com.mebit.app.getPlatform
+import com.mebit.app.ui.theme.MbAmberInk
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbChip
+import com.mebit.app.ui.theme.MbEyebrow
+import com.mebit.app.ui.theme.MbGreenWash
+import com.mebit.app.ui.theme.MbIconWash
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbMuted
 import com.mebit.app.ui.theme.MbNavyInk
@@ -56,12 +69,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.mebit.app.data.KeySourceLabel
 import com.mebit.app.data.KeyringStore
-import com.mebit.app.data.SavedVaults
-import com.mebit.app.data.VaultsNotice
+import com.mebit.app.data.SavedKey
+import com.mebit.app.navigation.MovieRoute
 import com.mebit.app.ui.components.HardwareMark
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.OptionCard
 import com.mebit.app.ui.components.PhoneMark
+import com.mebit.app.ui.components.PlusButton
 import com.mebit.app.ui.components.TwoPhonesMark
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
@@ -83,26 +97,27 @@ private fun NameChip(label: String, onPick: () -> Unit) {
     }
 }
 
-/** Penpot 2.1.1. The first group adds a wallet that signs here. The second adds a key for a Vault, which ends on the Keyring and never on a wallet list. */
+/** Penpot 2.2: one list of four cards in the board's order. The first and last add a wallet, the other two a key for a Vault. [line] says why a refused wallet add did not start. */
 @Composable
 fun AddKeyScreen(
     line: String?,
     onThisDevice: () -> Unit,
-    onImport: () -> Unit,
     onMebitOther: () -> Unit,
     onHardware: () -> Unit,
+    onImport: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
     MebitScreen(
-        eyebrow = "ADD WALLET OR KEY",
-        title = "เพิ่มกระเป๋าหรือกุญแจ",
-        subtitle = "เลือกว่าจะเพิ่มเป็นกระเป๋าใหม่ หรือเพิ่มเป็นกุญแจสำหรับ Vault",
+        eyebrow = MovieRoute.AddKey.eyebrow,
+        title = MovieRoute.AddKey.titleTh,
+        subtitle = "กุญแจคือสิ่งที่ใช้เซ็นอนุมัติการใช้จ่าย",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         tag = "screen_keys/add",
     ) {
-        GroupLabel("เพิ่มเป็นกระเป๋าใหม่")
+        // The board's cards start at y 226, 27 dp under where the shared scaffold ends a subtitle.
+        Spacer(modifier = Modifier.height(27.dp))
         OptionCard(
             title = "mebit บนเครื่องนี้",
             body = "สร้าง seed ใหม่เก็บใน secure enclave ของเครื่อง",
@@ -110,7 +125,24 @@ fun AddKeyScreen(
             leading = { PhoneMark() },
             onClick = onThisDevice,
         )
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(11.dp))
+        OptionCard(
+            title = "mebit บนเครื่องอื่น",
+            body = "จับคู่ผ่าน Bluetooth แล้วดึง xpub จากเครื่องนั้นมา",
+            tag = "cta_add_mebit_other",
+            leading = { TwoPhonesMark() },
+            onClick = onMebitOther,
+        )
+        Spacer(modifier = Modifier.height(11.dp))
+        OptionCard(
+            title = "Hardware wallet",
+            body = "อุปกรณ์แยกที่เก็บกุญแจไว้ออฟไลน์",
+            tag = "cta_add_hardware",
+            chips = listOf("Jade", "Trezor Safe 7"),
+            leading = { HardwareMark() },
+            onClick = onHardware,
+        )
+        Spacer(modifier = Modifier.height(13.dp))
         OptionCard(
             title = "นำเข้ากระเป๋าเดิม",
             body = "ใช้ 24 คำที่คุณจดไว้",
@@ -122,31 +154,7 @@ fun AddKeyScreen(
             Spacer(modifier = Modifier.height(12.dp))
             Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp, modifier = Modifier.testTag("error"))
         }
-        Spacer(modifier = Modifier.height(24.dp))
-        GroupLabel("เพิ่มเป็นกุญแจสำหรับ Vault")
-        OptionCard(
-            title = "mebit บนเครื่องอื่น",
-            body = "จับคู่ผ่าน Bluetooth แล้วดึง xpub จากเครื่องนั้นมา",
-            tag = "cta_add_mebit_other",
-            leading = { TwoPhonesMark() },
-            onClick = onMebitOther,
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        OptionCard(
-            title = "Hardware wallet",
-            body = "อุปกรณ์แยกที่เก็บกุญแจไว้ออฟไลน์",
-            tag = "cta_add_hardware",
-            chips = listOf("Jade", "Trezor Safe 7"),
-            leading = { HardwareMark() },
-            onClick = onHardware,
-        )
     }
-}
-
-@Composable
-private fun GroupLabel(text: String) {
-    Text(text, color = MbBody, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-    Spacer(modifier = Modifier.height(10.dp))
 }
 
 @Composable
@@ -317,93 +325,97 @@ fun VerifyKeyScreen(
     }
 }
 
+/**
+ * Penpot 2.1, in 6.2's order and subtitle while a key is unconfirmed. 6.2's two buttons and its "ไปที่ Wallet" text are not built.
+ * [onDeleteBlocked] runs when a key a vault uses cannot be deleted.
+ */
 @Composable
 fun KeyringScreen(
     store: KeyringStore,
-    vaults: SavedVaults,
     onAddKey: () -> Unit,
-    onFirstVault: () -> Unit,
     onDeleteBlocked: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
+    val keys = keyringOrder(store.keys)
+    val phone = remember { getPlatform().phoneMonogram }
     MebitScreen(
-        eyebrow = "KEYRING",
-        title = "คลังกุญแจ",
+        eyebrow = MovieRoute.Keyring.eyebrow,
+        // The title is drawn below so the + shares its row, as on the board.
+        title = null,
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         tag = "screen_keys/keyring",
     ) {
-        VaultsNotice(vaults)
-        if (store.keys.isEmpty()) {
-            Text(
-                text = "ยังไม่มีกุญแจในคลัง",
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.testTag("keyring_empty"),
-            )
-        } else {
-            store.keys.forEach { key ->
-                Text(
-                    text = key.label + if (key.verified) " · verified" else " · unverified",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.testTag("key_${key.id}"),
-                )
-                Text(
-                    text = key.fingerprint,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                if (store.canDelete(key)) {
-                    SecondaryCta("ลบ ${key.label}", "cta_delete_${key.id}", {
-                        if (!store.tryDelete(key.id)) onDeleteBlocked()
-                    })
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-            }
+        Spacer(modifier = Modifier.height(3.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text(MovieRoute.Keyring.titleTh, color = MbNavyInk, fontSize = 28.sp, fontWeight = FontWeight.Medium, lineHeight = 34.sp, modifier = Modifier.weight(1f).testTag("title"))
+            // Penpot 2.1 ends the + 1 dp inside the screen's padding, where 1.8 ends it 9 dp past.
+            PlusButton("cta_keyring_add", "เพิ่มกุญแจ", onAddKey, Modifier.padding(end = 1.dp))
         }
         Spacer(modifier = Modifier.height(12.dp))
-        PrimaryCta("เพิ่มกุญแจ", "cta_keyring_add", onAddKey)
-        if (store.verifiedCount() >= 1) {
-            Spacer(modifier = Modifier.height(8.dp))
-            SecondaryCta("สร้าง Vault", "cta_keyring_vault", onFirstVault)
-        }
-        store.lastError?.let {
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("error"))
+        Text(
+            keyringSubtitle(keys),
+            color = MbBody,
+            fontSize = 13.5.sp,
+            fontWeight = FontWeight.Light,
+            lineHeight = 20.sp,
+            modifier = Modifier.testTag(if (keys.isEmpty()) "keyring_empty" else "keyring_subtitle"),
+        )
+        Spacer(modifier = Modifier.height(29.dp))
+        keys.forEach { key ->
+            KeyCard(key, phone)
+            if (store.canDelete(key)) DeleteLink(key) { if (!store.tryDelete(key.id)) onDeleteBlocked() }
+            Spacer(modifier = Modifier.height(10.dp))
         }
     }
 }
 
+/** Penpot 2.1's key card, 62 dp high. It merges its texts into one node tagged `key_<id>`, which opens nothing. */
 @Composable
-fun KeyringFirstVaultScreen(
-    store: KeyringStore,
-    onContinuePolicy: () -> Unit,
-    onBack: (() -> Unit)?,
-    onOpenCatalog: () -> Unit,
-) {
-    MebitScreen(
-        eyebrow = "NEW VAULT",
-        title = "รวมกุญแจสำหรับ Vault",
-        onBack = onBack,
-        onOpenCatalog = onOpenCatalog,
-        tag = "screen_keys/keyring-first-vault",
+private fun KeyCard(key: SavedKey, phone: String) {
+    val shape = RoundedCornerShape(20.dp)
+    val hardware = key.source == KeySourceLabel.Jade || key.source == KeySourceLabel.TrezorSafe7
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(62.dp)
+            .shadow(4.dp, shape, clip = false)
+            .clip(shape)
+            .background(MbWhite)
+            .border(1.dp, MbBorder, shape)
+            .semantics(mergeDescendants = true) {}
+            .testTag("key_${key.id}"),
     ) {
-        Text(
-            text = "แนะนำ 3 ดอกสำหรับ 2-of-3 · personal_custody · มี verified ${store.verifiedCount()} ดอก",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        store.keys.filter { it.verified }.forEach { key ->
-            Text("• ${key.label} · ${key.fingerprint}", style = MaterialTheme.typography.bodyMedium)
+        Box(Modifier.offset(x = 16.dp, y = 12.dp).size(38.dp).clip(RoundedCornerShape(12.dp)).background(MbIconWash), contentAlignment = Alignment.Center) {
+            Text(keyMonogram(key.source, phone), color = if (hardware) MbEyebrow else MbNavy, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
         }
-        Spacer(modifier = Modifier.height(20.dp))
-        PrimaryCta(
-            "ต่อไป · นโยบาย Vault",
-            "cta_to_policy",
-            onContinuePolicy,
-            enabled = store.verifiedCount() >= 1,
+        // 96 dp at the end is the pill, its 10 dp inset and a 14 dp gap, so the texts are 200 dp wide on the board's 402 dp screen and end in … before the pill on a narrower one.
+        Text(key.label, color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(start = 66.dp, top = 10.dp, end = 96.dp))
+        Text(keyLine(key), color = MbSlate, fontSize = 11.sp, fontWeight = FontWeight.Light, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(start = 66.dp, top = 31.dp, end = 96.dp))
+        Box(
+            modifier = Modifier.align(Alignment.TopEnd).padding(end = 10.dp, top = 19.dp).size(width = 72.dp, height = 24.dp).clip(CircleShape).background(if (key.verified) MbGreenWash else MbIconWash),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            Text(keyBadge(key.verified), color = if (key.verified) MbSuccess else MbAmberInk, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 10.dp))
+        }
+    }
+}
+
+/** A small text link under a key's card, which no board draws. */
+@Composable
+private fun DeleteLink(key: SavedKey, onClick: () -> Unit) {
+    Box(Modifier.fillMaxWidth().heightIn(min = 40.dp), contentAlignment = Alignment.CenterEnd) {
+        Text(
+            "ลบ",
+            color = MbNavy,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .clickable(role = Role.Button, onClick = onClick)
+                .semantics { contentDescription = "ลบ ${key.label}" }
+                .testTag("cta_delete_${key.id}")
+                .padding(start = 12.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
         )
     }
 }

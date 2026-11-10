@@ -10,6 +10,7 @@ class BottomBarRoutesTest {
         MovieRoute.VaultList to BarTab.Wallets,
         MovieRoute.VaultDetail to BarTab.Wallets,
         MovieRoute.Keyring to BarTab.Keys,
+        MovieRoute.AddKey to BarTab.Keys,
         MovieRoute.T15KeyringEmpty to BarTab.Keys,
         MovieRoute.T15UnverifiedFirst to BarTab.Keys,
         MovieRoute.T15DeleteBlocked to BarTab.Keys,

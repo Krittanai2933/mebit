@@ -8,7 +8,7 @@ enum class KeyFlow { Onboarding, Keyring }
 /** The flow after [opened] is navigated to: Key Source starts onboarding, the keyring screens and the Wallet list end it, any other route keeps [current]. */
 fun keyFlowAfter(opened: MovieRoute, current: KeyFlow): KeyFlow = when (opened) {
     MovieRoute.KeySource -> KeyFlow.Onboarding
-    MovieRoute.AddKey, MovieRoute.Keyring, MovieRoute.KeyringFirstVault, MovieRoute.VaultList -> KeyFlow.Keyring
+    MovieRoute.AddKey, MovieRoute.Keyring, MovieRoute.VaultList -> KeyFlow.Keyring
     else -> current
 }
 

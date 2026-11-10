@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.dialog
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -161,6 +162,19 @@ fun BackChip(onClick: () -> Unit, dark: Boolean = false, tag: String = "back") {
             fontSize = 22.sp,
             fontWeight = FontWeight.Medium,
         )
+    }
+}
+
+/** Penpot's + on a title row (1.8 and 2.1): a 32 dp navy circle with a white 14 by 2 cross. A caller's [modifier] sets how far it sits from the screen's right edge. */
+@Composable
+fun PlusButton(tag: String, description: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.size(32.dp).clip(CircleShape).background(MbNavy).clickable(role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = description }.testTag(tag),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(Modifier.size(14.dp, 2.dp).background(MbWhite))
+        Box(Modifier.size(2.dp, 14.dp).background(MbWhite))
     }
 }
 

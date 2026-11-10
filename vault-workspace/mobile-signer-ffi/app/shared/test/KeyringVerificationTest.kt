@@ -78,6 +78,17 @@ class KeyringVerificationTest {
     }
 
     @Test
+    fun aRefusedDeleteLeavesNoErrorLineForTheNextKeyScreen() {
+        val jade = SavedKey("key_1_aaaa1111", "Jade", "aaaa1111", "xpub", "m/48'/1'/0'/2'", KeySourceLabel.Jade, true)
+        val vault = CreatedVault("vault_1", "Wallet 1", 1, 1, CustodyPolicy.PersonalCustody, "addr", "bsms", listOf(jade.fingerprint))
+        val book = SavedVaults.memoryOnly().also { it.edit { b -> b.copy(keys = listOf(jade), vaults = listOf(vault)) } }
+        val store = KeyringStore(book = book)
+        assertFalse(store.tryDelete(jade.id))
+        assertEquals(listOf(jade), store.keys)
+        assertNull(store.lastError)
+    }
+
+    @Test
     fun pastedAndHardwareKeysDefaultToReal() {
         val pasted = staged().pending!!
         assertFalse(pasted.isMock)

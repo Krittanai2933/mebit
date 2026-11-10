@@ -280,15 +280,10 @@ class KeyringStore(
 
     fun tryDelete(id: String): Boolean {
         val key = keys.find { it.id == id } ?: return false
-        if (inVault(key)) {
-            lastError = "ลบไม่ได้ · กุญแจยังถูกใช้ใน Vault"
-            return false
-        }
+        if (inVault(key)) return false
         book.edit { b -> b.copy(keys = b.keys.filterNot { it.id == id }) }
         return true
     }
-
-    fun verifiedCount(): Int = keys.count { it.verified }
 
     /** A wallet's own key comes from its session and has no saved row to remove. */
     fun canDelete(key: SavedKey): Boolean = ownKeys().none { it.id == key.id }
@@ -317,9 +312,29 @@ internal fun keyLine(key: SavedKey): String = "${keySourceName(key.source)} · $
 
 internal fun hardwareMonogram(source: KeySourceLabel): String = when (source) {
     KeySourceLabel.Jade -> "JD"
-    KeySourceLabel.TrezorSafe7 -> "TZ"
+    KeySourceLabel.TrezorSafe7 -> "TRZ"
     KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")
 }
+
+/** Penpot 2.1's text tile. [phone] is the phone's own text ([com.mebit.app.Platform.phoneMonogram]); "MB" for a key from another mebit phone is a guess, no board draws it. */
+internal fun keyMonogram(source: KeySourceLabel, phone: String): String = when (source) {
+    KeySourceLabel.ThisDevice -> phone
+    KeySourceLabel.MebitOther -> "MB"
+    KeySourceLabel.Jade, KeySourceLabel.TrezorSafe7 -> hardwareMonogram(source)
+}
+
+/** Pure. Unconfirmed keys first, as Penpot 6.2 has them, each group in keyring order. */
+internal fun keyringOrder(keys: List<SavedKey>): List<SavedKey> = keys.sortedBy { it.verified }
+
+/** Pure. Penpot 2.1's subtitle when every key is confirmed, 6.2's when some is not, and the empty keyring's line when there is none. */
+internal fun keyringSubtitle(keys: List<SavedKey>): String = when {
+    keys.isEmpty() -> "ยังไม่มีกุญแจในคลัง"
+    keys.all { it.verified } -> "${keys.size} กุญแจในคลัง · ยืนยันแล้วทั้งหมด"
+    else -> "${keys.size} กุญแจ · ยังไม่ยืนยัน ${keys.count { !it.verified }} ใบ (ขึ้นก่อน)"
+}
+
+/** Pure. The text of a Keyring card's pill. */
+internal fun keyBadge(confirmed: Boolean): String = if (confirmed) "ยืนยันแล้ว" else "ยังไม่ยืนยัน"
 
 /** "7F2CA91B" becomes "7f2c a91b": lowercase, in groups of four. */
 internal fun fingerprintGroups(fingerprint: String): String = fingerprint.lowercase().chunked(4).joinToString(" ")

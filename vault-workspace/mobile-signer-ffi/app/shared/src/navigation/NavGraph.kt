@@ -54,7 +54,6 @@ import com.mebit.app.data.liveQuoteCache
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.feature.keys.AddKeyScreen
 import com.mebit.app.feature.keys.HardwareWalletScreen
-import com.mebit.app.feature.keys.KeyringFirstVaultScreen
 import com.mebit.app.feature.keys.KeyringScreen
 import com.mebit.app.feature.keys.PairMebitOtherScreen
 import com.mebit.app.feature.keys.T13UnsupportedModelScreen
@@ -397,9 +396,9 @@ fun MebitNavHost(
                     MovieRoute.AddKey -> AddKeyScreen(
                         line = addLine,
                         onThisDevice = { addWallet(import = false) },
-                        onImport = { addWallet(import = true) },
                         onMebitOther = { navigate(MovieRoute.PairMebitOther) },
                         onHardware = { navigate(MovieRoute.HardwareWallet) },
+                        onImport = { addWallet(import = true) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
@@ -432,16 +431,8 @@ fun MebitNavHost(
                     )
                     MovieRoute.Keyring -> KeyringScreen(
                         store = keyring,
-                        vaults = vaults,
                         onAddKey = { navigate(MovieRoute.AddKey) },
-                        onFirstVault = { navigate(MovieRoute.KeyringFirstVault) },
                         onDeleteBlocked = { navigate(MovieRoute.T15DeleteBlocked) },
-                        onBack = onBack,
-                        onOpenCatalog = openCatalog,
-                    )
-                    MovieRoute.KeyringFirstVault -> KeyringFirstVaultScreen(
-                        store = keyring,
-                        onContinuePolicy = { navigate(MovieRoute.Policy) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
@@ -563,7 +554,7 @@ fun MebitNavHost(
                         quotes = quotes,
                         onReceive = { openReceive(WalletChoice.Spending(current.place)) },
                         onSend = { openSend(WalletChoice.Spending(current.place)) },
-                        onVault = { navigate(MovieRoute.KeyringFirstVault) },
+                        onVault = { navigate(MovieRoute.Keyring) },
                         onHistory = { navigate(MovieRoute.S7History) },
                         onOpenTx = openTx,
                         onOpenCatalog = openCatalog,

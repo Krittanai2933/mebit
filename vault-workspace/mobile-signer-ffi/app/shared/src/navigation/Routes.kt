@@ -72,6 +72,7 @@ enum class MovieRoute(
         "ADD KEY",
         "เพิ่มกุญแจ",
         "mebit บนเครื่องนี้ · เครื่องอื่น · HW",
+        BarTab.Keys,
     ),
     PairMebitOther(
         "keys/pair-mebit",
@@ -98,12 +99,6 @@ enum class MovieRoute(
         "กุญแจที่ยืนยันแล้ว",
         BarTab.Keys,
         tab = true,
-    ),
-    KeyringFirstVault(
-        "keys/keyring-first-vault",
-        "NEW VAULT",
-        "รวมกุญแจสำหรับ Vault",
-        "แนะนำ 3 ดอกสำหรับ 2-of-3",
     ),
     Policy(
         "vault/policy",

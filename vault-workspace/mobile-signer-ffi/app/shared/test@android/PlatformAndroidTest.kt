@@ -2,6 +2,7 @@ package com.mebit.app
 
 import android.content.pm.ApplicationInfo
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -9,6 +10,11 @@ class PlatformAndroidTest {
     @Test
     fun `platform name is reported`() {
         assertTrue(getPlatform().name.isNotBlank())
+    }
+
+    @Test
+    fun `a key made on an android phone reads AND on the keyring`() {
+        assertEquals("AND", getPlatform().phoneMonogram)
     }
 
     @Test

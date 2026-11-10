@@ -12,8 +12,7 @@ A user starts a wallet from the Wallet list's +, picks single-sig or a 2-of-3 or
 ## How to get to it (user POV)
 
 - Wallet list + → Policy → Choose keys → Script type → Review → Create → Wallet Created → Wallet list. Back from Policy returns to the list, and a second + starts with nothing picked.
-- "เพิ่มกุญแจอีก" on Choose keys opens Add Key. Confirm Key, or the end of a new phone wallet's setup, comes back to Choose keys with the earlier picks kept and the new key not picked.
-- Keyring first vault → Policy reaches the same flow until the Keyring is rebuilt.
+- "เพิ่มกุญแจอีก" on Choose keys opens Add Key. Confirm Key, or the end of a new phone wallet's setup, comes back to Choose keys with the earlier picks kept and the new key not picked. Add Key shows the bottom bar, so a tap on a tab there leaves the wizard and drops the picks.
 - Catalog jumps to POLICY / SCRIPT TYPE / WALLET CREATED / VAULTS / T20 when state is seeded.
 
 ## Driving it with verify.sh

@@ -8,7 +8,6 @@ class KeyFlowTest {
     private val keyringScreens = listOf(
         MovieRoute.AddKey,
         MovieRoute.Keyring,
-        MovieRoute.KeyringFirstVault,
         MovieRoute.VaultList,
     )
 

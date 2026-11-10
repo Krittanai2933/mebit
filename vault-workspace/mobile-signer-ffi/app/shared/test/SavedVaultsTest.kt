@@ -343,7 +343,6 @@ class SavedVaultsTest {
         val vaults = opened(storage)
         val keyring = KeyringStore(book = vaults)
         assertFalse(keyring.tryDelete(JADE.id))
-        assertNotNull(keyring.lastError)
         assertEquals(listOf(JADE), keyring.keys)
         assertEquals(0, storage.writes)
     }

@@ -292,7 +292,7 @@ fun T13UnsupportedModelScreen(
         ) {
             DeviceList {
                 DeviceRow(
-                    monogram = if (model?.startsWith("Trezor") == true) "TZ" else "?",
+                    monogram = if (model?.startsWith("Trezor") == true) hardwareMonogram(KeySourceLabel.TrezorSafe7) else "?",
                     title = name,
                     sub = "ไม่รองรับ",
                     action = "ปิด",

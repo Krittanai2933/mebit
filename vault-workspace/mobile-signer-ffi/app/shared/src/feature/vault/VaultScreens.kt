@@ -26,8 +26,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.mebit.app.Place
@@ -43,6 +41,7 @@ import com.mebit.app.resources.Res
 import com.mebit.app.resources.mebit_logo_dark
 import com.mebit.app.ui.components.InfoCard
 import com.mebit.app.ui.components.MebitScreen
+import com.mebit.app.ui.components.PlusButton
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
 import com.mebit.app.ui.theme.MbBody
@@ -108,7 +107,8 @@ fun VaultListScreen(
         Spacer(modifier = Modifier.height(3.dp))
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text(MovieRoute.VaultList.titleTh, color = MbNavyInk, fontSize = 28.sp, fontWeight = FontWeight.Medium, lineHeight = 34.sp, modifier = Modifier.weight(1f).testTag("title"))
-            AddButton(onCreate)
+            // Penpot 1.8 puts the + 29 dp from the screen's right edge, so 9 dp past the screen's own padding.
+            PlusButton("cta_vaults_add", "สร้าง Wallet", onCreate, Modifier.padding(end = 9.dp))
         }
         spendingTotal(spending, vaultListed = draft.created.isNotEmpty(), walletUnopened = unopenedNotice != null)?.let { TotalLine(it) }
         Spacer(modifier = Modifier.height(16.dp))
@@ -150,19 +150,6 @@ fun VaultListScreen(
         if (spending.isEmpty() && draft.created.isEmpty()) {
             Text("ยังไม่มี Wallet", modifier = Modifier.testTag("vaults_empty"))
         }
-    }
-}
-
-/** Penpot 1.8's + is a 32 by 32 MbNavy circle with a white +, 29dp from the screen's right edge, so 9dp past the screen's own padding. */
-@Composable
-private fun AddButton(onClick: () -> Unit) {
-    Box(
-        modifier = Modifier.padding(end = 9.dp).size(32.dp).clip(CircleShape).background(MbNavy).clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = "สร้าง Wallet" }.testTag("cta_vaults_add"),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(Modifier.size(14.dp, 2.dp).background(MbWhite))
-        Box(Modifier.size(2.dp, 14.dp).background(MbWhite))
     }
 }
 

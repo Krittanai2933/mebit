@@ -7,6 +7,9 @@ interface Platform {
 
     /** The check this platform's own prompt performs, or null where the system chooses the method and the app names none. */
     val biometricName: String?
+
+    /** The text on the Keyring tile of a key made on this phone. Penpot 2.1 draws "iOS", so Android says "AND", a guess (docs/04). */
+    val phoneMonogram: String
 }
 
 expect fun getPlatform(): Platform

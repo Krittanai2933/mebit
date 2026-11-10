@@ -22,9 +22,9 @@ class HardwareLabelsTest {
     }
 
     @Test
-    fun aJadeIsJDAndASafe7IsTZ() {
+    fun aJadeIsJDAndASafe7IsTRZ() {
         assertEquals("JD", hardwareMonogram(KeySourceLabel.Jade))
-        assertEquals("TZ", hardwareMonogram(KeySourceLabel.TrezorSafe7))
+        assertEquals("TRZ", hardwareMonogram(KeySourceLabel.TrezorSafe7))
     }
 
     @Test
