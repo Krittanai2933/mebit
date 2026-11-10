@@ -188,8 +188,8 @@ fun VaultReceiveScreen(
     onOpenCatalog: () -> Unit,
 ) {
     if (vault == null) {
-        MebitScreen(eyebrow = "RECEIVE · VAULT", title = null, onBack = onBack, onOpenCatalog = onOpenCatalog, tag = "screen_vaults/receive") {
-            Text("ยังไม่มี Vault · สร้างก่อน", color = MaterialTheme.colorScheme.error)
+        MebitScreen(eyebrow = "RECEIVE · WALLET", title = null, onBack = onBack, onOpenCatalog = onOpenCatalog, tag = "screen_vaults/receive") {
+            Text("ยังไม่มี Wallet · สร้างก่อน", color = MaterialTheme.colorScheme.error)
         }
         return
     }

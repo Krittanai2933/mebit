@@ -51,15 +51,15 @@ fun M1SendVaultScreen(
     val sats = parseBtc(amountText)
     val canContinue = draft.destination.isNotEmpty() && sats != null && isValidAddress(draft.destination, KeyNetwork.TEST)
     MebitScreen(
-        eyebrow = "SEND · VAULT",
-        title = "ส่งจาก Vault",
+        eyebrow = "SEND · WALLET",
+        title = "ส่งจาก Wallet",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         subtitle = vault?.let { "ต้องเซ็น ${it.m} จาก ${it.n} กุญแจก่อนส่ง" },
         tag = "screen_send/m1",
     ) {
         if (vault == null) {
-            Text("ยังไม่มี Vault · สร้างก่อน", color = MaterialTheme.colorScheme.error)
+            Text("ยังไม่มี Wallet · สร้างก่อน", color = MaterialTheme.colorScheme.error)
             return@MebitScreen
         }
         Text("${vault.name} · ${vault.m}-of-${vault.n}", style = MaterialTheme.typography.bodyLarge)
@@ -117,7 +117,7 @@ fun M2CollectSignaturesScreen(
         )
         Text(draft.psbtBase64.take(48) + "…", style = MaterialTheme.typography.bodySmall)
         Spacer(modifier = Modifier.height(12.dp))
-        if (vault == null) Text("ยังไม่ได้เริ่มส่งจาก Vault · กลับไปหน้าก่อน", color = MaterialTheme.colorScheme.error)
+        if (vault == null) Text("ยังไม่ได้เริ่มส่งจาก Wallet · กลับไปหน้าก่อน", color = MaterialTheme.colorScheme.error)
         val vaultKeys = vault?.keyFingerprints.orEmpty().mapNotNull { fp ->
             store.keys.find { it.fingerprint.equals(fp, ignoreCase = true) }
         }

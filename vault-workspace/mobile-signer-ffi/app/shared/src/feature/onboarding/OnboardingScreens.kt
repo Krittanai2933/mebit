@@ -178,13 +178,13 @@ fun KeySourceScreen(
     MebitScreen(
         eyebrow = "NEW WALLET",
         title = "เก็บกุญแจดอกแรกไว้ที่ไหน",
-        subtitle = "กุญแจคือสิ่งที่ใช้เซ็นอนุมัติการจ่ายเงิน เพิ่มดอกอื่นหรือยกระดับเป็น Vault ได้ทีหลัง",
+        subtitle = "กุญแจคือสิ่งที่ใช้เซ็นอนุมัติการจ่ายเงิน เพิ่มดอกอื่นหรือยกระดับเป็น Wallet ได้ทีหลัง",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         tag = "screen_onboarding/key-source",
         bottom = {
             Text(
-                text = "ไม่แน่ใจ? เริ่มจากมือถือก่อน แล้วค่อยเพิ่ม Jade หรือ Trezor เป็นกุญแจดอกที่สองตอนยกระดับเป็น Vault",
+                text = "ไม่แน่ใจ? เริ่มจากมือถือก่อน แล้วค่อยเพิ่ม Jade หรือ Trezor เป็นกุญแจดอกที่สองตอนยกระดับเป็น Wallet",
                 color = MbSlate,
                 fontSize = 13.sp,
                 textAlign = TextAlign.Center,

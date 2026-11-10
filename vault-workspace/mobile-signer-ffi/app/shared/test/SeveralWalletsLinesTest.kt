@@ -28,7 +28,7 @@ class SeveralWalletsLinesTest {
     @Test
     fun theBlockedLinesNameTheVaultOrSayTheBookCouldNotBeRead() {
         assertEquals("ลบไม่ได้ · กุญแจนี้ใช้อยู่ใน Vault A", removeBlockedLine(RemoveRow.InVault("Vault A")))
-        assertEquals("ลบไม่ได้ในตอนนี้ · อ่านรายการ Vault ไม่ได้", removeBlockedLine(RemoveRow.Unreadable))
+        assertEquals("ลบไม่ได้ในตอนนี้ · อ่านรายการ Wallet ไม่ได้", removeBlockedLine(RemoveRow.Unreadable))
         assertNull(removeBlockedLine(RemoveRow.Offered))
         assertNull(removeBlockedLine(RemoveRow.Hidden))
     }

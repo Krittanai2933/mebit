@@ -456,7 +456,7 @@ fun T15KeyringEmptyScreen(
         onOpenCatalog = onOpenCatalog,
         tag = "screen_critical/t15-empty",
     ) {
-        Text("เพิ่มกุญแจก่อนสร้าง Vault", style = MaterialTheme.typography.bodyLarge)
+        Text("เพิ่มกุญแจก่อนสร้าง Wallet", style = MaterialTheme.typography.bodyLarge)
         Spacer(modifier = Modifier.height(20.dp))
         PrimaryCta("เพิ่มกุญแจ", "cta_t15_add", onAddKey)
     }
@@ -475,7 +475,7 @@ fun T15UnverifiedFirstScreen(
         onOpenCatalog = onOpenCatalog,
         tag = "screen_critical/t15-unverified",
     ) {
-        Text("ยืนยัน fingerprint ก่อนใช้ใน Vault", style = MaterialTheme.typography.bodyLarge)
+        Text("ยืนยัน fingerprint ก่อนใช้ใน Wallet", style = MaterialTheme.typography.bodyLarge)
         Spacer(modifier = Modifier.height(20.dp))
         PrimaryCta("ไปยืนยัน", "cta_t15_verify", onVerify)
     }
@@ -494,7 +494,7 @@ fun T15DeleteBlockedScreen(
         tag = "screen_critical/t15-delete",
     ) {
         Text(
-            text = "ยังถูกใช้ใน Vault · ลบ Vault หรือถอดกุญแจออกจากนโยบายก่อน",
+            text = "ยังถูกใช้ใน Wallet · ลบ Wallet หรือถอดกุญแจออกจากนโยบายก่อน",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.error,
         )

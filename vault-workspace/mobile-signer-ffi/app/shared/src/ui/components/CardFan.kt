@@ -41,13 +41,13 @@ fun CardFan(modifier: Modifier = Modifier) {
     Box(modifier = modifier.size(402.dp, 400.dp).testTag("card_fan").clearAndSetSemantics {}) {
         FanCard(x = 114, y = 32, degrees = 12f, fill = SolidColor(CardBack), borderAlpha = 0.12f) {
             CardText("MULTISIG 3-of-5", 22, 22, 10f, FontWeight.Bold, MbWhite.copy(alpha = 0.5f), 1.2f)
-            CardText("Vault มรดก", 22, 40, 18f, FontWeight.SemiBold, MbWhite.copy(alpha = 0.85f))
+            CardText("Wallet มรดก", 22, 40, 18f, FontWeight.SemiBold, MbWhite.copy(alpha = 0.85f))
             listOf(204, 220, 236).forEach { KeyDot(it, MbGold) }
             listOf(252, 268).forEach { KeyDot(it, null) }
         }
         FanCard(x = 78, y = 96, degrees = 5f, fill = SolidColor(CardMid), borderAlpha = 0.16f) {
             CardText("MULTISIG 2-of-3", 22, 22, 10f, FontWeight.Bold, MbWhite.copy(alpha = 0.55f), 1.2f)
-            CardText("Vault ครอบครัว", 22, 40, 18f, FontWeight.SemiBold, MbWhite.copy(alpha = 0.95f))
+            CardText("Wallet ครอบครัว", 22, 40, 18f, FontWeight.SemiBold, MbWhite.copy(alpha = 0.95f))
             listOf(236, 252).forEach { KeyDot(it, MbBtcOrange) }
             KeyDot(268, null)
         }

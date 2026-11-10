@@ -348,9 +348,9 @@ private object VaultBookCodec {
 /** Pure. The line the keyring and vault list show. No Penpot board has it. */
 internal fun vaultsNoticeText(health: VaultsHealth): String? = when (health) {
     VaultsHealth.Ok -> null
-    VaultsHealth.SaveFailed -> "บันทึก Vault และกุญแจล่าสุดไม่สำเร็จ จะลองใหม่เมื่อเปิดแอปอีกครั้ง"
-    VaultsHealth.Damaged -> "อ่าน Vault และกุญแจที่บันทึกไว้ไม่ได้ กระเป๋าและ 24 คำของคุณยังใช้ได้ตามปกติ"
-    VaultsHealth.Newer -> "Vault และกุญแจถูกบันทึกโดยแอปเวอร์ชันใหม่กว่า อัปเดตแอปเพื่อดูรายการ"
+    VaultsHealth.SaveFailed -> "บันทึก Wallet และกุญแจล่าสุดไม่สำเร็จ จะลองใหม่เมื่อเปิดแอปอีกครั้ง"
+    VaultsHealth.Damaged -> "อ่าน Wallet หลายกุญแจและกุญแจที่บันทึกไว้ไม่ได้ กระเป๋าและ 24 คำของคุณยังใช้ได้ตามปกติ"
+    VaultsHealth.Newer -> "Wallet และกุญแจถูกบันทึกโดยแอปเวอร์ชันใหม่กว่า อัปเดตแอปเพื่อดูรายการ"
 }
 
 /** One line, or nothing while the book is Ok. */

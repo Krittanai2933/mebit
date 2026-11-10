@@ -222,7 +222,7 @@ private fun ForgetSheet(newerApp: Boolean, onConfirm: () -> Unit, onCancel: () -
             Text("ลบกระเป๋าทั้งหมดออกจากเครื่องนี้ไหม", color = MbNavyInk, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "กระเป๋าทุกใบ Vault และกุญแจจะถูกลบออกจากเครื่องนี้ · มีแค่ 24 คำที่นำกลับมาได้" +
+                text = "กระเป๋าทุกใบ Wallet หลายกุญแจ และกุญแจจะถูกลบออกจากเครื่องนี้ · มีแค่ 24 คำที่นำกลับมาได้" +
                     if (newerApp) "\nถ้าอัปเดต mebit ก่อน อาจเปิดกระเป๋านี้ได้" else "",
                 color = MbBody,
                 fontSize = 13.sp,

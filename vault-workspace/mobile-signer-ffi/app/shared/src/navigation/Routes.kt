@@ -140,8 +140,8 @@ enum class MovieRoute(
     ),
     VaultDetail(
         "vaults/detail",
-        "VAULT DETAIL",
-        "รายละเอียด Vault",
+        "WALLET DETAIL",
+        "รายละเอียด Wallet",
         "รับ · ส่ง",
         BarTab.Wallets,
     ),
@@ -175,7 +175,7 @@ enum class MovieRoute(
         "critical/t15-delete",
         "KEYRING",
         "ลบกุญแจไม่ได้",
-        "ยังถูกใช้ใน Vault",
+        "ยังถูกใช้ใน Wallet",
         BarTab.Keys,
     ),
     T16PolicyDecaying(
@@ -192,20 +192,20 @@ enum class MovieRoute(
     ),
     T17CountMismatch(
         "critical/t17",
-        "COMPOSE VAULT",
+        "COMPOSE WALLET",
         "จำนวนกุญแจไม่ตรง",
         "เลือกให้ครบตาม N",
     ),
     T18BackendError(
         "critical/t18",
-        "CONFIRM VAULT",
-        "สร้าง Vault ไม่สำเร็จ",
+        "CONFIRM WALLET",
+        "สร้าง Wallet ไม่สำเร็จ",
         "ลองอีกครั้ง",
     ),
     T20VaultActions(
         "critical/t20",
-        "VAULT ACTIONS",
-        "การกระทำของ Vault",
+        "WALLET ACTIONS",
+        "การกระทำของ Wallet",
         "BSMS · health check",
         BarTab.None,
     ),
@@ -278,8 +278,8 @@ enum class MovieRoute(
     ),
     M1SendVault(
         "send/m1",
-        "SEND · VAULT",
-        "ส่งจาก Vault",
+        "SEND · WALLET",
+        "ส่งจาก Wallet",
         "ต้องเซ็น M จาก N",
     ),
     M2CollectSignatures(
@@ -315,8 +315,8 @@ enum class MovieRoute(
     VaultReceive(
         "vaults/receive",
         "RECEIVE",
-        "รับเข้า Vault",
-        "ที่อยู่รับของ Vault",
+        "รับเข้า Wallet",
+        "ที่อยู่รับของ Wallet",
     ),
     ;
 

@@ -986,7 +986,7 @@ class MultisigSendDraft {
         val fp = fingerprint.uppercase()
         val keys = vault?.keyFingerprints.orEmpty()
         if (keys.none { it.equals(fp, ignoreCase = true) }) {
-            lastError = "กุญแจนี้ไม่ใช่กุญแจของ Vault นี้"
+            lastError = "กุญแจนี้ไม่ใช่กุญแจของ Wallet นี้"
             return false
         }
         if (fp !in signed) signed.add(fp)

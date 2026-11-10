@@ -33,13 +33,13 @@ sealed interface RemoveRow {
 internal fun removeRow(listedWallets: Int, saved: Boolean, usesKey: Boolean?, vaultName: String?): RemoveRow = when {
     listedWallets < 2 || !saved -> RemoveRow.Hidden
     usesKey == null -> RemoveRow.Unreadable
-    usesKey -> RemoveRow.InVault(vaultName ?: "Vault")
+    usesKey -> RemoveRow.InVault(vaultName ?: "Wallet")
     else -> RemoveRow.Offered
 }
 
 internal fun removeBlockedLine(row: RemoveRow): String? = when (row) {
     is RemoveRow.InVault -> "ลบไม่ได้ · กุญแจนี้ใช้อยู่ใน ${row.vaultName}"
-    RemoveRow.Unreadable -> "ลบไม่ได้ในตอนนี้ · อ่านรายการ Vault ไม่ได้"
+    RemoveRow.Unreadable -> "ลบไม่ได้ในตอนนี้ · อ่านรายการ Wallet ไม่ได้"
     RemoveRow.Hidden, RemoveRow.Offered -> null
 }
 

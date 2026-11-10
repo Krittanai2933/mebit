@@ -205,15 +205,15 @@ fun VaultDetailScreen(
 ) {
     val vault = draft.selectedVault()
     MebitScreen(
-        eyebrow = "VAULT DETAIL",
-        title = vault?.name ?: "รายละเอียด Vault",
+        eyebrow = "WALLET DETAIL",
+        title = vault?.name ?: "รายละเอียด Wallet",
         subtitle = vault?.let { "${it.m}-of-${it.n} · personal_custody" },
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         tag = "screen_vaults/detail",
     ) {
         if (vault == null) {
-            Text("ยังไม่ได้เลือก Vault", color = MaterialTheme.colorScheme.error)
+            Text("ยังไม่ได้เลือก Wallet", color = MaterialTheme.colorScheme.error)
             return@MebitScreen
         }
         Text(vault.address, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("detail_address"))
@@ -236,15 +236,15 @@ fun T20VaultActionsScreen(
 ) {
     val vault = draft.selectedVault()
     MebitScreen(
-        eyebrow = "VAULT ACTIONS",
-        title = "การกระทำของ Vault",
+        eyebrow = "WALLET ACTIONS",
+        title = "การกระทำของ Wallet",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         tag = "screen_critical/t20",
     ) {
         InfoCard(
-            eyebrow = "VAULT HEALTH CHECK",
-            title = "ตรวจสุขภาพ Vault",
+            eyebrow = "WALLET HEALTH CHECK",
+            title = "ตรวจสุขภาพ Wallet",
             body = if (vault != null) "health · ok (demo)" else "health · n/a",
             modifier = Modifier.testTag("t20_health"),
         )
@@ -252,7 +252,7 @@ fun T20VaultActionsScreen(
         InfoCard(
             eyebrow = "BACKUP / EXPORT",
             title = "ส่งออกไฟล์ BSMS",
-            body = vault?.bsms ?: "ยังไม่มี BSMS — สร้าง Vault ก่อน",
+            body = vault?.bsms ?: "ยังไม่มี BSMS — สร้าง Wallet ก่อน",
             modifier = Modifier.testTag("t20_bsms"),
         )
         Spacer(modifier = Modifier.height(20.dp))
@@ -301,7 +301,7 @@ fun T17CountMismatchScreen(
     onOpenCatalog: () -> Unit,
 ) {
     MebitScreen(
-        eyebrow = "COMPOSE VAULT",
+        eyebrow = "COMPOSE WALLET",
         title = "จำนวนกุญแจไม่ตรง",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
@@ -320,8 +320,8 @@ fun T18BackendErrorScreen(
     onOpenCatalog: () -> Unit,
 ) {
     MebitScreen(
-        eyebrow = "CONFIRM VAULT",
-        title = "สร้าง Vault ไม่สำเร็จ",
+        eyebrow = "CONFIRM WALLET",
+        title = "สร้าง Wallet ไม่สำเร็จ",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         subtitle = "ลองอีกครั้ง",
