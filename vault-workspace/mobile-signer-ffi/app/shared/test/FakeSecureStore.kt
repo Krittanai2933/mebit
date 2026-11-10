@@ -2,9 +2,12 @@ package com.mebit.app.data
 
 import com.mebit.app.CopyCounter
 import com.mebit.app.EraseResult
+import com.mebit.app.EveryRead
 import com.mebit.app.Marker
+import com.mebit.app.Place
 import com.mebit.app.PlainFile
 import com.mebit.app.ReadResult
+import com.mebit.app.SecureShelf
 import com.mebit.app.SecureStore
 import com.mebit.app.StoreProbe
 import com.mebit.app.StoreVersion
@@ -86,6 +89,49 @@ internal class FakeSecureStore(
     }
 }
 
+/** A phone with one place, so a test of one wallet's rules reads as it always did. [readEvery] goes through [store]'s read, so a test can still count sheets. */
+internal class OnePlaceShelf(private val store: SecureStore) : SecureShelf {
+    override fun store(place: Place): SecureStore = if (place == Place.FIRST) store else error("one place only")
+
+    override suspend fun readEvery(reason: String): EveryRead = when (val r = store.read(reason)) {
+        ReadResult.NotFound -> EveryRead.Found(emptyMap())
+        is ReadResult.Bytes, ReadResult.KeyGone, ReadResult.Unreadable -> EveryRead.Found(mapOf(Place.FIRST to r))
+        else -> EveryRead.Refused(r)
+    }
+
+    override fun eraseEvery(): Boolean = store.erase() is EraseResult.Erased
+}
+
+/**
+ * Several places over [FakeSecureStore]s that share one probe and one marker, as a real phone does. [places] holds each place's bytes,
+ * and a test scripts a damaged place through its `read`. [sheets] counts the owner checks, and [refuse] makes the next one answer it.
+ */
+internal class FakeShelf(var marker: Marker = Marker.Kept) : SecureShelf {
+    val places: Map<Place, FakeSecureStore> = Place.all.associateWith { FakeSecureStore() }
+    var sheets = 0
+        private set
+    var refuse: ReadResult? = null
+
+    override fun store(place: Place): SecureStore = object : SecureStore by places.getValue(place) {
+        override fun probe(): StoreProbe = if (places.values.any { it.probe == StoreProbe.Present }) StoreProbe.Present else StoreProbe.Empty
+
+        override fun marker(): Marker = this@FakeShelf.marker
+
+        override fun writeMarker(marker: Marker): Boolean {
+            this@FakeShelf.marker = marker
+            return true
+        }
+    }
+
+    override suspend fun readEvery(reason: String): EveryRead {
+        sheets++
+        refuse?.let { return EveryRead.Refused(it) }
+        return EveryRead.Found(Place.all.associateWith { places.getValue(it).read(reason) }.filterValues { it != ReadResult.NotFound })
+    }
+
+    override fun eraseEvery(): Boolean = places.values.map { it.erase() }.all { it is EraseResult.Erased }
+}
+
 /** An 8-character check value for test records. Nothing derives a key in these tests, so any 8 ASCII characters fit. */
 internal const val TEST_CHECK = "0a1b2c3d"
 
@@ -114,8 +160,8 @@ internal fun testRecord(
 /**
  * An in-memory [PlainFile] for common tests. [text] is what the file holds, null for no file. [failWrite] makes each write fail
  * and [failDelete] each delete, leaving the file as it was, and [unreadable] each read, as a full disk or a damaged file would,
- * until a delete removes the file. [onRead] runs after a read took the text and before it returns it, so a test can hold a reader
- * between what it read and what it writes.
+ * until a write replaces the file or a delete removes it. [onRead] runs after a read took the text and before it returns it, so a
+ * test can hold a reader between what it read and what it writes.
  */
 internal class FakePlainFile : PlainFile {
     var text: String? = null
@@ -136,6 +182,7 @@ internal class FakePlainFile : PlainFile {
         writes++
         if (failWrite) return false
         this.text = text
+        unreadable = false
         return true
     }
 

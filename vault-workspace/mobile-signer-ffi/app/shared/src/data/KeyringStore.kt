@@ -63,19 +63,18 @@ enum class EnrollResult { Enrolled, UnsupportedModel, Failed }
 /**
  * Keyring for Movie Page 01–05 / T13–T15, kept across restarts in [book]. Only [confirmFingerprint] after a VerifyKey match may add a verified key.
  *
- * [scan] lists the wallets of one kind in range. Tests pass a fake, so they need no Bluetooth. [ownKey] is the wallet's own key, or null when there is none.
+ * [scan] lists the wallets of one kind in range. Tests pass a fake, so they need no Bluetooth. [ownKeys] is each wallet's own key, in place order.
  */
 class KeyringStore(
     private val scan: suspend (WalletKind) -> List<FoundWallet> = { scanWallets(it) },
     private val book: SavedVaults = SavedVaults.memoryOnly(),
-    private val ownKey: () -> SavedKey? = { null },
+    private val ownKeys: () -> List<SavedKey> = { emptyList() },
 ) {
-    /** The wallet's own key first, then every saved key. Read-only, because [SavedVaults.edit] is the only way to change what is saved. */
+    /** Every wallet's own key first, then every saved key, a key already saved showing once. Read-only, because [SavedVaults.edit] is the only way to change what is saved. */
     val keys: List<SavedKey>
         get() {
             val saved = book.current.keys
-            val own = ownKey()?.takeUnless { o -> saved.any { it.fingerprint.equals(o.fingerprint, ignoreCase = true) } }
-            return listOfNotNull(own) + saved
+            return ownKeys().filterNot { o -> saved.any { it.fingerprint.equals(o.fingerprint, ignoreCase = true) } } + saved
         }
 
     var pending: PendingKey? by mutableStateOf(null)
@@ -97,24 +96,6 @@ class KeyringStore(
     fun clearError() {
         lastError = null
         lastMismatch = false
-    }
-
-    fun startThisDevice(passphrase: String = "", network: KeyNetwork = KeyNetwork.TEST) {
-        clearError()
-        try {
-            val key = generateSoftwareMultisigKey(passphrase, network, keys.size.toUInt())
-            pending = PendingKey(
-                label = "มือถือ · ${key.masterFingerprint.take(8)}",
-                fingerprint = key.masterFingerprint,
-                xpub = key.xpub,
-                derivationPath = key.derivationPath,
-                source = KeySourceLabel.ThisDevice,
-                isMock = true, // its words are dropped here, so nothing can ever sign with it until part 3 gives it a wallet
-            )
-        } catch (e: Exception) {
-            lastError = e.message
-            pending = null
-        }
     }
 
     /** Real tpub for a CI run that has no pasted fixture. */
@@ -307,10 +288,10 @@ class KeyringStore(
 
     fun verifiedCount(): Int = keys.count { it.verified }
 
-    /** The wallet's own key comes from the session and has no saved row to remove. */
-    fun canDelete(key: SavedKey): Boolean = key.id != ownKey()?.id
+    /** A wallet's own key comes from its session and has no saved row to remove. */
+    fun canDelete(key: SavedKey): Boolean = ownKeys().none { it.id == key.id }
 
-    private fun inVault(key: SavedKey) = book.current.vaults.any { v -> v.keyFingerprints.any { it.equals(key.fingerprint, ignoreCase = true) } }
+    private fun inVault(key: SavedKey) = book.current.usesKey(key.fingerprint)
 }
 
 /** BIP-48 P2WSH account on testnet. Coin type 1, account 0, script type 2. */

@@ -65,6 +65,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -122,7 +123,10 @@ fun S1HomeSingleSigScreen(
     onOpenTx: (HotTx) -> Unit,
     onOpenCatalog: () -> Unit,
     onChangePin: (() -> Unit)? = null,
-) = SingleSigHome(wallet, session, quotes, onReceive, onSend, onVault, onHistory, onOpenTx, onOpenCatalog, tag = "screen_send/s1", onChangePin = onChangePin)
+    remove: () -> RemoveRow = { RemoveRow.Hidden },
+    removeLine: String? = null,
+    onRemove: () -> Unit = {},
+) = SingleSigHome(wallet, session, quotes, onReceive, onSend, onVault, onHistory, onOpenTx, onOpenCatalog, tag = "screen_send/s1", onChangePin = onChangePin, remove = remove, removeLine = removeLine, onRemove = onRemove)
 
 /** The home itself, so the backup gate can show it dimmed behind its sheet under a tag of its own. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -139,7 +143,11 @@ internal fun SingleSigHome(
     onOpenCatalog: () -> Unit,
     tag: String,
     onChangePin: (() -> Unit)? = null,
+    remove: () -> RemoveRow = { RemoveRow.Hidden },
+    removeLine: String? = null,
+    onRemove: () -> Unit = {},
 ) {
+    var removing by remember { mutableStateOf(false) }
     var retries by remember { mutableIntStateOf(0) }
     // One bind at a time, because each one blocks a thread until it ends and an older one could end last.
     var binding by remember { mutableStateOf(false) }
@@ -205,7 +213,7 @@ internal fun SingleSigHome(
                 Text("SINGLE-SIG · กุญแจเดียว", color = MbWhite, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, lineHeight = 13.sp)
             }
             Spacer(modifier = Modifier.height(16.dp))
-            Text("กระเป๋าใช้จ่าย", color = MbWhite, fontSize = 19.sp, fontWeight = FontWeight.Medium, lineHeight = 25.sp)
+            Text(session.walletName, color = MbWhite, fontSize = 19.sp, fontWeight = FontWeight.Medium, lineHeight = 25.sp)
             Spacer(modifier = Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
@@ -248,9 +256,20 @@ internal fun SingleSigHome(
                 HomeAction("ส่ง", filled = false, tag = "cta_s1_send", modifier = Modifier.weight(1f), onClick = onSend)
             }
             Spacer(modifier = Modifier.height(58.dp))
-            KeyStatus(backedUp = session.backupConfirmed, fingerprint = session.fingerprint, expanded = keyDetails, onToggle = { keyDetails = !keyDetails }, onChangePin = onChangePin)
+            KeyStatus(backedUp = session.backupConfirmed, fingerprint = session.fingerprint, expanded = keyDetails, onToggle = { keyDetails = !keyDetails }, onChangePin = onChangePin, remove = remove, removeLine = removeLine, onRemove = { removing = true })
             Spacer(modifier = Modifier.height(14.dp))
             UpgradeCard(onVault)
+            if (removing) {
+                RemoveWalletSheet(
+                    name = session.walletName,
+                    backedUp = session.backupConfirmed,
+                    onConfirm = {
+                        removing = false
+                        onRemove()
+                    },
+                    onCancel = { removing = false },
+                )
+            }
             NotSavedNotice(session, Modifier.padding(top = 12.dp))
             wallet.lastError?.let {
                 Spacer(modifier = Modifier.height(12.dp))
@@ -470,7 +489,7 @@ private fun HomeAction(label: String, filled: Boolean, tag: String, modifier: Mo
  * row where the session Spending PIN guards spending, which no board has yet.
  */
 @Composable
-private fun KeyStatus(backedUp: Boolean, fingerprint: String, expanded: Boolean, onToggle: () -> Unit, onChangePin: (() -> Unit)?) {
+private fun KeyStatus(backedUp: Boolean, fingerprint: String, expanded: Boolean, onToggle: () -> Unit, onChangePin: (() -> Unit)?, remove: () -> RemoveRow, removeLine: String?, onRemove: () -> Unit) {
     val card = RoundedCornerShape(16.dp)
     Column(modifier = Modifier.fillMaxWidth().clip(card).background(MbWhite).border(1.dp, MbBorder, card).testTag("key_status")) {
         Row(modifier = Modifier.fillMaxWidth().height(52.dp).padding(start = 15.dp, end = 18.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -520,6 +539,22 @@ private fun KeyStatus(backedUp: Boolean, fingerprint: String, expanded: Boolean,
                     lineHeight = 17.sp,
                     modifier = Modifier.padding(start = 62.dp, bottom = 14.dp).clickable(role = Role.Button, onClick = it).testTag("cta_change_pin"),
                 )
+            }
+            // Read here, so each open of the details judges the book again, because a sync that finds the same book invalidates nothing.
+            val removeState = remove()
+            if (removeState != RemoveRow.Hidden) {
+                Box(modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth().height(1.dp).background(MbBorder))
+                val blocked = removeBlockedLine(removeState)
+                if (blocked == null) {
+                    Box(modifier = Modifier.fillMaxWidth().height(48.dp).clickable(role = Role.Button, onClick = onRemove).testTag("cta_remove_wallet"), contentAlignment = Alignment.Center) {
+                        Text(REMOVE_ROW_LABEL, color = MbEyebrow, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                } else {
+                    Text(blocked, color = MbSlate, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp).testTag("remove_blocked"))
+                }
+                removeLine?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp).testTag("remove_failed"))
+                }
             }
         }
     }

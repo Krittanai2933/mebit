@@ -1,6 +1,7 @@
 package com.mebit.app.data
 
 import com.mebit.app.EraseResult
+import com.mebit.app.Place
 import com.mebit.app.ReadResult
 import com.mebit.app.StoreProbe
 import com.mebit.app.Why
@@ -297,8 +298,7 @@ class OnboardingSessionSaveTest {
         val guards = FakePlainFile()
         val a = session(store, guards = guards)
         a.generateThisDevice()
-        val b = session(store, guards = guards)
-        val gate = WalletGateState(SavedWallet(store), b)
+        val (gate, b) = launched(store, guards = guards)
         runBlocking { gate.unlock("test") }
         assertIs<Boot.Open>(gate.boot, "B's unlock")
         b.markAppLockEnabled()
@@ -336,8 +336,7 @@ class OnboardingSessionSaveTest {
         session.markBackupConfirmed()
         assertEquals(SaveState.Saved, session.saved, "saved after three Replaces")
         assertNull(session.notSavedBecause, "a Replace of this session's own copy failed")
-        val next = session(store)
-        val gate = WalletGateState(SavedWallet(store), next)
+        val (gate, next) = launched(store)
         runBlocking { gate.unlock("test") }
         assertIs<Boot.Open>(gate.boot, "the next launch's unlock")
         next.markAppLockEnabled()
@@ -352,8 +351,7 @@ class OnboardingSessionSaveTest {
         val store = FakeSecureStore()
         val a = session(store)
         a.generateThisDevice()
-        val b = session(store)
-        val gate = WalletGateState(SavedWallet(store), b)
+        val (gate, b) = launched(store)
         runBlocking { gate.unlock("test") }
         b.markAppLockEnabled()
         assertEquals(UnlockResult.Verified, a.proveNow(), "A's read-back of the same key, now with B's flag")
@@ -851,6 +849,12 @@ class OnboardingSessionSaveTest {
 
     private fun session(store: SecureStore, keys: Keys = Keys(), guards: FakePlainFile? = null) =
         OnboardingSession(SavedWallet(store), keys.newKey, keys.restoreKey, keys.forgetScans, PendingPayments(guards))
+
+    /** The next launch on the phone [store]: its gate and the session of the wallet at the phone's one place. */
+    private fun launched(store: SecureStore, keys: Keys = Keys(), guards: FakePlainFile? = null): Pair<WalletGateState, OnboardingSession> {
+        val wallets = Wallets(OnePlaceShelf(store), PendingPayments(guards), forgetScans = keys.forgetScans, newKey = keys.newKey, restoreKey = keys.restoreKey)
+        return WalletGateState(wallets) to wallets.at(Place.FIRST).session
+    }
 
     /** Saves through [make], loads the saved copy into a new session, and compares every record field with what was set. */
     private fun roundTrip(case: String, flags: List<Boolean>, make: OnboardingSession.() -> Unit) {

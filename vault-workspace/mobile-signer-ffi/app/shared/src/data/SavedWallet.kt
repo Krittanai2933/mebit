@@ -86,50 +86,19 @@ sealed interface SaveResult {
     class NotSaved(val why: Why) : SaveResult
 }
 
-/** The wallet saved on this phone. The only code that touches [SecureStore], so the rules below live in one place. */
+/** One place's saved wallet, bound to its store at construction so its session cannot reach another wallet's bytes. The only code that touches [SecureStore], so the rules below live in one place. */
 class SavedWallet internal constructor(private val store: SecureStore) {
-    /** Never prompts. */
-    fun probe(): StoreProbe = store.probe()
-
-    /**
-     * The cold start of this process. Reads the marker and the probe, runs the pure [reinstallPolicy], and does what it says
-     * (erase an orphan, write the marker). Never wipes on doubt. Returns the probe to decide the boot with and a one-time notice.
-     */
-    fun start(): WalletStart {
-        val marker = store.marker()
-        var probe = store.probe()
-        var notice: StartNotice? = null
-        when (reinstallPolicy(marker, probe)) {
-            ReinstallAction.None -> Unit
-            ReinstallAction.MarkEmpty -> store.writeMarker(Marker.Empty)
-            ReinstallAction.MarkKept -> store.writeMarker(Marker.Kept)
-            ReinstallAction.WipeOrphan -> if (store.erase() is EraseResult.Erased) {
-                store.writeMarker(Marker.Empty)
-                probe = store.probe()
-                notice = StartNotice.OrphanWiped
-            } else {
-                // The wipe failed, so the wallet stays and counts as the user's. Another try at the next launch could erase it after they began to rely on it.
-                store.writeMarker(Marker.Kept)
-            }
-            ReinstallAction.Vanished -> {
-                store.writeMarker(Marker.Empty)
-                notice = StartNotice.WalletVanished
-            }
-        }
-        return WalletStart(probe, notice)
+    /** May show the OS owner check. The record exists in memory only inside the returned Opened, and the bytes read are zeroed. */
+    suspend fun open(reason: String): UnlockResult = decoded(store.read(reason)).also {
+        // A wallet its owner has opened is theirs whatever the marker said, so a later launch must never take it for an orphan. Best effort.
+        if (it is UnlockResult.Opened) store.writeMarker(Marker.Kept)
     }
 
-    /** May show the OS owner check. The record exists in memory only inside the returned Opened, and the bytes read are zeroed. */
-    suspend fun open(reason: String): UnlockResult = when (val r = store.read(reason)) {
+    /** What one read's answer means. [open] without its marker write, so a read of every place writes the marker once. Zeroes the bytes. */
+    internal fun decoded(r: ReadResult): UnlockResult = when (r) {
         is ReadResult.Bytes -> try {
             when (val d = RecordCodec.decode(r.bytes)) {
-                is Decoded.Ok -> if (d.record.network in NETWORKS) {
-                    // A wallet its owner has opened is theirs whatever the marker said, so a later launch must never take it for an orphan. Best effort.
-                    store.writeMarker(Marker.Kept)
-                    UnlockResult.Opened(d.record, r.version, d.oldGuard)
-                } else {
-                    UnlockResult.Broken(Cause.UnsupportedNetwork)
-                }
+                is Decoded.Ok -> if (d.record.network in NETWORKS) UnlockResult.Opened(d.record, r.version, d.oldGuard) else UnlockResult.Broken(Cause.UnsupportedNetwork)
                 Decoded.Newer -> UnlockResult.Broken(Cause.NewerVersion) // never overwritten: a newer app wrote it
                 Decoded.Corrupt -> UnlockResult.Broken(Cause.Corrupt)
             }
@@ -176,8 +145,16 @@ class SavedWallet internal constructor(private val store: SecureStore) {
         }
     }
 
-    /** After the user confirmed. The only call in the app that deletes the wallet. */
-    fun forget(): EraseResult = store.erase().also { if (it is EraseResult.Erased) store.writeMarker(Marker.Empty) }
+    /**
+     * After the user confirmed. Erases this place. The marker goes to Empty unless the phone positively still holds another wallet:
+     * a wrong Empty heals through [reinstallPolicy]'s MarkKept at the next start, while a missing Empty would read as Vanished.
+     */
+    fun forget(): EraseResult = store.erase().also {
+        if (it is EraseResult.Erased) {
+            val left = store.probe()
+            if (left != StoreProbe.Present && left != StoreProbe.KeyGone) store.writeMarker(Marker.Empty)
+        }
+    }
 
     private companion object {
         val NETWORKS = setOf(KeyNetwork.TEST)

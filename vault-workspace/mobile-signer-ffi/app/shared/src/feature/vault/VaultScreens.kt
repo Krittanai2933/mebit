@@ -8,7 +8,11 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -30,11 +34,13 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import com.mebit.app.Place
 import com.mebit.app.data.CustodyPolicy
 import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.SavedVaults
 import com.mebit.app.data.VaultDraft
 import com.mebit.app.data.VaultsNotice
+import com.mebit.app.feature.send.SpendingLine
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.mebit_logo_dark
 import com.mebit.app.ui.components.InfoCard
@@ -229,16 +235,17 @@ fun VaultCreatedScreen(
 }
 
 /**
- * Penpot 3.5: the spending wallet when the phone holds a real key, then the vaults. Left out: the total line, because the app
- * cannot read a vault's balance, so a vault shows a dash.
+ * Penpot 3.5: every individual wallet, then the vaults. Left out: the total line, because the app cannot read a vault's balance, so a
+ * vault shows a dash. The two buttons under the list are two different things: a wallet is added through Add Key, a Vault is composed from keys.
  */
 @Composable
 fun VaultListScreen(
     draft: VaultDraft,
     vaults: SavedVaults,
-    hasSpendingKey: Boolean,
-    spendingBalance: String,
-    onOpenSpending: () -> Unit,
+    spending: List<SpendingLine>,
+    unopenedNotice: String?,
+    onOpenSpending: (Place) -> Unit,
+    onAddWallet: () -> Unit,
     onOpenKeyring: () -> Unit,
     onOpenDetail: () -> Unit,
     onCreate: () -> Unit,
@@ -263,15 +270,19 @@ fun VaultListScreen(
         },
     ) {
         VaultsNotice(vaults)
-        if (hasSpendingKey) {
+        unopenedNotice?.let {
+            Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.testTag("wallets_unopened"))
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+        spending.forEach { line ->
             WalletListCard(
                 kind = "SINGLE-SIG",
-                name = "กระเป๋าใช้จ่าย",
+                name = line.name,
                 detail = "กุญแจเดียว · iPhone ของฉัน",
-                balance = spendingBalance,
+                balance = line.balance,
                 dark = false,
-                tag = "card_spending",
-                onClick = onOpenSpending,
+                tag = if (line.place == Place.FIRST) "card_spending" else "card_spending_${line.place.number}",
+                onClick = { onOpenSpending(line.place) },
             )
             Spacer(modifier = Modifier.height(11.dp))
         }
@@ -290,11 +301,25 @@ fun VaultListScreen(
             )
             Spacer(modifier = Modifier.height(11.dp))
         }
-        if (!hasSpendingKey && draft.created.isEmpty()) {
+        if (spending.isEmpty() && draft.created.isEmpty()) {
             Text("ยังไม่มี Vault", modifier = Modifier.testTag("vaults_empty"))
         }
         Spacer(modifier = Modifier.height(23.dp))
-        SecondaryCta("ประกอบ Vault ใหม่", "cta_new_vault", onCreate)
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+            ListButton("เพิ่มกระเป๋า", "cta_add_wallet", onAddWallet)
+            ListButton("ประกอบ Vault ใหม่", "cta_new_vault", onCreate)
+        }
+    }
+}
+
+@Composable
+private fun RowScope.ListButton(label: String, tag: String, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(999.dp)
+    Box(
+        modifier = Modifier.weight(1f).widthIn(max = 175.dp).height(52.dp).clip(shape).background(MbWhite).border(1.5.dp, MbNavy, shape).clickable(role = Role.Button, onClick = onClick).testTag(tag),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = MbNavy, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 

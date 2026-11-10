@@ -30,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import com.mebit.app.data.fingerprintGroups
 import com.mebit.app.data.hardwareName
+import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbChip
 import com.mebit.app.ui.theme.MbNavy
@@ -57,7 +58,11 @@ import com.mebit.app.data.KeySourceLabel
 import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.SavedVaults
 import com.mebit.app.data.VaultsNotice
+import com.mebit.app.ui.components.HardwareMark
 import com.mebit.app.ui.components.MebitScreen
+import com.mebit.app.ui.components.OptionCard
+import com.mebit.app.ui.components.PhoneMark
+import com.mebit.app.ui.components.TwoPhonesMark
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
 
@@ -78,41 +83,70 @@ private fun NameChip(label: String, onPick: () -> Unit) {
     }
 }
 
+/** Penpot 2.1.1. The first group adds a wallet that signs here. The second adds a key for a Vault, which ends on the Keyring and never on a wallet list. */
 @Composable
 fun AddKeyScreen(
-    store: KeyringStore,
+    line: String?,
     onThisDevice: () -> Unit,
+    onImport: () -> Unit,
     onMebitOther: () -> Unit,
     onHardware: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
     MebitScreen(
-        eyebrow = "ADD KEY",
-        title = "เพิ่มกุญแจ",
+        eyebrow = "ADD WALLET OR KEY",
+        title = "เพิ่มกระเป๋าหรือกุญแจ",
+        subtitle = "เลือกว่าจะเพิ่มเป็นกระเป๋าใหม่ หรือเพิ่มเป็นกุญแจสำหรับ Vault",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         tag = "screen_keys/add",
     ) {
-        Text(
-            text = "สามทาง · มือถือนี้ · mebit เครื่องอื่น · hardware wallet (BLE)",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        GroupLabel("เพิ่มเป็นกระเป๋าใหม่")
+        OptionCard(
+            title = "mebit บนเครื่องนี้",
+            body = "สร้าง seed ใหม่เก็บใน secure enclave ของเครื่อง",
+            tag = "cta_add_this_device",
+            leading = { PhoneMark() },
+            onClick = onThisDevice,
         )
-        Spacer(modifier = Modifier.height(20.dp))
-        PrimaryCta("mebit บนเครื่องนี้", "cta_add_this_device", {
-            store.startThisDevice()
-            if (store.pending != null) onThisDevice()
-        })
-        Spacer(modifier = Modifier.height(8.dp))
-        SecondaryCta("mebit เครื่องอื่น", "cta_add_mebit_other", onMebitOther)
-        Spacer(modifier = Modifier.height(8.dp))
-        SecondaryCta("Hardware wallet", "cta_add_hardware", onHardware)
-        store.lastError?.let {
+        Spacer(modifier = Modifier.height(12.dp))
+        OptionCard(
+            title = "นำเข้ากระเป๋าเดิม",
+            body = "ใช้ 24 คำที่คุณจดไว้",
+            tag = "cta_add_import",
+            leading = { Text("24", color = MbNavy, fontSize = 14.sp, fontWeight = FontWeight.Bold) },
+            onClick = onImport,
+        )
+        line?.let {
             Spacer(modifier = Modifier.height(12.dp))
-            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("error"))
+            Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp, modifier = Modifier.testTag("error"))
         }
+        Spacer(modifier = Modifier.height(24.dp))
+        GroupLabel("เพิ่มเป็นกุญแจสำหรับ Vault")
+        OptionCard(
+            title = "mebit บนเครื่องอื่น",
+            body = "จับคู่ผ่าน Bluetooth แล้วดึง xpub จากเครื่องนั้นมา",
+            tag = "cta_add_mebit_other",
+            leading = { TwoPhonesMark() },
+            onClick = onMebitOther,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        OptionCard(
+            title = "Hardware wallet",
+            body = "อุปกรณ์แยกที่เก็บกุญแจไว้ออฟไลน์",
+            tag = "cta_add_hardware",
+            chips = listOf("Jade", "Trezor Safe 7"),
+            leading = { HardwareMark() },
+            onClick = onHardware,
+        )
     }
+}
+
+@Composable
+private fun GroupLabel(text: String) {
+    Text(text, color = MbBody, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+    Spacer(modifier = Modifier.height(10.dp))
 }
 
 @Composable

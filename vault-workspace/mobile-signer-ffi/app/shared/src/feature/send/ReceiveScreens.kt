@@ -169,7 +169,7 @@ fun S3ReceiveScreen(
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) = ReceiveLayout(
-    eyebrow = "RECEIVE · กระเป๋าใช้จ่าย",
+    eyebrow = "RECEIVE · ${session.walletName}",
     tag = "screen_send/s3",
     address = wallet.receiveAddress,
     addressIsReal = wallet.addressIsReal,

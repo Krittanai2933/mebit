@@ -4,9 +4,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.mebit.app.EraseResult
+import com.mebit.app.Place
 import com.mebit.app.StoreVersion
 import com.mebit.app.Why
 import com.mebit.app.WriteMode
+import com.mebit.app.walletName
 import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
@@ -26,6 +28,10 @@ enum class SaveState { NotSaved, Staged, Saved }
  * With one, each committed change is saved through one write point, and only [forgetSavedWallet] erases the saved copy. The
  * guards outlive it. [newKey] and [restoreKey] make the key, and [forgetScans] drops the core's scan of every wallet, and tests
  * replace them because the host JVM has no native library. [pin] is the session Spending PIN, beside the words and never saved.
+ * [place] is this wallet's place on the phone, read only for its name, because [wallet] is already bound to that place.
+ * [onPhone] says whether another wallet on the phone holds a fingerprint. [startsLocked] is App Lock as the phone has it when this
+ * wallet is added, which its first save carries and [clear] returns to. [others] gives the other wallets' fingerprints, for the clear
+ * of a damaged guard file, null while a wallet this run could not read may be on the phone.
  */
 class OnboardingSession(
     private val wallet: SavedWallet? = null,
@@ -35,7 +41,13 @@ class OnboardingSession(
     private val payments: PendingPayments = PendingPayments(null),
     val pin: SpendingPin = SpendingPin(),
     private val forgetVaults: () -> Unit = {},
+    val place: Place = Place.FIRST,
+    private val onPhone: (String) -> Boolean = { false },
+    private val startsLocked: Boolean = false,
+    private val others: () -> List<String>? = { emptyList() },
 ) {
+    val walletName: String get() = place.walletName
+
     var words: List<String> by mutableStateOf(emptyList())
         private set
     var fingerprint: String by mutableStateOf("")
@@ -54,7 +66,7 @@ class OnboardingSession(
     /** The key came from typed words, so there was no backup step and its App Lock screen has no step count. */
     var imported: Boolean by mutableStateOf(false)
         private set
-    var appLockEnabled: Boolean by mutableStateOf(false)
+    var appLockEnabled: Boolean by mutableStateOf(startsLocked)
         private set
 
     /**
@@ -161,6 +173,10 @@ class OnboardingSession(
             lastError = e.message
             return
         }
+        if (onPhone(key.masterFingerprint)) {
+            lastError = ON_PHONE
+            return
+        }
         applyKey(key, passphrase, network)
         held = kept // the copy on the phone is still there, so this save must be a Replace of it, not a Create
         addressType = type // the same words of the same wallet, so the type the user chose stands
@@ -206,15 +222,21 @@ class OnboardingSession(
     fun restoreFromWords(words: List<String>, passphrase: String = "", network: KeyNetwork = KeyNetwork.TEST, accepted: Boolean = passphrase.isEmpty()) {
         lastError = null
         if (refuseToReplace()) return
-        try {
-            applyKey(restoreKey(words, passphrase, network, 0u), passphrase, network)
-            backupConfirmed = true
-            imported = true
-            inFirstSetup = true
+        val key = try {
+            restoreKey(words, passphrase, network, 0u)
         } catch (e: Exception) {
             lastError = e.message
             return
         }
+        // Before applyKey, so a refused duplicate leaves this session exactly as it was. A staged import is checked here too, with its passphrase's fingerprint.
+        if (onPhone(key.masterFingerprint)) {
+            lastError = ON_PHONE
+            return
+        }
+        applyKey(key, passphrase, network)
+        backupConfirmed = true
+        imported = true
+        inFirstSetup = true
         if (accepted) persist(fresh = true) else held = Held.Staged
     }
 
@@ -265,7 +287,7 @@ class OnboardingSession(
         passphrase = ""
         backupConfirmed = false
         imported = false
-        appLockEnabled = false
+        appLockEnabled = startsLocked
         inFirstSetup = false
         lastError = null
         network = KeyNetwork.TEST
@@ -306,11 +328,11 @@ class OnboardingSession(
     /**
      * The payment [guard] is out, refused, listed by the explorer, or cleared by the user, so its guard leaves the phone: every copy or
      * none, the record's first and then the file's, its signed bytes with it. False, with every copy kept, when the record could not be
-     * saved without it, or while a [repostUnconfirmedSend] of it runs in this process.
+     * saved without it, or while a [repostUnconfirmedSend] of it runs in this process. A damaged guard file stays damaged for [others].
      */
     fun clearUnconfirmedSend(guard: SingleSigWallet.Unsettled): Boolean {
         if (guard is SingleSigWallet.UnconfirmedSend && guard.txid == recordGuard?.txid && !persist(dropRecordGuard = true)) return false
-        return payments.settle(fingerprint, guard)
+        return payments.settle(fingerprint, guard, others())
     }
 
     /** The wallet is about to post [next], which replaces its guard [earlier]. Swaps this wallet's line in the guard file ([PendingPayments.swap]). */
@@ -329,7 +351,7 @@ class OnboardingSession(
      */
     fun forgetSavedWallet(oldGuard: Pair<String, SingleSigWallet.UnconfirmedSend>? = null): Boolean {
         val (heldFor, guard) = oldGuard ?: (fingerprint to recordGuard)
-        if (guard != null && !movedToFile(heldFor, guard)) return false
+        if (guard != null && !payments.moved(heldFor, guard)) return false
         return when (val r = wallet?.forget() ?: EraseResult.Erased) {
             EraseResult.Erased -> {
                 forgetScans()
@@ -384,7 +406,7 @@ class OnboardingSession(
         val w = wallet ?: return@synchronized false
         if (words.isEmpty()) return@synchronized false
         recordGuard?.let {
-            if (!dropRecordGuard && !movedToFile(fingerprint, it)) {
+            if (!dropRecordGuard && !payments.moved(fingerprint, it)) {
                 pendingSave = true // every write point and the flush try the move again, and no save drops the guard from the record before it
                 return@synchronized false
             }
@@ -436,17 +458,6 @@ class OnboardingSession(
         false
     }
 
-    /**
-     * Whether the guard file holds [guard] for the wallet [heldFor] now, written by this call or by an earlier move that the record's
-     * save did not follow. A damaged file, one that cannot take it, or another payment of that wallet in the file all leave it in the
-     * record alone.
-     */
-    private fun movedToFile(heldFor: String, guard: SingleSigWallet.UnconfirmedSend): Boolean = when (val claim = payments.claim(heldFor, guard)) {
-        Claim.Written -> true
-        is Claim.Taken -> claim.earlier.txid == guard.txid
-        Claim.Damaged, Claim.NotSaved -> false
-    }
-
     /** Tries a save that failed again, for example when the app comes back to the foreground. Does nothing unless one is pending. */
     fun flushPendingSave() {
         if (pendingSave) persist()
@@ -484,5 +495,8 @@ class OnboardingSession(
 
         /** The refusal while the session holds a key the phone did not save. Only a restart drops it, on purpose. */
         const val UNSAVED = "ยังมีกุญแจที่ยังไม่ได้บันทึกอยู่ในแอป สร้างหรือนำเข้าใหม่ทับไม่ได้ ปิดแอปแล้วเปิดใหม่ถ้าจะเริ่มใหม่"
+
+        /** The refusal when another wallet on this phone already holds this fingerprint. */
+        const val ON_PHONE = "กระเป๋านี้อยู่ในเครื่องนี้แล้ว"
     }
 }

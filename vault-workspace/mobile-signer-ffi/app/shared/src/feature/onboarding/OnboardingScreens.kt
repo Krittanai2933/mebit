@@ -40,8 +40,10 @@ import com.mebit.app.resources.Res
 import com.mebit.app.resources.mebit_logo
 import com.mebit.app.ui.components.BackChip
 import com.mebit.app.ui.components.CardFan
+import com.mebit.app.ui.components.HardwareMark
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.OptionCard
+import com.mebit.app.ui.components.PhoneMark
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
 import com.mebit.app.ui.theme.MbGold
@@ -50,7 +52,6 @@ import com.mebit.app.ui.theme.MbWhite
 import org.jetbrains.compose.resources.painterResource
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -203,11 +204,7 @@ fun KeySourceScreen(
             title = "มือถือเครื่องนี้",
             body = "สร้างกุญแจใหม่ในชิปของเครื่อง สำรองด้วย 24 คำ",
             tag = "cta_phone",
-            leading = {
-                Box(Modifier.size(44.dp)) {
-                    Box(Modifier.offset(15.dp, 10.dp).size(15.dp, 23.dp).border(2.dp, MbNavy, RoundedCornerShape(4.dp)))
-                }
-            },
+            leading = { PhoneMark() },
             onClick = {
                 session.generateThisDevice()
                 if (session.lastError == null && session.words.isNotEmpty()) onPhone()
@@ -220,12 +217,7 @@ fun KeySourceScreen(
             tag = "cta_hardware",
             chips = listOf("Jade", "Trezor Safe 7"),
             chipsTrailing = "เชื่อมผ่าน Bluetooth",
-            leading = {
-                Box(Modifier.size(44.dp)) {
-                    Box(Modifier.offset(11.dp, 16.dp).size(22.dp, 14.dp).border(2.dp, MbNavy, RoundedCornerShape(3.dp)))
-                    Box(Modifier.offset(27.dp, 21.dp).size(5.dp).background(MbBtcOrange, CircleShape))
-                }
-            },
+            leading = { HardwareMark() },
             onClick = onHardware,
         )
         session.lastError?.let {

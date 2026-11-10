@@ -5,6 +5,27 @@ import androidx.compose.runtime.Composable
 /** Why this phone cannot hold or release a wallet right now. A closed set, so no message can ever carry data. */
 enum class Why { NoScreenLock, OsTooOld, NotWired, TryLater, Other }
 
+/**
+ * One numbered place for a wallet on this phone, and the wallet's whole identity here. It names the secure item or file, the
+ * wallet's name on screen and its Stops on the Back stack, and it is never stored in a record. The first wallet keeps place 1.
+ * Ten, because a cold start reads every one of them. Raising the number later needs no migration.
+ */
+class Place private constructor(val number: Int) {
+    override fun toString(): String = "Place $number"
+
+    companion object {
+        const val COUNT = 10
+        val all: List<Place> = (1..COUNT).map(::Place)
+        val FIRST: Place = all.first()
+
+        /** The place this number names, or null. For a number read back from a file. */
+        fun parse(number: Int): Place? = all.getOrNull(number - 1)
+    }
+}
+
+/** The one place that turns a wallet's number into Thai. */
+val Place.walletName: String get() = if (this == Place.FIRST) "กระเป๋าใช้จ่าย" else "กระเป๋า $number"
+
 /** Which copy the store holds, as counted by this process. Opaque. Never written to disk, never compared across launches. */
 data class StoreVersion internal constructor(private val n: Long)
 
@@ -24,9 +45,9 @@ internal class CopyCounter {
     fun advance(): StoreVersion = StoreVersion(++n)
 }
 
-/** How a write treats a wallet that is already on the phone. */
+/** How a write treats a wallet that is already at its place. */
 sealed interface WriteMode {
-    /** Fails with [WriteResult.AlreadyExists] if any wallet is there. */
+    /** Fails with [WriteResult.AlreadyExists] if a wallet is at this place. */
     data object Create : WriteMode
 
     /** The same wallet with new data, only while the store still holds [expected]. Creates it if absent and nothing advanced since. */
@@ -94,7 +115,9 @@ sealed interface EraseResult {
 }
 
 /**
- * Bytes that only this phone's owner can read back. Contract for every actual:
+ * The secure store of one [Place]. [read], [write] and [erase] reach this place's bytes and no other's. [probe], [marker] and
+ * [writeMarker] speak for the whole phone, because the phone has one listing and one marker. Bytes that only this phone's
+ * owner can read back. Contract for every actual:
  * - never throws (every failure becomes a result) and never logs bytes;
  * - device-only: no cloud sync, no backup, no transfer to another phone;
  * - gate or nothing: a phone that cannot enforce an owner check on [read] reports Unavailable and stores nothing;
@@ -120,6 +143,29 @@ internal interface SecureStore {
     fun writeMarker(marker: Marker): Boolean
 }
 
-/** This platform's store. Composable because the Android one will need a Context. */
+/** How one owner check over every place ended. */
+internal sealed interface EveryRead {
+    /** The owner check did not pass, so nothing was read. Never [ReadResult.Bytes]. */
+    class Refused(val result: ReadResult) : EveryRead
+
+    /** The owner passed. Holds every place that answered anything but NotFound, so empty means no place holds a wallet. */
+    class Found(val places: Map<Place, ReadResult>) : EveryRead
+}
+
+/**
+ * Every place on this phone, and what no single place can do. A session keeps the store it was given by [store], so a write can
+ * name no other wallet.
+ */
+internal interface SecureShelf {
+    fun store(place: Place): SecureStore
+
+    /** One OS sheet at most on a healthy phone, then every place. Never holds a lock while the sheet is up. Every Bytes array belongs to the caller, which zeroes it. */
+    suspend fun readEvery(reason: String): EveryRead
+
+    /** Deletes every place, whatever each holds, and advances every place's copy counter. True when nothing is left. */
+    fun eraseEvery(): Boolean
+}
+
+/** This platform's shelf. Composable because the Android one needs a Context. */
 @Composable
-internal expect fun rememberSecureStore(): SecureStore
+internal expect fun rememberSecureShelf(): SecureShelf

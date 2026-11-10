@@ -29,6 +29,8 @@ import com.mebit.ffi.signer.hotTypicalVsize
 import com.mebit.ffi.signer.hotWalletHistory
 import com.mebit.ffi.signer.hotWalletSnapshot
 import com.mebit.app.feature.send.thousands
+import kotlinx.atomicfu.locks.SynchronizedObject
+import kotlinx.atomicfu.locks.synchronized
 import kotlin.time.Clock
 
 /**
@@ -174,12 +176,20 @@ class SingleSigWallet(
     /** Counts the drops of a held replacement, as [heldEpoch] does for a payment. */
     private var replacementEpoch: Int by mutableStateOf(0)
 
-    fun bindSession(session: OnboardingSession, network: KeyNetwork = KeyNetwork.TEST) {
+    /** Runs Home's bind and a list's bind of this wallet one after the other, so an older one can never end last. */
+    private val bindLock = SynchronizedObject()
+
+    private var lastBoundSeconds: Long? = null
+
+    /** Whether a bind ended within the last [seconds]. A list reads it so a visit does not ask the server about every wallet again. */
+    fun boundWithin(seconds: Long): Boolean = lastBoundSeconds?.let { nowSeconds() - it in 0..seconds } == true
+
+    fun bindSession(session: OnboardingSession, network: KeyNetwork = KeyNetwork.TEST): Unit = synchronized(bindLock) {
         lastError = null
         lastFailure = null
         if (session.words.size < 12) {
             useDemoFixture()
-            return
+            return@synchronized
         }
         // A wallet with no guard of its own takes the one the phone keeps for this key, which a run before a restart or another instance wrote.
         if (unconfirmedSend == null) unconfirmedSend = session.unconfirmedSend()
@@ -216,6 +226,7 @@ class SingleSigWallet(
                 ""
             }
         }
+        lastBoundSeconds = nowSeconds()
     }
 
     /**

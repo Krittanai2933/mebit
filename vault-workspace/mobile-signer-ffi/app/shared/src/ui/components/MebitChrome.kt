@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -45,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.rememberIsDebugBuild
 import com.mebit.app.ui.theme.MbBody
+import com.mebit.app.ui.theme.MbBtcOrange
 import com.mebit.app.ui.theme.MbChip
 import com.mebit.app.ui.theme.MbEyebrow
 import com.mebit.app.ui.theme.MbGold
@@ -160,6 +162,27 @@ fun BackChip(onClick: () -> Unit, dark: Boolean = false, tag: String = "back") {
             fontWeight = FontWeight.Medium,
         )
     }
+}
+
+/** Penpot's mark for a key on this phone: one phone outline, for [OptionCard]'s leading slot. */
+@Composable
+fun PhoneMark() = Box(Modifier.size(44.dp)) {
+    Box(Modifier.offset(15.dp, 10.dp).size(15.dp, 23.dp).border(2.dp, MbNavy, RoundedCornerShape(4.dp)))
+}
+
+/** Penpot 2.1.1's mark for mebit on another phone: two phone outlines and an orange link between them. */
+@Composable
+fun TwoPhonesMark() = Box(Modifier.size(44.dp)) {
+    Box(Modifier.offset(12.dp, 14.dp).size(8.dp, 15.dp).border(2.dp, MbNavy, RoundedCornerShape(2.dp)))
+    Box(Modifier.offset(24.dp, 14.dp).size(8.dp, 15.dp).border(2.dp, MbNavy, RoundedCornerShape(2.dp)))
+    Box(Modifier.offset(21.dp, 19.5.dp).size(2.dp, 4.dp).background(MbBtcOrange))
+}
+
+/** Penpot's mark for a hardware wallet: a device outline with an orange light. */
+@Composable
+fun HardwareMark() = Box(Modifier.size(44.dp)) {
+    Box(Modifier.offset(11.dp, 16.dp).size(22.dp, 14.dp).border(2.dp, MbNavy, RoundedCornerShape(3.dp)))
+    Box(Modifier.offset(27.dp, 21.dp).size(5.dp).background(MbBtcOrange, CircleShape))
 }
 
 @Composable

@@ -23,15 +23,4 @@ class KeyringMockProvenanceTest {
         assertTrue(store.confirmFingerprint(store.pending!!.fingerprint))
         assertEquals("Jade · จำลอง", store.keys.last().label)
     }
-
-    @Test
-    fun aKeyMadeOnThisDeviceIsAStandIn() {
-        val store = KeyringStore()
-        store.startThisDevice()
-        assertEquals(KeySourceLabel.ThisDevice, store.pending!!.source)
-        assertTrue(store.pending!!.isMock)
-        assertTrue(store.confirmFingerprint(store.pending!!.fingerprint))
-        assertTrue(store.keys.last().isMock)
-        assertTrue(store.keys.last().label.endsWith(" · จำลอง"), store.keys.last().label)
-    }
 }

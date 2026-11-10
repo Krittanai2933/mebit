@@ -72,7 +72,7 @@ private val SlipHairline = Color(0xFFEDF2F6)
  * the "แชร์สลิป" button that shares the card as a picture, and the link home.
  */
 @Composable
-fun SentSlip(wallet: SingleSigWallet, draft: SendDraft, quotes: QuoteCache, onHome: () -> Unit, onOpenCatalog: () -> Unit) {
+fun SentSlip(wallet: SingleSigWallet, draft: SendDraft, quotes: QuoteCache, walletName: String, onHome: () -> Unit, onOpenCatalog: () -> Unit) {
     val quote = rememberFiatQuote(quotes)
     val card = rememberGraphicsLayer()
     val frame = rememberGraphicsLayer()
@@ -84,7 +84,7 @@ fun SentSlip(wallet: SingleSigWallet, draft: SendDraft, quotes: QuoteCache, onHo
             // The bottom padding is the debug link's height (about 24 dp of Thai text at 11 sp) plus 8 dp, so the link home sits clear of it when the column ends at the screen bottom.
             modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(top = 54.dp, bottom = 32.dp),
         ) {
-            Slip(wallet, draft, quote, card)
+            Slip(wallet, draft, quote, walletName, card)
             Spacer(modifier = Modifier.height(14.dp))
             Box(
                 modifier = Modifier
@@ -122,7 +122,7 @@ fun SentSlip(wallet: SingleSigWallet, draft: SendDraft, quotes: QuoteCache, onHo
 }
 
 @Composable
-private fun Slip(wallet: SingleSigWallet, draft: SendDraft, quote: FiatQuote?, layer: GraphicsLayer) {
+private fun Slip(wallet: SingleSigWallet, draft: SendDraft, quote: FiatQuote?, walletName: String, layer: GraphicsLayer) {
     val shape = RoundedCornerShape(24.dp)
     Box(
         modifier = Modifier
@@ -203,7 +203,7 @@ private fun Slip(wallet: SingleSigWallet, draft: SendDraft, quote: FiatQuote?, l
                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(10.dp.toPx(), 9.6.dp.toPx())),
             )
         }
-        SlipRow("จาก", "กระเป๋าใช้จ่าย", top = 320.dp)
+        SlipRow("จาก", walletName, top = 320.dp)
         SlipHairline(354.dp)
         SlipRow("ถึง", shorten(draft.destination, "…"), top = 360.dp, tag = "slip_to")
         SlipHairline(394.dp)

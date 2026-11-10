@@ -136,7 +136,7 @@ fun S4SendScreen(
     }
     KeyboardDismissBox {
         MebitScreen(
-            eyebrow = "SEND · กระเป๋าใช้จ่าย",
+            eyebrow = "SEND · ${session.walletName}",
             title = null,
             // Back and รับ wait while a repost or a replacement runs, as Review's back does. The back chip stays so the header does not shift.
             onBack = onBack?.let(repost::unlessRunning),

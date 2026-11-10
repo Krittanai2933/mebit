@@ -130,7 +130,7 @@ fun S8TxDetailScreen(
                 .padding(horizontal = 20.dp)
                 .padding(top = 12.dp, bottom = 16.dp),
         ) {
-            Header(view, onBack)
+            Header(view, session.walletName, onBack)
             StatusCard(view.status)
             view.note?.let { note ->
                 Spacer(modifier = Modifier.height(14.dp))
@@ -262,7 +262,7 @@ fun S8TxDetailScreen(
 
 /** The navy top: back, the title and the network, the wallet, the direction, the amount and its value now. */
 @Composable
-private fun Header(view: TxDetailView, onBack: (() -> Unit)?) {
+private fun Header(view: TxDetailView, walletName: String, onBack: (() -> Unit)?) {
     Column(
         modifier = Modifier.fillMaxWidth().drawBehind {
             // Out to the screen's sides, up past the status bar, and down behind the top of the status card.
@@ -289,7 +289,7 @@ private fun Header(view: TxDetailView, onBack: (() -> Unit)?) {
             }
         }
         Spacer(modifier = Modifier.height(18.dp))
-        Text("กระเป๋าใช้จ่าย · Bitcoin", color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, lineHeight = 16.sp)
+        Text("$walletName · Bitcoin", color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, lineHeight = 16.sp)
         Spacer(modifier = Modifier.height(14.dp))
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("tx_direction")) {
             TxDirectionIcon(view.received)

@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,21 +32,24 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.mebit.app.Place
 import com.mebit.app.data.AppLockState
 import com.mebit.app.data.KeyringStore
-import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.OwnerCheck
 import com.mebit.app.data.MultisigSendDraft
 import com.mebit.app.data.Replacement
+import com.mebit.app.data.SaveState
 import com.mebit.app.data.SavedVaults
-import com.mebit.app.data.SendDraft
-import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.data.StartNotice
 import com.mebit.app.data.VaultDraft
+import com.mebit.app.data.OpenWallet
+import com.mebit.app.data.WalletRemoval
+import com.mebit.app.data.Wallets
+import com.mebit.app.data.addRefusalLine
+import com.mebit.app.data.unopenedNotice
 import com.mebit.app.data.ffiImportSeedDraft
 import com.mebit.app.data.liveQuoteCache
-import com.mebit.app.data.ownKey
 import com.mebit.app.data.pairedDevice
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.feature.keys.AddKeyScreen
@@ -95,7 +99,11 @@ import com.mebit.app.feature.send.S8TxDetailScreen
 import com.mebit.app.feature.send.ChooseWalletScreen
 import com.mebit.app.feature.send.DEMO_TX
 import com.mebit.app.feature.send.VaultReceiveScreen
+import com.mebit.app.feature.send.REMOVE_FAILED_LINE
+import com.mebit.app.feature.send.SpendingLine
 import com.mebit.app.feature.send.WalletChoice
+import com.mebit.app.feature.send.removeReason
+import com.mebit.app.feature.send.removeRow
 import com.mebit.app.feature.send.fiatLine
 import com.mebit.app.feature.send.homeBalanceText
 import com.mebit.app.feature.send.walletChoices
@@ -117,23 +125,29 @@ import kotlinx.coroutines.withContext
 
 private val ImplementedRoutes = MovieRoute.entries.toSet()
 
-/** [WalletGate] passes the session, the route a saved wallet opens at and Welcome's [startNotice]. A bare call is memory only and starts at Welcome. */
+/** One screen on the Back stack and the wallet it belongs to. A wallet switch is a push of a Stop with another place, and Back undoes it. */
+data class Stop(val route: MovieRoute, val place: Place)
+
+/** [WalletGate] passes the wallets, the Stop a saved wallet opens at and Welcome's [startNotice]. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MebitNavHost(
-    session: OnboardingSession = remember { OnboardingSession() },
-    start: MovieRoute = MovieRoute.start,
+    wallets: Wallets,
+    start: Stop,
     startNotice: StartNotice? = null,
     vaults: SavedVaults = remember { SavedVaults.memoryOnly() },
 ) {
     val backStack = remember { mutableStateListOf(start) }
+    val current = backStack.last()
+    // The wallet in use is the wallet of the top Stop. No other state says which one it is, so nothing can disagree with the screen.
+    val open = wallets.at(current.place)
+    val session = open.session
+    val singleSig = open.chain
+    val sendDraft = open.sendDraft
     var catalogOpen by remember { mutableStateOf(false) }
-    val keyring = remember(vaults, session) { KeyringStore(book = vaults, ownKey = { session.ownKey() }) }
+    val keyring = remember(vaults, wallets) { KeyringStore(book = vaults, ownKeys = { wallets.ownKeys() }) }
     val vaultDraft = remember(vaults) { VaultDraft(vaults) }
-    val singleSig = remember { SingleSigWallet() }
     val quotes = remember { liveQuoteCache() }
-    // The type changes only in first setup or with another wallet, before any payment of it, so a new draft loses nothing.
-    val sendDraft = remember(session.addressType) { SendDraft(session.addressType) }
     val multisigSend = remember { MultisigSendDraft() }
     // Import Seed's words and passphrase. They outlive the detour to Address Type and back, and a fresh draft replaces them once
     // the import goes on to the lock step or the user leaves Import Seed by its back chip. Memory only: never rememberSaveable,
@@ -144,29 +158,39 @@ fun MebitNavHost(
     val biometrics = remember(phone, session) { OwnerCheck(phone, session) }
     val appLock = remember { AppLockState() }
     val scope = rememberCoroutineScope()
+    var addLine by remember { mutableStateOf<String?>(null) }
+    var removeLine by remember { mutableStateOf<String?>(null) }
     // Starts as Keyring so the debug catalog can open Verify Key without passing Key Source.
     var keyFlow by remember { mutableStateOf(KeyFlow.Keyring) }
     var verifyRetryRoute by remember { mutableStateOf(MovieRoute.HardwareWallet) }
     var unsupportedModel by remember { mutableStateOf<String?>(null) }
     // The row a tap opened, whole, so the detail draws at once. The catalog opens the demo row until a tap.
     var openedTx by remember { mutableStateOf(DEMO_TX) }
-    val current = backStack.last()
 
     // More than a minute away locks the app again, once the user turned the lock on or where the Spending PIN guards it.
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { appLock.onBackground() }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { appLock.onForeground(biometrics.locksWhenAway) }
 
-    // This host exists only once the wallet is open or there is none, so the book is read after the owner check. Keyed on saved so keys added before a Create in this run are saved when it lands.
-    LaunchedEffect(vaults, session.saved) { withContext(Dispatchers.Default) { vaults.sync() } }
+    LaunchedEffect(current) {
+        addLine = null
+        removeLine = null
+    }
+    // Keyed on words too, so a wallet added in this run is noted once its key exists.
+    LaunchedEffect(current.place, session.words.isNotEmpty()) { if (session.words.isNotEmpty()) wallets.noteUsed(current.place) }
+    // This host exists only once the wallets are open or there are none, so the book is read after the owner check. Keyed on the owners so keys added before a Create in this run are saved when it lands.
+    LaunchedEffect(vaults, wallets.vaultOwners()) { withContext(Dispatchers.Default) { vaults.sync() } }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { scope.launch(Dispatchers.Default) { vaults.sync() } }
 
-    fun navigate(route: MovieRoute) {
+    fun navigate(route: MovieRoute, place: Place = backStack.last().place) {
         keyFlow = keyFlowAfter(route, keyFlow)
-        if (backStack.lastOrNull() != route) backStack.add(route)
+        val stop = Stop(route, place)
+        if (backStack.lastOrNull() != stop) backStack.add(stop)
     }
 
     fun returnToKeySource(sourceRoute: MovieRoute) {
-        val retryStack = keyRetryBackStack(backStack, sourceRoute)
+        val stops = backStack.toList()
+        // keyRetryBackStack keeps a prefix of the routes and may add one on top, so each kept route keeps its Stop's place.
+        val retryStack = keyRetryBackStack(stops.map { it.route }, sourceRoute).mapIndexed { i, route -> Stop(route, stops.getOrElse(i) { stops.last() }.place) }
         backStack.clear()
         backStack.addAll(retryStack)
     }
@@ -175,16 +199,24 @@ fun MebitNavHost(
         if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
 
-    // After create or import comes App Lock on a phone with an owner check, else the Spending PIN, set before Home.
-    fun lockStep() = navigate(if (biometrics.needsPin) MovieRoute.SpendingPin else MovieRoute.AppLock)
-
     // First setup picks the address type after the key is made or imported, then goes on to the lock step.
     fun chooseAddressType() = navigate(MovieRoute.AddressType)
 
     // Back to the latest [route] on the stack, dropping every screen above it.
     fun backTo(route: MovieRoute) {
-        val at = backStack.lastIndexOf(route)
+        val at = backStack.indexOfLast { it.route == route }
         if (at >= 0) while (backStack.lastIndex > at) backStack.removeAt(backStack.lastIndex)
+    }
+
+    // App Lock is one setting for the phone, so only the wallet that made the phone's first choice runs this step.
+    // After the first wallet's create or import comes App Lock on a phone with an owner check, else the Spending PIN, set before Home.
+    fun lockStep() {
+        if (wallets.listed.size < 2) return navigate(if (biometrics.needsPin) MovieRoute.SpendingPin else MovieRoute.AppLock)
+        val route = endAdd(backStack.map { it.route }, session)
+        if (route == MovieRoute.Keyring) return backTo(MovieRoute.Keyring)
+        backStack.clear()
+        backStack.add(Stop(route, current.place))
+        keyFlow = keyFlowAfter(route, keyFlow)
     }
 
     // A bar tab is a root. The stack below it goes, so the tab has no back chip, as its board has none.
@@ -196,8 +228,14 @@ fun MebitNavHost(
     // A backup started from the Home banner returns there. The create flow goes on to the address type. A tab clears the stack, so the session says which.
     fun afterBackup() = navigate(routeAfterBackup(session.inFirstSetup))
 
+    // A wallet that has not finished setup shows no address and no payment. Any way into it goes back to Address Type.
+    fun openWallet(place: Place, route: (OpenWallet) -> MovieRoute) {
+        val w = wallets.at(place)
+        navigate(if (w.session.addressTypeConfirmed) route(w) else MovieRoute.AddressType, place)
+    }
+
     fun openReceive(choice: WalletChoice) = when (choice) {
-        WalletChoice.Spending -> navigate(if (session.backupConfirmed) MovieRoute.S3Receive else MovieRoute.S2ReceiveBackupGate)
+        is WalletChoice.Spending -> openWallet(choice.place) { if (it.session.backupConfirmed) MovieRoute.S3Receive else MovieRoute.S2ReceiveBackupGate }
         is WalletChoice.Vault -> {
             vaultDraft.selectVault(choice.vault.id)
             navigate(MovieRoute.VaultReceive)
@@ -205,9 +243,9 @@ fun MebitNavHost(
     }
 
     fun openSend(choice: WalletChoice) = when (choice) {
-        WalletChoice.Spending -> {
-            sendDraft.reset()
-            navigate(MovieRoute.S4Send)
+        is WalletChoice.Spending -> openWallet(choice.place) {
+            it.sendDraft.reset() // the chosen wallet's own draft, never the one on screen
+            MovieRoute.S4Send
         }
         is WalletChoice.Vault -> {
             vaultDraft.selectVault(choice.vault.id)
@@ -217,7 +255,34 @@ fun MebitNavHost(
     }
 
     // A real key reads Demo until its first bind ends, so its balance stays a dash until then, as on Home.
-    fun spendingKnown() = singleSig.balanceKnown && !(session.words.size >= 12 && singleSig.mode == WalletMode.Demo)
+    fun spendingKnown(w: OpenWallet) = w.chain.balanceKnown && !(w.session.words.size >= 12 && w.chain.mode == WalletMode.Demo)
+
+    // The button on 3.5 opens Add Key, and its two wallet rows land here.
+    fun addWallet(import: Boolean) {
+        addLine = wallets.addRefusal()?.let(::addRefusalLine)
+        val w = wallets.beginAdd() ?: return
+        if (import) {
+            importDraft = ffiImportSeedDraft()
+            navigate(MovieRoute.ImportSeed, w.place)
+        } else {
+            w.session.generateThisDevice()
+            if (w.session.lastError == null && w.session.words.isNotEmpty()) navigate(MovieRoute.KeyCreated, w.place) else addLine = w.session.lastError
+        }
+    }
+
+    fun removeWallet(w: OpenWallet) {
+        scope.launch {
+            removeLine = null
+            when (wallets.remove(w, vaults, removeReason(w.session.walletName)) { next ->
+                // Runs in the snapshot that drops the wallet, so no frame shows a Stop whose wallet is gone.
+                backStack.clear()
+                backStack.add(Stop(MovieRoute.VaultList, next.place))
+            }) {
+                WalletRemoval.Removed, is WalletRemoval.Refused -> Unit // a refused owner check leaves everything as it was
+                WalletRemoval.InVault, WalletRemoval.NotErased -> removeLine = REMOVE_FAILED_LINE
+            }
+        }
+    }
 
     // Once onboarding is over the words open past the Spending PIN where it guards the session, and as before elsewhere.
     fun openWords() {
@@ -246,12 +311,13 @@ fun MebitNavHost(
     val debugBuild = rememberIsDebugBuild()
     val openCatalog = { if (debugBuild) catalogOpen = true }
 
-    val bar = current.bar
+    val bar = current.route.bar
     CompositionLocalProvider(LocalDebugLinkLift provides if (bar != null) 22.dp else 0.dp) {
         Box(Modifier.fillMaxSize().background(MbPage)) {
             val inset = if (bar != null) bottomBarHeight() else 0.dp
             Box(Modifier.fillMaxSize().padding(bottom = inset).consumeWindowInsets(PaddingValues(bottom = inset))) {
-                when (current) {
+                // Keyed on the place, so a wallet's screens never inherit another wallet's remembered state, such as its retries, its open key details and its pull.
+                key(current.place) { when (current.route) {
                     MovieRoute.Welcome -> WelcomeScreen(
                         onCreate = { navigate(MovieRoute.KeySource) },
                         onImport = { navigate(MovieRoute.ImportSeed) },
@@ -305,7 +371,7 @@ fun MebitNavHost(
                             lockStep()
                         },
                         // A cold start restores Address Type alone, so Backup Words is pushed when the stack does not hold it.
-                        onEditPassphrase = { if (MovieRoute.BackupWords in backStack) backTo(MovieRoute.BackupWords) else navigate(MovieRoute.BackupWords) },
+                        onEditPassphrase = { if (backStack.any { it.route == MovieRoute.BackupWords }) backTo(MovieRoute.BackupWords) else navigate(MovieRoute.BackupWords) },
                         onRejectImport = { backTo(MovieRoute.ImportSeed) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -343,8 +409,9 @@ fun MebitNavHost(
                         onOpenCatalog = openCatalog,
                     )
                     MovieRoute.AddKey -> AddKeyScreen(
-                        store = keyring,
-                        onThisDevice = { navigate(MovieRoute.VerifyKey) },
+                        line = addLine,
+                        onThisDevice = { addWallet(import = false) },
+                        onImport = { addWallet(import = true) },
                         onMebitOther = { navigate(MovieRoute.PairMebitOther) },
                         onHardware = { navigate(MovieRoute.HardwareWallet) },
                         onBack = onBack,
@@ -422,17 +489,21 @@ fun MebitNavHost(
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
-                    MovieRoute.VaultList -> VaultListScreen(
-                        draft = vaultDraft,
-                        vaults = vaults,
-                        hasSpendingKey = session.words.size >= 12,
-                        spendingBalance = heroBalanceText(singleSig.balanceSats, spendingKnown()),
-                        onOpenSpending = { navigate(MovieRoute.S1HomeSingleSig) },
-                        onOpenKeyring = { openTab(MovieRoute.Keyring) },
-                        onOpenDetail = { navigate(MovieRoute.VaultDetail) },
-                        onCreate = { navigate(MovieRoute.KeyringFirstVault) },
-                        onOpenCatalog = openCatalog,
-                    )
+                    MovieRoute.VaultList -> {
+                        LaunchedEffect(Unit) { wallets.refreshBalances() }
+                        VaultListScreen(
+                            draft = vaultDraft,
+                            vaults = vaults,
+                            spending = wallets.listed.map { w -> SpendingLine(w.place, w.session.walletName, heroBalanceText(w.chain.balanceSats, spendingKnown(w)), baht = null) },
+                            unopenedNotice = unopenedNotice(wallets.unopened),
+                            onOpenSpending = { place -> openWallet(place) { MovieRoute.S1HomeSingleSig } },
+                            onAddWallet = { navigate(MovieRoute.AddKey) },
+                            onOpenKeyring = { openTab(MovieRoute.Keyring) },
+                            onOpenDetail = { navigate(MovieRoute.VaultDetail) },
+                            onCreate = { navigate(MovieRoute.KeyringFirstVault) },
+                            onOpenCatalog = openCatalog,
+                        )
+                    }
                     MovieRoute.VaultDetail -> VaultDetailScreen(
                         draft = vaultDraft,
                         onReceive = { navigate(MovieRoute.VaultReceive) },
@@ -493,13 +564,19 @@ fun MebitNavHost(
                         wallet = singleSig,
                         session = session,
                         quotes = quotes,
-                        onReceive = { openReceive(WalletChoice.Spending) },
-                        onSend = { openSend(WalletChoice.Spending) },
+                        onReceive = { openReceive(WalletChoice.Spending(current.place)) },
+                        onSend = { openSend(WalletChoice.Spending(current.place)) },
                         onVault = { navigate(MovieRoute.KeyringFirstVault) },
                         onHistory = { navigate(MovieRoute.S7History) },
                         onOpenTx = openTx,
                         onOpenCatalog = openCatalog,
                         onChangePin = if (session.pin.isSet) ({ scope.launch { biometrics.changePin("เปลี่ยน PIN") } }) else null,
+                        remove = {
+                            val using = vaults.current.vaults.firstOrNull { v -> v.keyFingerprints.any { it.equals(session.fingerprint, ignoreCase = true) } }
+                            removeRow(wallets.listed.size, session.saved == SaveState.Saved, vaults.usesKey(session.fingerprint), using?.name)
+                        },
+                        removeLine = removeLine,
+                        onRemove = { removeWallet(open) },
                     )
                     MovieRoute.S7History -> S7HistoryScreen(
                         wallet = singleSig,
@@ -527,7 +604,7 @@ fun MebitNavHost(
                     MovieRoute.S3Receive -> S3ReceiveScreen(
                         wallet = singleSig,
                         session = session,
-                        onSend = { openSend(WalletChoice.Spending) },
+                        onSend = { openSend(WalletChoice.Spending(current.place)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
@@ -539,7 +616,7 @@ fun MebitNavHost(
                         confirmRepost = confirmRepost,
                         confirmReplacement = confirmReplacement,
                         onContinue = { navigate(MovieRoute.S5ReviewSign) },
-                        onReceive = { openReceive(WalletChoice.Spending) },
+                        onReceive = { openReceive(WalletChoice.Spending(current.place)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
@@ -559,6 +636,7 @@ fun MebitNavHost(
                         wallet = singleSig,
                         draft = sendDraft,
                         quotes = quotes,
+                        walletName = session.walletName,
                         variant = "default",
                         onHome = { navigate(MovieRoute.S1HomeSingleSig) },
                         onBack = onBack,
@@ -568,6 +646,7 @@ fun MebitNavHost(
                         wallet = singleSig,
                         draft = sendDraft,
                         quotes = quotes,
+                        walletName = session.walletName,
                         variant = "slip",
                         onHome = { navigate(MovieRoute.S1HomeSingleSig) },
                         onBack = onBack,
@@ -577,6 +656,7 @@ fun MebitNavHost(
                         wallet = singleSig,
                         draft = sendDraft,
                         quotes = quotes,
+                        walletName = session.walletName,
                         variant = "block",
                         onHome = { navigate(MovieRoute.S1HomeSingleSig) },
                         onBack = onBack,
@@ -586,6 +666,7 @@ fun MebitNavHost(
                         wallet = singleSig,
                         draft = sendDraft,
                         quotes = quotes,
+                        walletName = session.walletName,
                         variant = "poster",
                         onHome = { navigate(MovieRoute.S1HomeSingleSig) },
                         onBack = onBack,
@@ -613,15 +694,23 @@ fun MebitNavHost(
                         onOpenCatalog = openCatalog,
                     )
                     MovieRoute.ChooseWalletReceive, MovieRoute.ChooseWalletSend -> {
-                        val send = current == MovieRoute.ChooseWalletSend
+                        val send = current.route == MovieRoute.ChooseWalletSend
                         val quote = rememberFiatQuote(quotes)
+                        LaunchedEffect(Unit) { wallets.refreshBalances() }
                         ChooseWalletScreen(
                             send = send,
-                            choices = walletChoices(session.words.size >= 12, vaultDraft.created),
-                            spendingBalance = homeBalanceText(singleSig.balanceSats, spendingKnown(), loading = false),
-                            spendingBaht = if (singleSig.mode == WalletMode.Live && singleSig.balanceKnown) fiatLine(singleSig.balanceSats, quote) else null,
+                            choices = walletChoices(wallets.listed.map { it.place }, vaultDraft.created),
+                            line = { place ->
+                                val w = wallets.at(place)
+                                SpendingLine(
+                                    place,
+                                    w.session.walletName,
+                                    homeBalanceText(w.chain.balanceSats, spendingKnown(w), loading = false),
+                                    baht = if (w.chain.mode == WalletMode.Live && w.chain.balanceKnown) fiatLine(w.chain.balanceSats, quote) else null,
+                                )
+                            },
                             onChoose = { if (send) openSend(it) else openReceive(it) },
-                            onSwitch = { backStack[backStack.lastIndex] = if (send) MovieRoute.ChooseWalletReceive else MovieRoute.ChooseWalletSend },
+                            onSwitch = { backStack[backStack.lastIndex] = current.copy(route = if (send) MovieRoute.ChooseWalletReceive else MovieRoute.ChooseWalletSend) },
                             onBack = onBack,
                             onOpenCatalog = openCatalog,
                         )
@@ -641,7 +730,7 @@ fun MebitNavHost(
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
-                }
+                } }
             }
             if (bar != null) {
                 MebitBottomBar(

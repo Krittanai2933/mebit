@@ -49,6 +49,9 @@ class PendingPaymentsTest {
         "a cancel mark without a list" to FakePlainFile().apply { text = "$TEST_CHECK $SIGNED_TXID $SENT_AT $SIGNED_HEX cancel\n" },
         "a sixth field that is not the mark" to FakePlainFile().apply { text = "$TEST_CHECK $SIGNED_TXID $SENT_AT $SIGNED_HEX $OTHER_SIGNED_TXID Cancel\n" },
         "a seventh field" to FakePlainFile().apply { text = "$TEST_CHECK $SIGNED_TXID $SENT_AT $SIGNED_HEX $OTHER_SIGNED_TXID cancel cancel\n" },
+        // A wallet's "damaged" line, which only stands alone.
+        "a damaged mark with another field" to FakePlainFile().apply { text = "$TEST_CHECK damaged $SENT_AT\n" },
+        "a wallet's damaged mark beside its guard" to FakePlainFile().apply { text = "$TEST_CHECK damaged\n$TEST_CHECK $TEST_TXID $SENT_AT\n" },
     )
 
     private val signed = UnconfirmedSend(SIGNED_TXID, SENT_AT, SIGNED_HEX)
@@ -297,6 +300,31 @@ class PendingPaymentsTest {
         }
     }
 
+    // One user's clear of a damaged file speaks for one wallet. Each other wallet keeps a "damaged" line that refuses its payments as the
+    // damaged file did, until its own clear drops that line alone. While another wallet may be unread, the damaged file stays.
+    @Test
+    fun theClearOfADamagedFileLeavesADamagedLineForEachOtherWallet() {
+        val bump = UnconfirmedSend(OTHER_SIGNED_TXID, SENT_AT + 60, OTHER_SIGNED_HEX, listOf(SIGNED_TXID))
+        for ((case, file) in damagedFiles()) {
+            val payments = PendingPayments(file)
+            assertFalse(payments.settle(TEST_CHECK, DamagedGuard, others = null), "while another wallet may be unread, $case")
+            assertEquals(DamagedGuard, payments.of(TEST_CHECK), case)
+            assertTrue(payments.settle(TEST_CHECK, DamagedGuard, others = listOf(OTHER_CHECK, THIRD_CHECK)), case)
+            assertEquals("$OTHER_CHECK damaged\n$THIRD_CHECK damaged\n", file.text, case)
+            assertNull(payments.of(TEST_CHECK), "the wallet that cleared it, $case")
+            assertEquals(DamagedGuard, payments.of(OTHER_CHECK), case)
+            assertEquals(Claim.Damaged, payments.claim(OTHER_CHECK, send), case)
+            assertEquals(DamagedGuard, assertIs<Swap.Changed>(payments.swap(OTHER_CHECK, signed, bump), case).now)
+            assertNull(payments.repost(OTHER_CHECK, signed) { fail(case) }, case)
+            assertEquals(Claim.Written, payments.claim(TEST_CHECK, signed), "the wallet that cleared it pays again, $case")
+            assertTrue(payments.settle(OTHER_CHECK, DamagedGuard), case)
+            assertEquals("$THIRD_CHECK damaged\n$TEST_CHECK $SIGNED_TXID $SENT_AT $SIGNED_HEX\n", file.text, "only that wallet's line goes, $case")
+            assertTrue(payments.settle(THIRD_CHECK, DamagedGuard), case)
+            assertTrue(payments.settle(TEST_CHECK, signed), case)
+            assertNull(file.text, "the file once no line is left, $case")
+        }
+    }
+
     // A wallet took the damaged guard at its bind, and another wallet cleared the file and posted since. The late clear must leave the
     // file that reads again, because it now names a payment that may be out.
     @Test
@@ -321,6 +349,9 @@ private const val SENT_AT = 1_792_740_720L
 
 /** Another wallet's fingerprint, distinct from [TEST_CHECK]. */
 private const val OTHER_CHECK = "9f8e7d6c"
+
+/** A third wallet's fingerprint. */
+private const val THIRD_CHECK = "5e4d3c2b"
 
 /** [SIGNED_HEX] with no segwit marker, flag or witness, which are the bytes its txid is the hash of. Cut from it by a Python run. */
 private const val SIGNED_WITHOUT_WITNESS =

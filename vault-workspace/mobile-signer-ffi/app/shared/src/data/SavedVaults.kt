@@ -33,10 +33,16 @@ enum class VaultsHealth {
     Newer,
 }
 
-/** The keys and vaults saved on this phone. Takes a [VaultsStorage] and not a SecureStore, so it has no way to reach the wallet's record, and saves only while [owner] names a wallet. */
+/**
+ * Who the phone-level book may be saved for. [fingerprints] are the saved wallets in place order. [everyPlaceOpened] is false while the book's
+ * owner could be a wallet this run cannot name, because a place did not open or a wallet in memory could not be saved.
+ */
+data class VaultOwners(val fingerprints: List<String>, val everyPlaceOpened: Boolean)
+
+/** The keys and vaults saved on this phone. Takes a [VaultsStorage] and not a SecureStore, so it has no way to reach the wallet's record, and saves only while [owners] names a wallet. */
 class SavedVaults internal constructor(
     private val storage: VaultsStorage?,
-    private val owner: () -> String?,
+    private val owners: () -> VaultOwners?,
     private val deriveAddress: (List<String>, UByte) -> String = { x, m -> computeVaultAddressMultisig(x, m) },
 ) {
     /** The one copy of the state. Screens read it through [KeyringStore.keys] and [VaultDraft.created]. */
@@ -46,7 +52,7 @@ class SavedVaults internal constructor(
     var health: VaultsHealth by mutableStateOf(VaultsHealth.Ok)
         private set
 
-    /** The owner [current] was read for, null until it has been read. */
+    /** The fingerprint the stored copy names, as last read or written in this run. Null until it has been read. */
     private var opened: String? = null
 
     /** [current] is ahead of the stored copy. */
@@ -68,47 +74,84 @@ class SavedVaults internal constructor(
             }
             return@synchronized
         }
-        if (opened != me && !open(me)) return@synchronized
-        if (owed) save(me)
+        if (!readFor(me)) return@synchronized
+        if (owed) save()
     }
 
     /** The only way to change what is saved. [change] runs on the newest state, the result shows at once and is saved before this returns. */
     fun edit(change: (VaultBook) -> VaultBook): Unit = synchronized(vaultsLock) {
         val me = me()
-        val savable = me?.takeIf { opened == it || open(it) }
+        val read = me != null && readFor(me)
         current = change(current)
         owed = true
-        if (savable != null) {
-            save(savable)
+        if (read) {
+            save()
         } else {
             unopened = unopened + change
             if (me != null) health = VaultsHealth.SaveFailed
         }
     }
 
-    private fun me(): String? = if (storage == null) null else owner()
+    /**
+     * Whether a vault uses the key [fingerprint]. Null when the book could not be judged, because the stored copy is [VaultsHealth.Damaged]
+     * or [VaultsHealth.Newer] or has not been read this run, so a wallet can never be removed on a guess about a vault that needs its key.
+     */
+    fun usesKey(fingerprint: String): Boolean? = synchronized(vaultsLock) {
+        if (health == VaultsHealth.Damaged || health == VaultsHealth.Newer || (storage != null && opened == null)) null else current.usesKey(fingerprint)
+    }
 
-    /** True when the stored copy was read and judged. False when it could not be read this moment, which concludes nothing. */
-    private fun open(me: String): Boolean {
+    /**
+     * Before the wallet [leaving] is erased. When the stored book names it, writes the book under [next] first, so the owner survives its
+     * first wallet being removed and a crash at any point leaves the book owned by a wallet that exists. False, with nothing erased by the
+     * caller, when the book cannot be read or written now.
+     */
+    fun handOver(leaving: String, next: String): Boolean = synchronized(vaultsLock) {
+        val me = me() ?: return@synchronized true
+        if (opened == null && !open(me)) return@synchronized false
+        if (opened != leaving) return@synchronized true
+        if (health == VaultsHealth.Damaged || health == VaultsHealth.Newer) return@synchronized false // a Newer copy is never overwritten
+        val text = VaultBookCodec.encodeChecked(next, current) ?: return@synchronized false
+        if (storage?.write(text) != true) {
+            health = VaultsHealth.SaveFailed
+            return@synchronized false
+        }
+        opened = next
+        owed = false
+        health = VaultsHealth.Ok
+        true
+    }
+
+    private fun me(): VaultOwners? = if (storage == null) null else owners()
+
+    /** True when the stored copy has been read for a wallet this phone holds, reading it now if it has not. */
+    private fun readFor(me: VaultOwners): Boolean = (opened?.let { it in me.fingerprints } == true) || open(me)
+
+    /**
+     * True when the stored copy was read and judged. False when it could not be read this moment, which concludes nothing. A stored owner
+     * this phone does not hold is deleted as left behind, but only when every place opened. A place that did not open might be that owner,
+     * so the book is then kept, shown and re-owned at its next save.
+     */
+    private fun open(me: VaultOwners): Boolean {
         val text = storage?.read() ?: return false
-        when (val decoded = if (text.isEmpty()) null else VaultBookCodec.decode(text)) {
+        val decoded = if (text.isEmpty()) null else VaultBookCodec.decode(text)
+        when (decoded) {
             null -> keepMemory()
             VaultBookCodec.Decoded.Damaged -> refuse(VaultsHealth.Damaged)
             VaultBookCodec.Decoded.Newer -> refuse(VaultsHealth.Newer)
             is VaultBookCodec.Decoded.Ok -> when {
-                decoded.owner != me -> {
+                decoded.owner !in me.fingerprints && me.everyPlaceOpened -> {
                     storage?.delete() // left by a wallet this phone no longer holds
                     keepMemory()
                 }
                 !addressesMatch(decoded.book) -> refuse(VaultsHealth.Damaged)
                 else -> {
                     current = unopened.fold(decoded.book) { book, change -> change(book) }
-                    owed = unopened.isNotEmpty()
+                    owed = unopened.isNotEmpty() || decoded.owner !in me.fingerprints
                     health = VaultsHealth.Ok
                 }
             }
         }
-        opened = me
+        opened = (decoded as? VaultBookCodec.Decoded.Ok)?.owner?.takeIf { it in me.fingerprints } ?: me.fingerprints.first()
         unopened = emptyList()
         return true
     }
@@ -123,9 +166,10 @@ class SavedVaults internal constructor(
         health = why
     }
 
-    private fun save(me: String) {
+    /** Writes [current] under the owner the stored copy names. */
+    private fun save() {
         if (health == VaultsHealth.Damaged || health == VaultsHealth.Newer) return
-        val text = VaultBookCodec.encodeChecked(me, current)
+        val text = VaultBookCodec.encodeChecked(opened ?: return, current)
         if (text != null && storage?.write(text) == true) {
             owed = false
             health = VaultsHealth.Ok
@@ -145,18 +189,21 @@ class SavedVaults internal constructor(
 
     companion object {
         /** Nothing is ever saved. For a bare [com.mebit.app.navigation.MebitNavHost] and for tests that do not care. */
-        fun memoryOnly(): SavedVaults = SavedVaults(null, owner = { null })
+        fun memoryOnly(): SavedVaults = SavedVaults(null, owners = { null })
     }
 }
 
 /** One lock for every [SavedVaults] in the process, because they all share the one stored copy. */
 private val vaultsLock = SynchronizedObject()
 
+/** Whether a vault in this book uses the key [fingerprint]. The one rule behind deleting a key and removing a wallet. */
+internal fun VaultBook.usesKey(fingerprint: String): Boolean = vaults.any { v -> v.keyFingerprints.any { it.equals(fingerprint, ignoreCase = true) } }
+
 /** The wallet's own key as the keyring shows it, null for a session with no key. Never saved, so [SavedKey.verified] is always the session's backupConfirmed now. */
 internal fun OnboardingSession.ownKey(): SavedKey? = fingerprint.takeIf { it.isNotBlank() }?.let { fp ->
     SavedKey(
         id = "onboard_$fp",
-        label = "มือถือ · onboarding",
+        label = "มือถือ · $walletName",
         fingerprint = fp,
         xpub = xpub,
         derivationPath = derivationPath,

@@ -30,6 +30,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mebit.app.Place
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_chevron
@@ -56,21 +57,23 @@ private val NoteTitle = Color(0xFF244B66)
 
 /** One wallet the user owns. A later wallet is one more row, not another screen. */
 sealed interface WalletChoice {
-    data object Spending : WalletChoice
+    data class Spending(val place: Place) : WalletChoice
     data class Vault(val vault: CreatedVault) : WalletChoice
 }
 
-/** The spending wallet first when the phone holds a real key, then the vaults in the order they were made. */
-internal fun walletChoices(hasSpendingKey: Boolean, vaults: List<CreatedVault>): List<WalletChoice> =
-    listOfNotNull(WalletChoice.Spending.takeIf { hasSpendingKey }) + vaults.map { WalletChoice.Vault(it) }
+/** One individual wallet on a list, with its own name and balance. */
+data class SpendingLine(val place: Place, val name: String, val balance: String, val baht: String?)
+
+/** Every individual wallet in place order, then the vaults in the order they were made. */
+internal fun walletChoices(spending: List<Place>, vaults: List<CreatedVault>): List<WalletChoice> =
+    spending.map { WalletChoice.Spending(it) } + vaults.map { WalletChoice.Vault(it) }
 
 /** Penpot 4.3.0 and 4.4.0: the wallets to pick from before a Receive or Send. A vault's balance is a dash, because the app cannot read it yet. */
 @Composable
 fun ChooseWalletScreen(
     send: Boolean,
     choices: List<WalletChoice>,
-    spendingBalance: String,
-    spendingBaht: String?,
+    line: (Place) -> SpendingLine,
     onChoose: (WalletChoice) -> Unit,
     onSwitch: () -> Unit,
     onBack: (() -> Unit)?,
@@ -97,15 +100,17 @@ fun ChooseWalletScreen(
         choices.forEachIndexed { i, choice ->
             if (i > 0) Spacer(modifier = Modifier.height(16.dp))
             when (choice) {
-                WalletChoice.Spending -> WalletCard(
-                    name = "กระเป๋าใช้จ่าย",
-                    policy = "Single-sig · กุญแจ 1 ใบ",
-                    balance = spendingBalance,
-                    baht = spendingBaht,
-                    vault = false,
-                    tag = "choose_spending",
-                    onClick = { onChoose(choice) },
-                )
+                is WalletChoice.Spending -> line(choice.place).let { l ->
+                    WalletCard(
+                        name = l.name,
+                        policy = "Single-sig · กุญแจ 1 ใบ",
+                        balance = l.balance,
+                        baht = l.baht,
+                        vault = false,
+                        tag = if (choice.place == Place.FIRST) "choose_spending" else "choose_spending_${choice.place.number}",
+                        onClick = { onChoose(choice) },
+                    )
+                }
                 is WalletChoice.Vault -> WalletCard(
                     name = choice.vault.name,
                     policy = "Multisig · ใช้กุญแจ ${choice.vault.m} จาก ${choice.vault.n} ใบ",

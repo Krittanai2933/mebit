@@ -1,5 +1,6 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.Place
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.CustodyPolicy
 import kotlin.test.Test
@@ -9,23 +10,25 @@ import kotlin.test.assertTrue
 class WalletChoicesTest {
     private val first = vault("vault_1")
     private val second = vault("vault_2")
+    private val p1 = Place.FIRST
+    private val p3 = Place.parse(3)!!
 
     @Test
-    fun theSpendingWalletComesFirstThenTheVaultsInOrder() {
+    fun everyWalletComesFirstInPlaceOrderThenTheVaultsInOrder() {
         assertEquals(
-            listOf(WalletChoice.Spending, WalletChoice.Vault(first), WalletChoice.Vault(second)),
-            walletChoices(hasSpendingKey = true, vaults = listOf(first, second)),
+            listOf(WalletChoice.Spending(p1), WalletChoice.Spending(p3), WalletChoice.Vault(first), WalletChoice.Vault(second)),
+            walletChoices(spending = listOf(p1, p3), vaults = listOf(first, second)),
         )
     }
 
     @Test
     fun withoutAKeyOnlyTheVaultsShow() {
-        assertEquals(listOf(WalletChoice.Vault(first), WalletChoice.Vault(second)), walletChoices(false, listOf(first, second)))
+        assertEquals(listOf(WalletChoice.Vault(first), WalletChoice.Vault(second)), walletChoices(emptyList(), listOf(first, second)))
     }
 
     @Test
     fun noWalletsGiveAnEmptyList() {
-        assertTrue(walletChoices(false, emptyList()).isEmpty())
+        assertTrue(walletChoices(emptyList(), emptyList()).isEmpty())
     }
 
     private fun vault(id: String) = CreatedVault(

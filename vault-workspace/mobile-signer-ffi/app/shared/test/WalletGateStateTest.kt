@@ -2,6 +2,7 @@ package com.mebit.app.navigation
 
 import com.mebit.app.EraseResult
 import com.mebit.app.Marker
+import com.mebit.app.Place
 import com.mebit.app.ReadResult
 import com.mebit.app.SecureStore
 import com.mebit.app.StoreProbe
@@ -27,6 +28,8 @@ import com.mebit.app.data.TEST_CHECK
 import com.mebit.app.data.TEST_TXID
 import com.mebit.app.data.UnlockResult
 import com.mebit.app.data.WalletRecord
+import com.mebit.app.data.Wallets
+import com.mebit.app.data.OnePlaceShelf
 import com.mebit.app.data.oldRecordBytes
 import com.mebit.app.data.testRecord
 import com.mebit.app.data.v1Bytes
@@ -53,13 +56,13 @@ class WalletGateStateTest {
     @Test
     fun nothingIsInstalledUntilOpened(): Unit = runBlocking {
         val store = savedPhone()
-        val wallet = SavedWallet(store)
         var opened = false
-        val session = OnboardingSession(wallet, restoreKey = { words, _, _, _ ->
+        val wallets = Wallets(OnePlaceShelf(store), restoreKey = { words, _, _, _ ->
             if (!opened) fail("derived before the wallet opened")
             SoftwareAccountKey(words, TEST_CHECK, "tpub-test", "m/48'/1'/0'/2'")
         })
-        val gate = WalletGateState(wallet, session)
+        val session = wallets.at(Place.FIRST).session
+        val gate = WalletGateState(wallets)
         assertEquals(Boot.Locked, gate.boot, "a saved wallet starts")
         assertNothingInstalled(session, "a Locked gate")
         store.read = ReadResult.Cancelled
@@ -282,17 +285,17 @@ class WalletGateStateTest {
             val pending = UnconfirmedSend(TEST_TXID, SENT_AT)
             val guards = FakePlainFile()
             assertEquals(Claim.Written, PendingPayments(guards).claim(TEST_CHECK, pending), "the guard written before a post that ended unknown")
-            val wallet = SavedWallet(store)
-            val session = OnboardingSession(
-                wallet,
+            val wallets = Wallets(
+                OnePlaceShelf(store),
                 restoreKey = { words, _, _, _ -> SoftwareAccountKey(words, TEST_CHECK, "tpub-test", "m/48'/1'/0'/2'") },
                 forgetScans = {},
                 payments = PendingPayments(guards),
             )
-            val gate = WalletGateState(wallet, session)
+            val gate = WalletGateState(wallets)
             gate.forget("test")
             assertEquals(Boot.Onboarding, gate.boot, case)
             assertEquals(pending, guards.guardOf(), "the guard file after the forget, $case")
+            val session = wallets.at(Place.FIRST).session
             session.restoreFromWords(PUBLIC_WORDS_24)
             assertEquals(pending, session.unconfirmedSend(), "the same words imported again, $case")
             assertEquals(pending, assertIs<Claim.Taken>(session.recordUnconfirmedSend("f".repeat(64), SENT_AT + 600), case).earlier)
@@ -311,9 +314,7 @@ class WalletGateStateTest {
         val store = FakeSecureStore(probe = StoreProbe.Present, marker = Marker.Kept)
         store.write(oldRecordBytes(pending), WriteMode.Create)
         val guards = FakePlainFile()
-        val wallet = SavedWallet(store)
-        val session = OnboardingSession(wallet, payments = PendingPayments(guards))
-        val gate = WalletGateState(wallet, session)
+        val gate = WalletGateState(Wallets(OnePlaceShelf(store), payments = PendingPayments(guards)))
         gate.forget("test")
         assertEquals(Boot.Onboarding, gate.boot, "the forget")
         assertNotNull(guards.guardOf(), "the older record's guard was dropped by Forget")
@@ -481,9 +482,9 @@ private fun savedPhone(record: WalletRecord = testRecord()): FakeSecureStore {
 private class AppLaunch(val store: FakeSecureStore) {
     val keys = Keys()
     val sheets = Sheets(store)
-    private val wallet = SavedWallet(sheets)
-    val session = OnboardingSession(wallet, restoreKey = keys.restoreKey)
-    val gate = WalletGateState(wallet, session)
+    private val wallets = Wallets(OnePlaceShelf(sheets), restoreKey = keys.restoreKey)
+    val session: OnboardingSession get() = wallets.at(Place.FIRST).session
+    val gate = WalletGateState(wallets)
 }
 
 /**
@@ -492,14 +493,14 @@ private class AppLaunch(val store: FakeSecureStore) {
  */
 private class OlderRecordLaunch(pending: UnconfirmedSend, val guards: FakePlainFile, derivesTo: String) {
     val store = FakeSecureStore(marker = Marker.Kept).also { it.write(oldRecordBytes(pending), WriteMode.Create) }
-    private val wallet = SavedWallet(store)
-    private val session = OnboardingSession(
-        wallet,
-        restoreKey = { words, _, _, _ -> SoftwareAccountKey(words, derivesTo, "tpub-test", "m/48'/1'/0'/2'") },
-        forgetScans = {},
-        payments = PendingPayments(guards),
+    val gate = WalletGateState(
+        Wallets(
+            OnePlaceShelf(store),
+            restoreKey = { words, _, _, _ -> SoftwareAccountKey(words, derivesTo, "tpub-test", "m/48'/1'/0'/2'") },
+            forgetScans = {},
+            payments = PendingPayments(guards),
+        ),
     )
-    val gate = WalletGateState(wallet, session)
 }
 
 /** Restores that never load the native library. Each answers [fingerprint] and is counted, because a restore is the derive an install runs. */

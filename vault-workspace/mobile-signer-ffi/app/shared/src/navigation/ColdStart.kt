@@ -1,5 +1,6 @@
 package com.mebit.app.navigation
 
+import com.mebit.app.Place
 import com.mebit.app.StoreProbe
 import com.mebit.app.Why
 import com.mebit.app.data.Cause
@@ -15,8 +16,8 @@ sealed interface Boot {
     /** Saved but can never open: recovery only. */
     class Broken(val cause: Cause) : Boot
 
-    /** Session installed: show the nav host here. */
-    class Open(val route: MovieRoute) : Boot
+    /** Every wallet installed: show the nav host at this route, for the wallet at [place]. */
+    class Open(val route: MovieRoute, val place: Place) : Boot
 }
 
 /** Pure. Never offers Welcome on a guess: an unknown error may be hiding a saved wallet, so it stays Locked. */

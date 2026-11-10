@@ -22,6 +22,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * The Keystore store's decisions, fed plain facts (API level, file and alias present, screen lock, exceptions, prompt error
@@ -187,7 +188,7 @@ class KeystoreMappingTest {
     @Test
     fun anEnvelopeOpensToItsPayloadAndCarriesTheCopyItWasReadFrom() {
         listOf(ByteArray(173) { it.toByte() }, byteArrayOf(7), ByteArray(4096) { (it * 31).toByte() }).forEach { payload ->
-            val opened = assertIs<ReadResult.Bytes>(openEnvelope(sealEnvelope(payload, pair.public), unwrapWith(pair), noCode, LATER_VERSION))
+            val opened = assertIs<ReadResult.Bytes>(openEnvelope(sealEnvelope(payload, phoneKey), unwrapWith(pair), noCode, LATER_VERSION))
             assertContentEquals(payload, opened.bytes, "payload of ${payload.size} bytes")
             assertEquals(LATER_VERSION, opened.version, "the version of a payload of ${payload.size} bytes")
         }
@@ -196,21 +197,88 @@ class KeystoreMappingTest {
     @Test
     fun twoSealsOfOnePayloadDiffer() {
         val payload = ByteArray(173) { it.toByte() }
-        assertFalse(sealEnvelope(payload, pair.public).contentEquals(sealEnvelope(payload, pair.public)), "a fresh data key and IV each time")
+        assertFalse(sealEnvelope(payload, phoneKey).contentEquals(sealEnvelope(payload, phoneKey)), "a fresh IV each time, under the one phone key")
     }
 
     @Test
-    fun everySealUsesAFreshDataKey() {
-        val payload = ByteArray(173) { it.toByte() }
-        // The wrapped key sits after the 3-byte header and the 4-byte length.
-        val keys = List(2) { unwrapWith(pair)(sealEnvelope(payload, pair.public).copyOfRange(7, 7 + 256)) }
-        assertEquals(32, keys[0].size, "an AES-256 key")
-        assertFalse(keys[0].contentEquals(keys[1]), "two seals share a data key")
+    fun everyMintIsAFreshDataKeyWrappedForThePublicHalf() {
+        val keys = List(2) { mintPhoneKey(pair.public) }
+        assertEquals(32, keys[0].dataKey.size, "an AES-256 key")
+        assertFalse(keys[0].dataKey.contentEquals(keys[1].dataKey), "two mints share a data key")
+        assertContentEquals(keys[0].dataKey, unwrapWith(pair)(keys[0].wrapped), "the wrapped copy opens to the data key")
+    }
+
+    @Test
+    fun envelopesOfOnePhoneKeyOpenWithOneUnwrap() {
+        val payloads = List(3) { i -> ByteArray(173 + i) { it.toByte() } }
+        val envelopes = payloads.map { sealEnvelope(it, phoneKey) }
+        assertEquals(1, envelopes.map { wrappedKeyOf(it)!!.toList() }.toSet().size, "one wrapped key in every envelope")
+        var unwraps = 0
+        val (results, key) = openWithOneUnwrap(envelopes.map { it to LATER_VERSION }, { w -> unwraps++; unwrapWith(pair)(w) }, noCode)
+        assertEquals(1, unwraps, "one use of the Keystore key, so one prompt")
+        results.zip(payloads) { result, payload -> assertContentEquals(payload, assertIs<ReadResult.Bytes>(result).bytes, "payload of ${payload.size} bytes") }
+        assertTrue(results.all { (it as ReadResult.Bytes).version == LATER_VERSION }, "each result carries its envelope's copy")
+        assertContentEquals(phoneKey.dataKey, key, "the data key the caller keeps")
+    }
+
+    @Test
+    fun aDamagedEnvelopeOfAGroupDoesNotBlockTheOthers() {
+        val good = List(2) { sealEnvelope(ByteArray(173) { 7 }, phoneKey) }
+        val damaged = sealEnvelope(ByteArray(173) { 7 }, phoneKey).also { it[it.size - 1] = (it[it.size - 1].toInt() xor 1).toByte() }
+        var unwraps = 0
+        val (results, key) = openWithOneUnwrap(listOf(good[0] to ANY_VERSION, damaged to ANY_VERSION, good[1] to ANY_VERSION), { w -> unwraps++; unwrapWith(pair)(w) }, noCode)
+        assertEquals(1, unwraps, "one use of the Keystore key")
+        assertIs<ReadResult.Bytes>(results[0], "the first envelope")
+        assertEquals("Unreadable", name(results[1]))
+        assertIs<ReadResult.Bytes>(results[2], "the envelope after the damaged one")
+        assertContentEquals(phoneKey.dataKey, key)
+    }
+
+    @Test
+    fun aFailedUnwrapIsTriedPerEnvelopeAndLeavesNoKey() {
+        val envelopes = List(2) { sealEnvelope(ByteArray(173) { 7 }, phoneKey) }
+        val needsAuth: (ByteArray) -> ByteArray = { throw IllegalBlockSizeException() }
+        val (results, key) = openWithOneUnwrap(envelopes.map { it to ANY_VERSION }, needsAuth) { 2 }
+        assertTrue(results.all { name(it) == "Unavailable(TryLater)" }, "the owner must be asked again, so nothing may read as damage")
+        assertNull(key, "no key to adopt")
+    }
+
+    @Test
+    fun anExistingEnvelopesOwnKeyIsAdoptedSoItIsNotRewritten() {
+        // What an existing phone's first unlock does: the first envelope's key becomes the phone key, so its file needs no new write.
+        val existing = sealEnvelope(ByteArray(173) { 3 }, mintPhoneKey(pair.public))
+        val (results, key) = openWithOneUnwrap(listOf(existing to ANY_VERSION), unwrapWith(pair), noCode)
+        assertIs<ReadResult.Bytes>(results.single())
+        val adopted = PhoneKey(key!!, wrappedKeyOf(existing)!!)
+        val added = sealEnvelope(ByteArray(50) { 9 }, adopted)
+        assertContentEquals(wrappedKeyOf(existing), wrappedKeyOf(added), "a second wallet's envelope carries the first one's wrapped key")
+        var unwraps = 0
+        val (both, _) = openWithOneUnwrap(listOf(existing to ANY_VERSION, added to ANY_VERSION), { w -> unwraps++; unwrapWith(pair)(w) }, noCode)
+        assertEquals(1, unwraps, "both envelopes open with one prompt")
+        assertTrue(both.all { it is ReadResult.Bytes }, "the existing envelope and the added one")
+    }
+
+    @Test
+    fun theWrappedKeyOfAnEnvelopeIsReadByItsLayoutOnly() {
+        val sealed = sealEnvelope(ByteArray(173) { 7 }, phoneKey)
+        assertContentEquals(phoneKey.wrapped, wrappedKeyOf(sealed), "the 256 bytes after the header and the length")
+        assertNull(wrappedKeyOf(ByteArray(0)))
+        assertNull(wrappedKeyOf(sealed.copyOf(sealed.size - 200)), "an envelope too short for its layout")
+        assertNull(wrappedKeyOf(sealed.copyOf().also { it[0] = 0 }), "another header")
+        assertNull(wrappedKeyOf(sealed.copyOf().also { it[6] = 1 }), "another wrapped length")
+    }
+
+    @Test
+    fun eachPlaceHasItsOwnFileAndPlaceOneKeepsTodays() {
+        assertEquals("wallet", walletFileName(Place.FIRST), "the file the first wallet is already in")
+        assertEquals("wallet.2", walletFileName(Place.parse(2)!!))
+        assertEquals("wallet.10", walletFileName(Place.parse(10)!!))
+        assertEquals(Place.COUNT, Place.all.map(::walletFileName).toSet().size, "two places share a file")
     }
 
     @Test
     fun everyFlippedBitIsUnreadable() {
-        val sealed = sealEnvelope(ByteArray(173) { it.toByte() }, pair.public)
+        val sealed = sealEnvelope(ByteArray(173) { it.toByte() }, phoneKey)
         // Every byte of the header, the length and the IV, and a byte every 7 through the wrapped key and the ciphertext and tag.
         val positions = (0 until 3 + 4 + 256 + 12 + 8).toSet() + (0 until sealed.size step 7) + (sealed.size - 1)
         positions.forEach { at ->
@@ -221,7 +289,7 @@ class KeystoreMappingTest {
 
     @Test
     fun everyShortOrLongEnvelopeIsUnreadable() {
-        val sealed = sealEnvelope(ByteArray(173) { it.toByte() }, pair.public)
+        val sealed = sealEnvelope(ByteArray(173) { it.toByte() }, phoneKey)
         (0 until sealed.size).forEach { size ->
             assertEquals("Unreadable", name(openEnvelope(sealed.copyOf(size), unwrapWith(pair), noCode, ANY_VERSION)), "cut to $size of ${sealed.size}")
         }
@@ -244,13 +312,13 @@ class KeystoreMappingTest {
 
     @Test
     fun anEnvelopeForAnotherKeyIsUnreadable() {
-        val sealed = sealEnvelope(ByteArray(173) { it.toByte() }, pair.public)
+        val sealed = sealEnvelope(ByteArray(173) { it.toByte() }, phoneKey)
         assertEquals("Unreadable", name(openEnvelope(sealed, unwrapWith(otherPair), noCode, ANY_VERSION)))
     }
 
     @Test
     fun anUnwrapThatNeedsTheOwnerAgainIsTryLaterNotUnreadable() {
-        val sealed = sealEnvelope(ByteArray(173) { it.toByte() }, pair.public)
+        val sealed = sealEnvelope(ByteArray(173) { it.toByte() }, phoneKey)
         val needsAuth: (ByteArray) -> ByteArray = { throw IllegalBlockSizeException() }
         assertEquals("Unavailable(TryLater)", name(openEnvelope(sealed, needsAuth, { 2 }, ANY_VERSION)))
         assertEquals("Unreadable", name(openEnvelope(sealed, needsAuth, { 10 }, ANY_VERSION)))
@@ -259,6 +327,7 @@ class KeystoreMappingTest {
     private companion object {
         val pair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
         val otherPair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+        val phoneKey = mintPhoneKey(pair.public)
         val noCode: (Throwable) -> Int? = { null }
 
         fun unwrapWith(keys: java.security.KeyPair): (ByteArray) -> ByteArray = { wrapped -> unwrapCipher(keys.private).doFinal(wrapped) }

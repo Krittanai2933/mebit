@@ -16,7 +16,7 @@ sealed interface Claim {
     /** The wallet already has a guard on the phone, [earlier], which stays. That payment may be out, so this one must not go. */
     class Taken(val earlier: UnconfirmedSend) : Claim
 
-    /** The file is on the phone but cannot be read or decoded ([DamagedGuard]), so any wallet may have a payment out and this one must not go. Nothing is written. */
+    /** The file is on the phone but cannot be read or decoded, or holds this wallet's "damaged" line ([DamagedGuard]), so this wallet may have a payment out and this one must not go. Nothing is written. */
     data object Damaged : Claim
 
     /** There is no file to keep the guard in, or the write failed, so the phone may not hold the guard and the payment must not go. */
@@ -46,13 +46,15 @@ sealed interface Swap {
  * The file holds one line per wallet, "fingerprint txid seconds" or "fingerprint txid seconds hex", and a newline, the txid empty or
  * 64 lowercase hex, and the hex a transaction whose txid is the line's ([txidOf]). A replacement's line ([swap]) adds the txids it
  * replaces, "fingerprint txid seconds hex replaced,replaced", each 64 lowercase hex, distinct and not the line's own, and "cancel"
- * after them once its chain holds a cancel. A file that cannot be read, or holds anything
- * else, is damaged. It may hide any wallet's guard, so it is [DamagedGuard] for every wallet, refuses every claim, and only the
- * user's clear deletes it. Only a wallet's own settle deletes its guard, never a forget of the wallet, so the same words imported
- * again still refuse until that payment settles.
+ * after them once its chain holds a cancel. "fingerprint damaged" is a wallet whose user has not cleared a damaged file that
+ * another wallet's user cleared, so it is [DamagedGuard] for that wallet alone. A file that cannot be read, or holds anything
+ * else, is damaged. It may hide any wallet's guard, so it is [DamagedGuard] for every wallet, refuses every claim, and only a
+ * user's clear replaces it ([settle]). A build before the "damaged" line reads the line as a damaged file, which refuses every claim.
+ * Only a wallet's own settle deletes its guard, never a forget of the wallet, so the same words imported again still refuse until
+ * that payment settles.
  */
 class PendingPayments internal constructor(private val file: PlainFile?) {
-    /** The guard of the wallet [fingerprint]: null when it has none or there is no [file], and [DamagedGuard] while the file is damaged. */
+    /** The guard of the wallet [fingerprint]: null when it has none or there is no [file], and [DamagedGuard] while the file is damaged or holds its "damaged" line. */
     fun of(fingerprint: String): Unsettled? = synchronized(guardLock) {
         val f = file ?: return@synchronized null
         val guards = f.guards() ?: return@synchronized DamagedGuard
@@ -63,9 +65,19 @@ class PendingPayments internal constructor(private val file: PlainFile?) {
     fun claim(fingerprint: String, send: UnconfirmedSend): Claim = synchronized(guardLock) {
         val f = file ?: return@synchronized Claim.NotSaved
         val guards = f.guards() ?: return@synchronized Claim.Damaged
-        guards[fingerprint]?.let { return@synchronized Claim.Taken(it) }
+        guards[fingerprint]?.let { return@synchronized if (it is UnconfirmedSend) Claim.Taken(it) else Claim.Damaged }
         val written = FINGERPRINT.matches(fingerprint) && send.writable() && f.write(encode(guards + (fingerprint to send)))
         if (written) Claim.Written else Claim.NotSaved
+    }
+
+    /**
+     * Whether the file holds [send] for [fingerprint] now, written by this call or by an earlier move that the record's save did not
+     * follow. A damaged file, one that cannot take it, or another payment of that wallet in the file all leave it in the record alone.
+     */
+    fun moved(fingerprint: String, send: UnconfirmedSend): Boolean = when (val claim = claim(fingerprint, send)) {
+        Claim.Written -> true
+        is Claim.Taken -> claim.earlier.txid == send.txid
+        Claim.Damaged, Claim.NotSaved -> false
     }
 
     /**
@@ -78,7 +90,7 @@ class PendingPayments internal constructor(private val file: PlainFile?) {
         val f = file ?: return@synchronized Swap.NotSaved
         val guards = f.guards() ?: return@synchronized Swap.Changed(DamagedGuard)
         val now = guards[fingerprint]
-        if (now?.txid != earlier.txid) return@synchronized Swap.Changed(now)
+        if (now !is UnconfirmedSend || now.txid != earlier.txid) return@synchronized Swap.Changed(now)
         val follows = next.hex != null && next.replaces == earlier.replaces + earlier.txid && (next.holdsCancel || !earlier.holdsCancel)
         if (follows && next.writable() && f.write(encode(guards + (fingerprint to next)))) Swap.Written else Swap.NotSaved
     }
@@ -91,7 +103,7 @@ class PendingPayments internal constructor(private val file: PlainFile?) {
      */
     fun <T> repost(fingerprint: String, guard: UnconfirmedSend, post: (hex: String) -> T): T? {
         val hex = synchronized(guardLock) {
-            file?.guards()?.get(fingerprint)?.takeIf { it.txid == guard.txid }?.hex?.also { reposting += guard.txid }
+            (file?.guards()?.get(fingerprint) as? UnconfirmedSend)?.takeIf { it.txid == guard.txid }?.hex?.also { reposting += guard.txid }
         } ?: return null
         try {
             return post(hex)
@@ -102,20 +114,25 @@ class PendingPayments internal constructor(private val file: PlainFile?) {
 
     /**
      * Drops [guard] while the file still holds it: a payment's line while it still names that txid, so a late settle never drops a
-     * newer payment's guard, and a damaged file while it is still damaged, so a late clear never drops a file that reads again.
-     * False, dropping nothing, while a [repost] of that payment runs in this process. False too when the write or the delete that
-     * drops it failed, so the guard may still be on the phone and the screen says the clear could not finish.
+     * newer payment's guard, and the wallet's "damaged" line or a damaged file while it is still damaged, so a late clear never drops
+     * a file that reads again. A damaged file gives way to a "damaged" line for each of [others], the phone's other wallets, because
+     * one user's clear speaks for one wallet and any of them may have a payment out. With [others] null the damaged file stays.
+     * False, dropping nothing, while a [repost] of that payment runs in this process, or while [others] is null. False too when the
+     * write or the delete that drops it failed, so the guard may still be on the phone and the screen says the clear could not finish.
      */
-    fun settle(fingerprint: String, guard: Unsettled): Boolean = synchronized(guardLock) {
+    fun settle(fingerprint: String, guard: Unsettled, others: List<String>? = emptyList()): Boolean = synchronized(guardLock) {
         val f = file ?: return@synchronized true
         val guards = f.guards()
         when (guard) {
-            DamagedGuard -> guards != null || f.delete()
+            DamagedGuard -> when {
+                guards == null -> others != null && f.keep(others.associateWith { DamagedGuard })
+                guards[fingerprint] == DamagedGuard -> f.keep(guards - fingerprint)
+                else -> true
+            }
             is UnconfirmedSend -> {
                 if (guard.txid in reposting) return@synchronized false
-                if (guards == null || guards[fingerprint]?.txid != guard.txid) return@synchronized true
-                val rest = guards - fingerprint
-                if (rest.isEmpty()) f.delete() else f.write(encode(rest))
+                if (guards == null || (guards[fingerprint] as? UnconfirmedSend)?.txid != guard.txid) return@synchronized true
+                f.keep(guards - fingerprint)
             }
         }
     }
@@ -131,9 +148,13 @@ private val FINGERPRINT = Regex("[0-9a-f]{8}")
 private val TXID = Regex("(?:[0-9a-f]{64})?")
 private val REPLACED = Regex("[0-9a-f]{64}")
 private const val CANCEL_MARK = "cancel"
+private const val DAMAGED_MARK = "damaged"
 
 /** The guards the file holds, or null when it is damaged: there but unreadable, or holding text [encode] never writes. */
-private fun PlainFile.guards(): Map<String, UnconfirmedSend>? = read()?.let(::decode)
+private fun PlainFile.guards(): Map<String, Unsettled>? = read()?.let(::decode)
+
+/** Writes [guards] as the whole file, or deletes it when none is left. */
+private fun PlainFile.keep(guards: Map<String, Unsettled>): Boolean = if (guards.isEmpty()) delete() else write(encode(guards))
 
 /**
  * Whether [encode] writes this guard so that [decode] reads it back the same. That needs the txid's shape, bytes that are its own
@@ -144,19 +165,27 @@ private fun UnconfirmedSend.writable(): Boolean =
         (replaces.isEmpty() || hex != null && replaces.all(REPLACED::matches) && replaces.toSet().size == replaces.size && txid !in replaces) &&
         (!holdsCancel || replaces.isNotEmpty())
 
-private fun encode(guards: Map<String, UnconfirmedSend>): String = guards.entries.joinToString("") { (fingerprint, send) ->
-    val replaced = send.replaces.joinToString(",").ifEmpty { null }
-    listOfNotNull(fingerprint, send.txid, "${send.sinceSeconds}", send.hex, replaced, CANCEL_MARK.takeIf { send.holdsCancel }).joinToString(" ") + "\n"
+private fun encode(guards: Map<String, Unsettled>): String = guards.entries.joinToString("") { (fingerprint, guard) ->
+    val fields = when (guard) {
+        DamagedGuard -> listOf(DAMAGED_MARK)
+        is UnconfirmedSend -> listOfNotNull(guard.txid, "${guard.sinceSeconds}", guard.hex, guard.replaces.joinToString(",").ifEmpty { null }, CANCEL_MARK.takeIf { guard.holdsCancel })
+    }
+    (listOf(fingerprint) + fields).joinToString(" ") + "\n"
 }
 
 /** The guards [text] holds, or null when it is anything [encode] never writes. */
-private fun decode(text: String): Map<String, UnconfirmedSend>? {
+private fun decode(text: String): Map<String, Unsettled>? {
     if (text.isNotEmpty() && !text.endsWith('\n')) return null
-    val guards = LinkedHashMap<String, UnconfirmedSend>()
+    val guards = LinkedHashMap<String, Unsettled>()
     for (line in text.split('\n').dropLast(1)) {
         val fields = line.split(' ')
+        if (!FINGERPRINT.matches(fields[0]) || fields[0] in guards) return null
+        if (fields.size == 2 && fields[1] == DAMAGED_MARK) {
+            guards[fields[0]] = DamagedGuard
+            continue
+        }
         val since = fields.getOrNull(2)?.toLongOrNull()
-        if (fields.size !in 3..6 || !FINGERPRINT.matches(fields[0]) || since == null || fields[0] in guards) return null
+        if (fields.size !in 3..6 || since == null) return null
         if (fields.size == 6 && fields[5] != CANCEL_MARK) return null
         val send = UnconfirmedSend(fields[1], since, fields.getOrNull(3), fields.getOrNull(4)?.split(',').orEmpty(), holdsCancel = fields.size == 6)
         // Bytes that are not the line's own transaction could be another payment, so the file is damaged rather than trusted.

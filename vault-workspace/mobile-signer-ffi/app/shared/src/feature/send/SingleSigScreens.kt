@@ -173,7 +173,7 @@ fun S5ReviewSignScreen(
         Column(
             modifier = Modifier.fillMaxWidth().height(196.dp).clip(rows).background(MbWhite).border(1.dp, MbBorder, rows).padding(start = 16.dp, end = 16.dp, top = 6.dp),
         ) {
-            ReviewRow("จาก", "กระเป๋าใช้จ่าย")
+            ReviewRow("จาก", session.walletName)
             ReviewDivider()
             ReviewRow(
                 "ค่าธรรมเนียม",
@@ -401,13 +401,14 @@ fun S6SentScreen(
     wallet: SingleSigWallet,
     draft: SendDraft,
     quotes: QuoteCache,
+    walletName: String,
     variant: String,
     onHome: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
     if (variant == "slip") {
-        SentSlip(wallet, draft, quotes, onHome, onOpenCatalog)
+        SentSlip(wallet, draft, quotes, walletName, onHome, onOpenCatalog)
         return
     }
     val eyebrow = when (variant) {

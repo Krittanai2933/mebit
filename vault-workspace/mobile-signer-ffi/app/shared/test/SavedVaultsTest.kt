@@ -1,6 +1,7 @@
 package com.mebit.app.data
 
 import com.mebit.app.EraseResult
+import com.mebit.app.Place
 import com.mebit.app.VaultsStorage
 import com.mebit.app.Why
 import com.mebit.app.WriteMode
@@ -20,7 +21,7 @@ class SavedVaultsTest {
     @Test
     fun aRestartBringsBackTheKeysAndVaults() {
         val storage = FakeVaultsStorage()
-        val first = SavedVaults(storage, owner = { TEST_CHECK }) // the real derivation, so what VaultDraft writes must pass the check at the next start
+        val first = SavedVaults(storage, owners = one { TEST_CHECK }) // the real derivation, so what VaultDraft writes must pass the check at the next start
         first.sync()
         val keyring = KeyringStore(book = first)
         val draft = VaultDraft(first)
@@ -30,7 +31,7 @@ class SavedVaultsTest {
         keyring.keys.forEach { draft.toggleKey(it.id) }
         assertTrue(draft.commit(keyring))
 
-        val second = SavedVaults(storage, owner = { TEST_CHECK })
+        val second = SavedVaults(storage, owners = one { TEST_CHECK })
         second.sync()
         assertEquals(VaultsHealth.Ok, second.health)
         assertEquals(first.current, second.current)
@@ -43,10 +44,10 @@ class SavedVaultsTest {
         val store = FakeSecureStore()
         assertIs<SaveResult.Written>(SavedWallet(store).save(testRecord(), WriteMode.Create))
         val storage = FakeVaultsStorage("not a book")
-        val wallet = SavedWallet(store)
-        val session = session(wallet)
-        val vaults = SavedVaults(storage, owner = { session.vaultsOwner() }, deriveAddress = FAKE_DERIVE)
-        val gate = WalletGateState(wallet, session)
+        val wallets = Wallets(OnePlaceShelf(store), restoreKey = { words, _, _, _ -> SoftwareAccountKey(words, TEST_CHECK, "tpub-own", PATH) }, forgetScans = {})
+        val session = wallets.at(Place.FIRST).session
+        val vaults = SavedVaults(storage, owners = { wallets.vaultOwners() }, deriveAddress = FAKE_DERIVE)
+        val gate = WalletGateState(wallets)
         assertEquals(Boot.Locked, gate.boot)
 
         gate.unlock("test")
@@ -74,13 +75,13 @@ class SavedVaultsTest {
         val before = store.activity()
 
         val storage = FakeVaultsStorage()
-        val vaults = SavedVaults(storage, owner = { session.vaultsOwner() }, deriveAddress = FAKE_DERIVE)
+        val vaults = SavedVaults(storage, owners = one { session.vaultsOwner() }, deriveAddress = FAKE_DERIVE)
         vaults.sync()
         vaults.edit(added(JADE))
         vaults.edit { it.copy(vaults = it.vaults + VAULT) }
         vaults.sync()
         assertTrue(storage.writes > 0, "the book was saved, or this proves nothing")
-        val restart = SavedVaults(storage, owner = { session.vaultsOwner() }, deriveAddress = FAKE_DERIVE)
+        val restart = SavedVaults(storage, owners = one { session.vaultsOwner() }, deriveAddress = FAKE_DERIVE)
         restart.sync()
         assertEquals(vaults.current, restart.current)
         restart.edit { it.copy(keys = emptyList()) }
@@ -152,7 +153,7 @@ class SavedVaultsTest {
         )
         for ((case, derive) in derives) {
             val storage = FakeVaultsStorage(GOLDEN)
-            val vaults = SavedVaults(storage, owner = { TEST_CHECK }, deriveAddress = derive)
+            val vaults = SavedVaults(storage, owners = one { TEST_CHECK }, deriveAddress = derive)
             vaults.sync()
             assertEquals(VaultsHealth.Damaged, vaults.health, case)
             assertEquals(VaultBook(), vaults.current, case)
@@ -188,7 +189,7 @@ class SavedVaultsTest {
     @Test
     fun aBookLeftByAnotherWalletIsDeletedAndNeverShown() {
         val storage = FakeVaultsStorage(GOLDEN)
-        val vaults = SavedVaults(storage, owner = { "11112222" }, deriveAddress = FAKE_DERIVE)
+        val vaults = SavedVaults(storage, owners = one { "11112222" }, deriveAddress = FAKE_DERIVE)
         vaults.sync()
         assertEquals(VaultBook(), vaults.current)
         assertEquals(VaultsHealth.Ok, vaults.health)
@@ -251,7 +252,7 @@ class SavedVaultsTest {
         for ((case, session) in cases) {
             assertFalse(session.saved == SaveState.Saved, case)
             val storage = FakeVaultsStorage(GOLDEN)
-            val vaults = SavedVaults(storage, owner = { session.vaultsOwner() }, deriveAddress = FAKE_DERIVE)
+            val vaults = SavedVaults(storage, owners = one { session.vaultsOwner() }, deriveAddress = FAKE_DERIVE)
             vaults.sync()
             vaults.edit(added(JADE))
             vaults.sync()
@@ -265,7 +266,7 @@ class SavedVaultsTest {
 
     @Test
     fun aStoreThatDoesNotExistKeepsTheBookInMemoryWithNoError() {
-        val vaults = SavedVaults(null, owner = { TEST_CHECK }, deriveAddress = FAKE_DERIVE)
+        val vaults = SavedVaults(null, owners = one { TEST_CHECK }, deriveAddress = FAKE_DERIVE)
         vaults.sync()
         vaults.edit(added(JADE))
         vaults.sync()
@@ -277,7 +278,7 @@ class SavedVaultsTest {
     fun keysAddedBeforeTheWalletExistsAreSavedWhenItIsSaved() {
         val storage = FakeVaultsStorage()
         var owner: String? = null
-        val vaults = SavedVaults(storage, owner = { owner }, deriveAddress = FAKE_DERIVE)
+        val vaults = SavedVaults(storage, owners = one { owner }, deriveAddress = FAKE_DERIVE)
         vaults.edit(added(JADE))
         vaults.sync()
         assertEquals(0, storage.writes)
@@ -293,8 +294,8 @@ class SavedVaultsTest {
         val storage = FakeVaultsStorage()
         val session = session(SavedWallet(FakeSecureStore()))
         session.generateThisDevice()
-        val vaults = SavedVaults(storage, owner = { session.vaultsOwner() }, deriveAddress = FAKE_DERIVE)
-        val keyring = KeyringStore(book = vaults, ownKey = { session.ownKey() })
+        val vaults = SavedVaults(storage, owners = one { session.vaultsOwner() }, deriveAddress = FAKE_DERIVE)
+        val keyring = KeyringStore(book = vaults, ownKeys = { listOfNotNull(session.ownKey()) })
         vaults.sync()
         assertFalse(keyring.keys.single().verified)
 
@@ -354,7 +355,7 @@ class SavedVaultsTest {
     fun theMemoryClearsWhenTheOwnerGoesAway() {
         val storage = FakeVaultsStorage(GOLDEN)
         var owner: String? = TEST_CHECK
-        val vaults = SavedVaults(storage, owner = { owner }, deriveAddress = FAKE_DERIVE)
+        val vaults = SavedVaults(storage, owners = one { owner }, deriveAddress = FAKE_DERIVE)
         vaults.sync()
         assertEquals(listOf(JADE), vaults.current.keys)
 
@@ -365,12 +366,107 @@ class SavedVaultsTest {
         assertEquals(0, storage.deletes)
     }
 
+    @Test
+    fun aHandOverRewritesTheBookForTheNextWalletBeforeTheErase() {
+        val storage = FakeVaultsStorage(GOLDEN)
+        var owners = listOf(TEST_CHECK, OTHER_CHECK)
+        val vaults = SavedVaults(storage, owners = { VaultOwners(owners, everyPlaceOpened = true) }, deriveAddress = FAKE_DERIVE).apply { sync() }
+        assertEquals(1, vaults.current.vaults.size)
+
+        assertTrue(vaults.handOver(TEST_CHECK, OTHER_CHECK), "the book's owner is leaving")
+        assertEquals(1, storage.writes, "the stored copy names the next owner before anything is erased")
+        assertEquals(OTHER_CHECK, storedOwner(storage))
+        assertEquals(VaultsHealth.Ok, vaults.health)
+
+        owners = listOf(OTHER_CHECK)
+        vaults.sync()
+        assertEquals(0, storage.deletes, "the book survived its first owner's removal")
+        assertEquals(listOf(VAULT), vaults.current.vaults)
+        assertEquals(1, storage.writes, "nothing was owed")
+        val restart = SavedVaults(storage, owners = { VaultOwners(listOf(OTHER_CHECK), everyPlaceOpened = true) }, deriveAddress = FAKE_DERIVE).apply { sync() }
+        assertEquals(listOf(VAULT), restart.current.vaults, "the next launch reads the book under the new owner")
+    }
+
+    @Test
+    fun aHandOverOfAWalletTheBookDoesNotNameWritesNothing() {
+        val storage = FakeVaultsStorage(GOLDEN)
+        val vaults = SavedVaults(storage, owners = { VaultOwners(listOf(TEST_CHECK, OTHER_CHECK), everyPlaceOpened = true) }, deriveAddress = FAKE_DERIVE).apply { sync() }
+        assertTrue(vaults.handOver(OTHER_CHECK, TEST_CHECK), "the book names the wallet that stays")
+        assertEquals(0, storage.writes)
+        assertEquals(GOLDEN, storage.text)
+    }
+
+    @Test
+    fun aHandOverThatCannotWriteRefusesAndChangesNothing() {
+        val storage = FakeVaultsStorage(GOLDEN).apply { failWrite = true }
+        val vaults = SavedVaults(storage, owners = { VaultOwners(listOf(TEST_CHECK, OTHER_CHECK), everyPlaceOpened = true) }, deriveAddress = FAKE_DERIVE).apply { sync() }
+        assertFalse(vaults.handOver(TEST_CHECK, OTHER_CHECK), "the write failed, so the wallet must not be erased")
+        assertEquals(GOLDEN, storage.text)
+    }
+
+    @Test
+    fun aHandOverNeverOverwritesANewerBook() {
+        val newer = GOLDEN.replaceFirst("MV1", "MV2")
+        val storage = FakeVaultsStorage(newer)
+        val vaults = SavedVaults(storage, owners = { VaultOwners(listOf(TEST_CHECK, OTHER_CHECK), everyPlaceOpened = true) }, deriveAddress = FAKE_DERIVE).apply { sync() }
+        assertEquals(VaultsHealth.Newer, vaults.health)
+        assertFalse(vaults.handOver(TEST_CHECK, OTHER_CHECK), "a book it cannot judge is not rewritten")
+        assertEquals(newer, storage.text)
+        assertEquals(0, storage.writes)
+    }
+
+    @Test
+    fun aBookUsesAKeyOnlyWhenItCanBeJudged() {
+        val healthy = opened(FakeVaultsStorage(GOLDEN))
+        assertEquals(true, healthy.usesKey("ABCD0123"), "a fingerprint in a vault, in any case")
+        assertEquals(false, healthy.usesKey(OTHER_CHECK), "a fingerprint in no vault")
+        for ((case, storage) in listOf("damaged" to FakeVaultsStorage("not a book"), "newer" to FakeVaultsStorage(GOLDEN.replaceFirst("MV1", "MV2")))) {
+            assertNull(opened(storage).usesKey("abcd0123"), case)
+        }
+        val unread = FakeVaultsStorage(GOLDEN).apply { unreadable = true }
+        assertNull(opened(unread).usesKey("abcd0123"), "a book that could not be read this moment")
+        assertEquals(false, SavedVaults.memoryOnly().usesKey("abcd0123"), "a memory-only book holds everything it knows")
+    }
+
+    @Test
+    fun aBookWhoseOwnerIsNotHeldIsKeptAndReownedWhileAPlaceHasNotOpened() {
+        val storage = FakeVaultsStorage(GOLDEN) // owned by TEST_CHECK, which is not among the opened wallets
+        val vaults = SavedVaults(storage, owners = { VaultOwners(listOf(OTHER_CHECK), everyPlaceOpened = false) }, deriveAddress = FAKE_DERIVE).apply { sync() }
+        assertEquals(0, storage.deletes, "the owner may be the wallet that did not open")
+        assertEquals(listOf(VAULT), vaults.current.vaults)
+        assertEquals(OTHER_CHECK, storedOwner(storage), "re-owned at its next save")
+        assertEquals(1, storage.writes)
+
+        val next = SavedVaults(storage, owners = { VaultOwners(listOf(OTHER_CHECK), everyPlaceOpened = true) }, deriveAddress = FAKE_DERIVE).apply { sync() }
+        assertEquals(0, storage.deletes, "the book now names a wallet the phone holds")
+        assertEquals(listOf(VAULT), next.current.vaults)
+    }
+
+    @Test
+    fun aBookWhoseOwnerIsNotHeldIsDeletedOnceEveryPlaceOpened() {
+        val storage = FakeVaultsStorage(GOLDEN)
+        SavedVaults(storage, owners = { VaultOwners(listOf(OTHER_CHECK), everyPlaceOpened = true) }, deriveAddress = FAKE_DERIVE).sync()
+        assertEquals(1, storage.deletes)
+        assertEquals("", storage.text)
+    }
+
+    @Test
+    fun aBookReadForOneHeldOwnerStaysReadWhenAnotherIsAdded() {
+        val storage = FakeVaultsStorage(GOLDEN)
+        var owners = listOf(TEST_CHECK)
+        val vaults = SavedVaults(storage, owners = { VaultOwners(owners, everyPlaceOpened = true) }, deriveAddress = FAKE_DERIVE).apply { sync() }
+        owners = listOf(TEST_CHECK, OTHER_CHECK)
+        vaults.sync()
+        vaults.edit(added(JADE.copy(id = "key_2_ffff0000", fingerprint = "ffff0000")))
+        assertEquals(TEST_CHECK, storedOwner(storage), "the book keeps its owner while that wallet stays")
+    }
+
     private fun enrol(keyring: KeyringStore, fingerprint: String, xpub: String) {
         assertTrue(keyring.startMebitOtherFromPaste("$fingerprint\n$xpub\n$PATH"))
         assertTrue(keyring.confirmFingerprint(fingerprint))
     }
 
-    private fun opened(storage: VaultsStorage) = SavedVaults(storage, owner = { TEST_CHECK }, deriveAddress = FAKE_DERIVE).apply { sync() }
+    private fun opened(storage: VaultsStorage) = SavedVaults(storage, owners = one { TEST_CHECK }, deriveAddress = FAKE_DERIVE).apply { sync() }
 
     private fun session(wallet: SavedWallet?, forgetVaults: () -> Unit = {}) = OnboardingSession(
         wallet,
@@ -386,7 +482,7 @@ class SavedVaultsTest {
 }
 
 /** A [VaultsStorage] in memory. [text] is what is saved. [unreadable] and [failWrite] make each read or write fail, and it counts writes and deletes. */
-private class FakeVaultsStorage(var text: String = "") : VaultsStorage {
+internal class FakeVaultsStorage(var text: String = "") : VaultsStorage {
     var unreadable = false
     var failWrite = false
     var writes = 0
@@ -411,6 +507,15 @@ private class FakeVaultsStorage(var text: String = "") : VaultsStorage {
 }
 
 private const val PATH = "m/48'/1'/0'/2'"
+
+/** Another wallet's check value, distinct from [TEST_CHECK]. */
+private const val OTHER_CHECK = "9f8e7d6c"
+
+/** Owners for a phone with one wallet that every place opened for, so a test of one wallet's rules reads as it did. */
+private fun one(fingerprint: () -> String?): () -> VaultOwners? = { fingerprint()?.let { VaultOwners(listOf(it), everyPlaceOpened = true) } }
+
+/** The owner field of the stored text, read by hand from the layout. */
+internal fun storedOwner(storage: FakeVaultsStorage): String = storage.text.lines()[1].substringAfter(' ')
 
 private val FAKE_DERIVE: (List<String>, UByte) -> String = { xpubs, m -> "addr-$m-" + xpubs.joinToString("+") }
 

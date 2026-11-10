@@ -111,98 +111,86 @@ private const val SERVICE = "com.mebit.app.wallet"
 private val MARKER_CONTENT = mapOf(Marker.Empty to "empty", Marker.Kept to "kept")
 
 /**
- * True: [KeychainStore.read] asks for the owner with LocalAuthentication first and hands the passed context to the Keychain,
- * so the Face ID card shows and blocks on a simulator too, where the Keychain enforces no access control. Setting it to false
- * returns to the Keychain's own sheet, the fallback if an iPhone shows two sheets for one read.
+ * True: [KeychainShelf] asks for the owner with LocalAuthentication first and hands the passed context to the Keychain, so the
+ * Face ID card shows and blocks on a simulator too, where the Keychain enforces no access control. Setting it to false returns
+ * to the Keychain's own sheet, the fallback if an iPhone shows two sheets for one read.
  */
 private const val EVALUATE_BEFORE_READ = true
 
 /**
- * The wallet in the iOS Keychain. Each write is a generic-password item under [SERVICE] in one of the two accounts of [Slot],
- * never synchronizable, protected by `SecAccessControl(WhenPasscodeSetThisDeviceOnly, UserPresence)` and never also by
- * `kSecAttrAccessible`, in the default access group with no entitlements file. So the item never syncs, never enters a backup,
- * never leaves this phone, is refused on a phone without a passcode, and the OS owner check runs inside [read].
+ * The wallets in the iOS Keychain, one place per wallet. Each write is a generic-password item under [SERVICE] in one of the
+ * two accounts of [Slot] at its place ([account]), never synchronizable, protected by
+ * `SecAccessControl(WhenPasscodeSetThisDeviceOnly, UserPresence)` and never also by `kSecAttrAccessible`, in the default access
+ * group with no entitlements file. So the item never syncs, never enters a backup, never leaves this phone, is refused on a
+ * phone without a passcode, and the OS owner check runs inside a read.
  *
- * On an iPhone no listing of this item is both silent and useful (2 Nov 2026): a list under a non-interactive LAContext answers
- * errSecInteractionNotAllowed and returns no item, and a list with no context is slow and likely shows a sheet. So [read] and a
- * Replace [write] name the two accounts and never list. Only [probe] and a Create's existence check list, silently, and
- * [probeOutcome] reads that refusal on an unlocked phone as an item that needs its owner.
+ * On an iPhone no listing of these items is both silent and useful (2 Nov 2026): a list under a non-interactive LAContext answers
+ * errSecInteractionNotAllowed and returns no item, and a list with no context is slow and likely shows a sheet. So every read
+ * and write names its accounts and never lists. Only the probe lists, silently, and [probeOutcome] reads that refusal on an
+ * unlocked phone as an item that needs its owner.
  *
  * This is the default arrangement. The simulator enforces no access control, so the iPhone decides whether it holds, and
  * each fallback plugs in here without changing anything above [SecureStore]:
- * - if an add or a delete of this item shows a sheet, [write] and [read] move to an EC P-256 key pair (the private half
+ * - if an add or a delete of this item shows a sheet, the writes and reads move to an EC P-256 key pair (the private half
  *   under this access control, the public half in its own item with none) and an ECIES blob in a plain ThisDeviceOnly item;
- * - [read] evaluates its LAContext before the Keychain read and hands it in, so the sheet shows on a simulator too; if that
+ * - a read evaluates its LAContext before the Keychain read and hands it in, so the sheet shows on a simulator too; if that
  *   gives two sheets on the iPhone, not one, [EVALUATE_BEFORE_READ] returns to the Keychain's own sheet.
  *
- * One object and one lock per process, because the two slots are one shared write target. Logs nothing.
+ * One object and one lock per process. Logs nothing.
  */
-private object KeychainStore : SecureStore {
+private object KeychainShelf : SecureShelf {
     /**
-     * Taken by every call, so a write's add and delete never interleave with another call. A read takes it for its Keychain
+     * Taken by every call, so a write's adds and deletes never interleave with another call. A read takes it for its Keychain
      * calls only, never while its owner check's card is up, so the card never blocks a probe or a flush on the main thread.
      */
     private val lock = NSLock()
 
-    /** Which copy the two slots hold, as this process counts it. Guarded by [lock]. One per process, because this object is. */
-    private val copies = CopyCounter()
+    /** Which copy each place's two slots hold, as this process counts it. Guarded by [lock]. One per process, because this object is. */
+    private val copies: Map<Place, CopyCounter> = Place.all.associateWith { CopyCounter() }
+
+    private val stores: Map<Place, SecureStore> = Place.all.associateWith { KeychainPlace(it) }
 
     /** Application Support/mebit/wallet-marker. Application Support is in backups, which the reinstall rule needs. */
     private val markerFile =
         (NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, true).first() as String) + "/mebit/wallet-marker"
 
-    override fun probe(): StoreProbe {
-        val unlocked = protectedDataAvailable()
-        return locked { silentProbe(unlocked) }
-    }
+    override fun store(place: Place): SecureStore = stores.getValue(place)
 
-    override suspend fun read(reason: String): ReadResult {
+    /**
+     * One owner check and one context for every place, read by name, so no listing is involved. An absent account answers
+     * -25300 silently, so this is how the app learns which wallets exist, and it needs no list stored anywhere.
+     */
+    override suspend fun readEvery(reason: String): EveryRead {
         val context = LAContext().apply { localizedReason = reason }
-        if (EVALUATE_BEFORE_READ) {
-            if (!awaitActive()) return ReadResult.Cancelled
-            ownerCheck(context, reason)?.let { return it }
-            KeychainVaults.ownerPassed(context)
-        }
-        return coroutineScope {
-            // The Keychain call blocks while the OS sheet is up, so it runs off the caller's thread.
-            val reading = async(Dispatchers.Default) { locked { readSlots(context) } }
-            try {
-                reading.await()
-            } catch (e: CancellationException) {
-                context.invalidate() // takes the sheet down, so the blocked call returns and frees the lock
-                throw e
-            }
-        }
+        ownerPassed(context, reason)?.let { return EveryRead.Refused(it) }
+        val read = offTheCaller(context) { Place.all.associateWith { place -> locked { readSlots(place, context) } } }
+        return EveryRead.Found(read.filterValues { it != ReadResult.NotFound })
     }
 
-    override fun write(bytes: ByteArray, mode: WriteMode): WriteResult {
-        val unlocked = mode == WriteMode.Create && protectedDataAvailable() // before the lock, see protectedDataAvailable
-        return locked {
-            copies.refuse(mode)?.let { return@locked it } // a stale Replace makes no Keychain call
-            if (mode == WriteMode.Create) createRefusal(silentProbe(unlocked))?.let { return@locked it }
-            // An add that succeeded advances even if its delete of the other slot failed, because the phone did change.
-            writeRefusal(addToFreeSlot(bytes, mode), mode, passcodeSet()) ?: WriteResult.Written(copies.advance())
+    /** One SecItemDelete of the whole service, the call that already passed on the iPhone. */
+    override fun eraseEvery(): Boolean = locked {
+        copies.values.forEach { it.advance() }
+        delete(null).let { it == errSecSuccess || it == errSecItemNotFound }
+    }
+
+    /** Asks for the owner on [context] and gives the book the same context. Null when the owner passed, else what the read answers. */
+    private suspend fun ownerPassed(context: LAContext, reason: String): ReadResult? {
+        if (!EVALUATE_BEFORE_READ) return null
+        if (!awaitActive()) return ReadResult.Cancelled
+        ownerCheck(context, reason)?.let { return it }
+        KeychainVaults.ownerPassed(context)
+        return null
+    }
+
+    /** Runs [read] off the caller's thread, because a Keychain call blocks while the OS sheet is up. */
+    private suspend fun <T> offTheCaller(context: LAContext, read: () -> T): T = coroutineScope {
+        val reading = async(Dispatchers.Default) { read() }
+        try {
+            reading.await()
+        } catch (e: CancellationException) {
+            context.invalidate() // takes the sheet down, so the blocked call returns and frees the lock
+            throw e
         }
-    }
-
-    override fun erase(): EraseResult = locked {
-        val version = copies.advance()
-        eraseOutcome(delete(null), version)
-    }
-
-    override fun marker(): Marker = locked {
-        if (!NSFileManager.defaultManager.fileExistsAtPath(markerFile)) {
-            Marker.Absent
-        } else {
-            markerOf(NSString.stringWithContentsOfFile(markerFile, encoding = NSUTF8StringEncoding, error = null))
-        }
-    }
-
-    override fun writeMarker(marker: Marker): Boolean = locked {
-        val content = markerContent(marker)?.encodeToByteArray() ?: return@locked false
-        val data = content.usePinned { NSData.dataWithBytes(it.addressOf(0), content.size.toULong()) }
-        NSFileManager.defaultManager.createDirectoryAtPath(markerFile.substringBeforeLast('/'), withIntermediateDirectories = true, attributes = null, error = null) &&
-            data.writeToFile(markerFile, atomically = true)
     }
 
     /** Runs [block] holding the store's lock. It never suspends, so the lock is released on the thread that took it. */
@@ -216,25 +204,72 @@ private object KeychainStore : SecureStore {
     }
 
     /**
-     * The wallet's bytes, read from each slot by name with [context], which carries the sheet's reason, so nothing is listed.
+     * [place]'s bytes, read from each slot by name with [context], which carries the sheet's reason, so nothing is listed.
      * Blocks while a sheet is up. Every copy it does not return is zeroed.
      */
-    private fun readSlots(context: LAContext): ReadResult {
-        val version = copies.current
-        val reads = Slot.entries.associateWith { readData(it, context, version) }
+    private fun readSlots(place: Place, context: LAContext): ReadResult {
+        val version = copies.getValue(place).current
+        val reads = Slot.entries.associateWith { readData(place.account(it), context, version) }
         val result = slotsOutcome(reads) {
             // Two copies mean a write's delete did not happen, so the older copy is deleted here, best effort. The counter does not
             // advance: both copies are this process's own writer's, and advancing would give that writer a false Conflict.
-            pickNewest(Slot.entries.associateWith { creationDate(it, context) }).also { delete(it.other.account) }
+            pickNewest(Slot.entries.associateWith { creationDate(place.account(it), context) }).also { delete(place.account(it.other)) }
         }
         reads.values.forEach { if (it !== result) (it as? ReadResult.Bytes)?.bytes?.fill(0) }
         return result
     }
+
+    private class KeychainPlace(private val place: Place) : SecureStore {
+        override fun probe(): StoreProbe {
+            val unlocked = protectedDataAvailable()
+            return locked { silentProbe(unlocked) }
+        }
+
+        override suspend fun read(reason: String): ReadResult {
+            val context = LAContext().apply { localizedReason = reason }
+            ownerPassed(context, reason)?.let { return it }
+            return offTheCaller(context) { locked { readSlots(place, context) } }
+        }
+
+        override fun write(bytes: ByteArray, mode: WriteMode): WriteResult = locked {
+            val copy = copies.getValue(place)
+            copy.refuse(mode)?.let { return@locked it } // a stale Replace makes no Keychain call
+            val status = if (mode == WriteMode.Create) {
+                createInBothSlots({ add(place.account(it), bytes) }, { delete(place.account(it)) })
+            } else {
+                replaceInFreeSlot(place, bytes)
+            }
+            // An add that succeeded advances even if its delete of the other slot failed, because the phone did change.
+            writeRefusal(status, mode, passcodeSet()) ?: WriteResult.Written(copy.advance())
+        }
+
+        /** Deletes this place's two accounts by name, so the other places' items are not touched. */
+        override fun erase(): EraseResult = locked {
+            val version = copies.getValue(place).advance()
+            val statuses = Slot.entries.map { delete(place.account(it)) }
+            eraseOutcome(statuses.firstOrNull { it != errSecSuccess && it != errSecItemNotFound } ?: errSecSuccess, version)
+        }
+
+        override fun marker(): Marker = locked {
+            if (!NSFileManager.defaultManager.fileExistsAtPath(markerFile)) {
+                Marker.Absent
+            } else {
+                markerOf(NSString.stringWithContentsOfFile(markerFile, encoding = NSUTF8StringEncoding, error = null))
+            }
+        }
+
+        override fun writeMarker(marker: Marker): Boolean = locked {
+            val content = markerContent(marker)?.encodeToByteArray() ?: return@locked false
+            val data = content.usePinned { NSData.dataWithBytes(it.addressOf(0), content.size.toULong()) }
+            NSFileManager.defaultManager.createDirectoryAtPath(markerFile.substringBeforeLast('/'), withIntermediateDirectories = true, attributes = null, error = null) &&
+                data.writeToFile(markerFile, atomically = true)
+        }
+    }
 }
 
-/** The Keychain store. One per process, so every caller shares its lock. */
+/** The Keychain shelf. One per process, so every caller shares its lock. */
 @Composable
-internal actual fun rememberSecureStore(): SecureStore = KeychainStore
+internal actual fun rememberSecureShelf(): SecureShelf = KeychainShelf
 
 /**
  * The status of a listing of every item under the service, and their accounts. Never prompts. A simulator lists the wallet's
@@ -273,22 +308,22 @@ private fun protectedDataAvailable(): Boolean {
     return available
 }
 
-/** A data-only read of [slot] with [context]: the query an iPhone answered with no second sheet once the context had passed. */
-private fun readData(slot: Slot, context: LAContext, version: StoreVersion): ReadResult = memScoped {
+/** A data-only read of [account] with [context]: the query an iPhone answered with no second sheet once the context had passed. */
+private fun readData(account: String, context: LAContext, version: StoreVersion): ReadResult = memScoped {
     val out = alloc<CFTypeRefVar>()
     val status = SecItemCopyMatching(
-        query(slot.account, kSecReturnData to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne, kSecUseAuthenticationContext to owned(CFBridgingRetain(context))),
+        query(account, kSecReturnData to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne, kSecUseAuthenticationContext to owned(CFBridgingRetain(context))),
         out.ptr,
     )
     val data = owned(out.value)?.reinterpret<__CFData>()
     readOutcome(status, data?.let { CFDataGetBytePtr(it)?.readBytes(CFDataGetLength(it).toInt()) ?: ByteArray(0) }, version)
 }
 
-/** When [slot]'s item was added, in seconds from 1 Jan 2001, by an attributes-only read with [context], or null if unreadable. */
-private fun creationDate(slot: Slot, context: LAContext): Double? = memScoped {
+/** When [account]'s item was added, in seconds from 1 Jan 2001, by an attributes-only read with [context], or null if unreadable. */
+private fun creationDate(account: String, context: LAContext): Double? = memScoped {
     val out = alloc<CFTypeRefVar>()
     SecItemCopyMatching(
-        query(slot.account, kSecReturnAttributes to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne, kSecUseAuthenticationContext to owned(CFBridgingRetain(context))),
+        query(account, kSecReturnAttributes to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne, kSecUseAuthenticationContext to owned(CFBridgingRetain(context))),
         out.ptr,
     )
     val item = owned(out.value)?.reinterpret<__CFDictionary>() ?: return@memScoped null
@@ -296,15 +331,15 @@ private fun creationDate(slot: Slot, context: LAContext): Double? = memScoped {
 }
 
 /**
- * Adds [bytes] to the slot [slotToAdd] names, moving on while an add answers duplicate, and returns the last add's status.
- * After a Replace's add it deletes the other slot, which held the copy this one replaces, best effort. Never SecItemUpdate,
- * which may prompt for an item with this access control.
+ * A Replace: adds [bytes] to the slot [slotToAdd] names, moving on while an add answers duplicate, and returns the last add's status,
+ * then deletes the other slot, which held the copy this one replaces, best effort. Never SecItemUpdate, which may prompt
+ * for an item with this access control.
  */
-private tailrec fun addToFreeSlot(bytes: ByteArray, mode: WriteMode, taken: Set<Slot> = emptySet()): Int {
-    val slot = slotToAdd(mode, taken) ?: return errSecDuplicateItem
-    val added = add(slot.account, bytes)
-    if (added == errSecDuplicateItem) return addToFreeSlot(bytes, mode, taken + slot)
-    if (added == errSecSuccess && mode is WriteMode.Replace) delete(slot.other.account)
+private tailrec fun replaceInFreeSlot(place: Place, bytes: ByteArray, taken: Set<Slot> = emptySet()): Int {
+    val slot = slotToAdd(taken) ?: return errSecDuplicateItem
+    val added = add(place.account(slot), bytes)
+    if (added == errSecDuplicateItem) return replaceInFreeSlot(place, bytes, taken + slot)
+    if (added == errSecSuccess) delete(place.account(slot.other))
     return added
 }
 
@@ -413,7 +448,7 @@ internal fun eraseOutcome(status: Int, version: StoreVersion): EraseResult =
     if (status == errSecSuccess || status == errSecItemNotFound) EraseResult.Erased else EraseResult.Failed(Why.Other, version)
 
 /**
- * The two accounts under [SERVICE] that can hold the wallet. A Replace adds to the free one and then deletes the other, so two
+ * The two accounts under [SERVICE] that can hold place 1's wallet. A Replace adds to the free one and then deletes the other, so two
  * copies exist only when that delete did not happen (a crash between the calls, or a failed delete), and no call needs a
  * listing to find the wallet.
  */
@@ -426,22 +461,29 @@ internal enum class Slot(val account: String) {
     val other: Slot get() = if (this == A) B else A
 }
 
-/**
- * What stops a Create before its add, from the silent probe of the store: nothing when it is empty, AlreadyExists for a wallet
- * it lists or only senses, else the probe's reason.
- */
-internal fun createRefusal(probe: StoreProbe): WriteResult? = when (probe) {
-    StoreProbe.Empty -> null
-    StoreProbe.Present, StoreProbe.KeyGone -> WriteResult.AlreadyExists
-    is StoreProbe.Unavailable -> WriteResult.Unavailable(probe.why)
-}
+/** The account of [slot] at this place. Place 1 keeps today's two accounts, so the wallet already on a phone is read by the same call as before. */
+internal fun Place.account(slot: Slot): String = if (this == Place.FIRST) slot.account else "wallet.$number." + slot.account.substringAfterLast('.')
 
 /**
- * The slot a write adds to, given the slots whose add answered duplicate: a Create only to an empty store, a Replace to the
- * first slot not taken. Null when there is none.
+ * A Create at one place: adds to slot A, adds to slot B, and only then deletes B. So a copy in either slot answers duplicate, and
+ * the failed add's partner is undone, leaving the phone as it was, and a Create can never land beside a wallet already there.
+ * A failure to delete B leaves two equal copies, which the next read settles. Uses only SecItemAdd and SecItemDelete, which
+ * never prompted on the iPhone. Returns the first status that was not a success.
  */
-internal fun slotToAdd(mode: WriteMode, taken: Set<Slot>): Slot? =
-    if (mode == WriteMode.Create && taken.isNotEmpty()) null else Slot.entries.firstOrNull { it !in taken }
+internal fun createInBothSlots(add: (Slot) -> Int, delete: (Slot) -> Unit): Int {
+    val first = add(Slot.A)
+    if (first != errSecSuccess) return first
+    val second = add(Slot.B)
+    if (second != errSecSuccess) {
+        delete(Slot.A)
+        return second
+    }
+    delete(Slot.B)
+    return errSecSuccess
+}
+
+/** The slot a Replace adds to, given the slots whose add answered duplicate: the first not taken, or null when there is none. */
+internal fun slotToAdd(taken: Set<Slot>): Slot? = Slot.entries.firstOrNull { it !in taken }
 
 /**
  * What a read of both slots answers. One slot with bytes holds the wallet. Two (a write's add whose delete did not happen) go

@@ -70,7 +70,7 @@ private const val SERVICE = "com.mebit.app.vaults"
 /** The account of this slot's copy of the book. */
 private val Slot.book: String get() = if (this == Slot.A) "book.a" else "book.b"
 
-/** The saved vaults in the Keychain, kept as the wallet is: add then delete across two named accounts, never SecItemUpdate and never a listing, for the reasons in `KeychainStore`. */
+/** The saved vaults in the Keychain, kept as the wallet is: add then delete across two named accounts, never SecItemUpdate and never a listing, for the reasons in `KeychainShelf`. */
 internal object KeychainVaults : VaultsStorage {
     private val lock = NSLock()
 

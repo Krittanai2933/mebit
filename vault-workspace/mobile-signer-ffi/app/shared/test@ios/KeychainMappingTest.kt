@@ -7,6 +7,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 import kotlin.test.fail
 import platform.LocalAuthentication.LAErrorAppCancel
 import platform.LocalAuthentication.LAErrorAuthenticationFailed
@@ -245,51 +246,66 @@ class KeychainMappingTest {
     }
 
     @Test
-    fun aCreateGoesOnToItsAddOnlyWhenTheStoreIsEmpty() {
-        assertNull(createRefusal(StoreProbe.Empty))
-        assertNull(createRefusal(probeOutcome(errSecItemNotFound, emptyList(), passcodeSet = true, protectedDataAvailable = true)))
+    fun eachPlaceHasItsOwnAccountsAndPlaceOneKeepsTodays() {
+        assertEquals("wallet.a", Place.FIRST.account(Slot.A), "the account the real wallet is already under")
+        assertEquals("wallet.b", Place.FIRST.account(Slot.B))
+        assertEquals("wallet.2.a", Place.parse(2)!!.account(Slot.A))
+        assertEquals("wallet.2.b", Place.parse(2)!!.account(Slot.B))
+        assertEquals("wallet.10.b", Place.parse(10)!!.account(Slot.B))
+        val every = Place.all.flatMap { p -> Slot.entries.map { p.account(it) } }
+        assertEquals(every.size, every.toSet().size, "two places share an account")
     }
 
     @Test
-    fun aCreateNeverAddsBesideAWalletItSeesOrOnlySenses() {
-        assertEquals("AlreadyExists", name(createRefusal(probeOutcome(errSecSuccess, listOf("wallet.b"), passcodeSet = true, protectedDataAvailable = true))))
-        // The iPhone's answer while a wallet is there and the phone is unlocked: the list is refused and names no item.
-        assertEquals("AlreadyExists", name(createRefusal(probeOutcome(errSecInteractionNotAllowed, emptyList(), passcodeSet = true, protectedDataAvailable = true))))
-        assertEquals("AlreadyExists", name(createRefusal(StoreProbe.KeyGone)))
+    fun aCreateOnAnEmptyPlaceLeavesOneCopyInSlotA() {
+        val place = FakeSlots()
+        assertEquals(errSecSuccess, place.create())
+        assertEquals(setOf(Slot.A), place.held, "the copy")
+        assertEquals(listOf(Slot.B), place.deleted, "only the second add is undone")
     }
 
     @Test
-    fun aCreateOnALockedPhoneIsTryLater() {
-        assertEquals(
-            "Unavailable(TryLater)",
-            name(createRefusal(probeOutcome(errSecInteractionNotAllowed, emptyList(), passcodeSet = true, protectedDataAvailable = false))),
-        )
+    fun aCreateNeverLandsBesideACopyInEitherSlot() {
+        // Measured on the iPhone, 10 Nov: only slot B holds a copy, so the second add answers duplicate and the first is undone.
+        val onlyInB = FakeSlots(Slot.B)
+        assertEquals(errSecDuplicateItem, onlyInB.create())
+        assertEquals(setOf(Slot.B), onlyInB.held, "the copy in B must survive and A must be empty")
+        assertEquals(listOf(Slot.A), onlyInB.deleted, "only the add this Create made")
+
+        val inA = FakeSlots(Slot.A)
+        assertEquals(errSecDuplicateItem, inA.create())
+        assertEquals(setOf(Slot.A), inA.held, "the copy in A is never deleted")
+        assertTrue(inA.deleted.isEmpty(), "a duplicate on the first add must touch nothing")
+
+        assertEquals("AlreadyExists", name(writeRefusal(onlyInB.create(), WriteMode.Create, passcodeSet = true)))
     }
 
     @Test
-    fun aCreateThatCannotCheckTheStoreSaysWhy() {
-        Why.entries.forEach { why -> assertEquals("Unavailable($why)", name(createRefusal(StoreProbe.Unavailable(why))), "$why") }
+    fun aCreateWhoseAddFailsUndoesWhatItAddedAndSaysWhy() {
+        val firstFails = FakeSlots().apply { fail[Slot.A] = errSecInteractionNotAllowed }
+        assertEquals(errSecInteractionNotAllowed, firstFails.create())
+        assertTrue(firstFails.held.isEmpty() && firstFails.deleted.isEmpty(), "a failed first add must change nothing")
+
+        val secondFails = FakeSlots().apply { fail[Slot.B] = errSecNotAvailable }
+        assertEquals(errSecNotAvailable, secondFails.create())
+        assertTrue(secondFails.held.isEmpty(), "the first add must be undone, leaving the place empty")
+        assertEquals("Unavailable(Other)", name(writeRefusal(errSecNotAvailable, WriteMode.Create, passcodeSet = true)))
     }
 
     @Test
-    fun aWriteToAnEmptyStoreGoesToSlotA() {
-        MODES.forEach { mode -> assertEquals(Slot.A, slotToAdd(mode, emptySet()), "$mode") }
+    fun aReplaceToAnEmptyPlaceGoesToSlotA() {
+        assertEquals(Slot.A, slotToAdd(emptySet()))
     }
 
     @Test
     fun aReplaceGoesToTheFirstSlotWhoseAddWasNotADuplicate() {
-        assertEquals(Slot.B, slotToAdd(WriteMode.Replace(ANY_VERSION),setOf(Slot.A)))
-        assertEquals(Slot.A, slotToAdd(WriteMode.Replace(ANY_VERSION),setOf(Slot.B)))
+        assertEquals(Slot.B, slotToAdd(setOf(Slot.A)))
+        assertEquals(Slot.A, slotToAdd(setOf(Slot.B)))
     }
 
     @Test
     fun aReplaceWithBothSlotsTakenAddsNothing() {
-        assertNull(slotToAdd(WriteMode.Replace(ANY_VERSION),setOf(Slot.A, Slot.B)))
-    }
-
-    @Test
-    fun aCreateNeverAddsBesideAWallet() {
-        listOf(setOf(Slot.A), setOf(Slot.B), setOf(Slot.A, Slot.B)).forEach { taken -> assertNull(slotToAdd(WriteMode.Create, taken), "taken $taken") }
+        assertNull(slotToAdd(setOf(Slot.A, Slot.B)))
     }
 
     @Test
@@ -367,6 +383,22 @@ class KeychainMappingTest {
 
 /** Both write kinds. A Replace names a version, so the sealed WriteMode has no entries list. */
 private val MODES = listOf(WriteMode.Create, WriteMode.Replace(ANY_VERSION))
+
+/** One place's two slots for [createInBothSlots]: an add answers duplicate when the slot is held. [fail] scripts an add's status instead. */
+private class FakeSlots(vararg start: Slot) {
+    val held = start.toMutableSet()
+    val deleted = mutableListOf<Slot>()
+    val fail = mutableMapOf<Slot, Int>()
+
+    fun create(): Int = createInBothSlots(::add, ::delete)
+
+    private fun add(slot: Slot): Int = fail[slot] ?: if (held.add(slot)) errSecSuccess else errSecDuplicateItem
+
+    private fun delete(slot: Slot) {
+        deleted += slot
+        held -= slot
+    }
+}
 
 /** A version after one advance, distinct from [ANY_VERSION]. */
 private val LATER_VERSION = CopyCounter().advance()
