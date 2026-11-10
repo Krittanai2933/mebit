@@ -115,6 +115,7 @@ What to do when `doctor` is red:
 | `adb ARGS...` | Runs `adb -s emulator-5580 ARGS`. Use it for key events, `am`, `pm`, and `logcat`. |
 | `ios-see`, `ios-tap`, `ios-gone SELECTOR` | The same three actions on the iOS simulator. About 5 s each, 15 s the first time while the test bundle builds, and about 20 s when the action fails. |
 | `ios-type SELECTOR TEXT` | Taps the element, then types TEXT into the keyboard focus. A `\n` in TEXT presses the return key. |
+| `UI_DX=0.15 ios-tap SELECTOR` | Taps at that fraction of the element's width, for a wide button whose middle the debug link covers. |
 | `ios-shot LABEL` | Saves `NN-LABEL.png` from the simulator. |
 
 A selector is `[KIND[~]:]VALUE`. KIND is `text` (the default), `desc` (content description) or `id` (resource id, or a Compose `testTag`). A `~` after the kind means "contains" instead of "equals". Examples are `"Click me! na kub"`, `"text~:Hello, Android"`, `"desc:app"`. On iOS `text` and `desc` both match the accessibility label, and `id` matches the accessibility identifier.

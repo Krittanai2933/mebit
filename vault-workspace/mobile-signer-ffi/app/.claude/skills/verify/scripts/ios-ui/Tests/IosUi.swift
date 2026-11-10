@@ -45,7 +45,10 @@ final class IosUi: XCTestCase {
             )
             // Settle after scroll so the sheet finishes decelerating before the tap.
             Thread.sleep(forTimeInterval: 0.35)
-            if element.isHittable {
+            // UI_DX taps at that fraction of the element's width, for a wide button whose centre the debug link covers.
+            if let dx = env["UI_DX"].flatMap(Double.init) {
+                element.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: 0.5)).tap()
+            } else if element.isHittable {
                 element.tap()
             } else {
                 element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()

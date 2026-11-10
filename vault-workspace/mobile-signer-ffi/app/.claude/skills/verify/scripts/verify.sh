@@ -486,7 +486,7 @@ ios_ui() {
     sign=(-allowProvisioningUpdates DEVELOPMENT_TEAM="$TEAM" PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE.ui")
   fi
   TEST_RUNNER_UI_ACTION=$act TEST_RUNNER_UI_KIND=$kind TEST_RUNNER_UI_CONTAINS=$contains TEST_RUNNER_UI_LABEL=$val \
-    TEST_RUNNER_UI_TEXT=${UI_TEXT:-} TEST_RUNNER_MEBIT_BUNDLE_ID=$bundle \
+    TEST_RUNNER_UI_TEXT=${UI_TEXT:-} TEST_RUNNER_UI_DX=${UI_DX:-} TEST_RUNNER_MEBIT_BUNDLE_ID=$bundle \
     xcodebuild test -project "$HERE/ios-ui/IosUi.xcodeproj" -scheme IosUi -destination "${dest[0]}" \
       -derivedDataPath "$derived" "${sign[@]}" > "$log" 2>&1 &
   local pid=$! i
