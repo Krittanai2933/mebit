@@ -241,6 +241,8 @@ int64_t uniffi_mobile_signer_ffi_fn_func_scan_wallets(RustBuffer kind
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_sign_psbt(RustBuffer psbtJson, RustBuffer borrowerPubkey, UniffiRustCallStatus *_Nonnull out_status
 );
+RustBuffer uniffi_mobile_signer_ffi_fn_func_vault_snapshot(RustBuffer xpubs, int8_t threshold, UniffiRustCallStatus *_Nonnull out_status
+);
 RustBuffer ffi_mobile_signer_ffi_rustbuffer_alloc(int64_t size, UniffiRustCallStatus *_Nonnull out_status
 );
 RustBuffer ffi_mobile_signer_ffi_rustbuffer_from_bytes(ForeignBytes bytes, UniffiRustCallStatus *_Nonnull out_status
@@ -438,6 +440,9 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_scan_wallets(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_func_sign_psbt(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_vault_snapshot(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(void

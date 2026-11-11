@@ -620,6 +620,25 @@ public data class SoftwareAccountKey (
 
 
 /**
+ * A several-key wallet's balance as one sync of both its chains found it. Not `HotWalletSnapshot`, because a vault
+ * has no spendable figure while multisig spend is a mock, and a next unused receive address would contradict the
+ * Receive screen, which shows address 0.
+ */
+
+public data class VaultSnapshot (
+    /**
+     * Confirmed plus mempool over every address of both chains the scan counts. Before `scan` is `Complete`, only
+     * what the scan has found so far, which no screen may show as the balance.
+     */
+    var `balanceSats`: kotlin.ULong, 
+    var `scan`: HotScan
+) {
+    public companion object
+}
+
+
+
+/**
  * Who answered on a connected link.
  */
 
@@ -1337,4 +1356,14 @@ public expect suspend fun `scanWallets`(`kind`: WalletKind): List<FoundWallet>
  */
 @Throws(MobileSignerException::class)
 public expect fun `signPsbt`(`psbtJson`: kotlin.String, `borrowerPubkey`: kotlin.String): kotlin.String
+
+/**
+ * The confirmed + mempool balance over every address of both chains, receive `0/i` and change `1/i`, of the
+ * `threshold`-of-`xpubs.len()` sorted multisig that `compute_vault_address_multisig` takes, with how far the scan
+ * got. Testnet4 only, so mainnet `xpub` keys are refused before any request. About 40 Esplora calls for a wallet
+ * nobody paid and a routine sync's few after that, so call it off the main thread. No screen may show
+ * `balance_sats` unless `scan` is `Complete`.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `vaultSnapshot`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte): VaultSnapshot
 

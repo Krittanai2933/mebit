@@ -39,9 +39,10 @@ use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::{All, Message, Secp256k1, SecretKey, ecdsa};
 use bitcoin::transaction::{InputWeightPrediction, predict_weight};
 use bitcoin::{
-    Address, Amount, CompressedPublicKey, Network, OutPoint, PrivateKey, Script, ScriptBuf,
-    Sequence, Transaction, TxIn, TxOut, Txid, Witness, sighash::SighashCache,
+    Address, Amount, CompressedPublicKey, Network, NetworkKind, OutPoint, PrivateKey, Script,
+    ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness, sighash::SighashCache,
 };
+use vault_core::descriptor::{Branch, build_multisig_descriptor_on, derive_address_at};
 
 /// How long after a sync of a wallet ended the next call shares its answer with no request, so the
 /// app's snapshot followed by history costs one sync. A used address's balance is never older than this.
@@ -184,7 +185,17 @@ impl Account {
             address,
         })
     }
+}
 
+/// A wallet as a scan sees it. Its public id names its store entry and scan file, and `address` gives each index of each
+/// chain. A sync needs nothing else, so one sync serves a seed's wallet and a several-key wallet. The id travels with the
+/// addresses it names, so no call can pair one wallet's addresses with another's file.
+trait Addresses {
+    fn id(&self) -> WalletId;
+    fn address(&self, chain: Chain, index: u32) -> Result<Address, MobileSignerError>;
+}
+
+impl Addresses for Account {
     /// SHA-256 of the two chain xpubs. Public data, so the store can name a wallet without holding
     /// a key, and different words, passphrase or network give a different id.
     fn id(&self) -> WalletId {
@@ -193,6 +204,10 @@ impl Account {
             bytes.extend_from_slice(&Xpub::from_priv(&self.secp, chain).encode());
         }
         sha256::Hash::hash(&bytes).to_byte_array()
+    }
+
+    fn address(&self, chain: Chain, index: u32) -> Result<Address, MobileSignerError> {
+        Ok(self.key(chain, index)?.address)
     }
 }
 
@@ -276,13 +291,7 @@ impl Wallet {
     }
 
     fn balance(&self) -> Result<u64, MobileSignerError> {
-        self.indices()
-            .try_fold(0u64, |sum, (_, _, _, balance)| sum.checked_add(balance))
-            .ok_or_else(|| {
-                MobileSignerError::InvalidPsbtJson(
-                    "esplora balance: the sum over the wallet's addresses does not fit u64".into(),
-                )
-            })
+        held(&self.scans, &self.balances)
     }
 }
 
@@ -298,6 +307,13 @@ fn complete(wallet: Wallet) -> Result<Wallet, MobileSignerError> {
             "esplora scan: {why}"
         ))),
     }
+}
+
+/// What a sync left of a wallet, copied out of its store entry, so the caller derives keys or sums with no lock held.
+struct Synced {
+    scan: WalletScan,
+    balances: [Vec<u64>; 2],
+    status: ScanStatus,
 }
 
 /// The wallet as `store` and `source` give it, by one of three syncs:
@@ -317,25 +333,25 @@ fn complete(wallet: Wallet) -> Result<Wallet, MobileSignerError> {
 /// included, so a wallet with more funded addresses than a host serves in an hour still completes. Any other failed read fails the call. Either way what the sync learned is kept, the scan
 /// written to the wallet's file when the app named a folder and each balance in memory. Freshness counts from when
 /// a sync ends, and the period of full passes from when one starts.
-fn synced(
+fn sync_scan(
     source: &dyn ChainSource,
-    words: &[String],
-    passphrase: &str,
-    network: KeyNetwork,
-    address_type: AddressType,
+    wallet: &dyn Addresses,
+    anchor: Anchor,
     clock: &dyn Fn() -> SystemTime,
     store: &ScanStore,
-) -> Result<Wallet, MobileSignerError> {
-    let account = Account::new(words, passphrase, network_of(network), address_type)?;
-    check_network(network)?;
-    let id = account.id();
+) -> Result<Synced, MobileSignerError> {
+    let id = wallet.id();
     let held = store.wallet(&id);
     let mut entry = held.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(last) = &entry.last
         && last.epoch == store.epoch()
         && elapsed(clock(), last.ended) < SHARE_TTL
     {
-        return wallet_of(&account, &entry.scan, &entry.balances, last.status.clone());
+        return Ok(Synced {
+            scan: entry.scan.clone(),
+            balances: entry.balances.clone(),
+            status: last.status.clone(),
+        });
     }
     let epoch = store.epoch();
     let started = clock();
@@ -367,8 +383,8 @@ fn synced(
     let routine = entry.round.get_or_insert([0, 0]);
     let pass = scan_chains(
         source,
-        anchor_of(network),
-        &account,
+        anchor,
+        wallet,
         &mut scan.chains,
         &mut entry.balances,
         routine,
@@ -398,7 +414,28 @@ fn synced(
         status: pass?,
     };
     entry.last = Some(last.clone());
-    wallet_of(&account, &entry.scan, &entry.balances, last.status)
+    Ok(Synced {
+        scan: entry.scan.clone(),
+        balances: entry.balances.clone(),
+        status: last.status,
+    })
+}
+
+/// The one-key wallet `words` and `passphrase` make, by `sync_scan`, with every key derived again. `Account::new` and
+/// `check_network` run before the store or any host hears of the wallet.
+fn synced(
+    source: &dyn ChainSource,
+    words: &[String],
+    passphrase: &str,
+    network: KeyNetwork,
+    address_type: AddressType,
+    clock: &dyn Fn() -> SystemTime,
+    store: &ScanStore,
+) -> Result<Wallet, MobileSignerError> {
+    let account = Account::new(words, passphrase, network_of(network), address_type)?;
+    check_network(network)?;
+    let synced = sync_scan(source, &account, anchor_of(network), clock, store)?;
+    wallet_of(&account, synced)
 }
 
 /// How often a full pass runs on the host the next read goes to, by who runs it.
@@ -426,21 +463,16 @@ fn unix_seconds(at: SystemTime) -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
-/// `scan`, `balances` and `status` as the wallet they describe, with every key derived again. No request.
-fn wallet_of(
-    account: &Account,
-    scan: &WalletScan,
-    balances: &[Vec<u64>; 2],
-    status: ScanStatus,
-) -> Result<Wallet, MobileSignerError> {
+/// `synced` as the wallet it describes, with every key derived again. No request.
+fn wallet_of(account: &Account, synced: Synced) -> Result<Wallet, MobileSignerError> {
     Ok(Wallet {
         keys: [
-            keys_of(account, Chain::External, &scan.chains[0])?,
-            keys_of(account, Chain::Internal, &scan.chains[1])?,
+            keys_of(account, Chain::External, &synced.scan.chains[0])?,
+            keys_of(account, Chain::Internal, &synced.scan.chains[1])?,
         ],
-        scans: scan.chains.clone(),
-        balances: balances.clone(),
-        status,
+        scans: synced.scan.chains,
+        balances: synced.balances,
+        status: synced.status,
     })
 }
 
@@ -451,7 +483,7 @@ fn wallet_of(
 fn scan_chains(
     source: &dyn ChainSource,
     anchor: Anchor,
-    account: &Account,
+    wallet: &dyn Addresses,
     scans: &mut [ChainScan; 2],
     balances: &mut [Vec<u64>; 2],
     routine: &mut [usize; 2],
@@ -463,7 +495,7 @@ fn scan_chains(
             let status = scan_chain(
                 source,
                 anchor,
-                account,
+                wallet,
                 chain,
                 &mut scans[c],
                 &mut balances[c],
@@ -500,7 +532,7 @@ fn scan_chains(
 fn scan_chain(
     source: &dyn ChainSource,
     anchor: Anchor,
-    account: &Account,
+    wallet: &dyn Addresses,
     chain: Chain,
     scan: &mut ChainScan,
     balances: &mut Vec<u64>,
@@ -511,7 +543,7 @@ fn scan_chain(
     loop {
         if !refreshed && !matches!(scan.proof, Some(Proof::Stored(_))) {
             refreshed = true;
-            if let Some(status) = refresh(source, account, chain, scan, balances, routine)? {
+            if let Some(status) = refresh(source, wallet, chain, scan, balances, routine)? {
                 return Ok(status);
             }
             at = scan.next();
@@ -519,7 +551,7 @@ fn scan_chain(
         let event = match &at {
             Step::Ask(indices) => {
                 let part = indices.start..indices.end.min(indices.start + WINDOW as u32);
-                match lookup(source, account, chain, part) {
+                match lookup(source, wallet, chain, part) {
                     Ok(summaries) => {
                         balances.extend(summaries.iter().map(|summary| summary.balance));
                         Event::Asked(summaries)
@@ -531,21 +563,21 @@ fn scan_chain(
                 }
             }
             Step::Reprove(index) => {
-                let address = account.key(chain, *index)?.address;
+                let address = wallet.address(chain, *index)?;
                 match prove_use(source, anchor, &address, *index) {
                     Ok(proven) => Event::Proven(proven),
                     Err(not) => Event::NotProven(not),
                 }
             }
             Step::Recheck(evidence) => {
-                let address = account.key(chain, evidence.index)?.address;
+                let address = wallet.address(chain, evidence.index)?;
                 match verify(source, anchor, &address, *evidence) {
                     Ok(proven) => Event::Proven(proven),
                     Err(not) => Event::NotProven(not),
                 }
             }
             Step::Prove(index) => {
-                let address = account.key(chain, *index)?.address;
+                let address = wallet.address(chain, *index)?;
                 match prove_use(source, anchor, &address, *index) {
                     Ok(proven) => Event::Proven(proven),
                     Err(not) => {
@@ -568,6 +600,13 @@ fn scan_chain(
     }
 }
 
+/// How many indices of `scan` a wallet counts, the ones `keys_of` derives and `held` sums, so a one-key wallet and
+/// a vault count the same range.
+fn counted(scan: &ChainScan) -> usize {
+    let seen = (scan.seen.len() as u32).min(scan.frontier() + GAP);
+    seen.max(scan.issued() + 1) as usize
+}
+
 /// The key of every index `scan` has seen below its frontier plus `GAP`, and of the one it hands out, which a
 /// pass cut short may not have reached, derived again. No request. The index the scan file holds moves no
 /// frontier before a source proves it used again, so a file never makes this derive keys a source did not prove.
@@ -576,26 +615,39 @@ fn keys_of(
     chain: Chain,
     scan: &ChainScan,
 ) -> Result<Vec<OwnKey>, MobileSignerError> {
-    let seen = (scan.seen.len() as u32).min(scan.frontier() + GAP);
-    (0..seen.max(scan.issued() + 1))
+    (0..counted(scan) as u32)
         .map(|index| account.key(chain, index))
         .collect()
+}
+
+/// Confirmed plus mempool over the indices `counted` gives of both chains. Fails when the sum does not fit u64.
+fn held(scans: &[ChainScan; 2], balances: &[Vec<u64>; 2]) -> Result<u64, MobileSignerError> {
+    scans
+        .iter()
+        .zip(balances)
+        .flat_map(|(scan, balances)| balances.iter().zip(&scan.seen).take(counted(scan)))
+        .try_fold(0u64, |sum, (balance, _)| sum.checked_add(*balance))
+        .ok_or_else(|| {
+            MobileSignerError::InvalidPsbtJson(
+                "esplora balance: the sum over the wallet's addresses does not fit u64".into(),
+            )
+        })
 }
 
 /// What the source says of `indices` of `chain`, in order.
 fn lookup(
     source: &dyn ChainSource,
-    account: &Account,
+    wallet: &dyn Addresses,
     chain: Chain,
     indices: impl IntoIterator<Item = u32>,
 ) -> Result<Vec<Summary>, MobileSignerError> {
-    let keys = indices
+    let addresses = indices
         .into_iter()
-        .map(|index| account.key(chain, index))
+        .map(|index| wallet.address(chain, index))
         .collect::<Result<Vec<_>, _>>()?;
-    let addresses: Vec<&Address> = keys.iter().map(|key| &key.address).collect();
-    let summaries = source.summaries(&addresses)?;
-    if summaries.len() != keys.len() {
+    let asked: Vec<&Address> = addresses.iter().collect();
+    let summaries = source.summaries(&asked)?;
+    if summaries.len() != addresses.len() {
         return Err(MobileSignerError::InvalidPsbtJson(
             "esplora scan: fewer answers than asked".into(),
         ));
@@ -614,7 +666,7 @@ fn lookup(
 /// nothing here.
 fn refresh(
     source: &dyn ChainSource,
-    account: &Account,
+    wallet: &dyn Addresses,
     chain: Chain,
     scan: &mut ChainScan,
     balances: &mut Vec<u64>,
@@ -635,7 +687,7 @@ fn refresh(
         })
         .collect();
     for part in asked.chunks(WINDOW) {
-        let fresh = match lookup(source, account, chain, part.iter().map(|&i| i as u32)) {
+        let fresh = match lookup(source, wallet, chain, part.iter().map(|&i| i as u32)) {
             Ok(fresh) => fresh,
             Err(e) => {
                 return match throttled(&e).map(str::to_string) {
@@ -781,6 +833,129 @@ fn snapshot_from(
         spendable_sats,
         network,
         scan,
+    })
+}
+
+/// A sorted-multisig wallet's two chains, watch-only. It holds the checked keys and threshold and no key that signs. Every
+/// address comes from vault-core, which gives the vault its receive address on the Receive screen and in the book's
+/// address check, so the scan's receive chain is that address's chain.
+struct Multisig {
+    keys: Vec<Xpub>,
+    threshold: usize,
+    id: WalletId,
+}
+
+impl Multisig {
+    /// The wallet `compute_vault_address_multisig(xpubs, threshold)` names, checked the same way, then refused when its
+    /// keys are mainnet `xpub`s, since this build reads testnet4 only. All before the store or any host hears of it.
+    fn new(xpubs: &[String], threshold: u8) -> Result<Self, MobileSignerError> {
+        let keys = crate::parse_and_check_xpubs(xpubs)?;
+        // vault-core's threshold rule, which also refuses an empty list, so keys[0] exists below.
+        build_multisig_descriptor_on(&keys, threshold.into(), Branch::Receive)?;
+        check_network(match keys[0].network {
+            NetworkKind::Main => KeyNetwork::Main,
+            NetworkKind::Test => KeyNetwork::Test,
+        })?;
+        Ok(Self {
+            id: vault_id(&keys, threshold),
+            keys,
+            threshold: threshold.into(),
+        })
+    }
+}
+
+impl Addresses for Multisig {
+    fn id(&self) -> WalletId {
+        self.id
+    }
+
+    fn address(&self, chain: Chain, index: u32) -> Result<Address, MobileSignerError> {
+        let branch = match chain {
+            Chain::External => Branch::Receive,
+            Chain::Internal => Branch::Change,
+        };
+        // shortcut: the descriptor is rebuilt for each address, because vault-core returns a miniscript type this crate
+        // does not name; it costs microseconds beside the GET each address costs. Hold the two descriptors (add
+        // `miniscript = "13"` beside `bitcoin`, as the Cargo.toml comment does for Xpub) if a profile ever shows it.
+        let descriptor = build_multisig_descriptor_on(&self.keys, self.threshold, branch)?;
+        Ok(derive_address_at(&descriptor, index, Network::Testnet4)?)
+    }
+}
+
+/// Domain tag for vault ids, so no preimage is ever a one-key id's two 78-byte xpubs in the folder both kinds share.
+const VAULT_ID_TAG: &[u8] = b"mebit/wallet-id/wsh-sortedmulti/v1";
+
+/// SHA-256 of `VAULT_ID_TAG`, a network byte (0 main, 1 test), `threshold`, then each key's 33-byte public key and
+/// 32-byte chain code, the 65-byte records in byte order. Public, like a one-key id.
+/// - Sorted, because sortedmulti makes the same keys in any order the same wallet, so a reordered BSMS reuses the scan file.
+/// - Only what makes addresses goes in, so a key re-encoded with another depth or parent fingerprint is the same wallet.
+/// - The network byte keeps a future mainnet build from sharing a testnet vault's file over the same key material.
+/// - `threshold` goes in, because 2-of-3 and 3-of-3 over the same keys pay different scripts.
+fn vault_id(keys: &[Xpub], threshold: u8) -> WalletId {
+    let mut records: Vec<[u8; 65]> = keys
+        .iter()
+        .map(|key| {
+            let mut record = [0; 65];
+            record[..33].copy_from_slice(&key.public_key.serialize());
+            record[33..].copy_from_slice(key.chain_code.as_bytes());
+            record
+        })
+        .collect();
+    records.sort();
+    let mut bytes = VAULT_ID_TAG.to_vec();
+    bytes.push(match keys[0].network {
+        NetworkKind::Main => 0,
+        NetworkKind::Test => 1,
+    });
+    bytes.push(threshold);
+    bytes.extend_from_slice(&records.concat());
+    sha256::Hash::hash(&bytes).to_byte_array()
+}
+
+/// A several-key wallet's balance as one sync of both its chains found it. Not `HotWalletSnapshot`, because a vault
+/// has no spendable figure while multisig spend is a mock, and a next unused receive address would contradict the
+/// Receive screen, which shows address 0.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct VaultSnapshot {
+    /// Confirmed plus mempool over every address of both chains the scan counts. Before `scan` is `Complete`, only
+    /// what the scan has found so far, which no screen may show as the balance.
+    pub balance_sats: u64,
+    pub scan: HotScan,
+}
+
+/// The confirmed + mempool balance over every address of both chains, receive `0/i` and change `1/i`, of the
+/// `threshold`-of-`xpubs.len()` sorted multisig that `compute_vault_address_multisig` takes, with how far the scan
+/// got. Testnet4 only, so mainnet `xpub` keys are refused before any request. About 40 Esplora calls for a wallet
+/// nobody paid and a routine sync's few after that, so call it off the main thread. No screen may show
+/// `balance_sats` unless `scan` is `Complete`.
+#[uniffi::export]
+pub fn vault_snapshot(
+    xpubs: Vec<String>,
+    threshold: u8,
+) -> Result<VaultSnapshot, MobileSignerError> {
+    vault_snapshot_from(
+        &EsploraSource(&testnet4()),
+        &xpubs,
+        threshold,
+        &SystemTime::now,
+        &SCAN_STORE,
+    )
+}
+
+/// `vault_snapshot` on `source`, `clock` and `store`, so tests run it on `Fake`. No coin list is read, because a
+/// vault's figure is the scan's sum and nothing spends from it in this build.
+fn vault_snapshot_from(
+    source: &dyn ChainSource,
+    xpubs: &[String],
+    threshold: u8,
+    clock: &dyn Fn() -> SystemTime,
+    store: &ScanStore,
+) -> Result<VaultSnapshot, MobileSignerError> {
+    let vault = Multisig::new(xpubs, threshold)?;
+    let synced = sync_scan(source, &vault, Anchor::Testnet4, clock, store)?;
+    Ok(VaultSnapshot {
+        balance_sats: held(&synced.scan.chains, &synced.balances)?,
+        scan: HotScan::from(&synced.status),
     })
 }
 
@@ -12882,5 +13057,222 @@ mod tests {
             (HotScan::Unverified, 60),
             "the host still proves the payment it calls unpaid"
         );
+    }
+
+    /// Three testnet4 tpubs of `abandon_about`'s accounts 0, 1 and 2, what a vault of this phone's keys looks like.
+    fn vault_keys() -> Vec<String> {
+        (0..3)
+            .map(|account| {
+                crate::restore_software_multisig_key(
+                    abandon_about(),
+                    String::new(),
+                    KeyNetwork::Test,
+                    account,
+                )
+                .unwrap()
+                .xpub
+            })
+            .collect()
+    }
+
+    /// Address `index` of `branch` of the 2-of-3 over `vault_keys()`, from vault-core, not from the scan under test.
+    fn vault_addr(branch: Branch, index: u32) -> String {
+        let keys = crate::parse_and_check_xpubs(&vault_keys()).unwrap();
+        let descriptor = build_multisig_descriptor_on(&keys, 2, branch).unwrap();
+        derive_address_at(&descriptor, index, Network::Testnet4)
+            .unwrap()
+            .to_string()
+    }
+
+    impl Fake {
+        fn vault(&self, keys: &[String], m: u8) -> Result<VaultSnapshot, MobileSignerError> {
+            vault_snapshot_from(
+                &EsploraSource(&Reads(&|url| self.get(url))),
+                keys,
+                m,
+                &|| self.now(),
+                &self.store,
+            )
+        }
+    }
+
+    #[test]
+    fn a_vault_nobody_paid_holds_nothing_after_twenty_reads_per_chain() {
+        let fake = Fake::new();
+        assert_eq!(
+            fake.vault(&vault_keys(), 2).unwrap(),
+            VaultSnapshot {
+                balance_sats: 0,
+                scan: HotScan::Complete
+            }
+        );
+        assert_eq!(
+            fake.requests(),
+            40,
+            "GAP lookups per chain and no coin list"
+        );
+    }
+
+    #[test]
+    fn a_vault_counts_coins_on_its_receive_and_change_chains() {
+        let mut fake = Fake::new();
+        fake.fund_unconfirmed(&vault_addr(Branch::Receive, 3), 84_000_000, '1');
+        fake.fund_unconfirmed(&vault_addr(Branch::Change, 0), 200_000, '2');
+        assert_eq!(
+            fake.vault(&vault_keys(), 2).unwrap(),
+            VaultSnapshot {
+                balance_sats: 84_200_000,
+                scan: HotScan::Complete
+            }
+        );
+        assert!(
+            fake.asked_about(&vault_addr(Branch::Change, 19)),
+            "the change chain is asked to its gap"
+        );
+        assert!(
+            !fake.asked_about(&vault_addr(Branch::Change, 20)),
+            "and no further"
+        );
+    }
+
+    #[test]
+    fn a_vault_read_within_ten_seconds_shares_the_last_answer_whatever_the_key_order() {
+        let fake = Fake::new();
+        let mut keys = vault_keys();
+        fake.vault(&keys, 2).unwrap();
+        let before = fake.requests();
+        keys.rotate_left(1);
+        fake.vault(&keys, 2).unwrap();
+        assert_eq!(
+            fake.requests(),
+            before,
+            "the same keys in another order are the same wallet"
+        );
+        fake.tick(SHARE_TTL);
+        fake.vault(&keys, 2).unwrap();
+        assert!(fake.requests() - before < 40, "a routine sync");
+    }
+
+    #[test]
+    fn another_threshold_over_the_same_keys_is_another_wallet() {
+        let fake = Fake::new();
+        fake.vault(&vault_keys(), 2).unwrap();
+        let before = fake.requests();
+        fake.vault(&vault_keys(), 3).unwrap();
+        assert_eq!(
+            fake.requests() - before,
+            40,
+            "a 3-of-3 pays other scripts, so its first scan asks every index"
+        );
+    }
+
+    #[test]
+    fn a_vault_of_mainnet_keys_is_refused_before_any_request() {
+        let fake = Fake::new();
+        let keys: Vec<String> = (0..3)
+            .map(|account| {
+                crate::restore_software_multisig_key(
+                    abandon_about(),
+                    String::new(),
+                    KeyNetwork::Main,
+                    account,
+                )
+                .unwrap()
+                .xpub
+            })
+            .collect();
+        match fake.vault(&keys, 2) {
+            Err(MobileSignerError::InvalidPsbtJson(m)) => {
+                assert_eq!(m, "mainnet Esplora is not enabled in this build")
+            }
+            other => panic!("expected the mainnet refusal, got {other:?}"),
+        }
+        assert_eq!(fake.requests(), 0);
+    }
+
+    #[test]
+    fn bad_keys_or_threshold_fail_as_the_vault_address_does() {
+        let fake = Fake::new();
+        let keys = vault_keys();
+        let mainnet = crate::restore_software_multisig_key(
+            abandon_about(),
+            String::new(),
+            KeyNetwork::Main,
+            0,
+        )
+        .unwrap()
+        .xpub;
+        let refused = |keys: Vec<String>, m: u8| {
+            let vault = fake.vault(&keys, m).unwrap_err();
+            let address = crate::compute_vault_address_multisig(keys, m).unwrap_err();
+            assert_eq!(vault.to_string(), address.to_string());
+            vault
+        };
+        assert!(matches!(
+            refused(vec![keys[0].clone(), keys[0].clone(), keys[1].clone()], 2),
+            MobileSignerError::DuplicateXpub { first: 0, index: 1 }
+        ));
+        assert!(matches!(
+            refused(keys.clone(), 0),
+            MobileSignerError::InvalidThreshold(_)
+        ));
+        assert!(matches!(
+            refused(keys.clone(), 4),
+            MobileSignerError::InvalidThreshold(_)
+        ));
+        assert!(matches!(
+            refused(vec![keys[0].clone(), mainnet], 1),
+            MobileSignerError::NetworkMismatch { index: 1 }
+        ));
+        assert_eq!(fake.requests(), 0);
+    }
+
+    #[test]
+    fn a_vault_read_while_every_host_is_limited_goes_on_later() {
+        let fake = Fake::new();
+        let limited = vault_snapshot_from(
+            &EsploraSource(&Refusing(EVERY_HOST_LIMITED)),
+            &vault_keys(),
+            2,
+            &|| fake.now(),
+            &fake.store,
+        )
+        .unwrap();
+        assert_eq!(limited.scan, HotScan::Continuing);
+    }
+
+    // The proof block pays only `abandon_about`'s own addresses, so nothing proves this claim. `Unverified`, or
+    // `Complete` with the claim withdrawn, are both honest.
+    #[test]
+    fn a_confirmed_claim_nothing_proves_is_not_counted_as_the_balance() {
+        let mut fake = Fake::new();
+        fake.fund(&vault_addr(Branch::Receive, 0), 50_000, '1');
+        let snapshot = fake.vault(&vault_keys(), 2).unwrap();
+        assert!(
+            !(snapshot.scan == HotScan::Complete && snapshot.balance_sats == 50_000),
+            "an unproven claim read as the balance: {snapshot:?}"
+        );
+    }
+
+    #[test]
+    fn a_vault_scan_file_names_no_address_or_amount() {
+        let mut fake = Fake::new();
+        fake.fund_unconfirmed(&vault_addr(Branch::Receive, 3), 84_000_000, '1');
+        let folder = Folder::new("vault");
+        let store = ScanStore::default();
+        store.use_dir(folder.0.clone());
+        vault_snapshot_from(
+            &EsploraSource(&Reads(&|url| fake.get(url))),
+            &vault_keys(),
+            2,
+            &|| fake.now(),
+            &store,
+        )
+        .unwrap();
+        let (path, _) = scan_file(&folder);
+        let text = fs::read_to_string(path).unwrap();
+        for part in ["tb1", "84000000", "tpub"] {
+            assert!(!text.contains(part), "the file names {part}: {text}");
+        }
     }
 }

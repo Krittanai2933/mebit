@@ -937,6 +937,10 @@ mod tests {
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_is_valid_address(),
             ),
             (
+                "func_vault_snapshot",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_snapshot(),
+            ),
+            (
                 "func_scan_wallets",
                 ble::uniffi_mobile_signer_ffi_checksum_func_scan_wallets(),
             ),

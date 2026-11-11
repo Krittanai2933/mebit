@@ -1338,6 +1338,8 @@ internal val UniffiVTableCallbackInterfacePairingCodesUniffiByValue.`uniffiFree`
 
 
 
+
+
 internal object UniffiLib {
     init {
             uniffiCallbackInterfacePairingCodes.register(this)
@@ -1735,6 +1737,15 @@ internal object UniffiLib {
     ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_sign_psbt(
         `psbtJson`,
         `borrowerPubkey`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_func_vault_snapshot(
+        `xpubs`: RustBufferByValue,
+        `threshold`: Byte,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_vault_snapshot(
+        `xpubs`,
+        `threshold`,
         uniffiCallStatus,
     )
     fun ffi_mobile_signer_ffi_rustbuffer_alloc(
@@ -2191,6 +2202,9 @@ internal object UniffiLib {
     )
     fun uniffi_mobile_signer_ffi_checksum_func_sign_psbt(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_sign_psbt(
+    )
+    fun uniffi_mobile_signer_ffi_checksum_func_vault_snapshot(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_vault_snapshot(
     )
     fun uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(
@@ -3374,6 +3388,28 @@ public object FfiConverterTypeSoftwareAccountKey: FfiConverterRustBuffer<Softwar
 
 
 
+public object FfiConverterTypeVaultSnapshot: FfiConverterRustBuffer<VaultSnapshot> {
+    override fun read(buf: ByteBuffer): VaultSnapshot {
+        return VaultSnapshot(
+            FfiConverterULong.read(buf),
+            FfiConverterTypeHotScan.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: VaultSnapshot): ULong = (
+            FfiConverterULong.allocationSize(value.`balanceSats`) +
+            FfiConverterTypeHotScan.allocationSize(value.`scan`)
+    )
+
+    override fun write(value: VaultSnapshot, buf: ByteBuffer) {
+        FfiConverterULong.write(value.`balanceSats`, buf)
+        FfiConverterTypeHotScan.write(value.`scan`, buf)
+    }
+}
+
+
+
+
 public object FfiConverterTypeWalletInfo: FfiConverterRustBuffer<WalletInfo> {
     override fun read(buf: ByteBuffer): WalletInfo {
         return WalletInfo(
@@ -4534,6 +4570,24 @@ public actual fun `signPsbt`(`psbtJson`: kotlin.String, `borrowerPubkey`: kotlin
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_sign_psbt(
             FfiConverterString.lower(`psbtJson`),
             FfiConverterString.lower(`borrowerPubkey`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The confirmed + mempool balance over every address of both chains, receive `0/i` and change `1/i`, of the
+ * `threshold`-of-`xpubs.len()` sorted multisig that `compute_vault_address_multisig` takes, with how far the scan
+ * got. Testnet4 only, so mainnet `xpub` keys are refused before any request. About 40 Esplora calls for a wallet
+ * nobody paid and a routine sync's few after that, so call it off the main thread. No screen may show
+ * `balance_sats` unless `scan` is `Complete`.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `vaultSnapshot`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte): VaultSnapshot {
+    return FfiConverterTypeVaultSnapshot.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_vault_snapshot(
+            FfiConverterSequenceString.lower(`xpubs`),
+            FfiConverterUByte.lower(`threshold`),
             uniffiRustCallStatus,
         )
     })
