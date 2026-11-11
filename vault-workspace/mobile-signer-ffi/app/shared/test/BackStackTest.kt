@@ -22,6 +22,10 @@ class BackStackTest {
             "a hardware start" to stops(p1, MovieRoute.Welcome, MovieRoute.KeySource, MovieRoute.HardwareWallet, MovieRoute.VerifyKey),
             "a hardware add" to stops(p1, MovieRoute.Keyring, MovieRoute.AddKey, MovieRoute.HardwareWallet, MovieRoute.VerifyKey),
             "a finished vault" to stops(p1, MovieRoute.VaultList, MovieRoute.Policy, MovieRoute.ChooseKeys, MovieRoute.Review, MovieRoute.VaultCreated),
+            "a detail pushed after a vault send, which its X closes to the list" to stops(
+                p1, MovieRoute.VaultList, MovieRoute.VaultDetail, MovieRoute.M1SendVault, MovieRoute.M2CollectSignatures,
+                MovieRoute.M4ReadyToBroadcast, MovieRoute.VaultDetail,
+            ),
         )
         for ((case, stack) in stacks) for (tab in MovieRoute.entries.filter { it.tab }) {
             assertEquals(listOf(Stop(tab, p2)), stackAfterOpen(stack, Stop(tab, p2)), "$case, ${tab.name}")

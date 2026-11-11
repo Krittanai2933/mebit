@@ -15,7 +15,9 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -37,11 +39,14 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.resources.Res
+import com.mebit.app.resources.ic_close
 import com.mebit.app.resources.mebit_logo
 import com.mebit.app.ui.components.DebugLink
 import com.mebit.app.ui.theme.MbBody
@@ -125,7 +130,8 @@ internal fun WalletPage(
 
 /**
  * The navy block's content from the logo to the two pills, at the spacing 4.1 and 3.7 share. [goldLine] fills the 17 dp line under the
- * balance, which keeps its room when empty so nothing below it moves. [demo] adds Home's small marker after the balance.
+ * balance, which keeps its room when empty so nothing below it moves. [demo] adds Home's small marker after the balance. [onClose] draws
+ * 3.7's X at the logo's right.
  */
 @Composable
 internal fun WalletHero(
@@ -139,10 +145,13 @@ internal fun WalletHero(
     sendTag: String,
     onSend: () -> Unit,
     demo: Boolean = false,
+    onClose: (() -> Unit)? = null,
     goldLine: @Composable BoxScope.() -> Unit,
 ) {
+    // The header keeps the logo's 26 dp, so the X's larger target moves nothing below it.
     Box(modifier = Modifier.fillMaxWidth().height(26.dp)) {
         Image(painterResource(Res.drawable.mebit_logo), contentDescription = "mebit", modifier = Modifier.size(width = 98.dp, height = 26.dp))
+        onClose?.let { CloseButton(it) }
     }
     Spacer(modifier = Modifier.height(22.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -172,6 +181,27 @@ internal fun WalletHero(
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
         HeroPill("รับ", filled = true, board = board, tag = receiveTag, modifier = Modifier.weight(1f), onClick = onReceive)
         HeroPill("ส่ง", filled = false, board = board, tag = sendTag, modifier = Modifier.weight(1f), onClick = onSend)
+    }
+}
+
+/**
+ * 3.7's close X: the 18 dp X with its right edge at the content's and its top 6 dp below the logo's, read as one button "ปิด", in a 48 dp
+ * target centred on it.
+ */
+@Composable
+private fun BoxScope.CloseButton(onClose: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .align(Alignment.TopEnd)
+            // requiredSize centres the 48 dp target on the 26 dp header, 11 dp above its top, so this puts its centre on the X's.
+            .offset(x = 15.dp, y = 2.dp)
+            .requiredSize(48.dp)
+            .clickable(role = Role.Button, onClick = onClose)
+            .semantics { contentDescription = "ปิด" }
+            .testTag("cta_vault_close"),
+        contentAlignment = Alignment.Center,
+    ) {
+        Image(painterResource(Res.drawable.ic_close), contentDescription = null, modifier = Modifier.size(18.dp))
     }
 }
 

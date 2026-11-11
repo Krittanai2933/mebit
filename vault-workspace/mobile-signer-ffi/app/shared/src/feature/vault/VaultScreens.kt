@@ -325,40 +325,6 @@ private fun WalletListCard(
 }
 
 @Composable
-fun VaultDetailScreen(
-    draft: VaultDraft,
-    onReceive: () -> Unit,
-    onSend: () -> Unit,
-    onActions: () -> Unit,
-    onBack: (() -> Unit)?,
-    onOpenCatalog: () -> Unit,
-) {
-    val vault = draft.selectedVault()
-    MebitScreen(
-        eyebrow = "WALLET DETAIL",
-        title = vault?.name ?: "รายละเอียด Wallet",
-        subtitle = vault?.let { "${it.m}-of-${it.n} · personal_custody" },
-        onBack = onBack,
-        onOpenCatalog = onOpenCatalog,
-        tag = "screen_vaults/detail",
-    ) {
-        if (vault == null) {
-            Text("ยังไม่ได้เลือก Wallet", color = MaterialTheme.colorScheme.error)
-            return@MebitScreen
-        }
-        Text(vault.address, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("detail_address"))
-        Spacer(modifier = Modifier.height(8.dp))
-        Text("keys · ${vault.keyFingerprints.joinToString()}", style = MaterialTheme.typography.bodySmall)
-        Spacer(modifier = Modifier.height(20.dp))
-        PrimaryCta("รับ", "cta_vault_receive", onReceive)
-        Spacer(modifier = Modifier.height(8.dp))
-        SecondaryCta("ส่ง (multisig)", "cta_vault_send", onSend)
-        Spacer(modifier = Modifier.height(8.dp))
-        SecondaryCta("การกระทำ · BSMS", "cta_vault_actions", onActions)
-    }
-}
-
-@Composable
 fun T20VaultActionsScreen(
     draft: VaultDraft,
     onBack: (() -> Unit)?,

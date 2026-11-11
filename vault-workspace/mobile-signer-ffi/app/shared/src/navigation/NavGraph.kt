@@ -524,14 +524,17 @@ fun MebitNavHost(
                         )
                     }
                     MovieRoute.VaultDetail -> VaultDetailScreen(
-                        draft = vaultDraft,
+                        vault = vaultDraft.selectedVault(),
+                        wallets = wallets,
+                        keyring = keyring,
+                        quotes = quotes,
                         onReceive = { navigate(MovieRoute.VaultReceive) },
                         onSend = {
                             multisigSend.startForm()
                             navigate(MovieRoute.M1SendVault)
                         },
-                        onActions = { navigate(MovieRoute.T20VaultActions) },
-                        onBack = onBack,
+                        // The Wallet list is a tab, so it opens as the only entry, and a detail pushed after a vault send closes to the list, not to M4.
+                        onClose = { navigate(MovieRoute.VaultList) },
                         onOpenCatalog = openCatalog,
                     )
                     MovieRoute.T13UnsupportedModel -> T13UnsupportedModelScreen(

@@ -44,7 +44,7 @@ mobile-signer-ffi/
 cargo test -p mobile-signer-ffi
 ```
 
-The crate's UniFFI exports include the vault-signer functions `derive_borrower_pubkey`, `compute_vault_address`, `sign_psbt` and `compute_vault_address_multisig`, plus the Bluetooth exports described in [Bluetooth](#bluetooth-jade-and-trezor-safe-7). Its golden addresses are re-derived by `scripts/address_oracle.py`. The **hot-wallet half** is `rust/src/hot_wallet.rs`, which exports `hot_wallet_snapshot`, `hot_wallet_history`, `hot_tx_detail`, `hot_receive_address`, `hot_fee_tiers`, `hot_prepare_send_at_rate`, `hot_prepare_send_all`, `hot_broadcast` and `is_valid_address`. It signs a payment and posts it in two calls, so the app can save its pay-twice guard in between.
+The crate's UniFFI exports include the vault-signer functions `derive_borrower_pubkey`, `compute_vault_address`, `sign_psbt` and `compute_vault_address_multisig`, plus the Bluetooth exports described in [Bluetooth](#bluetooth-jade-and-trezor-safe-7). Its golden addresses are re-derived by `scripts/address_oracle.py`. The **hot-wallet half** is `rust/src/hot_wallet.rs`, which exports `hot_wallet_snapshot`, `hot_wallet_history`, `hot_tx_detail`, `hot_receive_address`, `hot_fee_tiers`, `hot_prepare_send_at_rate`, `hot_prepare_send_all`, `hot_broadcast` and `is_valid_address`, and for a several-key wallet `vault_snapshot` and `vault_history`. It signs a payment and posts it in two calls, so the app can save its pay-twice guard in between.
 
 ### Kotlin bindings (UniFFI and Gobley)
 
