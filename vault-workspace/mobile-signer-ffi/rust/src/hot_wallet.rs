@@ -966,6 +966,69 @@ fn vault_snapshot_from(
     })
 }
 
+/// The latest transactions of the `threshold`-of-`xpubs.len()` sorted multisig that `vault_snapshot` reads, over every
+/// used address of its receive and change chains, each once, as the wallet saw it: the mempool first, then confirmed
+/// transactions newest first. Only each address's first page comes back (about 25 confirmed transactions plus the
+/// mempool), so older history is not here. Testnet4 only, so mainnet `xpub` keys are refused before any request. Fails
+/// unless the scan reached the end of both chains, and an answer it cannot read fails the whole call. Makes a network
+/// call per used address plus one for the tip, on top of the sync it shares with a `vault_snapshot` of the last ten
+/// seconds, so call it off the main thread.
+#[uniffi::export]
+pub fn vault_history(xpubs: Vec<String>, threshold: u8) -> Result<Vec<HotTx>, MobileSignerError> {
+    vault_history_from(
+        &EsploraSource(&testnet4()),
+        &xpubs,
+        threshold,
+        &SystemTime::now,
+        &SCAN_STORE,
+    )
+}
+
+/// `vault_history` on `source`, `clock` and `store`, so tests run it on `Fake`. `Multisig::new` checks the keys, the
+/// threshold and the network before the store or any host hears of the vault. Every address the scan counts is the
+/// vault's own, change included, so a payment out with change reads as minus the amount and the fee.
+fn vault_history_from(
+    source: &dyn ChainSource,
+    xpubs: &[String],
+    threshold: u8,
+    clock: &dyn Fn() -> SystemTime,
+    store: &ScanStore,
+) -> Result<Vec<HotTx>, MobileSignerError> {
+    let vault = Multisig::new(xpubs, threshold)?;
+    let synced = sync_scan(source, &vault, Anchor::Testnet4, clock, store)?;
+    finished(&synced.status)?;
+    let counted = counted_addresses(&vault, &synced)?;
+    let used: Vec<&Address> = counted
+        .iter()
+        .filter(|(_, used)| *used)
+        .map(|(address, _)| address)
+        .collect();
+    let own: Vec<String> = counted
+        .iter()
+        .map(|(address, _)| address.to_string())
+        .collect();
+    history_over(source, &used, &own)
+}
+
+/// Every address `counted` gives of both chains, receive then change, each in index order, with whether the scan saw it
+/// used. These are the addresses a one-key `Wallet` derives, and the used ones are those `Wallet::used` walks: an index
+/// counts as used only where the scan holds both what it saw there and its balance. No request.
+fn counted_addresses(
+    wallet: &dyn Addresses,
+    synced: &Synced,
+) -> Result<Vec<(Address, bool)>, MobileSignerError> {
+    let mut counted_all = Vec::new();
+    for chain in [Chain::External, Chain::Internal] {
+        let c = chain as usize;
+        let (scan, balances) = (&synced.scan.chains[c], &synced.balances[c]);
+        for index in 0..counted(scan) {
+            let used = index < balances.len() && scan.seen.get(index).is_some_and(|seen| seen.used);
+            counted_all.push((wallet.address(chain, index as u32)?, used));
+        }
+    }
+    Ok(counted_all)
+}
+
 /// One transaction of the hot wallet, seen from the wallet's side.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct HotTx {
@@ -13187,6 +13250,16 @@ mod tests {
                 &self.store,
             )
         }
+
+        fn vault_history(&self, keys: &[String], m: u8) -> Result<Vec<HotTx>, MobileSignerError> {
+            vault_history_from(
+                &EsploraSource(&Reads(&|url| self.get(url))),
+                keys,
+                m,
+                &|| self.now(),
+                &self.store,
+            )
+        }
     }
 
     #[test]
@@ -13367,5 +13440,159 @@ mod tests {
         for part in ["tb1", "84000000", "tpub"] {
             assert!(!text.contains(part), "the file names {part}: {text}");
         }
+    }
+
+    // 84,000,000 lands on receive 3 and is spent: 83,700,000 to someone, 200,000 back to change 0, 100,000 fee. Both pages
+    // list the payment. Mempool claims mark both addresses used, because the proof block pays no vault address.
+    #[test]
+    fn a_vault_history_lists_each_transaction_once_and_counts_its_change_as_its_own() {
+        let (r3, c0) = (
+            vault_addr(Branch::Receive, 3),
+            vault_addr(Branch::Change, 0),
+        );
+        let receive = tx_json(
+            '1',
+            &[spent(SOMEONE, 84_001_000)],
+            &[txo(&r3, 84_000_000)],
+            MEMPOOL,
+        );
+        let payment = tx_json(
+            '3',
+            &[spent(&r3, 84_000_000)],
+            &[txo(SOMEONE, 83_700_000), txo(&c0, 200_000)],
+            MEMPOOL,
+        );
+        let mut fake = Fake::new();
+        fake.fund_unconfirmed(&r3, 84_000_000, '1');
+        fake.fund_unconfirmed(&c0, 200_000, '2');
+        fake.txs.insert(r3, format!("[{payment},{receive}]"));
+        fake.txs.insert(c0, format!("[{payment}]"));
+        assert_eq!(
+            fake.vault_history(&vault_keys(), 2).unwrap(),
+            [
+                hot(&id('3'), -83_800_000, 0, None),
+                hot(&id('1'), 84_000_000, 0, None)
+            ],
+            "the payment once, as the amount and the fee, then the receive"
+        );
+    }
+
+    #[test]
+    fn a_vault_history_right_after_its_snapshot_adds_only_the_pages_and_the_tip() {
+        let mut fake = Fake::new();
+        fake.fund_unconfirmed(&vault_addr(Branch::Receive, 3), 84_000_000, '1');
+        fake.fund_unconfirmed(&vault_addr(Branch::Change, 0), 200_000, '2');
+        fake.vault(&vault_keys(), 2).unwrap();
+        let before = fake.requests();
+        fake.vault_history(&vault_keys(), 2).unwrap();
+        assert_eq!(
+            fake.requests() - before,
+            3,
+            "two used addresses' pages and the tip, the sync shared"
+        );
+    }
+
+    #[test]
+    fn a_vault_nobody_paid_has_an_empty_history_and_asks_no_page() {
+        let fake = Fake::new();
+        assert!(fake.vault_history(&vault_keys(), 2).unwrap().is_empty());
+        assert_eq!(fake.requests(), 40, "the sync alone, as a snapshot's");
+        assert!(
+            fake.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|url| !url.ends_with("/txs")),
+            "no page and no tip"
+        );
+    }
+
+    #[test]
+    fn a_vault_history_is_refused_until_the_scan_reaches_the_end_of_both_chains() {
+        let fake = Fake::new();
+        let limited = vault_history_from(
+            &EsploraSource(&Refusing(EVERY_HOST_LIMITED)),
+            &vault_keys(),
+            2,
+            &|| fake.now(),
+            &fake.store,
+        );
+        match limited {
+            Err(MobileSignerError::InvalidPsbtJson(m)) => {
+                assert!(m.starts_with("esplora get: "), "{m}")
+            }
+            other => panic!("expected the scan's refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_vault_history_of_mainnet_keys_is_refused_before_any_request() {
+        let fake = Fake::new();
+        let keys: Vec<String> = (0..3)
+            .map(|account| {
+                crate::restore_software_multisig_key(
+                    abandon_about(),
+                    String::new(),
+                    KeyNetwork::Main,
+                    account,
+                )
+                .unwrap()
+                .xpub
+            })
+            .collect();
+        match fake.vault_history(&keys, 2) {
+            Err(MobileSignerError::InvalidPsbtJson(m)) => {
+                assert_eq!(m, "mainnet Esplora is not enabled in this build")
+            }
+            other => panic!("expected the mainnet refusal, got {other:?}"),
+        }
+        assert_eq!(fake.requests(), 0);
+    }
+
+    // Built by hand, so the scan can hold what no host gives: a used index with no balance beside it, and indices past
+    // the gap that `counted` leaves out.
+    #[test]
+    fn a_vault_counts_the_addresses_a_one_key_wallet_counts_receive_first_each_in_index_order() {
+        let vault = Multisig::new(&vault_keys(), 2).unwrap();
+        let seen = |used: &[usize], len: usize| {
+            (0..len)
+                .map(|i| Seen {
+                    used: used.contains(&i),
+                    ..Seen::default()
+                })
+                .collect()
+        };
+        let mut synced = Synced {
+            scan: WalletScan::default(),
+            balances: [vec![0; 2], vec![0; 25]],
+            status: ScanStatus::Complete,
+        };
+        synced.scan.chains[0].seen = seen(&[1, 2], 3);
+        synced.scan.chains[1].seen = seen(&[0, 22], 25);
+        let counted = counted_addresses(&vault, &synced).unwrap();
+        let named =
+            |branch, indices: std::ops::Range<u32>| indices.map(move |i| vault_addr(branch, i));
+        assert_eq!(
+            counted
+                .iter()
+                .map(|(a, _)| a.to_string())
+                .collect::<Vec<_>>(),
+            named(Branch::Receive, 0..4)
+                .chain(named(Branch::Change, 0..20))
+                .collect::<Vec<_>>(),
+            "receive to the index it hands out, then change to the gap past its frontier"
+        );
+        assert_eq!(
+            counted
+                .iter()
+                .filter(|(_, used)| *used)
+                .map(|(a, _)| a.to_string())
+                .collect::<Vec<_>>(),
+            [
+                vault_addr(Branch::Receive, 1),
+                vault_addr(Branch::Change, 0)
+            ],
+            "receive 2 has no balance beside it and change 22 is past the gap"
+        );
     }
 }

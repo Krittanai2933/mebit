@@ -1358,6 +1358,18 @@ public expect suspend fun `scanWallets`(`kind`: WalletKind): List<FoundWallet>
 public expect fun `signPsbt`(`psbtJson`: kotlin.String, `borrowerPubkey`: kotlin.String): kotlin.String
 
 /**
+ * The latest transactions of the `threshold`-of-`xpubs.len()` sorted multisig that `vault_snapshot` reads, over every
+ * used address of its receive and change chains, each once, as the wallet saw it: the mempool first, then confirmed
+ * transactions newest first. Only each address's first page comes back (about 25 confirmed transactions plus the
+ * mempool), so older history is not here. Testnet4 only, so mainnet `xpub` keys are refused before any request. Fails
+ * unless the scan reached the end of both chains, and an answer it cannot read fails the whole call. Makes a network
+ * call per used address plus one for the tip, on top of the sync it shares with a `vault_snapshot` of the last ten
+ * seconds, so call it off the main thread.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `vaultHistory`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte): List<HotTx>
+
+/**
  * The confirmed + mempool balance over every address of both chains, receive `0/i` and change `1/i`, of the
  * `threshold`-of-`xpubs.len()` sorted multisig that `compute_vault_address_multisig` takes, with how far the scan
  * got. Testnet4 only, so mainnet `xpub` keys are refused before any request. About 40 Esplora calls for a wallet

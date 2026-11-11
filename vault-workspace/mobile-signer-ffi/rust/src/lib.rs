@@ -941,6 +941,10 @@ mod tests {
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_snapshot(),
             ),
             (
+                "func_vault_history",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_history(),
+            ),
+            (
                 "func_scan_wallets",
                 ble::uniffi_mobile_signer_ffi_checksum_func_scan_wallets(),
             ),

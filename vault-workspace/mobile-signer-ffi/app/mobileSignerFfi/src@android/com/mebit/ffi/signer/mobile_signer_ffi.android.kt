@@ -1072,6 +1072,8 @@ internal typealias UniffiVTableCallbackInterfacePairingCodesUniffiByValue = Unif
 
 
 
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -1198,6 +1200,9 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_sign_psbt() != 37769.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
+        if (uniffi_mobile_signer_ffi_checksum_func_vault_history() != 23274.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
         if (uniffi_mobile_signer_ffi_checksum_func_vault_snapshot() != 54531.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
@@ -1314,6 +1319,9 @@ internal object IntegrityCheckingUniffiLib : Library {
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_sign_psbt(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_vault_history(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_vault_snapshot(
@@ -1618,6 +1626,12 @@ internal object UniffiLib : Library {
     external fun uniffi_mobile_signer_ffi_fn_func_sign_psbt(
         `psbtJson`: RustBufferByValue,
         `borrowerPubkey`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_vault_history(
+        `xpubs`: RustBufferByValue,
+        `threshold`: Byte,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     @JvmStatic
@@ -4234,6 +4248,26 @@ public actual fun `signPsbt`(`psbtJson`: kotlin.String, `borrowerPubkey`: kotlin
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_sign_psbt(
             FfiConverterString.lower(`psbtJson`),
             FfiConverterString.lower(`borrowerPubkey`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The latest transactions of the `threshold`-of-`xpubs.len()` sorted multisig that `vault_snapshot` reads, over every
+ * used address of its receive and change chains, each once, as the wallet saw it: the mempool first, then confirmed
+ * transactions newest first. Only each address's first page comes back (about 25 confirmed transactions plus the
+ * mempool), so older history is not here. Testnet4 only, so mainnet `xpub` keys are refused before any request. Fails
+ * unless the scan reached the end of both chains, and an answer it cannot read fails the whole call. Makes a network
+ * call per used address plus one for the tip, on top of the sync it shares with a `vault_snapshot` of the last ten
+ * seconds, so call it off the main thread.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `vaultHistory`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte): List<HotTx> {
+    return FfiConverterSequenceTypeHotTx.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_vault_history(
+            FfiConverterSequenceString.lower(`xpubs`),
+            FfiConverterUByte.lower(`threshold`),
             uniffiRustCallStatus,
         )
     })
