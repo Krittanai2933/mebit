@@ -13,12 +13,14 @@ import com.mebit.app.SecureShelf
 import com.mebit.app.walletName
 import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.HotScan
+import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
 import com.mebit.ffi.signer.VaultSnapshot
 import com.mebit.ffi.signer.generateSoftwareMultisigKey
 import com.mebit.ffi.signer.hotForgetScanState
 import com.mebit.ffi.signer.restoreSoftwareMultisigKey
+import com.mebit.ffi.signer.vaultHistory
 import com.mebit.ffi.signer.vaultSnapshot
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
@@ -105,6 +107,7 @@ class Wallets internal constructor(
     private val restoreKey: (List<String>, String, KeyNetwork, UInt) -> SoftwareAccountKey = { w, p, n, a -> restoreSoftwareMultisigKey(w, p, n, a) },
     private val newChain: () -> SingleSigWallet = { SingleSigWallet() },
     private val vaultSnapshotOf: (xpubs: List<String>, m: UByte) -> VaultSnapshot = { x, m -> vaultSnapshot(x, m) },
+    private val vaultHistoryOf: (xpubs: List<String>, m: UByte) -> List<HotTx> = { x, m -> vaultHistory(x, m) },
     private val nowSeconds: () -> Long = { Clock.System.now().epochSeconds },
 ) {
     private val saved = mutableMapOf<Place, SavedWallet>()
@@ -344,8 +347,19 @@ class Wallets internal constructor(
     /** Called when the app returns. Each session repeats its own failed save. */
     fun flushPendingSaves() = all.forEach { it.session.flushPendingSave() }
 
-    /** One vault's last read this run, with the core's answer, or null for a read that failed, and when it ended. */
-    private class VaultRead(val snapshot: VaultSnapshot?, val atSeconds: Long)
+    /**
+     * One vault's last read this run: the core's balance answer, or null for a read that failed, when it ended, and the transactions asked
+     * with that balance. [history] is null when none were asked (a list read, or a balance that did not reach the end of both chains), a
+     * failure when they were asked and did not come, else the list. Only [readVault] writes one, so it is null beside any balance that is not
+     * COMPLETE.
+     */
+    private class VaultRead(val snapshot: VaultSnapshot?, val atSeconds: Long, val history: Result<List<HotTx>>? = null) {
+        /**
+         * Whether this read, while fresh, spares a pass another read. Any read spares a list. A detail is spared by one that asked the history,
+         * failed or not, so a failure costs a minute as a failed balance does, and by one whose balance did not complete, which no history can follow.
+         */
+        fun answers(withHistory: Boolean): Boolean = !withHistory || history != null || snapshot?.scan != HotScan.COMPLETE
+    }
 
     /**
      * Each vault's last read, keyed by its receive address, which only its keys and m make, so a book edit that renumbers ids never moves
@@ -372,6 +386,21 @@ class Wallets internal constructor(
         vaultReads[vault.address]?.snapshot?.takeIf { it.scan == HotScan.COMPLETE }?.balanceSats?.toLong()
 
     /**
+     * [vault]'s transactions from the read behind [vaultSats], as the core lists them: the mempool first, then newest first. Null until a detail
+     * read asked them with the balance on screen and they came, so always null while [vaultSats] is, and a list read that replaces the balance
+     * drops them, so a balance and the rows beside it always come from one read.
+     */
+    fun vaultTxs(vault: CreatedVault): List<HotTx>? = vaultReads[vault.address]?.history?.getOrNull()
+
+    /**
+     * For a several-key wallet's detail (Penpot 3.7): its balance and, once that read reached the end of both chains, its transactions, by
+     * [readVault]'s rules. Never part of [refreshBalances], so a list on screen asks no page of any vault's history.
+     */
+    suspend fun readVaultDetail(vault: CreatedVault) {
+        withContext(Dispatchers.Default) { readVault(vault, withHistory = true) }
+    }
+
+    /**
      * For a list on screen. One wallet at a time, never in parallel, the one-key wallets first, then [vaults] in book order. Skips a wallet
      * read in the last minute, a failed read included, so N wallets cost N routine syncs at most per visit. A public host that limits one
      * wallet would limit the next, so a scan that came back Continuing ends the pass, whichever kind of wallet it was, and Home's own retry
@@ -389,19 +418,35 @@ class Wallets internal constructor(
         }
     }
 
-    /** Reads [vault] unless a read of it ended in the last minute. Blocks on the network. How far its scan got, or null when nothing was asked or the read failed. */
-    private fun readVault(vault: CreatedVault): HotScan? = synchronized(vaultLock) {
+    /**
+     * Reads [vault] unless a read of it ended in the last minute that [VaultRead.answers] this pass. The balance first, then, for a detail
+     * ([withHistory]) whose balance reached the end of both chains, the transactions, inside the core's ten-second share window so they add
+     * only their pages and the tip. Both land in one write after the erase check, so a balance and its rows come from one read and an erase
+     * leaves neither. Blocks on the network. How far its scan got, or null when nothing was asked or the read failed.
+     */
+    private fun readVault(vault: CreatedVault, withHistory: Boolean = false): HotScan? = synchronized(vaultLock) {
         val last = vaultReads[vault.address]
-        if (last != null && nowSeconds() - last.atSeconds in 0..BALANCE_FRESH_SECONDS) return@synchronized null
+        if (last != null && nowSeconds() - last.atSeconds in 0..BALANCE_FRESH_SECONDS && last.answers(withHistory)) return@synchronized null
         val generation = vaultGeneration
+        val keys = xpubsIn(vault.bsms)
+        val m = vault.m.toUByte()
         // A mainnet vault, a malformed BSMS and a lost host all leave the figure unknown, never guessed.
         val snapshot = try {
-            vaultSnapshotOf(xpubsIn(vault.bsms), vault.m.toUByte())
+            vaultSnapshotOf(keys, m)
         } catch (_: Exception) {
             null
         }
+        val history = if (withHistory && snapshot?.scan == HotScan.COMPLETE) {
+            try {
+                Result.success(vaultHistoryOf(keys, m))
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        } else {
+            null
+        }
         val endedAt = nowSeconds()
-        synchronized(vaultWriteLock) { if (generation == vaultGeneration) vaultReads[vault.address] = VaultRead(snapshot, endedAt) }
+        synchronized(vaultWriteLock) { if (generation == vaultGeneration) vaultReads[vault.address] = VaultRead(snapshot, endedAt, history) }
         snapshot?.scan
     }
 

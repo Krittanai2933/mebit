@@ -16,6 +16,7 @@ import com.mebit.app.navigation.WalletGateState
 import com.mebit.app.navigation.endSetup
 import com.mebit.app.walletName
 import com.mebit.ffi.signer.HotScan
+import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.SoftwareAccountKey
 import com.mebit.ffi.signer.VaultSnapshot
@@ -94,6 +95,14 @@ private class ShelfPhone {
     /** Runs each time [Wallets] reads its own clock, which a vault read does after the network answers and before it writes the figure. */
     var onWalletsNow: () -> Unit = {}
 
+    /** Each vault history the core was asked for, as its keys and m. */
+    val historyReads = mutableListOf<Pair<List<String>, UByte>>()
+    var vaultTxsOnChain = listOf(HotTx("tx1", 84_200_000, 3u, 1_790_000_000uL))
+    var historyFails = false
+
+    /** Runs inside each history read, so a test can erase the phone while one is out. */
+    var duringHistoryRead: () -> Unit = {}
+
     /** Writes a record at [place] as an earlier launch did, and forgets that write, so a test sees only what this launch writes. */
     fun saved(place: Place, record: WalletRecord): ShelfPhone {
         assertIs<SaveResult.Written>(SavedWallet(shelf.places.getValue(place)).save(record, WriteMode.Create), "the earlier launch's save")
@@ -130,6 +139,12 @@ private class ShelfPhone {
             duringVaultRead()
             if (vaultFails) error("network error: down")
             VaultSnapshot(vaultSatsOnChain, vaultScan)
+        },
+        vaultHistoryOf = { xpubs, m ->
+            historyReads += xpubs to m
+            duringHistoryRead()
+            if (historyFails) error("esplora history: tx 0: unreadable")
+            vaultTxsOnChain
         },
         nowSeconds = {
             onWalletsNow()
@@ -1047,6 +1062,142 @@ class WalletsTest {
         chooser.join()
         assertEquals(1, phone.vaultReads.size, "the second screen waits for the first read and finds it fresh")
         assertEquals(84_200_000L, wallets.vaultSats(vault(1)))
+    }
+
+    @Test
+    fun aListPassNeverAsksAVaultsHistory(): Unit = runBlocking {
+        val phone = ShelfPhone()
+        val wallets = phone.launch()
+        wallets.refreshBalances(listOf(vault(1), vault(2)))
+        assertEquals(2, phone.vaultReads.size)
+        assertTrue(phone.historyReads.isEmpty(), "history would multiply page requests across every vault a list shows")
+        assertNull(wallets.vaultTxs(vault(1)))
+    }
+
+    @Test
+    fun aDetailReadAsksTheHistoryOnlyAfterABalanceThatReachedTheEndOfBothChains(): Unit = runBlocking {
+        val phone = ShelfPhone()
+        val wallets = phone.launch()
+        for (scan in listOf(HotScan.CONTINUING, HotScan.UNVERIFIED)) {
+            phone.vaultScan = scan
+            phone.nowSeconds += 61
+            wallets.readVaultDetail(vault(1))
+            assertTrue(phone.historyReads.isEmpty(), "$scan asks no history")
+            assertNull(wallets.vaultTxs(vault(1)), "$scan")
+        }
+        phone.vaultFails = true
+        phone.nowSeconds += 61
+        wallets.readVaultDetail(vault(1))
+        assertTrue(phone.historyReads.isEmpty(), "a failed balance asks no history")
+
+        phone.vaultFails = false
+        phone.vaultScan = HotScan.COMPLETE
+        phone.nowSeconds += 61
+        wallets.readVaultDetail(vault(1))
+        assertEquals(listOf(vaultKeys(1) to 2.toUByte()), phone.historyReads, "its own keys and m")
+        assertEquals(phone.vaultTxsOnChain, wallets.vaultTxs(vault(1)))
+        assertEquals(84_200_000L, wallets.vaultSats(vault(1)))
+    }
+
+    @Test
+    fun aDetailReadInTheLastMinuteIsNotAskedAgainAndAFailedHistoryCountsAsRead(): Unit = runBlocking {
+        val phone = ShelfPhone()
+        val wallets = phone.launch()
+        phone.historyFails = true
+        wallets.readVaultDetail(vault(1))
+        assertNull(wallets.vaultTxs(vault(1)), "a failed history is unknown, never empty")
+        assertEquals(84_200_000L, wallets.vaultSats(vault(1)), "and costs the balance nothing")
+        phone.historyFails = false
+        phone.nowSeconds += 30
+        wallets.readVaultDetail(vault(1))
+        assertEquals(1 to 1, phone.vaultReads.size to phone.historyReads.size, "a failed history is fresh for a minute")
+        phone.nowSeconds += 31
+        wallets.readVaultDetail(vault(1))
+        assertEquals(2 to 2, phone.vaultReads.size to phone.historyReads.size)
+        assertEquals(phone.vaultTxsOnChain, wallets.vaultTxs(vault(1)))
+    }
+
+    @Test
+    fun aDetailAfterACompleteListReadAsksTheHistoryOnceAndAfterAnIncompleteOneAsksNothing(): Unit = runBlocking {
+        val phone = ShelfPhone()
+        val wallets = phone.launch()
+        wallets.refreshBalances(listOf(vault(1)))
+        phone.nowSeconds += 20
+        wallets.readVaultDetail(vault(1))
+        assertEquals(2 to 1, phone.vaultReads.size to phone.historyReads.size, "the balance again, whose sync the history shares, then the history")
+        wallets.readVaultDetail(vault(1))
+        assertEquals(2 to 1, phone.vaultReads.size to phone.historyReads.size, "then nothing for the rest of the minute")
+
+        phone.vaultScan = HotScan.CONTINUING
+        wallets.refreshBalances(listOf(vault(2)))
+        phone.nowSeconds += 20
+        wallets.readVaultDetail(vault(2))
+        assertEquals(3 to 1, phone.vaultReads.size to phone.historyReads.size, "a host that limited the list's read is left alone for the minute")
+    }
+
+    @Test
+    fun aBalanceAndTheRowsBesideItAlwaysComeFromOneRead(): Unit = runBlocking {
+        val phone = ShelfPhone()
+        val wallets = phone.launch()
+        wallets.readVaultDetail(vault(1))
+        assertNotNull(wallets.vaultTxs(vault(1)), "the detail's own rows")
+        phone.nowSeconds += 61
+        phone.vaultSatsOnChain = 90_000_000uL
+        wallets.refreshBalances(listOf(vault(1)))
+        assertEquals(90_000_000L, wallets.vaultSats(vault(1)))
+        assertNull(wallets.vaultTxs(vault(1)), "the older rows go with the older balance")
+    }
+
+    @Test
+    fun aVaultsRowsFollowItsAddressNotItsId(): Unit = runBlocking {
+        val phone = ShelfPhone()
+        val wallets = phone.launch()
+        wallets.readVaultDetail(vault(1))
+        assertEquals(phone.vaultTxsOnChain, wallets.vaultTxs(vault(1).copy(id = "vault_9")), "a renumbered vault keeps its rows")
+        assertNull(wallets.vaultTxs(vault(1).copy(address = "tb1qother")), "another vault never shows this one's rows")
+    }
+
+    @Test
+    fun eraseDropsEveryVaultsRowsAndAHistoryThatEndsAfterItWritesNothingBack(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P1, 1)
+        val wallets = phone.unlocked()
+        wallets.readVaultDetail(vault(1))
+        assertNotNull(wallets.vaultTxs(vault(1)), "the rows before the erase")
+        assertTrue(wallets.forgetEvery())
+        assertNull(wallets.vaultTxs(vault(1)), "an erase drops the rows with the figure")
+
+        var erased: Boolean? = null
+        phone.duringHistoryRead = { erased = wallets.forgetEvery() }
+        wallets.readVaultDetail(vault(1))
+        assertEquals(true, erased, "the erase ran while the history was out")
+        assertNull(wallets.vaultSats(vault(1)))
+        assertNull(wallets.vaultTxs(vault(1)), "a history that ends after the erase leaves nothing")
+    }
+
+    @Test
+    fun aDetailReadWaitsForAListReadOfTheSameVault(): Unit = runBlocking {
+        val phone = ShelfPhone()
+        val wallets = phone.launch()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var overlapped = false
+        var out = 0
+        phone.duringVaultRead = {
+            if (++out > 1) overlapped = true
+            entered.complete(Unit)
+            runBlocking { release.await() }
+            out--
+        }
+        val list = launch(Dispatchers.Default) { wallets.refreshBalances(listOf(vault(1))) }
+        entered.await()
+        val detail = launch(Dispatchers.Default) { wallets.readVaultDetail(vault(1)) }
+        delay(300)
+        assertTrue(phone.historyReads.isEmpty(), "the detail waits while the list's read is out")
+        release.complete(Unit)
+        list.join()
+        detail.join()
+        assertFalse(overlapped, "one read at a time")
+        assertEquals(1, phone.historyReads.size, "the detail's history, after the list's read")
     }
 
     @Test
