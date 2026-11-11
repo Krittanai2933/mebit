@@ -19,6 +19,10 @@ import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.SoftwareAccountKey
 import com.mebit.ffi.signer.VaultSnapshot
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -87,6 +91,9 @@ private class ShelfPhone {
     /** Runs inside each vault read, so a test can erase the phone while one is out. */
     var duringVaultRead: () -> Unit = {}
 
+    /** Runs each time [Wallets] reads its own clock, which a vault read does after the network answers and before it writes the figure. */
+    var onWalletsNow: () -> Unit = {}
+
     /** Writes a record at [place] as an earlier launch did, and forgets that write, so a test sees only what this launch writes. */
     fun saved(place: Place, record: WalletRecord): ShelfPhone {
         assertIs<SaveResult.Written>(SavedWallet(shelf.places.getValue(place)).save(record, WriteMode.Create), "the earlier launch's save")
@@ -124,7 +131,10 @@ private class ShelfPhone {
             if (vaultFails) error("network error: down")
             VaultSnapshot(vaultSatsOnChain, vaultScan)
         },
-        nowSeconds = { nowSeconds },
+        nowSeconds = {
+            onWalletsNow()
+            nowSeconds
+        },
     )
 
     private fun key(w: List<String>, passphrase: String) = SoftwareAccountKey(w, derive(w, passphrase), "tpub-${derive(w, passphrase)}", "m/48'/1'/0'/2'")
@@ -1006,6 +1016,37 @@ class WalletsTest {
         wallets.refreshBalances(listOf(vault(1)))
         assertEquals(true, erasedDuringRead, "the erase ran while the read was out")
         assertNull(wallets.vaultSats(vault(1)), "a read that ends after the erase leaves nothing")
+    }
+
+    // The independent review's probe: an erase that landed after the read's generation check and before its write left the figure behind.
+    @Test
+    fun anEraseJustBeforeAReadsWriteLeavesNoFigure(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P1, 1)
+        val wallets = phone.unlocked()
+        var erased: Boolean? = null
+        phone.onWalletsNow = { if (erased == null) erased = wallets.forgetEvery() }
+        wallets.refreshBalances(listOf(vault(1)))
+        assertEquals(true, erased, "the erase ran after the network answered")
+        assertNull(wallets.vaultSats(vault(1)), "a read that ends after the erase writes nothing back")
+    }
+
+    @Test
+    fun twoScreensAtOnceReadOneVaultOnce(): Unit = runBlocking {
+        val phone = ShelfPhone()
+        val wallets = phone.launch()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        phone.duringVaultRead = { entered.complete(Unit); runBlocking { release.await() } }
+        val list = launch(Dispatchers.Default) { wallets.refreshBalances(listOf(vault(1))) }
+        entered.await()
+        phone.duringVaultRead = {}
+        val chooser = launch(Dispatchers.Default) { wallets.refreshBalances(listOf(vault(1))) }
+        delay(300)
+        release.complete(Unit)
+        list.join()
+        chooser.join()
+        assertEquals(1, phone.vaultReads.size, "the second screen waits for the first read and finds it fresh")
+        assertEquals(84_200_000L, wallets.vaultSats(vault(1)))
     }
 
     @Test

@@ -1,6 +1,11 @@
 package com.mebit.app.feature.vault
 
 import com.mebit.app.Place
+import com.mebit.app.data.CreatedVault
+import com.mebit.app.data.CustodyPolicy
+import com.mebit.app.data.FakeVaultsStorage
+import com.mebit.app.data.SavedVaults
+import com.mebit.app.data.VaultOwners
 import com.mebit.app.ui.components.DeleteItem
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -54,6 +59,37 @@ class WalletListTest {
         assertEquals("—", walletsTotal(listOf(card(3_000_000)), vaults = emptyList(), walletUnopened = true))
         assertEquals("—", walletsTotal(emptyList(), vaults = emptyList(), walletUnopened = true), "a wallet waiting to open is still money")
         assertEquals("—", walletsTotal(listOf(card(3_000_000)), vaults = listOf(84_200_000), walletUnopened = true), "a wallet waiting to open is still money beside a vault")
+    }
+
+    // The independent review's probe: a book saved before Choose Keys refused a repeat can list one wallet twice, and the total read 1.6840 BTC.
+    @Test
+    fun aWalletTheBookListsTwiceCountsOnceInTheTotal() {
+        val vault = CreatedVault("vault_1", "Wallet 1", 2, 3, CustodyPolicy.PersonalCustody, "tb1qvault1", "", emptyList())
+        val book = SavedVaults(null, owners = { null }, deriveAddress = { _, _ -> "" })
+        book.edit { it.copy(vaults = listOf(vault, vault.copy(id = "vault_2", name = "Wallet 2"))) }
+        assertEquals(2, book.current.vaults.size, "two cards of one wallet")
+        val sats: (CreatedVault) -> Long? = { if (it.address == vault.address) 84_200_000L else null }
+        assertEquals("0.8420 BTC", listTotal(emptyList(), book, sats, walletUnopened = false))
+    }
+
+    // The independent review's probe: beside a book this run cannot read, the one-key wallet's 0.0300 BTC read as all of the money.
+    @Test
+    fun theTotalIsADashWhileTheBookOfSeveralKeyWalletsCannotBeRead() {
+        val owner = VaultOwners(listOf("aaaa0000"), everyPlaceOpened = true)
+        val books = mapOf(
+            "a newer app's book" to SavedVaults(FakeVaultsStorage("MV2\n"), { owner }, { _, _ -> "" }).apply { sync() },
+            "a damaged book" to SavedVaults(FakeVaultsStorage("not a book"), { owner }, { _, _ -> "" }).apply { sync() },
+            "a book not read yet" to SavedVaults(FakeVaultsStorage(""), { owner }, { _, _ -> "" }),
+        )
+        for ((what, book) in books) {
+            assertEquals("—", listTotal(listOf(card(3_000_000)), book, { null }, walletUnopened = false), "$what (${book.health})")
+        }
+    }
+
+    @Test
+    fun aBookReadWithNoSeveralKeyWalletKeepsTheOneKeyTotal() {
+        val book = SavedVaults(FakeVaultsStorage(""), { VaultOwners(listOf("aaaa0000"), everyPlaceOpened = true) }, { _, _ -> "" }).apply { sync() }
+        assertEquals("0.0300 BTC", listTotal(listOf(card(3_000_000)), book, { null }, walletUnopened = false))
     }
 
     @Test

@@ -84,9 +84,17 @@ internal fun cardBalanceText(sats: Long, known: Boolean): String = if (known) fo
 /**
  * Penpot 1.8's total adds every wallet's balance, one-key and several-key, as 1.8.0 adds 0.0312, 0.0150 and 0.8420 to 0.8882 BTC. A dash
  * while any figure is unknown, a wallet that did not open this run included ([walletUnopened]), so part of the money never reads as all
- * of it. [vaults] holds each listed vault's [com.mebit.app.data.Wallets.vaultSats], null while unknown. Null, so no line, only while no
+ * of it. [vaults] holds one figure per several-key wallet, as [listTotal] gives them, null while unknown. Null, so no line, only while no
  * wallet of either kind is listed or waiting to open.
  */
+/**
+ * The Wallet list's total of [spending] and every several-key wallet [book] lists, each counted once. Two entries with one address are one
+ * wallet, the same keys and m, which a book saved before Choose Keys refused a repeat can hold. A dash while [book] cannot be
+ * [SavedVaults.judged], because it may list wallets this run cannot show.
+ */
+internal fun listTotal(spending: List<SpendingCard>, book: SavedVaults, vaultSats: (CreatedVault) -> Long?, walletUnopened: Boolean): String? =
+    walletsTotal(spending, book.current.vaults.distinctBy { it.address }.map(vaultSats), walletUnopened || !book.judged)
+
 internal fun walletsTotal(cards: List<SpendingCard>, vaults: List<Long?>, walletUnopened: Boolean): String? = when {
     walletUnopened -> "—"
     cards.isEmpty() && vaults.isEmpty() -> null
@@ -139,7 +147,7 @@ fun VaultListScreen(
             // Penpot 1.8 puts the + 29 dp from the screen's right edge, so 9 dp past the screen's own padding.
             PlusButton("cta_vaults_add", "สร้าง Wallet", onCreate, Modifier.padding(end = 9.dp))
         }
-        walletsTotal(spending, draft.created.map(vaultSats), walletUnopened = unopenedNotice != null)?.let { TotalLine(it) }
+        listTotal(spending, vaults, vaultSats, walletUnopened = unopenedNotice != null)?.let { TotalLine(it) }
         Spacer(modifier = Modifier.height(16.dp))
         VaultsNotice(vaults)
         unopenedNotice?.let {

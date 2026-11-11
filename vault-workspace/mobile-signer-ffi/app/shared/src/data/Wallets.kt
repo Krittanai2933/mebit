@@ -261,8 +261,10 @@ class Wallets internal constructor(
         lastUsed?.delete()
         all.forEach { it.session.clear() }
         // Outside the snapshot below, so a vault read that lands on another thread meanwhile cannot make its apply fail.
-        vaultGeneration++
-        vaultReads.clear()
+        synchronized(vaultWriteLock) {
+            vaultGeneration++
+            vaultReads.clear()
+        }
         Snapshot.withMutableSnapshot {
             all = listOf(empty(Place.FIRST, locked = false))
             unopened = emptyMap()
@@ -357,6 +359,9 @@ class Wallets internal constructor(
     /** Counts erases, so a read that ends after [forgetEvery] writes nothing back. */
     private var vaultGeneration by mutableStateOf(0)
 
+    /** Makes a read's generation check and write one step against an erase's bump and clear. Never held across a read, so an erase never waits on the network. */
+    private val vaultWriteLock = SynchronizedObject()
+
     /**
      * [vault]'s balance in sats once a read reached the end of both its chains. Null before its first read this run, after a failed read, and
      * while its scan stopped short or a host lied. Null is a dash on every screen and makes any total a dash, so part of a vault never reads as
@@ -395,7 +400,8 @@ class Wallets internal constructor(
         } catch (_: Exception) {
             null
         }
-        if (generation == vaultGeneration) vaultReads[vault.address] = VaultRead(snapshot, nowSeconds())
+        val endedAt = nowSeconds()
+        synchronized(vaultWriteLock) { if (generation == vaultGeneration) vaultReads[vault.address] = VaultRead(snapshot, endedAt) }
         snapshot?.scan
     }
 
