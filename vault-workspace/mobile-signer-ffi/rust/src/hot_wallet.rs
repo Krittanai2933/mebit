@@ -298,8 +298,15 @@ impl Wallet {
 /// `wallet` when its scan reached the end of the wallet, so no payment or history works from part of it.
 /// A scan that goes on fails with `esplora get:` and one a host lied in with `esplora scan:`, as the app maps them.
 fn complete(wallet: Wallet) -> Result<Wallet, MobileSignerError> {
-    match &wallet.status {
-        ScanStatus::Complete => Ok(wallet),
+    finished(&wallet.status)?;
+    Ok(wallet)
+}
+
+/// Ok when a scan that ended with `status` reached the end of its wallet, else `complete`'s two errors. The one place
+/// those texts are made, so a one-key wallet and a several-key wallet fail alike.
+fn finished(status: &ScanStatus) -> Result<(), MobileSignerError> {
+    match status {
+        ScanStatus::Complete => Ok(()),
         ScanStatus::Continuing(why) => Err(MobileSignerError::InvalidPsbtJson(format!(
             "esplora get: {why}"
         ))),
@@ -1029,11 +1036,21 @@ fn history_of(
         store,
     )?)?;
     let used: Vec<&Address> = wallet.used().map(|(_, k)| &k.address).collect();
+    history_over(source, &used, &wallet.addresses())
+}
+
+/// The latest transactions of the `used` addresses, each once and read against `own`, every address the wallet counts:
+/// the mempool first, then confirmed transactions newest first. No request when nothing is used, else one page per used
+/// address and the tip. The tail a one-key wallet and a several-key wallet share, so both net and order by one rule.
+fn history_over(
+    source: &dyn ChainSource,
+    used: &[&Address],
+    own: &[String],
+) -> Result<Vec<HotTx>, MobileSignerError> {
     if used.is_empty() {
         return Ok(Vec::new());
     }
-    let (pages, tip) = source.history(&used)?;
-    let own = wallet.addresses();
+    let (pages, tip) = source.history(used)?;
     let own: Vec<&str> = own.iter().map(String::as_str).collect();
     merge_history(&pages, tip, &own)
 }
@@ -6629,6 +6646,23 @@ mod tests {
                 hot(&id('b'), 1_000, 6, Some(1_790_000_000)),
             ],
             "each transaction once, netted over every address, the mempool first, ties in page order"
+        );
+    }
+
+    #[test]
+    fn finished_keeps_the_two_texts_the_app_maps() {
+        assert!(finished(&ScanStatus::Complete).is_ok());
+        let text = |status| match finished(&status) {
+            Err(MobileSignerError::InvalidPsbtJson(m)) => m,
+            other => panic!("expected a refusal, got {other:?}"),
+        };
+        assert_eq!(
+            text(ScanStatus::Continuing("receive index 3".into())),
+            "esplora get: receive index 3"
+        );
+        assert_eq!(
+            text(ScanStatus::Unverified("a host lied".into())),
+            "esplora scan: a host lied"
         );
     }
 
