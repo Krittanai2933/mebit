@@ -10,6 +10,9 @@ import com.mebit.app.Why
 import com.mebit.app.WriteMode
 import com.mebit.app.WriteResult
 import com.mebit.app.androidReadRefusal
+import com.mebit.app.androidWriteRefusal
+import com.mebit.app.feature.send.vaultDeleteItem
+import com.mebit.app.ui.components.DeleteItem
 import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.SoftwareAccountKey
@@ -17,6 +20,7 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** Twelve test words for wallet [n]. Never a real wallet, and never printed. */
@@ -59,5 +63,20 @@ class WalletRemovalAndroidTest {
         assertEquals(WalletRemoval.NotErased, wallets.remove(w, book, "test") {}, "a key held only in memory is not dropped by Remove")
         assertEquals(words(2), w.session.words)
         assertTrue(w in wallets.listed)
+    }
+
+    // A phone with no screen lock saves no wallet, and the owner check a several-key removal asks for can never pass there, so the menu says why.
+    @Test
+    fun onAPhoneWithNoScreenLockASeveralKeyWalletIsBlockedAsNotSaved() {
+        val refusal = androidWriteRefusal(api = 30, fileExists = false, deviceSecure = false, mode = WriteMode.Create)
+        val wallets = Wallets(
+            OnePlaceShelf(FakeSecureStore(write = refusal)),
+            forgetScans = {},
+            newKey = { _, _, _ -> SoftwareAccountKey(words(1), check(words(1)), "tpub", "m/48'/1'/0'/2'") },
+        )
+        wallets.beginAdd()!!.session.generateThisDevice()
+        assertNull(wallets.vaultOwners(), "no wallet is saved")
+        val book = SavedVaults(FakeVaultsStorage(), owners = { wallets.vaultOwners() }, deriveAddress = { _, _ -> "addr" }).apply { sync() }
+        assertEquals(DeleteItem.Blocked("ลบไม่ได้ · Wallet นี้ยังไม่ได้บันทึกในเครื่อง"), vaultDeleteItem(book.saving))
     }
 }

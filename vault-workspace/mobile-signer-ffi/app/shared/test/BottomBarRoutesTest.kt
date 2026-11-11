@@ -13,7 +13,6 @@ class BottomBarRoutesTest {
         MovieRoute.AddKey to BarTab.Keys,
         MovieRoute.T15KeyringEmpty to BarTab.Keys,
         MovieRoute.T15UnverifiedFirst to BarTab.Keys,
-        MovieRoute.T15DeleteBlocked to BarTab.Keys,
         MovieRoute.T20VaultActions to BarTab.None,
     )
 

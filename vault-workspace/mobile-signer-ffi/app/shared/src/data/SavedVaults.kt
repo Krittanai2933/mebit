@@ -33,6 +33,17 @@ enum class VaultsHealth {
     Newer,
 }
 
+/** Whether a change to the book can be saved now, which a several-key wallet's removal needs. */
+enum class BookSaving {
+    /** There is no store or no saved wallet, so the book lives in memory only. */
+    MemoryOnly,
+
+    /** A wallet is saved, but the book cannot be [SavedVaults.judged] now. */
+    Unjudged,
+
+    Ready,
+}
+
 /**
  * Who the phone-level book may be saved for. [fingerprints] are the saved wallets in place order. [everyPlaceOpened] is false while the book's
  * owner could be a wallet this run cannot name, because a place did not open or a wallet in memory could not be saved.
@@ -52,14 +63,20 @@ class SavedVaults internal constructor(
     var health: VaultsHealth by mutableStateOf(VaultsHealth.Ok)
         private set
 
-    /** The fingerprint the stored copy names, as last read or written in this run. Null until it has been read. */
-    private var opened: String? = null
+    /** The fingerprint the stored copy names, as last read or written in this run. Null until it has been read. State, so a first read that finds nothing new still redraws what [judged] decided. */
+    private var opened: String? by mutableStateOf(null)
 
     /** [current] is ahead of the stored copy. */
     private var owed = false
 
     /** The edits made while the stored book could not be read, so they can be run again over it once it can. */
     private var unopened = emptyList<(VaultBook) -> VaultBook>()
+
+    /**
+     * Whether the store held nothing when a [sync] with no saved wallet last read it, the one proof then that memory is the whole book.
+     * Null before that read and after each [open], which every write and delete follows. State, so a screen that judged the book redraws.
+     */
+    private var storedEmpty: Boolean? by mutableStateOf(null)
 
     /** Reads the stored book once per owner this run sees and writes what is owed. Never prompts, never throws, and safe to run any number of times. */
     fun sync(): Unit = synchronized(vaultsLock) {
@@ -72,32 +89,77 @@ class SavedVaults internal constructor(
                 owed = false
                 unopened = emptyList()
             }
+            if (storage != null) storedEmpty = storage.read() == ""
             return@synchronized
         }
         if (!readFor(me)) return@synchronized
         if (owed) save()
     }
 
-    /** The only way to change what is saved. [change] runs on the newest state, the result shows at once and is saved before this returns. */
+    /**
+     * Changes what is saved. [change] runs on the newest state, the result shows at once and is saved before this returns, or by a later
+     * [sync]. A change that must never come back uses [editSaved].
+     */
     fun edit(change: (VaultBook) -> VaultBook): Unit = synchronized(vaultsLock) {
         val me = me()
-        val read = me != null && readFor(me)
-        current = change(current)
-        owed = true
-        if (read) {
+        if (me != null && readFor(me)) {
+            current = change(current)
+            owed = true
             save()
         } else {
-            unopened = unopened + change
+            keepUnsaved(change)
             if (me != null) health = VaultsHealth.SaveFailed
         }
     }
 
     /**
-     * Whether a vault uses the key [fingerprint]. Null when the book could not be judged, because the stored copy is [VaultsHealth.Damaged]
-     * or [VaultsHealth.Newer] or has not been read this run, so a wallet can never be removed on a guess about a vault that needs its key.
+     * For a change that must never come back, such as a removal. True once it is saved, and false, with nothing changed, while the book
+     * cannot be [judged] or the write fails, so memory never drops what the stored copy still holds. With no store or no saved wallet
+     * nothing is saved, so on a book that can be judged, where memory is the whole book, the change applies at once as [edit]'s does.
      */
-    fun usesKey(fingerprint: String): Boolean? = synchronized(vaultsLock) {
-        if (health == VaultsHealth.Damaged || health == VaultsHealth.Newer || (storage != null && opened == null)) null else current.usesKey(fingerprint)
+    fun editSaved(change: (VaultBook) -> VaultBook): Boolean = synchronized(vaultsLock) {
+        val me = me()
+        if (me == null) {
+            if (!judgedNow()) return@synchronized false
+            keepUnsaved(change)
+            return@synchronized true
+        }
+        if (!readFor(me) || !judgedNow()) return@synchronized false
+        val next = change(current)
+        val text = VaultBookCodec.encodeChecked(opened ?: return@synchronized false, next)
+        if (text == null || storage?.write(text) != true) return@synchronized false
+        current = next
+        owed = false
+        health = VaultsHealth.Ok
+        true
+    }
+
+    /**
+     * Whether the book can be judged: the stored copy was read this run and is neither [VaultsHealth.Damaged] nor [VaultsHealth.Newer],
+     * or memory is the whole book, because there is no store, or no saved wallet and a store that holds nothing. With no saved wallet the
+     * stored copy is never read, so one that holds a book, or cannot be read, may hold a vault this run never saw. Nothing is deleted or
+     * removed on a book that cannot be judged, so never on a guess about a vault that needs a key.
+     */
+    val judged: Boolean get() = synchronized(vaultsLock) { judgedNow() }
+
+    /** Whether a vault uses the key [fingerprint]. Null while the book cannot be [judged]. */
+    fun usesKey(fingerprint: String): Boolean? = synchronized(vaultsLock) { if (judgedNow()) current.vaultsUsing(fingerprint).isNotEmpty() else null }
+
+    /** Whether a several-key wallet's removal can run now. Only a saved wallet saves the book, and only a phone that saved one has the owner check the removal asks for. */
+    val saving: BookSaving
+        get() = synchronized(vaultsLock) {
+            when {
+                me() == null -> BookSaving.MemoryOnly
+                judgedNow() -> BookSaving.Ready
+                else -> BookSaving.Unjudged
+            }
+        }
+
+    // Until a sync reads the store, each call reads it and keeps nothing, because a composition that writes a state a sync also writes can fail.
+    private fun judgedNow() = health != VaultsHealth.Damaged && health != VaultsHealth.Newer && when {
+        storage == null -> true
+        me() == null -> storedEmpty ?: (storage.read() == "")
+        else -> opened != null
     }
 
     /**
@@ -132,6 +194,7 @@ class SavedVaults internal constructor(
      * so the book is then kept, shown and re-owned at its next save.
      */
     private fun open(me: VaultOwners): Boolean {
+        storedEmpty = null
         val text = storage?.read() ?: return false
         val decoded = if (text.isEmpty()) null else VaultBookCodec.decode(text)
         when (decoded) {
@@ -154,6 +217,13 @@ class SavedVaults internal constructor(
         opened = (decoded as? VaultBookCodec.Decoded.Ok)?.owner?.takeIf { it in me.fingerprints } ?: me.fingerprints.first()
         unopened = emptyList()
         return true
+    }
+
+    /** Shows [change] at once and runs it again over the stored book once that is read. */
+    private fun keepUnsaved(change: (VaultBook) -> VaultBook) {
+        current = change(current)
+        owed = true
+        unopened = unopened + change
     }
 
     private fun keepMemory() {
@@ -196,8 +266,8 @@ class SavedVaults internal constructor(
 /** One lock for every [SavedVaults] in the process, because they all share the one stored copy. */
 private val vaultsLock = SynchronizedObject()
 
-/** Whether a vault in this book uses the key [fingerprint]. The one rule behind deleting a key and removing a wallet. */
-internal fun VaultBook.usesKey(fingerprint: String): Boolean = vaults.any { v -> v.keyFingerprints.any { it.equals(fingerprint, ignoreCase = true) } }
+/** The vaults in this book that use the key [fingerprint], matched without case. The one rule behind deleting a key and removing a wallet. */
+internal fun VaultBook.vaultsUsing(fingerprint: String): List<CreatedVault> = vaults.filter { v -> v.keyFingerprints.any { it.equals(fingerprint, ignoreCase = true) } }
 
 /** The wallet's own key as the keyring shows it, null for a session with no key. Never saved, so [SavedKey.verified] is always the session's backupConfirmed now. */
 internal fun OnboardingSession.ownKey(): SavedKey? = fingerprint.takeIf { it.isNotBlank() }?.let { fp ->

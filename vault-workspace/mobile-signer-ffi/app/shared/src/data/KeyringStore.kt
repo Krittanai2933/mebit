@@ -70,7 +70,7 @@ class KeyringStore(
     private val book: SavedVaults = SavedVaults.memoryOnly(),
     private val ownKeys: () -> List<SavedKey> = { emptyList() },
 ) {
-    /** Every wallet's own key first, then every saved key, a key already saved showing once. Read-only, because [SavedVaults.edit] is the only way to change what is saved. */
+    /** Every wallet's own key first, then every saved key, a key already saved showing once. Read-only, because only [SavedVaults] changes what is saved. */
     val keys: List<SavedKey>
         get() {
             val saved = book.current.keys
@@ -278,17 +278,16 @@ class KeyringStore(
         clearError()
     }
 
+    /**
+     * Deletes the saved key [id]. Refused for a wallet's own key, which comes from its session and goes with its wallet, for a key a
+     * vault uses, and while the book cannot be judged, because a delete queued then would run over a stored vault that needs the key.
+     * False, with the key kept, when the delete could not be saved.
+     */
     fun tryDelete(id: String): Boolean {
         val key = keys.find { it.id == id } ?: return false
-        if (inVault(key)) return false
-        book.edit { b -> b.copy(keys = b.keys.filterNot { it.id == id }) }
-        return true
+        if (ownKeys().any { it.id == id } || book.usesKey(key.fingerprint) != false) return false
+        return book.editSaved { b -> b.copy(keys = b.keys.filterNot { it.id == id }) }
     }
-
-    /** A wallet's own key comes from its session and has no saved row to remove. */
-    fun canDelete(key: SavedKey): Boolean = ownKeys().none { it.id == key.id }
-
-    private fun inVault(key: SavedKey) = book.current.usesKey(key.fingerprint)
 }
 
 /** BIP-48 P2WSH account on testnet. Coin type 1, account 0, script type 2. */

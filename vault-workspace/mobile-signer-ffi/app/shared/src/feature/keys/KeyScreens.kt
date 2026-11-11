@@ -70,7 +70,12 @@ import androidx.compose.runtime.setValue
 import com.mebit.app.data.KeySourceLabel
 import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.SavedKey
+import com.mebit.app.feature.send.ConfirmSheet
+import com.mebit.app.feature.send.deleteKeyBody
+import com.mebit.app.feature.send.removeSheetTitle
 import com.mebit.app.navigation.MovieRoute
+import com.mebit.app.ui.components.CardDeleteMenu
+import com.mebit.app.ui.components.DeleteItem
 import com.mebit.app.ui.components.HardwareMark
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.OptionCard
@@ -327,18 +332,20 @@ fun VerifyKeyScreen(
 
 /**
  * Penpot 2.1, in 6.2's order and subtitle while a key is unconfirmed. 6.2's two buttons and its "ไปที่ Wallet" text are not built.
- * [onDeleteBlocked] runs with the key when a vault uses it, so it cannot be deleted.
+ * Each key's ⋯ holds [deleteItem]'s item, and an offered delete asks first (2.1.9).
  */
 @Composable
 fun KeyringScreen(
     store: KeyringStore,
+    deleteItem: (SavedKey) -> DeleteItem,
     onAddKey: () -> Unit,
-    onDeleteBlocked: (SavedKey) -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
     val keys = keyringOrder(store.keys)
     val phone = remember { getPlatform().phoneMonogram }
+    var deleting by remember { mutableStateOf<SavedKey?>(null) }
+    var deleteFailed by remember { mutableStateOf(false) }
     MebitScreen(
         eyebrow = MovieRoute.Keyring.eyebrow,
         // The title is drawn below so the + shares its row, as on the board.
@@ -362,18 +369,28 @@ fun KeyringScreen(
             lineHeight = 20.sp,
             modifier = Modifier.testTag(if (keys.isEmpty()) "keyring_empty" else "keyring_subtitle"),
         )
+        if (deleteFailed) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("ลบกุญแจไม่สำเร็จ ลองอีกครั้ง", color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.testTag("delete_failed"))
+        }
         Spacer(modifier = Modifier.height(29.dp))
         keys.forEach { key ->
-            KeyCard(key, phone)
-            if (store.canDelete(key)) DeleteLink(key) { if (!store.tryDelete(key.id)) onDeleteBlocked(key) }
+            KeyCard(key, phone, deleteItem(key), onOpen = { deleteFailed = false }) { deleting = key }
             Spacer(modifier = Modifier.height(10.dp))
         }
     }
+    deleting?.let { key ->
+        // A delete refused now, because a wallet started using the key or the save failed, leaves the key on the list and says so.
+        DeleteKeySheet(key, onConfirm = { deleting = null; deleteFailed = !store.tryDelete(key.id) }, onCancel = { deleting = null })
+    }
 }
 
-/** Penpot 2.1's key card, 62 dp high. It merges its texts into one node tagged `key_<id>`, which opens nothing. */
+/**
+ * Penpot 2.1's key card, 62 dp high. Its texts merge into one node tagged `key_<id>`, which opens nothing. The ⋯ is that node's
+ * sibling, not its child, so it stays an element of its own on both platforms.
+ */
 @Composable
-private fun KeyCard(key: SavedKey, phone: String) {
+private fun KeyCard(key: SavedKey, phone: String, item: DeleteItem, onOpen: () -> Unit, onDelete: () -> Unit) {
     val shape = RoundedCornerShape(20.dp)
     val hardware = key.source == KeySourceLabel.Jade || key.source == KeySourceLabel.TrezorSafe7
     Box(
@@ -383,40 +400,34 @@ private fun KeyCard(key: SavedKey, phone: String) {
             .shadow(4.dp, shape, clip = false)
             .clip(shape)
             .background(MbWhite)
-            .border(1.dp, MbBorder, shape)
-            .semantics(mergeDescendants = true) {}
-            .testTag("key_${key.id}"),
+            .border(1.dp, MbBorder, shape),
     ) {
-        Box(Modifier.offset(x = 16.dp, y = 12.dp).size(38.dp).clip(RoundedCornerShape(12.dp)).background(MbIconWash), contentAlignment = Alignment.Center) {
-            Text(keyMonogram(key.source, phone), color = if (hardware) MbEyebrow else MbNavy, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+        Box(Modifier.matchParentSize().semantics(mergeDescendants = true) {}.testTag("key_${key.id}")) {
+            Box(Modifier.offset(x = 16.dp, y = 12.dp).size(38.dp).clip(RoundedCornerShape(12.dp)).background(MbIconWash), contentAlignment = Alignment.Center) {
+                Text(keyMonogram(key.source, phone), color = if (hardware) MbEyebrow else MbNavy, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+            }
+            // 132 dp at the end is the ⋯, the pill and their gaps, so the texts are 164 dp wide on the board's 402 dp screen and end in … before the pill on a narrower one.
+            Text(key.label, color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(start = 66.dp, top = 10.dp, end = 132.dp))
+            Text(keyLine(key), color = MbSlate, fontSize = 11.sp, fontWeight = FontWeight.Light, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(start = 66.dp, top = 31.dp, end = 132.dp))
+            Box(
+                modifier = Modifier.align(Alignment.TopEnd).padding(end = 46.dp, top = 19.dp).size(width = 72.dp, height = 24.dp).clip(CircleShape).background(if (key.verified) MbGreenWash else MbIconWash),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Text(keyBadge(key.verified), color = if (key.verified) MbSuccess else MbAmberInk, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 10.dp))
+            }
         }
-        // 96 dp at the end is the pill, its 10 dp inset and a 14 dp gap, so the texts are 200 dp wide on the board's 402 dp screen and end in … before the pill on a narrower one.
-        Text(key.label, color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(start = 66.dp, top = 10.dp, end = 96.dp))
-        Text(keyLine(key), color = MbSlate, fontSize = 11.sp, fontWeight = FontWeight.Light, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(start = 66.dp, top = 31.dp, end = 96.dp))
-        Box(
-            modifier = Modifier.align(Alignment.TopEnd).padding(end = 10.dp, top = 19.dp).size(width = 72.dp, height = 24.dp).clip(CircleShape).background(if (key.verified) MbGreenWash else MbIconWash),
-            contentAlignment = Alignment.CenterStart,
-        ) {
-            Text(keyBadge(key.verified), color = if (key.verified) MbSuccess else MbAmberInk, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 10.dp))
-        }
+        // The dots end 18 dp inside the card's right edge, centred in their 44 dp target.
+        CardDeleteMenu(key.id, "ลบกุญแจ", item, onDark = false, onDelete = onDelete, modifier = Modifier.align(Alignment.CenterEnd).padding(end = 5.dp), onOpen = onOpen)
     }
 }
 
-/** A small text link under a key's card, which no board draws. */
+/** Penpot 2.1.9. No owner check: the Keyring holds only a key's public half, and the device that made the key keeps it. */
 @Composable
-private fun DeleteLink(key: SavedKey, onClick: () -> Unit) {
-    Box(Modifier.fillMaxWidth().heightIn(min = 40.dp), contentAlignment = Alignment.CenterEnd) {
-        Text(
-            "ลบ",
-            color = MbNavy,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier
-                .clickable(role = Role.Button, onClick = onClick)
-                .semantics { contentDescription = "ลบ ${key.label}" }
-                .testTag("cta_delete_${key.id}")
-                .padding(start = 12.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
-        )
+private fun DeleteKeySheet(key: SavedKey, onConfirm: () -> Unit, onCancel: () -> Unit) {
+    ConfirmSheet(tag = "dialog_delete_key", title = removeSheetTitle(key.label), body = deleteKeyBody(key.source), onCancel = onCancel) {
+        PrimaryCta("ลบกุญแจ", "cta_delete_key_confirm", onConfirm)
+        Spacer(modifier = Modifier.height(10.dp))
+        SecondaryCta("ยกเลิก", "cta_delete_key_cancel", onCancel)
     }
 }
 
@@ -478,29 +489,5 @@ fun T15UnverifiedFirstScreen(
         Text("ยืนยัน fingerprint ก่อนใช้ใน Wallet", style = MaterialTheme.typography.bodyLarge)
         Spacer(modifier = Modifier.height(20.dp))
         PrimaryCta("ไปยืนยัน", "cta_t15_verify", onVerify)
-    }
-}
-
-@Composable
-fun T15DeleteBlockedScreen(
-    line: String,
-    onBack: (() -> Unit)?,
-    onOpenCatalog: () -> Unit,
-) {
-    MebitScreen(
-        eyebrow = "KEYRING",
-        title = "ลบกุญแจไม่ได้",
-        onBack = onBack,
-        onOpenCatalog = onOpenCatalog,
-        tag = "screen_critical/t15-delete",
-    ) {
-        Text(
-            text = line,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.testTag("t15_delete_line"),
-        )
-        Spacer(modifier = Modifier.height(20.dp))
-        PrimaryCta("กลับ", "cta_t15_delete_back", { onBack?.invoke() })
     }
 }

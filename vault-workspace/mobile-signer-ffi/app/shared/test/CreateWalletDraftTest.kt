@@ -184,6 +184,22 @@ class CreateWalletDraftTest {
     }
 
     @Test
+    fun aWalletMadeAfterARemoveNeverRepeatsASavedIdOrName() {
+        val book = SavedVaults.memoryOnly()
+        fun create(vararg picks: Int): CreatedVault = draft(book).run {
+            pick(*picks)
+            create(ready(keys)!!)!!
+        }
+        val first = create(1, 2, 3)
+        create(1, 2, 4)
+        assertTrue(VaultDraft(book).remove(first.id))
+        val made = create(1, 2, 5)
+        assertEquals("vault_3", made.id)
+        assertEquals(listOf("Wallet 2", "Wallet 3"), book.current.vaults.map { it.name })
+        assertEquals(book.current.vaults.map { it.id }.distinct(), book.current.vaults.map { it.id })
+    }
+
+    @Test
     fun aThreeOfFiveWalletCarriesItsThresholdAndAMockKeyIsFlagged() {
         val book = SavedVaults.memoryOnly()
         val draft = draft(book)

@@ -41,7 +41,6 @@
     {"path": "critical/t14", "boardName": "T14 — Verify Key — mismatch", "boardId": "bb000499-7ca1-801a-8008-d90c1a70d5fd"},
     {"path": "critical/t15-empty", "boardName": "T15 — KeyVault — empty", "boardId": "bb000499-7ca1-801a-8008-d90c4ca58681"},
     {"path": "critical/t15-unverified", "boardName": "T15 — KeyVault — unverified first", "boardId": "bb000499-7ca1-801a-8008-d90c4ced7a4e"},
-    {"path": "critical/t15-delete", "boardName": "T15 — KeyVault — delete blocked", "boardId": "bb000499-7ca1-801a-8008-d90c4d25fe41"},
     {"path": "critical/t16-decaying", "boardName": "T16 — Select Policy — decaying", "boardId": "bb000499-7ca1-801a-8008-d90c6ab385ed"},
     {"path": "critical/t16-mn", "boardName": "T16 — Select Policy — invalid M / N", "boardId": "bb000499-7ca1-801a-8008-d90c6d56925e"},
     {"path": "critical/t17", "boardName": "T17 — Compose Vault — count mismatch", "boardId": "bb000499-7ca1-801a-8008-d90c6e9df48d"},

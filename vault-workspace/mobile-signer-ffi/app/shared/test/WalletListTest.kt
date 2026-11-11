@@ -1,12 +1,13 @@
 package com.mebit.app.feature.vault
 
 import com.mebit.app.Place
+import com.mebit.app.ui.components.DeleteItem
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class WalletListTest {
-    private fun card(sats: Long, known: Boolean = true, backedUp: Boolean = true) = SpendingCard(Place.FIRST, "w", sats, known, backedUp)
+    private fun card(sats: Long, known: Boolean = true, backedUp: Boolean = true) = SpendingCard(Place.FIRST, "w", sats, known, backedUp, DeleteItem.Offered)
 
     // Commit f6734a2 moved every other money line to formatBtcCompact, and the first-run hero kept cutting 379,087 sats to 0.0037.
     @Test

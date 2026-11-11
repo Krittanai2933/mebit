@@ -38,6 +38,18 @@ class VaultDraft(private val book: SavedVaults = SavedVaults.memoryOnly()) {
         createdAddress = made.address
     }
 
+    /**
+     * Removes the vault [id] from the book and keeps every key, so its BSMS file and keys can restore it. False, with the vault still listed,
+     * when the removal could not be saved. A second call changes nothing.
+     */
+    fun remove(id: String): Boolean {
+        val gone = created.find { it.id == id }
+        if (!book.editSaved { b -> b.copy(vaults = b.vaults.filterNot { it.id == id }) }) return false
+        if (selectedVaultId == id) selectedVaultId = null
+        if (gone != null && createdAddress == gone.address) createdAddress = null
+        return true
+    }
+
     fun selectedVault(): CreatedVault? =
         createdAddress?.let { address -> created.lastOrNull { it.address == address } }
             ?: created.find { it.id == selectedVaultId }

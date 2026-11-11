@@ -171,13 +171,6 @@ enum class MovieRoute(
         "ยืนยัน fingerprint ก่อน",
         BarTab.Keys,
     ),
-    T15DeleteBlocked(
-        "critical/t15-delete",
-        "KEYRING",
-        "ลบกุญแจไม่ได้",
-        "ยังถูกใช้ใน Wallet",
-        BarTab.Keys,
-    ),
     T16PolicyDecaying(
         "critical/t16-decaying",
         "POLICY · ADVANCED",

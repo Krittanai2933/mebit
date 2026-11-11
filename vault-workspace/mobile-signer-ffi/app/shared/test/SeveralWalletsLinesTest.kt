@@ -3,8 +3,6 @@ package com.mebit.app.feature.send
 import com.mebit.app.Place
 import com.mebit.app.data.AddRefusal
 import com.mebit.app.data.Cause
-import com.mebit.app.data.CreatedVault
-import com.mebit.app.data.CustodyPolicy
 import com.mebit.app.data.UnlockResult
 import com.mebit.app.data.addRefusalLine
 import com.mebit.app.data.unopenedNotice
@@ -13,43 +11,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class SeveralWalletsLinesTest {
-    @Test
-    fun theRemoveRowNeedsTwoWalletsAndThenHasThreeStates() {
-        assertEquals(RemoveRow.Hidden, removeRow(1, saved = true, usesKey = false, vaultName = null))
-        assertEquals(RemoveRow.Hidden, removeRow(1, saved = true, usesKey = true, vaultName = "Vault A"), "one wallet left shows nothing, even in a vault")
-        assertEquals(RemoveRow.Offered, removeRow(2, saved = true, usesKey = false, vaultName = null))
-        assertEquals(RemoveRow.InVault("Vault A"), removeRow(2, saved = true, usesKey = true, vaultName = "Vault A"))
-        assertEquals(RemoveRow.Unreadable, removeRow(3, saved = true, usesKey = null, vaultName = null))
-    }
-
-    @Test
-    fun aWalletThatIsNotSavedShowsNoRemoveRow() {
-        assertEquals(RemoveRow.Hidden, removeRow(2, saved = false, usesKey = false, vaultName = null), "its words are only in memory")
-    }
-
-    @Test
-    fun theBlockedLinesNameTheVaultOrSayTheBookCouldNotBeRead() {
-        assertEquals("ลบไม่ได้ · กุญแจนี้ใช้อยู่ใน Vault A", removeBlockedLine(RemoveRow.InVault("Vault A")))
-        assertEquals("ลบไม่ได้ในตอนนี้ · อ่านรายการ Wallet ไม่ได้", removeBlockedLine(RemoveRow.Unreadable))
-        assertNull(removeBlockedLine(RemoveRow.Offered))
-        assertNull(removeBlockedLine(RemoveRow.Hidden))
-    }
-
-    @Test
-    fun theKeyringsRefusalNamesEveryWalletThatUsesTheKeyInPenpotsWords() {
-        fun wallet(name: String, vararg fps: String) = CreatedVault("id_$name", name, 2, 3, CustodyPolicy.PersonalCustody, "tb1q", "", fps.toList())
-        val vaults = listOf(wallet("Vault 1", "aaaa0001", "bbbb0002", "cccc0003"), wallet("Wallet 2", "AAAA0001", "dddd0004", "eeee0005"))
-        assertEquals("ลบไม่ได้ · กุญแจนี้ใช้อยู่ใน Vault 1, Wallet 2", keyInUseLine(vaults, "aaaa0001"), "both wallets, the fingerprint matched without case")
-        assertEquals("ลบไม่ได้ · กุญแจนี้ใช้อยู่ใน Wallet 2", keyInUseLine(vaults, "dddd0004"))
-        assertEquals("ลบไม่ได้ · กุญแจนี้ใช้อยู่ใน Wallet", keyInUseLine(vaults, null), "the debug catalog opens it with no key")
-    }
-
-    @Test
-    fun theConfirmNamesTheWalletInItsTitleAndItsReason() {
-        assertEquals("ลบกระเป๋า 2 ออกจากเครื่องนี้ไหม", removeSheetTitle("กระเป๋า 2"))
-        assertEquals("ลบกระเป๋า 2 ออกจากเครื่องนี้", removeReason("กระเป๋า 2"))
-    }
-
     @Test
     fun eachRefusalHasItsOwnLine() {
         assertEquals("เครื่องนี้เก็บกระเป๋าได้สูงสุด 10 ใบ", addRefusalLine(AddRefusal.Full))

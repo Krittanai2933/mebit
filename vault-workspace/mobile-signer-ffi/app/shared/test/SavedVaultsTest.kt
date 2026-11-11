@@ -5,6 +5,7 @@ import com.mebit.app.Place
 import com.mebit.app.VaultsStorage
 import com.mebit.app.Why
 import com.mebit.app.WriteMode
+import androidx.compose.runtime.snapshots.Snapshot
 import com.mebit.app.navigation.Boot
 import com.mebit.app.navigation.WalletGateState
 import com.mebit.ffi.signer.KeyNetwork
@@ -450,14 +451,201 @@ class SavedVaultsTest {
     @Test
     fun aBookUsesAKeyOnlyWhenItCanBeJudged() {
         val healthy = opened(FakeVaultsStorage(GOLDEN))
+        assertTrue(healthy.judged)
         assertEquals(true, healthy.usesKey("ABCD0123"), "a fingerprint in a vault, in any case")
         assertEquals(false, healthy.usesKey(OTHER_CHECK), "a fingerprint in no vault")
         for ((case, storage) in listOf("damaged" to FakeVaultsStorage("not a book"), "newer" to FakeVaultsStorage(GOLDEN.replaceFirst("MV1", "MV2")))) {
+            assertFalse(opened(storage).judged, case)
             assertNull(opened(storage).usesKey("abcd0123"), case)
         }
         val unread = FakeVaultsStorage(GOLDEN).apply { unreadable = true }
+        assertFalse(opened(unread).judged, "a book that could not be read this moment")
         assertNull(opened(unread).usesKey("abcd0123"), "a book that could not be read this moment")
+        assertTrue(SavedVaults.memoryOnly().judged)
         assertEquals(false, SavedVaults.memoryOnly().usesKey("abcd0123"), "a memory-only book holds everything it knows")
+    }
+
+    // A first read that finds no book changes no other state, so a menu drawn before it said the book could not be read until something else redrew it.
+    @Test
+    fun aScreenThatJudgedTheBookBeforeItsFirstReadIsToldOfTheRead() {
+        val vaults = SavedVaults(FakeVaultsStorage(), owners = one { TEST_CHECK }, deriveAddress = FAKE_DERIVE)
+        val read = mutableSetOf<Any>()
+        Snapshot.observe(readObserver = { read += it }) { assertFalse(vaults.judged) }
+        val written = mutableSetOf<Any>()
+        val observer = Snapshot.registerApplyObserver { changed, _ -> written.addAll(changed) }
+        try {
+            vaults.sync()
+            Snapshot.sendApplyNotifications()
+        } finally {
+            observer.dispose()
+        }
+        assertTrue(vaults.judged)
+        assertTrue(read.any { it in written }, "the read changed state the screen read")
+    }
+
+    @Test
+    fun aKeyIsNeverDeletedWhileTheBookCannotBeJudged() {
+        val storage = FakeVaultsStorage(GOLDEN).apply { unreadable = true }
+        val keyring = KeyringStore(book = opened(storage))
+        enrol(keyring, "ffff0000", tpubA)
+        assertFalse(keyring.tryDelete(keyring.keys.single().id), "a delete queued now would run over the stored book")
+        assertEquals(1, keyring.keys.size)
+    }
+
+    @Test
+    fun removingAVaultKeepsEveryKeyAndTheOtherVaultsAndASecondRemoveChangesNothing() {
+        val storage = FakeVaultsStorage(GOLDEN)
+        val vaults = opened(storage)
+        val other = CreatedVault("vault_2", "Wallet 2", 1, 1, CustodyPolicy.PersonalCustody, "addr-1-tpub-b", "x\nwsh(sortedmulti(1,tpub-b))", listOf("bbbb0002"))
+        vaults.edit { it.copy(vaults = it.vaults + other) }
+        val draft = VaultDraft(vaults)
+        draft.noteCreated(VAULT)
+
+        assertTrue(draft.remove(VAULT.id))
+        assertEquals(listOf(other), vaults.current.vaults)
+        assertEquals(listOf(JADE), vaults.current.keys, "the removed wallet's keys stay on the Keyring")
+        assertNull(draft.selectedVaultId)
+        assertEquals(other, draft.selectedVault(), "the vault screens let go of the removed wallet")
+
+        val stored = storage.text
+        assertTrue(draft.remove(VAULT.id))
+        assertEquals(listOf(other), vaults.current.vaults)
+        assertEquals(stored, storage.text, "a second remove changes nothing")
+        assertEquals(listOf(other), opened(storage).current.vaults, "and a restart still has only the other wallet")
+    }
+
+    @Test
+    fun aRemovalWhoseWriteFailsKeepsTheWalletAndARestartAgrees() {
+        val storage = FakeVaultsStorage(GOLDEN).apply { failWrite = true } // a full disk, say
+        val vaults = opened(storage)
+        val draft = VaultDraft(vaults).apply { noteCreated(VAULT) }
+
+        assertFalse(draft.remove(VAULT.id))
+        assertEquals(listOf(VAULT), vaults.current.vaults, "the wallet stays on the list")
+        assertEquals(VAULT, draft.selectedVault(), "and on the vault screens")
+        assertNull(vaultsNoticeText(vaults.health), "nothing waits for a retry")
+
+        storage.failWrite = false
+        vaults.sync()
+        assertEquals(listOf(VAULT), opened(storage).current.vaults, "a later save and a restart agree")
+    }
+
+    @Test
+    fun aRemovalOnABookThatCannotBeJudgedKeepsTheWallet() {
+        val cases = listOf(
+            "damaged" to FakeVaultsStorage("not a book"),
+            "written by a newer app" to FakeVaultsStorage(GOLDEN.replaceFirst("MV1", "MV2")),
+            "not readable this moment" to FakeVaultsStorage(GOLDEN).apply { unreadable = true },
+        )
+        for ((case, storage) in cases) {
+            val vaults = opened(storage)
+            vaults.edit { it.copy(vaults = listOf(VAULT)) } // this run's wallet, shown though it is not stored
+            val text = storage.text
+            assertFalse(VaultDraft(vaults).remove(VAULT.id), case)
+            assertEquals(listOf(VAULT), vaults.current.vaults, case)
+            assertEquals(text, storage.text, case)
+        }
+    }
+
+    @Test
+    fun aKeyDeleteWhoseWriteFailsKeepsTheKey() {
+        val storage = FakeVaultsStorage()
+        val vaults = opened(storage)
+        vaults.edit(added(JADE))
+        val keyring = KeyringStore(book = vaults)
+
+        storage.failWrite = true
+        assertFalse(keyring.tryDelete(JADE.id))
+        assertEquals(listOf(JADE), keyring.keys)
+        assertNull(vaultsNoticeText(vaults.health), "nothing waits for a retry")
+
+        storage.failWrite = false
+        vaults.sync()
+        assertEquals(listOf(JADE), opened(storage).current.keys, "a later save and a restart agree")
+    }
+
+    // Check c12's start: a Forget, then only hardware keys and no wallet saved. The store holds nothing, so memory is the whole book. Every delete here was once blocked as unreadable.
+    @Test
+    fun withNoWalletSavedTheBookIsJudgedSoAKeyAndAWalletCanBeRemoved() {
+        val storage = FakeVaultsStorage()
+        val vaults = SavedVaults(storage, owners = one { null }, deriveAddress = FAKE_DERIVE)
+        assertTrue(vaults.judged, "before any sync too")
+        vaults.sync()
+        vaults.edit { VaultBook(listOf(JADE), listOf(VAULT)) }
+        val keyring = KeyringStore(book = vaults)
+
+        assertTrue(vaults.judged)
+        assertFalse(keyring.tryDelete(JADE.id), "the wallet still uses the key")
+        assertTrue(VaultDraft(vaults).remove(VAULT.id))
+        assertTrue(keyring.tryDelete(JADE.id))
+        assertEquals(VaultBook(), vaults.current)
+        assertEquals(0, storage.writes, "nothing is stored without a saved wallet")
+    }
+
+    // With no wallet saved the stored book is never opened, so it may hold what this run never saw, and a change queued now would run over it once its owner is back.
+    @Test
+    fun withNoWalletSavedAStoredBookLosesNoKeyAndNoVault() {
+        for (synced in listOf(false, true)) {
+            val case = if (synced) "after a sync" else "before any sync"
+            val storage = FakeVaultsStorage(GOLDEN)
+            var owner: String? = null
+            val vaults = SavedVaults(storage, owners = one { owner }, deriveAddress = FAKE_DERIVE)
+            if (synced) vaults.sync()
+            vaults.edit { it.copy(keys = listOf(JADE)) } // the key added again this run, with no vault in memory
+            assertFalse(KeyringStore(book = vaults).tryDelete(JADE.id), case)
+            assertFalse(VaultDraft(vaults).remove(VAULT.id), "a removal by an id the stored book also holds, $case")
+            assertEquals(GOLDEN, storage.text, case)
+
+            owner = TEST_CHECK
+            vaults.sync()
+            assertEquals(VaultBook(listOf(JADE), listOf(VAULT)), vaults.current, "once the owner is back, $case")
+            assertEquals(VaultBook(listOf(JADE), listOf(VAULT)), opened(storage).current, "and after a restart, $case")
+        }
+    }
+
+    @Test
+    fun withNoWalletSavedAStoreThatCannotBeReadRefusesADelete() {
+        val vaults = SavedVaults(FakeVaultsStorage().apply { unreadable = true }, owners = one { null }, deriveAddress = FAKE_DERIVE).apply { sync() }
+        val keyring = KeyringStore(book = vaults)
+        vaults.edit(added(JADE))
+        assertFalse(vaults.judged)
+        assertFalse(keyring.tryDelete(JADE.id))
+        assertEquals(listOf(JADE), keyring.keys)
+    }
+
+    @Test
+    fun aBookSavedForAWalletIsNeverTakenForAnEmptyStoreOnceTheWalletGoes() {
+        val storage = FakeVaultsStorage()
+        var owner: String? = null
+        val vaults = SavedVaults(storage, owners = one { owner }, deriveAddress = FAKE_DERIVE).apply { sync() }
+        assertTrue(vaults.judged, "nothing is stored yet")
+
+        owner = TEST_CHECK
+        vaults.edit { VaultBook(listOf(JADE), listOf(VAULT)) }
+        assertEquals(GOLDEN, storage.text)
+        owner = null
+        assertFalse(vaults.judged, "before the next sync")
+        vaults.sync()
+        assertFalse(vaults.judged, "after it")
+    }
+
+    @Test
+    fun withNoWalletSavedAScreenThatJudgedTheBookIsToldWhenASyncFindsTheStoreEmptied() {
+        val storage = FakeVaultsStorage(GOLDEN)
+        val vaults = SavedVaults(storage, owners = one { null }, deriveAddress = FAKE_DERIVE).apply { sync() }
+        val read = mutableSetOf<Any>()
+        Snapshot.observe(readObserver = { read += it }) { assertFalse(vaults.judged) }
+        storage.delete() // a Forget
+        val written = mutableSetOf<Any>()
+        val observer = Snapshot.registerApplyObserver { changed, _ -> written.addAll(changed) }
+        try {
+            vaults.sync()
+            Snapshot.sendApplyNotifications()
+        } finally {
+            observer.dispose()
+        }
+        assertTrue(vaults.judged)
+        assertTrue(read.any { it in written }, "the sync changed state the screen read")
     }
 
     @Test

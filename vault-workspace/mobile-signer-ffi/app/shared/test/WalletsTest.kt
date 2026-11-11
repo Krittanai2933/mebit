@@ -650,6 +650,22 @@ class WalletsTest {
     }
 
     @Test
+    fun aVaultRemovalThatCouldNotBeSavedStillKeepsTheWalletWhoseKeyItUses(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P1, 1).saved(P2, 2)
+        val wallets = phone.unlocked()
+        val storage = FakeVaultsStorage()
+        val book = book(storage, wallets).apply { sync() }
+        val vault = vaultUsing(check(words(2)))
+        book.edit { it.copy(vaults = listOf(vault)) }
+
+        storage.failWrite = true // a full disk, say: the book cannot be written, while a wallet's own record could still be erased
+        assertFalse(VaultDraft(book).remove(vault.id))
+        assertEquals(true, book.usesKey(check(words(2))), "the vault still uses wallet 2's key")
+        assertEquals(WalletRemoval.InVault, wallets.remove(wallets.at(P2), book, "test") { error("not gone") })
+        assertEquals(0, phone.place(P2).erases, "wallet 2's words are not erased")
+    }
+
+    @Test
     fun aBookThatCannotBeJudgedRefusesARemovalWithoutAnOwnerCheck(): Unit = runBlocking {
         val cases = listOf(
             "damaged" to FakeVaultsStorage("not a book"),
@@ -831,8 +847,10 @@ class WalletsTest {
         book.edit { it.copy(keys = listOf(HARDWARE)) }
         assertEquals(listOf(check(words(1)), check(words(2)), HARDWARE.fingerprint), keyring.keys.map { it.fingerprint })
         val own = keyring.keys.first()
-        assertFalse(keyring.canDelete(own), "a wallet's own key is removed with the wallet, not on the keyring")
-        assertTrue(keyring.canDelete(keyring.keys.last()), "a saved key can be deleted")
+        assertFalse(keyring.tryDelete(own.id), "a wallet's own key is removed with the wallet, not on the keyring")
+        assertEquals(3, keyring.keys.size)
+        assertTrue(keyring.tryDelete(HARDWARE.id), "a saved key can be deleted")
+        assertEquals(listOf(check(words(1)), check(words(2))), keyring.keys.map { it.fingerprint })
     }
 
     @Test

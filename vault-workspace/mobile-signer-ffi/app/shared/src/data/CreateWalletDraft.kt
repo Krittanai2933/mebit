@@ -93,7 +93,8 @@ class CreateWalletDraft(
     /**
      * Saves this draft's wallet once and returns it. A second call, such as a double tap on "สร้าง Wallet", returns the same vault and
      * writes nothing. Null, with nothing saved, when the core refuses the keys (a duplicate key, for one). Named "Wallet <n>" with id
-     * "vault_<n>", n counting every vault in the book (vaults are never removed), so a saved "Vault 1" is followed by "Wallet 2".
+     * "vault_<n>", n one past the highest number a saved id carries, so a removed wallet never makes it repeat a saved id or name, and a
+     * saved "Vault 1" is followed by "Wallet 2".
      */
     fun create(ready: ReadyPlan): CreatedVault? {
         made?.let { return it }
@@ -115,7 +116,7 @@ class CreateWalletDraft(
             hasMockKey = ready.keys.any { it.isMock },
         )
         book.edit { b ->
-            val number = b.vaults.size + 1
+            val number = (b.vaults.mapNotNull { it.id.removePrefix("vault_").toIntOrNull() }.maxOrNull() ?: 0) + 1
             b.copy(vaults = b.vaults + vault.copy(id = "vault_$number", name = "Wallet $number"))
         }
         return book.current.vaults.last().also { made = it }

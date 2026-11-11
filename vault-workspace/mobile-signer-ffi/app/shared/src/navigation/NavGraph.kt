@@ -32,6 +32,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.mebit.app.BiometricResult
 import com.mebit.app.Place
 import com.mebit.app.data.AppLockState
 import com.mebit.app.data.CreateWalletDraft
@@ -48,7 +49,9 @@ import com.mebit.app.data.OpenWallet
 import com.mebit.app.data.WalletRemoval
 import com.mebit.app.data.Wallets
 import com.mebit.app.data.addRefusalLine
+import com.mebit.app.data.ownKey
 import com.mebit.app.data.unopenedNotice
+import com.mebit.app.data.vaultsUsing
 import com.mebit.app.data.ffiImportSeedDraft
 import com.mebit.app.data.liveQuoteCache
 import com.mebit.app.data.rememberFiatQuote
@@ -58,7 +61,6 @@ import com.mebit.app.feature.keys.KeyringScreen
 import com.mebit.app.feature.keys.PairMebitOtherScreen
 import com.mebit.app.feature.keys.T13UnsupportedModelScreen
 import com.mebit.app.feature.keys.T14VerifyMismatchScreen
-import com.mebit.app.feature.keys.T15DeleteBlockedScreen
 import com.mebit.app.feature.keys.T15KeyringEmptyScreen
 import com.mebit.app.feature.keys.T15UnverifiedFirstScreen
 import com.mebit.app.feature.keys.VerifyKeyScreen
@@ -86,7 +88,7 @@ import com.mebit.app.feature.vault.T20VaultActionsScreen
 import com.mebit.app.feature.vault.VaultCreatedScreen
 import com.mebit.app.feature.vault.VaultDetailScreen
 import com.mebit.app.feature.vault.VaultListScreen
-import com.mebit.app.feature.send.keyInUseLine
+import com.mebit.app.feature.send.keyDeleteItem
 import com.mebit.app.feature.send.S1HomeSingleSigScreen
 import com.mebit.app.feature.send.S2ReceiveBackupGateScreen
 import com.mebit.app.feature.send.S3ReceiveScreen
@@ -102,7 +104,7 @@ import com.mebit.app.feature.send.REMOVE_FAILED_LINE
 import com.mebit.app.feature.send.SpendingLine
 import com.mebit.app.feature.send.WalletChoice
 import com.mebit.app.feature.send.removeReason
-import com.mebit.app.feature.send.removeRow
+import com.mebit.app.feature.send.walletDeleteItem
 import com.mebit.app.feature.send.fiatLine
 import com.mebit.app.feature.send.homeBalanceText
 import com.mebit.app.feature.send.walletChoices
@@ -165,7 +167,6 @@ fun MebitNavHost(
     var keyFlow by remember { mutableStateOf(KeyFlow.Keyring) }
     var verifyRetryRoute by remember { mutableStateOf(MovieRoute.HardwareWallet) }
     var unsupportedModel by remember { mutableStateOf<String?>(null) }
-    var blockedKeyFingerprint by remember { mutableStateOf<String?>(null) }
     // The row a tap opened, whole, so the detail draws at once. The catalog opens the demo row until a tap.
     var openedTx by remember { mutableStateOf(DEMO_TX) }
 
@@ -279,8 +280,8 @@ fun MebitNavHost(
         scope.launch {
             removeLine = null
             when (wallets.remove(w, vaults, removeReason(w.session.walletName)) { next ->
-                // Runs in the snapshot that drops the wallet, so no frame shows a Stop whose wallet is gone.
-                navigate(MovieRoute.VaultList, next.place)
+                // Runs in the snapshot that drops the wallet, so no frame shows a Stop whose wallet is gone. The list keeps the wallet in use unless it was the one removed.
+                navigate(MovieRoute.VaultList, backStack.last().place.takeIf { it != w.place } ?: next.place)
             }) {
                 WalletRemoval.Removed, is WalletRemoval.Refused -> Unit // a refused owner check leaves everything as it was
                 WalletRemoval.InVault, WalletRemoval.NotErased -> removeLine = REMOVE_FAILED_LINE
@@ -433,11 +434,13 @@ fun MebitNavHost(
                     )
                     MovieRoute.Keyring -> KeyringScreen(
                         store = keyring,
-                        onAddKey = { navigate(MovieRoute.AddKey) },
-                        onDeleteBlocked = { key ->
-                            blockedKeyFingerprint = key.fingerprint
-                            navigate(MovieRoute.T15DeleteBlocked)
+                        deleteItem = { key ->
+                            keyDeleteItem(
+                                ownWalletName = wallets.listed.firstOrNull { it.session.ownKey()?.id == key.id }?.session?.walletName,
+                                usingWallets = if (vaults.judged) vaults.current.vaultsUsing(key.fingerprint).map { it.name } else null,
+                            )
                         },
+                        onAddKey = { navigate(MovieRoute.AddKey) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
@@ -489,11 +492,30 @@ fun MebitNavHost(
                         VaultListScreen(
                             draft = vaultDraft,
                             vaults = vaults,
-                            spending = wallets.listed.map { w -> SpendingCard(w.place, w.session.walletName, w.chain.balanceSats, spendingKnown(w), w.session.backupConfirmed) },
+                            spending = wallets.listed.map { w ->
+                                val fingerprint = w.session.fingerprint
+                                val delete = walletDeleteItem(
+                                    listedWallets = wallets.listed.size,
+                                    saved = w.session.saved == SaveState.Saved,
+                                    usesKey = vaults.usesKey(fingerprint),
+                                    vaultName = vaults.current.vaultsUsing(fingerprint).firstOrNull()?.name,
+                                )
+                                SpendingCard(w.place, w.session.walletName, w.chain.balanceSats, spendingKnown(w), w.session.backupConfirmed, delete)
+                            },
                             inUse = session,
                             unopenedNotice = unopenedNotice(wallets.unopened),
+                            removeLine = removeLine,
                             onOpenSpending = { place -> openWallet(place) { MovieRoute.S1HomeSingleSig } },
+                            onRemoveSpending = { place -> removeWallet(wallets.at(place)) },
                             onOpenDetail = { navigate(MovieRoute.VaultDetail) },
+                            // The phone's own owner sheet, which a one-key wallet's removal shows as it opens the wallet's saved copy, and never the Spending PIN.
+                            onRemoveVault = { vault ->
+                                scope.launch {
+                                    removeLine = null
+                                    if (phone.authenticate(removeReason(vault.name), allowPasscode = true) != BiometricResult.Success) return@launch
+                                    if (!vaultDraft.remove(vault.id)) removeLine = REMOVE_FAILED_LINE
+                                }
+                            },
                             onCreate = { navigate(MovieRoute.Policy) },
                             onOpenCatalog = openCatalog,
                         )
@@ -525,11 +547,6 @@ fun MebitNavHost(
                     )
                     MovieRoute.T15UnverifiedFirst -> T15UnverifiedFirstScreen(
                         onVerify = { navigate(MovieRoute.VerifyKey) },
-                        onBack = onBack,
-                        onOpenCatalog = openCatalog,
-                    )
-                    MovieRoute.T15DeleteBlocked -> T15DeleteBlockedScreen(
-                        line = keyInUseLine(vaults.current.vaults, blockedKeyFingerprint),
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
@@ -566,12 +583,6 @@ fun MebitNavHost(
                         onOpenTx = openTx,
                         onOpenCatalog = openCatalog,
                         onChangePin = if (session.pin.isSet) ({ scope.launch { biometrics.changePin("เปลี่ยน PIN") } }) else null,
-                        remove = {
-                            val using = vaults.current.vaults.firstOrNull { v -> v.keyFingerprints.any { it.equals(session.fingerprint, ignoreCase = true) } }
-                            removeRow(wallets.listed.size, session.saved == SaveState.Saved, vaults.usesKey(session.fingerprint), using?.name)
-                        },
-                        removeLine = removeLine,
-                        onRemove = { removeWallet(open) },
                     )
                     MovieRoute.S7History -> S7HistoryScreen(
                         wallet = singleSig,
