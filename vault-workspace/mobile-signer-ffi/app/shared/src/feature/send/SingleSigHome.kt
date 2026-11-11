@@ -15,24 +15,17 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -50,7 +43,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -64,6 +56,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -77,8 +70,6 @@ import com.mebit.app.feature.onboarding.NotSavedNotice
 import com.mebit.app.rememberIsDebugBuild
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_chevron
-import com.mebit.app.resources.mebit_logo
-import com.mebit.app.ui.components.DebugLink
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbChip
@@ -88,7 +79,6 @@ import com.mebit.app.ui.theme.MbEyebrow
 import com.mebit.app.ui.theme.MbIconWash
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
-import com.mebit.app.ui.theme.MbPage
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.ffi.signer.HotTx
@@ -96,8 +86,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.painterResource
-
-private val FiatGold = Color(0xFFEEB42A)
 
 // Four and a half rows at the 67 dp pitch, so a fifth row peeks out to show the box scrolls.
 private val TxListMaxHeight = 301.5.dp
@@ -173,140 +161,126 @@ internal fun SingleSigHome(
     // Derived, so a drag recomposes the page only when one of these flips and not on every frame.
     val armed by remember { derivedStateOf { pull.distanceFraction > 1f } }
     val open by remember { derivedStateOf { pull.distanceFraction > 0f } }
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MbPage)
-            .testTag(tag)
-            .pullToRefresh(
-                isRefreshing = pulled,
-                state = pull,
-                onRefresh = {
-                    pulled = true
-                    retries = afterPull(retries, binding)
-                },
-            ),
+    WalletPage(
+        tag = tag,
+        board = WalletBoard.Home,
+        onOpenCatalog = onOpenCatalog,
+        modifier = Modifier.pullToRefresh(
+            isRefreshing = pulled,
+            state = pull,
+            onRefresh = {
+                pulled = true
+                retries = afterPull(retries, binding)
+            },
+        ),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                // After the scroll, so the navy block is part of the content and scrolls away with it.
-                .drawBehind { drawRect(MbNavy, size = size.copy(height = 350.dp.toPx())) }
-                .safeDrawingPadding()
-                .padding(horizontal = 20.dp)
-                .padding(top = 4.dp),
+        WalletHero(
+            board = WalletBoard.Home,
+            eyebrow = "SINGLE-SIG · กุญแจเดียว",
+            name = session.walletName,
+            balance = homeBalanceText(wallet.balanceSats, wallet.balanceKnown, loading),
+            balanceTag = "ss_balance",
+            receiveTag = "cta_s1_receive",
+            onReceive = onReceive,
+            sendTag = "cta_s1_send",
+            onSend = onSend,
+            demo = wallet.mode == WalletMode.Demo && !loading,
         ) {
-            Image(painterResource(Res.drawable.mebit_logo), contentDescription = "mebit", modifier = Modifier.size(width = 98.dp, height = 26.dp))
-            Spacer(modifier = Modifier.height(22.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(8.dp).background(MbBtcOrange, CircleShape))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("SINGLE-SIG · กุญแจเดียว", color = MbWhite, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, lineHeight = 13.sp)
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(session.walletName, color = MbWhite, fontSize = 19.sp, fontWeight = FontWeight.Medium, lineHeight = 25.sp)
-            Spacer(modifier = Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(
-                    text = homeBalanceText(wallet.balanceSats, wallet.balanceKnown, loading),
-                    color = MbWhite,
-                    fontSize = 38.sp,
-                    fontWeight = FontWeight.Bold,
-                    lineHeight = 50.sp,
-                    modifier = Modifier.testTag("ss_balance"),
-                )
-                if (wallet.mode == WalletMode.Demo && !loading) {
-                    Text(" demo", color = MbWhite.copy(alpha = 0.6f), fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.padding(bottom = 10.dp))
-                }
-            }
-            Spacer(modifier = Modifier.height(2.dp))
-            // The board's baht line sits here, and so do the fetch note, the scan's calm line and the retry. The room stays when none shows, so nothing below it moves.
+            // The board's baht line sits here, and so do the fetch note, the scan's calm line and the retry.
             val scanLine = homeScanLine(wallet.mode, wallet.scan)
-            Box(modifier = Modifier.height(17.dp)) {
-                when {
-                    loading -> GoldLine("กำลังดึงยอด…")
-                    scanLine != null -> Text(
-                        scanLine,
-                        color = MbWhite.copy(alpha = 0.6f),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Light,
-                        lineHeight = 17.sp,
-                        maxLines = 1,
-                        modifier = Modifier.testTag("ss_scan_line"),
-                    )
-                    !wallet.balanceKnown -> GoldLine(
-                        text = "ดึงยอดไม่สำเร็จ · แตะเพื่อลองใหม่",
-                        modifier = Modifier.clickable(role = Role.Button, enabled = !binding) { retries++ }.testTag("cta_s1_retry"),
-                    )
-                    wallet.mode == WalletMode.Live -> fiatLine(wallet.balanceSats, quote)?.let { GoldLine(it) }
+            when {
+                loading -> GoldLine("กำลังดึงยอด…")
+                scanLine != null -> Text(
+                    scanLine,
+                    color = MbWhite.copy(alpha = 0.6f),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Light,
+                    lineHeight = 17.sp,
+                    maxLines = 1,
+                    modifier = Modifier.testTag("ss_scan_line"),
+                )
+                !wallet.balanceKnown -> GoldLine(
+                    text = "ดึงยอดไม่สำเร็จ · แตะเพื่อลองใหม่",
+                    modifier = Modifier.clickable(role = Role.Button, enabled = !binding) { retries++ }.testTag("cta_s1_retry"),
+                )
+                wallet.mode == WalletMode.Live -> fiatLine(wallet.balanceSats, quote)?.let { GoldLine(it) }
+            }
+        }
+        Spacer(modifier = Modifier.height(58.dp))
+        PolicyCard(
+            board = WalletBoard.Home,
+            dot = if (session.backupConfirmed) MbSuccess else MbBtcOrange,
+            summary = "กุญแจ: iPhone ของฉัน · " + if (session.backupConfirmed) "สำรองแล้ว" else "ยังไม่สำรอง",
+            keys = listOf(KeyRowText("iPhone ของฉัน", "mebit บนเครื่องนี้ · " + session.fingerprint.chunked(4).joinToString(" ").ifBlank { "—" }, "key_fingerprint")),
+            expanded = keyDetails,
+            onToggle = { keyDetails = !keyDetails },
+        ) {
+            // A link under the key's row where the session Spending PIN guards spending, which no board has yet.
+            onChangePin?.let {
+                Text(
+                    text = "เปลี่ยน PIN",
+                    color = MbNavy,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    lineHeight = 17.sp,
+                    modifier = Modifier.padding(start = 62.dp, bottom = 14.dp).clickable(role = Role.Button, onClick = it).testTag("cta_change_pin"),
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(14.dp))
+        UpgradeCard(onVault)
+        NotSavedNotice(session, Modifier.padding(top = 12.dp))
+        wallet.lastError?.let {
+            Spacer(modifier = Modifier.height(12.dp))
+            // Already plain Thai: every read error goes through readErrorThai, so none names the server or the library.
+            Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.testTag("error"))
+        }
+        debugFailureLine(wallet.lastFailure, debugBuild)?.let {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(it, color = MbBody, fontSize = 10.sp, lineHeight = 13.sp, modifier = Modifier.testTag("debug_failure"))
+        }
+        if (rows.isNotEmpty() || open || pulled) {
+            Spacer(modifier = Modifier.height(24.dp))
+            val hasMore = homeHasMoreHistory(wallet.history)
+            val end = txHeaderEnd(pulled, armed, hasMore)
+            Box {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("ธุรกรรมล่าสุด", color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 14.sp, modifier = Modifier.weight(1f).testTag("home_tx_label"))
+                    if (hasMore) {
+                        Text(
+                            "ดูทั้งหมด",
+                            color = MbNavy,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            lineHeight = 14.sp,
+                            // Hidden, not removed, so the status over it moves nothing below.
+                            modifier = (if (end == TxHeaderEnd.SeeAll) Modifier.clickable(role = Role.Button, onClick = onHistory) else Modifier.alpha(0f).clearAndSetSemantics { })
+                                .padding(vertical = 8.dp)
+                                .testTag("cta_s1_history"),
+                        )
+                    }
+                }
+                if (end == TxHeaderEnd.Armed || end == TxHeaderEnd.Refreshing) {
+                    Row(
+                        modifier = Modifier.matchParentSize().wrapContentHeight(align = Alignment.CenterVertically, unbounded = true),
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (end == TxHeaderEnd.Refreshing) {
+                            RefreshSpinner()
+                            Spacer(modifier = Modifier.width(11.dp))
+                        }
+                        Text("กำลังอัปเดต…", color = MbBody, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, lineHeight = 13.2.sp, modifier = Modifier.testTag("home_refresh_status"))
+                    }
                 }
             }
-            Spacer(modifier = Modifier.height(9.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(20.dp)) {
-                HomeAction("รับ", filled = true, tag = "cta_s1_receive", modifier = Modifier.weight(1f), onClick = onReceive)
-                HomeAction("ส่ง", filled = false, tag = "cta_s1_send", modifier = Modifier.weight(1f), onClick = onSend)
-            }
-            Spacer(modifier = Modifier.height(58.dp))
-            KeyStatus(backedUp = session.backupConfirmed, fingerprint = session.fingerprint, expanded = keyDetails, onToggle = { keyDetails = !keyDetails }, onChangePin = onChangePin)
-            Spacer(modifier = Modifier.height(14.dp))
-            UpgradeCard(onVault)
-            NotSavedNotice(session, Modifier.padding(top = 12.dp))
-            wallet.lastError?.let {
-                Spacer(modifier = Modifier.height(12.dp))
-                // Already plain Thai: every read error goes through readErrorThai, so none names the server or the library.
-                Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.testTag("error"))
-            }
-            debugFailureLine(wallet.lastFailure, debugBuild)?.let {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(it, color = MbBody, fontSize = 10.sp, lineHeight = 13.sp, modifier = Modifier.testTag("debug_failure"))
-            }
-            if (rows.isNotEmpty() || open || pulled) {
-                Spacer(modifier = Modifier.height(24.dp))
-                val hasMore = homeHasMoreHistory(wallet.history)
-                val end = txHeaderEnd(pulled, armed, hasMore)
-                Box {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("ธุรกรรมล่าสุด", color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 14.sp, modifier = Modifier.weight(1f).testTag("home_tx_label"))
-                        if (hasMore) {
-                            Text(
-                                "ดูทั้งหมด",
-                                color = MbNavy,
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                lineHeight = 14.sp,
-                                // Hidden, not removed, so the status over it moves nothing below.
-                                modifier = (if (end == TxHeaderEnd.SeeAll) Modifier.clickable(role = Role.Button, onClick = onHistory) else Modifier.alpha(0f).clearAndSetSemantics { })
-                                    .padding(vertical = 8.dp)
-                                    .testTag("cta_s1_history"),
-                            )
-                        }
-                    }
-                    if (end == TxHeaderEnd.Armed || end == TxHeaderEnd.Refreshing) {
-                        Row(
-                            modifier = Modifier.matchParentSize().wrapContentHeight(align = Alignment.CenterVertically, unbounded = true),
-                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.End,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            if (end == TxHeaderEnd.Refreshing) {
-                                RefreshSpinner()
-                                Spacer(modifier = Modifier.width(11.dp))
-                            }
-                            Text("กำลังอัปเดต…", color = MbBody, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, lineHeight = 13.2.sp, modifier = Modifier.testTag("home_refresh_status"))
-                        }
-                    }
-                }
-                PullGap(pull)
-                LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = TxListMaxHeight).testTag("home_tx_list")) {
-                    itemsIndexed(rows, key = { _, row -> row.tx.txid }) { index, row ->
-                        HomeTxRowItem(row, Modifier.testTag("home_tx_$index")) { onOpenTx(row.tx) }
-                    }
+            PullGap(pull)
+            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = TxListMaxHeight).testTag("home_tx_list")) {
+                itemsIndexed(rows, key = { _, row -> row.tx.txid }) { index, row ->
+                    HomeTxRowItem(row, Modifier.testTag("home_tx_$index")) { onOpenTx(row.tx) }
                 }
             }
         }
-        // Once the navy block has scrolled up, the status bar still needs a navy ground for its white icons.
-        Box(modifier = Modifier.fillMaxWidth().windowInsetsTopHeight(WindowInsets.safeDrawing).background(MbNavy))
-        DebugLink(onClick = onOpenCatalog)
     }
 }
 
@@ -383,19 +357,18 @@ internal fun afterPull(retries: Int, binding: Boolean): Int = if (binding) retri
 /** The Rust text under the error line, which names the request that failed. A debug build only: a release build shows the Thai line alone, as before. */
 internal fun debugFailureLine(failure: String?, debugBuild: Boolean): String? = failure?.takeIf { debugBuild }
 
-/** The board's gold 13 sp line under the balance. */
-@Composable
-internal fun GoldLine(text: String, modifier: Modifier = Modifier) {
-    Text(text, color = FiatGold, fontSize = 13.sp, fontWeight = FontWeight.Light, lineHeight = 17.sp, modifier = modifier)
-}
-
 /**
  * One recent transaction: the arrow, the title over the date, and the amount over the status, on the board's 67 dp pitch.
- * A tap anywhere on it calls [onClick].
+ * A tap anywhere on it calls [onClick]. With no [onClick] the row is not a button, and a screen reader reads it as one item.
  */
 @Composable
-internal fun HomeTxRowItem(row: HomeTxRow, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Row(modifier = modifier.fillMaxWidth().heightIn(min = 67.dp).clickable(role = Role.Button, onClick = onClick)) {
+internal fun HomeTxRowItem(row: HomeTxRow, modifier: Modifier = Modifier, onClick: (() -> Unit)?) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 67.dp)
+            .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier.semantics(mergeDescendants = true) {}),
+    ) {
         TxDirectionIcon(row.received, Modifier.padding(top = 5.dp))
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
@@ -445,83 +418,6 @@ private fun TxArrow(down: Boolean, color: Color) {
             lineTo(inset + width, tip - width / 2)
         }
         drawPath(arrow, color, style = Stroke(stroke.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-    }
-}
-
-@Composable
-private fun HomeAction(label: String, filled: Boolean, tag: String, modifier: Modifier, onClick: () -> Unit) {
-    val pill = RoundedCornerShape(999.dp)
-    Box(
-        modifier = modifier
-            .height(50.dp)
-            .clip(pill)
-            .background(if (filled) MbWhite else MbWhite.copy(alpha = 0.12f))
-            .then(if (filled) Modifier else Modifier.border(1.dp, MbWhite.copy(alpha = 0.28f), pill))
-            .clickable(role = Role.Button, onClick = onClick)
-            .testTag(tag),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(label, color = if (filled) MbNavy else MbWhite, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
-    }
-}
-
-/**
- * Penpot 4.1 closed and 4.1.1 open: the same card, with the key's row under a divider. [onChangePin] adds a link under the key's
- * row where the session Spending PIN guards spending, which no board has yet.
- */
-@Composable
-private fun KeyStatus(backedUp: Boolean, fingerprint: String, expanded: Boolean, onToggle: () -> Unit, onChangePin: (() -> Unit)?) {
-    val card = RoundedCornerShape(16.dp)
-    Column(modifier = Modifier.fillMaxWidth().clip(card).background(MbWhite).border(1.dp, MbBorder, card).testTag("key_status")) {
-        Row(modifier = Modifier.fillMaxWidth().height(52.dp).padding(start = 15.dp, end = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(8.dp).background(if (backedUp) MbSuccess else MbBtcOrange, CircleShape))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = "กุญแจ: iPhone ของฉัน · " + if (backedUp) "สำรองแล้ว" else "ยังไม่สำรอง",
-                color = MbBody,
-                fontSize = 12.sp,
-                lineHeight = 16.sp,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = if (expanded) "ซ่อน" else "รายละเอียด",
-                color = MbNavy,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                lineHeight = 15.sp,
-                modifier = Modifier.clickable(role = Role.Button, onClick = onToggle).padding(bottom = 8.dp).testTag("key_details_toggle"),
-            )
-        }
-        if (expanded) {
-            Box(modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth().height(1.dp).background(MbBorder))
-            Row(modifier = Modifier.fillMaxWidth().height(63.dp).padding(start = 22.dp, end = 22.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(modifier = Modifier.size(28.dp).background(MbChip, CircleShape), contentAlignment = Alignment.Center) {
-                    Text("1", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text("iPhone ของฉัน", color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 19.sp)
-                    Text(
-                        text = "mebit บนเครื่องนี้ · " + fingerprint.chunked(4).joinToString(" ").ifBlank { "—" },
-                        color = MbSlate,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Light,
-                        lineHeight = 15.sp,
-                        modifier = Modifier.testTag("key_fingerprint"),
-                    )
-                }
-            }
-            onChangePin?.let {
-                Text(
-                    text = "เปลี่ยน PIN",
-                    color = MbNavy,
-                    fontSize = 12.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    lineHeight = 17.sp,
-                    modifier = Modifier.padding(start = 62.dp, bottom = 14.dp).clickable(role = Role.Button, onClick = it).testTag("cta_change_pin"),
-                )
-            }
-        }
     }
 }
 
