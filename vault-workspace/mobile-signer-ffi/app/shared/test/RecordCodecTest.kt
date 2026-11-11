@@ -201,11 +201,48 @@ class RecordCodecTest {
         }
     }
 
+    // Every flag bit is in use since bit 128, so only the version and the network byte can carry a value no build writes.
     @Test
-    fun unknownFlagBitsAndNetworkBytesAreNewer() {
-        assertBroken(Cause.NewerVersion, v1Bytes(flags = 1 or 128), "flag bit 128")
-        assertBroken(Cause.NewerVersion, v1Bytes(flags = 8 or 128) + sendSection(TEST_TXID.encodeToByteArray(), 1), "flag bit 128 beside a payment of unknown outcome")
+    fun unknownNetworkBytesAreNewer() {
         for (network in listOf(2, 255)) assertBroken(Cause.NewerVersion, v1Bytes(network = network), "network byte $network")
+    }
+
+    // Bit 128 and the last section name the keys a wallet had before a passphrase changed it in first setup. A record without them,
+    // every record saved before the bit among them, keeps exactly the bytes it had, and every build before the bit reads one with it as
+    // a newer app's.
+    @Test
+    fun earlierFingerprintsWriteBit128AndTheLastSectionAndARecordWithoutThemReadsAsNone() {
+        val earlier = listOf("aaaa1111", "bbbb2222")
+        val store = FakeSecureStore()
+        SavedWallet(store).save(testRecord(passphrase = "x y", appLockEnabled = true, earlierFingerprints = earlier), WriteMode.Create)
+        val documented = v1Bytes(passphrase = "x y".encodeToByteArray(), flags = 4 or 128) + earlierSection(*earlier.toTypedArray())
+        assertTrue(store.writes.single().bytes.contentEquals(documented), "encoder output")
+        val back = assertIs<UnlockResult.Opened>(opened(documented), "documented bytes").record
+        assertTrue(back.earlierFingerprints == earlier, "the earlier fingerprints")
+        assertTrue(back.appLockEnabled && back.passphrase == "x y" && back.fingerprint == TEST_CHECK, "the rest of the record")
+        assertTrue(assertIs<UnlockResult.Opened>(opened(v1Bytes(flags = 7))).record.earlierFingerprints.isEmpty(), "a record from before the bit")
+        for (bad in listOf("0a1b2c3", "0a1b2c3" + Char(0xE9))) {
+            val refusing = FakeSecureStore()
+            assertIs<SaveResult.NotSaved>(SavedWallet(refusing).save(testRecord(earlierFingerprints = listOf(bad)), WriteMode.Create), "an earlier fingerprint of ${bad.length}")
+            assertTrue(refusing.writes.isEmpty(), "something was written for an earlier fingerprint of ${bad.length}")
+        }
+    }
+
+    @Test
+    fun earlierFingerprintsTheEncoderNeverWritesAreCorrupt() {
+        val corrupt = listOf(
+            "the flag without the section" to v1Bytes(flags = 128),
+            "the section without the flag" to v1Bytes() + earlierSection("aaaa1111"),
+            "an empty section" to v1Bytes(flags = 128) + earlierSection(),
+            "a fingerprint of 7" to v1Bytes(flags = 128) + earlierSection("aaaa111"),
+            "a fingerprint and a half" to v1Bytes(flags = 128) + earlierSection("aaaa1111bbbb"),
+            "a byte above ASCII" to v1Bytes(flags = 128) + byteArrayOf(0, 8) + "aaaa111".encodeToByteArray() + 0x80.toByte(),
+            "a trailing byte" to v1Bytes(flags = 128) + earlierSection("aaaa1111") + 0.toByte(),
+        )
+        for ((case, bytes) in corrupt) assertBroken(Cause.Corrupt, bytes, case)
+        val good = v1Bytes(flags = 128) + earlierSection("aaaa1111")
+        assertIs<UnlockResult.Opened>(opened(good), "the untouched section opens")
+        for (cut in 0 until good.size) assertBroken(Cause.Corrupt, good.copyOf(cut), "cut to $cut of ${good.size} bytes")
     }
 
     @Test

@@ -327,7 +327,7 @@ class Wallets internal constructor(
             is UnlockResult.Broken -> return WalletRemoval.NotErased // the copy can never open, so the words live only in memory
             else -> return WalletRemoval.Refused(r)
         }
-        if (!book.handOver(fingerprint, next.session.fingerprint)) return WalletRemoval.NotErased
+        if (!book.handOver(fingerprint, next.session.vaultsOwner() ?: return WalletRemoval.NotErased)) return WalletRemoval.NotErased
         if (!w.session.forgetSavedWallet(oldGuard)) return WalletRemoval.NotErased
         Snapshot.withMutableSnapshot {
             all = all - w
@@ -340,7 +340,7 @@ class Wallets internal constructor(
     fun vaultOwners(): VaultOwners? {
         val owners = all.mapNotNull { it.session.vaultsOwner() }.takeIf { it.isNotEmpty() } ?: return null
         val unknown = unopened.isNotEmpty() || all.any { it.session.words.isNotEmpty() && it.session.saved != SaveState.Saved }
-        return VaultOwners(owners, everyPlaceOpened = !unknown)
+        return VaultOwners(owners, everyPlaceOpened = !unknown, earlier = all.flatMap { it.session.earlierVaultsOwners() })
     }
 
     /** Every wallet's own key, in place order. */

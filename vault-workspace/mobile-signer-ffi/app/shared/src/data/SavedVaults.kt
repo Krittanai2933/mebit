@@ -46,9 +46,10 @@ enum class BookSaving {
 
 /**
  * Who the phone-level book may be saved for. [fingerprints] are the saved wallets in place order. [everyPlaceOpened] is false while the book's
- * owner could be a wallet this run cannot name, because a place did not open or a wallet in memory could not be saved.
+ * owner could be a wallet this run cannot name, because a place did not open or a wallet in memory could not be saved. [earlier] are keys
+ * those wallets had before a passphrase changed them in first setup, which the stored book may still name but is never saved for.
  */
-data class VaultOwners(val fingerprints: List<String>, val everyPlaceOpened: Boolean)
+data class VaultOwners(val fingerprints: List<String>, val everyPlaceOpened: Boolean, val earlier: List<String> = emptyList())
 
 /** The keys and vaults saved on this phone. Takes a [VaultsStorage] and not a SecureStore, so it has no way to reach the wallet's record, and saves only while [owners] names a wallet. */
 class SavedVaults internal constructor(
@@ -63,7 +64,10 @@ class SavedVaults internal constructor(
     var health: VaultsHealth by mutableStateOf(VaultsHealth.Ok)
         private set
 
-    /** The fingerprint the stored copy names, as last read or written in this run. Null until it has been read. State, so a first read that finds nothing new still redraws what [judged] decided. */
+    /**
+     * The fingerprint the stored copy names, as last read or written in this run, or the owner it moves to at the next save. Null until it
+     * has been read. State, so a first read that finds nothing new still redraws what [judged] decided.
+     */
     private var opened: String? by mutableStateOf(null)
 
     /** [current] is ahead of the stored copy. */
@@ -165,12 +169,12 @@ class SavedVaults internal constructor(
     /**
      * Before the wallet [leaving] is erased. When the stored book names it, writes the book under [next] first, so the owner survives its
      * first wallet being removed and a crash at any point leaves the book owned by a wallet that exists. False, with nothing erased by the
-     * caller, when the book cannot be read or written now.
+     * caller, when the book cannot be read or written now, so also while memory holds a change that the last [sync] could not save.
      */
     fun handOver(leaving: String, next: String): Boolean = synchronized(vaultsLock) {
         val me = me() ?: return@synchronized true
         if (opened == null && !open(me)) return@synchronized false
-        if (opened != leaving) return@synchronized true
+        if (opened != leaving) return@synchronized !owed
         if (health == VaultsHealth.Damaged || health == VaultsHealth.Newer) return@synchronized false // a Newer copy is never overwritten
         val text = VaultBookCodec.encodeChecked(next, current) ?: return@synchronized false
         if (storage?.write(text) != true) {
@@ -185,13 +189,25 @@ class SavedVaults internal constructor(
 
     private fun me(): VaultOwners? = if (storage == null) null else owners()
 
-    /** True when the stored copy has been read for a wallet this phone holds, reading it now if it has not. */
-    private fun readFor(me: VaultOwners): Boolean = (opened?.let { it in me.fingerprints } == true) || open(me)
+    /**
+     * True when the stored copy has been read for a wallet this phone holds, reading it now if it has not. Once read, [current] holds the
+     * book, so a book whose owner is no longer an owner, as when a new key takes a passphrase, moves to the first owner at the next save
+     * with no second read, which iOS answers only after an owner check.
+     */
+    private fun readFor(me: VaultOwners): Boolean {
+        val owner = opened ?: return open(me)
+        if (owner !in me.fingerprints) {
+            opened = me.fingerprints.first()
+            owed = true
+        }
+        return true
+    }
 
     /**
      * True when the stored copy was read and judged. False when it could not be read this moment, which concludes nothing. A stored owner
-     * this phone does not hold is deleted as left behind, but only when every place opened. A place that did not open might be that owner,
-     * so the book is then kept, shown and re-owned at its next save.
+     * that is neither the key nor an earlier key of a wallet this phone holds is deleted as left behind, but only when every place opened.
+     * A place that did not open might be that owner, so the book is then kept, shown and re-owned at its next save, as it is when it
+     * names an earlier key.
      */
     private fun open(me: VaultOwners): Boolean {
         storedEmpty = null
@@ -202,7 +218,7 @@ class SavedVaults internal constructor(
             VaultBookCodec.Decoded.Damaged -> refuse(VaultsHealth.Damaged)
             VaultBookCodec.Decoded.Newer -> refuse(VaultsHealth.Newer)
             is VaultBookCodec.Decoded.Ok -> when {
-                decoded.owner !in me.fingerprints && me.everyPlaceOpened -> {
+                decoded.owner !in me.fingerprints && decoded.owner !in me.earlier && me.everyPlaceOpened -> {
                     storage?.delete() // left by a wallet this phone no longer holds
                     keepMemory()
                 }
@@ -281,9 +297,6 @@ internal fun OnboardingSession.ownKey(): SavedKey? = fingerprint.takeIf { it.isN
         verified = backupConfirmed,
     )
 }
-
-/** The fingerprint of the wallet this session holds on the phone, or null while there is none. This is the one rule for whether the book may be saved. */
-internal fun OnboardingSession.vaultsOwner(): String? = fingerprint.takeIf { saved == SaveState.Saved && it.isNotBlank() }
 
 /** The extended keys in the descriptor line of [bsms], in order. Empty when the text is not the shape [walletBsms] writes, which then fails the address check. */
 internal fun xpubsIn(bsms: String): List<String> =

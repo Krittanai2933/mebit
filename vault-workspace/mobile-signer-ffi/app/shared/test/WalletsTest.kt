@@ -850,6 +850,64 @@ class WalletsTest {
     }
 
     @Test
+    fun theBookIsHandedToTheKeyThePhoneHoldsAfterAPassphraseSaveFailed(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P1, 1)
+        val wallets = phone.unlocked()
+        val storage = FakeVaultsStorage()
+        val book = book(storage, wallets).apply { sync() }
+        book.edit { it.copy(keys = listOf(HARDWARE)) }
+        val w = assertNotNull(wallets.beginAdd())
+        phone.nextWords = words(2)
+        w.session.generateThisDevice()
+        phone.place(P2).write = WriteResult.Unavailable(Why.Other)
+        w.session.changeNewKeyPassphrase("pw") // the phone keeps the copy without it
+        w.session.confirmAddressType()
+        endSetup(w.session) // a later wallet has no App Lock read-back
+        assertEquals(WalletRemoval.Removed, wallets.remove(wallets.at(P1), book, "test") {})
+
+        val next = book(storage, phone.unlocked()).apply { sync() }
+        assertEquals(listOf(HARDWARE), next.current.keys, "the next launch opens wallet 2 by the key the phone holds, and its book")
+    }
+
+    @Test
+    fun aRemovalWaitsWhileTheBookCannotBeSavedForAKeyThatChangedAndTheBookOutlivesTheNextLaunch(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P2, 2).saved(P3, 3)
+        val wallets = phone.unlocked()
+        val w = assertNotNull(wallets.beginAdd())
+        phone.nextWords = words(1)
+        w.session.generateThisDevice()
+        val storage = FakeVaultsStorage()
+        val book = book(storage, wallets).apply { sync() }
+        book.edit { it.copy(keys = listOf(HARDWARE)) }
+        assertEquals(check(words(1)), storedOwner(storage), "the book names the wallet at place 1, still in setup")
+        storage.failWrite = true
+        w.session.changeNewKeyPassphrase("pw")
+        book.sync() // the move to the new key is not saved
+        assertEquals(WalletRemoval.NotErased, wallets.remove(wallets.at(P2), book, "test") { error("not gone") })
+        assertEquals(0, phone.place(P2).erases, "wallet 2 stays while the book cannot be saved")
+
+        storage.failWrite = false
+        val next = book(storage, phone.unlocked()).apply { sync() }
+        assertEquals(listOf(HARDWARE), next.current.keys, "the next launch keeps the book its wallet saved before the passphrase")
+    }
+
+    @Test
+    fun aRemovalWaitsForAnEditTheBookCouldNotSaveAndGoesAheadOnceItSaves(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P1, 1).saved(P2, 2)
+        val wallets = phone.unlocked()
+        val storage = FakeVaultsStorage()
+        val book = book(storage, wallets).apply { sync() }
+        storage.failWrite = true
+        book.edit { it.copy(keys = listOf(HARDWARE)) }
+        assertEquals(WalletRemoval.NotErased, wallets.remove(wallets.at(P2), book, "test") { error("not gone") })
+        assertEquals(0, phone.place(P2).erases, "nothing is erased while the book holds a change the phone does not")
+
+        storage.failWrite = false
+        assertEquals(WalletRemoval.Removed, wallets.remove(wallets.at(P2), book, "test") {})
+        assertEquals(listOf(HARDWARE), book(storage, phone.unlocked()).apply { sync() }.current.keys, "the edit was saved before the erase")
+    }
+
+    @Test
     fun aCopyThatCanNeverOpenIsNotRemovedBecauseItsWordsAreOnlyInMemory(): Unit = runBlocking {
         val phone = ShelfPhone().saved(P1, 1).saved(P2, 2)
         val wallets = phone.unlocked()

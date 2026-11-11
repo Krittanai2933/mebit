@@ -102,8 +102,8 @@ class OnboardingSession(
         /** A passphrase import waiting for its fingerprint check. */
         data object Staged : Held
 
-        /** The phone held this copy at our last read or write. */
-        class Copy(val version: StoreVersion) : Held
+        /** The phone held this copy, of the key [fingerprint] and naming the wallet's [earlier] keys, at our last read or write. */
+        class Copy(val version: StoreVersion, val fingerprint: String, val earlier: List<String>) : Held
 
         /** Another instance changed the phone since. This session never writes again in this run. */
         data object Stale : Held
@@ -118,6 +118,15 @@ class OnboardingSession(
             Held.Staged -> SaveState.Staged
             is Held.Copy -> SaveState.Saved
         }
+
+    /**
+     * The key of the wallet this session holds on the phone, or null while there is none. This is the one rule for whether the book may
+     * be saved. After a passphrase Replace that failed, it is the earlier key, which the phone still holds, not [fingerprint].
+     */
+    internal fun vaultsOwner(): String? = (held as? Held.Copy)?.fingerprint?.takeIf { it.isNotBlank() }
+
+    /** The keys this wallet had before a passphrase changed it in first setup, as the copy on the phone names them. A book may still be saved under one. */
+    internal fun earlierVaultsOwners(): List<String> = (held as? Held.Copy)?.earlier.orEmpty()
 
     /** Why the wallet is not saved on this phone, for the notice. Null until a save fails, and again after one succeeds. */
     var notSavedBecause: Why? by mutableStateOf(null)
@@ -361,7 +370,7 @@ class OnboardingSession(
             }
             is EraseResult.Failed -> {
                 // The copy is still on the phone, but the erase advanced the store's counter, so the session's Replace must expect the new version or every later save is a Conflict.
-                if (held is Held.Copy) held = Held.Copy(r.version)
+                (held as? Held.Copy)?.let { held = Held.Copy(r.version, it.fingerprint, it.earlier) }
                 false
             }
         }
@@ -388,7 +397,7 @@ class OnboardingSession(
         addressTypeConfirmed = record.addressTypeConfirmed
         // A type not yet confirmed means the Wallet list never showed the wallet, so setup goes on where it stopped.
         inFirstSetup = !record.addressTypeConfirmed
-        held = Held.Copy(version)
+        held = Held.Copy(version, record.fingerprint, record.earlierFingerprints)
         recordGuard = oldGuard
         if (oldGuard != null) persist()
         return true
@@ -416,9 +425,10 @@ class OnboardingSession(
             Held.Nothing -> WriteMode.Create
             is Held.Copy -> WriteMode.Replace(h.version)
         }
-        when (val r = w.save(toRecord(), mode)) {
+        val record = toRecord()
+        when (val r = w.save(record, mode)) {
             is SaveResult.Written -> {
-                held = Held.Copy(r.version)
+                held = Held.Copy(r.version, record.fingerprint, record.earlierFingerprints)
                 recordGuard = null // the record on the phone no longer holds it
                 notSavedBecause = null
                 lastSaveFailed = false
@@ -473,7 +483,11 @@ class OnboardingSession(
         return true
     }
 
-    private fun toRecord() = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled, addressType, addressTypeConfirmed)
+    // The key the phone holds joins the earlier ones when this save changes it, because the book may stay saved under it.
+    private fun toRecord() = WalletRecord(
+        words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled, addressType, addressTypeConfirmed,
+        earlierFingerprints = (held as? Held.Copy)?.let { it.earlier + it.fingerprint - fingerprint }.orEmpty(),
+    )
 
     private fun applyKey(key: SoftwareAccountKey, passphrase: String, network: KeyNetwork) {
         words = key.mnemonicWords

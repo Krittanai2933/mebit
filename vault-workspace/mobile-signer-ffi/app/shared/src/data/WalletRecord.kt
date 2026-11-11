@@ -21,6 +21,11 @@ class WalletRecord(
     val addressType: AddressType = AddressType.NATIVE_SEGWIT,
     /** False while the user has not confirmed [addressType] on the Address Type screen. A record saved before this field reads as confirmed. */
     val addressTypeConfirmed: Boolean = true,
+    /**
+     * The fingerprints [words] gave this wallet earlier in its first setup, before a passphrase changed its key, so the next launch knows a
+     * book still saved under one of them is this wallet's. A record saved before this field reads as none.
+     */
+    val earlierFingerprints: List<String> = emptyList(),
 ) {
     init {
         require(words.size in BIP39_SIZES) { "word count" } // no record without a key, and the message names no word
