@@ -28,6 +28,7 @@ Skills (each one's `description` says when to use it):
 - `.claude/skills/policy-engine-review/SKILL.md`
 - `.claude/skills/testnet-workflow/SKILL.md`
 - `.claude/skills/design-tokens/SKILL.md`
+- `.claude/skills/organize-vault-send/SKILL.md`
 - `vault-workspace/mobile-signer-ffi/app/.claude/skills/verify/SKILL.md` drives the mobile app on an emulator or simulator and applies only under `vault-workspace/mobile-signer-ffi/app`. Agents that read only `.agents/skills` do not list it, so read it before verifying app changes.
 
 ## Module dependency order
