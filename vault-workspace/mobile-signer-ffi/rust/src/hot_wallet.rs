@@ -6573,6 +6573,65 @@ mod tests {
         );
     }
 
+    // The pages are fetched in parallel, so the order they are asked in shows in the rows instead: rows of equal depth keep the
+    // order of the pages that first list them, which is receive 0, 1, 2, then change 0.
+    #[test]
+    fn the_one_key_history_asks_these_pages_in_this_order_and_reads_these_rows() {
+        let mut fake = three_used();
+        let (e0, e1, e2, c0) = (
+            addr(Chain::External, 0),
+            addr(Chain::External, 1),
+            addr(Chain::External, 2),
+            addr(Chain::Internal, 0),
+        );
+        fake.snapshot("").unwrap();
+        let to_e0 = tx_json('a', &[spent(SOMEONE, 5_000)], &[txo(&e0, 1_000)], &at(100));
+        let to_e1 = tx_json('b', &[spent(SOMEONE, 5_000)], &[txo(&e1, 1_000)], &at(100));
+        let spend = tx_json(
+            'c',
+            &[spent(&e1, 1_000)],
+            &[txo(SOMEONE, 400), txo(&c0, 500)],
+            MEMPOOL,
+        );
+        let to_e2 = tx_json('d', &[spent(SOMEONE, 900)], &[txo(&e2, 300)], MEMPOOL);
+        let to_c0 = tx_json('e', &[spent(SOMEONE, 900)], &[txo(&c0, 200)], MEMPOOL);
+        fake.txs.insert(e0.clone(), format!("[{to_e0}]"));
+        fake.txs.insert(e1.clone(), format!("[{spend},{to_e1}]"));
+        fake.txs.insert(e2.clone(), format!("[{to_e2}]"));
+        fake.txs.insert(c0.clone(), format!("[{to_c0},{spend}]"));
+        let before = fake.requests();
+        let rows = fake.history().unwrap();
+        let asked = fake.calls.lock().unwrap()[before..].to_vec();
+        let (tip, pages) = asked.split_last().unwrap();
+        assert_eq!(
+            tip,
+            &format!("{ESPLORA_TESTNET4}/blocks/tip/height"),
+            "the tip after every page"
+        );
+        let mut pages = pages.to_vec();
+        pages.sort();
+        let mut expected: Vec<String> = [&e0, &e1, &e2, &c0]
+            .iter()
+            .map(|a| format!("{ESPLORA_TESTNET4}/address/{a}/txs"))
+            .collect();
+        expected.sort();
+        assert_eq!(
+            pages, expected,
+            "one page per used address and no sync request, the snapshot's sync shared"
+        );
+        assert_eq!(
+            rows,
+            [
+                hot(&id('c'), -500, 0, None),
+                hot(&id('d'), 300, 0, None),
+                hot(&id('e'), 200, 0, None),
+                hot(&id('a'), 1_000, 6, Some(1_790_000_000)),
+                hot(&id('b'), 1_000, 6, Some(1_790_000_000)),
+            ],
+            "each transaction once, netted over every address, the mempool first, ties in page order"
+        );
+    }
+
     #[test]
     fn a_used_address_balance_is_asked_again_once_the_share_window_has_passed() {
         let mut fake = Fake::new();
