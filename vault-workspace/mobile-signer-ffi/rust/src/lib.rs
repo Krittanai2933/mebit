@@ -397,7 +397,7 @@ mod tests {
     use bitcoin::bip32::{ChainCode, ChildNumber};
 
     // xpubs: vault-core key derivation over BIP-39 entropy 32x 0x00 / 0x7f / 0x80, m/48'/coin'/0'/2'.
-    // `python3 scripts/address_oracle.py` re-derives the two addresses from these constants.
+    // `python3 scripts/address_oracle.py` re-derives the three addresses from these constants.
     const TPUB: [&str; 3] = [
         "tpubDFkN51vYF36W4Yfn3wGv5fpmRo3ok7vZZjc1gmRJjumq33L776e6GkP4HGdCVjDqYiBahXCrXQKja8aUZ2xovQNS8WkF46MdY7TLHJLYD7H",
         "tpubDF41CiHSj6Y4iSH7syioTxCr9cvMXLXvz4sGzvg4MSYfnid68mGMStcADFnKGnYmwL5GJ6ZzqvypiZaHs3AefpGuDrzMa56PYHVELc4crdQ",
@@ -410,6 +410,9 @@ mod tests {
     ];
     const TESTNET_2_OF_3: &str = "tb1q693w8s33wzc0pmrpu9yda3ngm2eu9hkzvkwagw4q69643my3xt0q9lcl0f";
     const MAINNET_2_OF_3: &str = "bc1qvmhkp7q475h5klcqm5karudgu8nhjxkqh498nghpds754vc6uy0sa7mrh9";
+    // Address 0 of the change chain (/1/*), whose construction vault-core also checks against rust-bitcoin alone.
+    const TESTNET_2_OF_3_CHANGE_0: &str =
+        "tb1qzdk57kxf0rg9ndqsunchavw4vcfnpqt4we065xu9t53yqh2p5jyq7kv8tr";
     const ZPUB: &str = "Zpub74fkz9VnCkwXHqheLbKfBEPKPfnFg3S1Ecn7Jx4HgBWwD1FS5VLMtFYNqLmFBVifGuXKz2nirv647gFYCinhBSdBqrrh5vq8ok8m2eaRAt7";
 
     fn strings(keys: &[&str]) -> Vec<String> {
@@ -508,6 +511,23 @@ mod tests {
             compute_vault_address_multisig(strings(&TPUB), 2).unwrap(),
             direct.to_string()
         );
+    }
+
+    #[test]
+    fn the_change_chain_of_a_2_of_3_is_the_one_other_wallets_derive() {
+        let mut keys = parse_and_check_xpubs(&strings(&TPUB)).unwrap();
+        for _ in 0..keys.len() {
+            let address = |branch| {
+                let descriptor =
+                    descriptor::build_multisig_descriptor_on(&keys, 2, branch).unwrap();
+                descriptor::derive_address_at(&descriptor, 0, Network::Testnet4)
+                    .unwrap()
+                    .to_string()
+            };
+            assert_eq!(address(descriptor::Branch::Change), TESTNET_2_OF_3_CHANGE_0);
+            assert_eq!(address(descriptor::Branch::Receive), TESTNET_2_OF_3);
+            keys.rotate_left(1);
+        }
     }
 
     #[test]

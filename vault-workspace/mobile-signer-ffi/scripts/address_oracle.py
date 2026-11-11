@@ -102,9 +102,9 @@ def segwit_v0_address(hrp, program):
     return hrp + "1" + "".join(BECH32[d] for d in data + checksum)
 
 
-def p2wsh_sortedmulti(xpubs, threshold, index, hrp):
+def p2wsh_sortedmulti(xpubs, threshold, index, hrp, branch=0):
     assert 1 <= threshold <= len(xpubs) <= 16, "0x50 + n encodes OP_1..OP_16 only"
-    keys = sorted(derive_public(x, [0, index]) for x in xpubs)  # receive chain /0/*, BIP-67 lexicographic order
+    keys = sorted(derive_public(x, [branch, index]) for x in xpubs)  # receive chain /0/*, change /1/*, BIP-67 lexicographic order
     script = bytes([0x50 + threshold]) + b"".join(b"\x21" + k for k in keys) + bytes([0x50 + len(keys), 0xAE])
     return segwit_v0_address(hrp, hashlib.sha256(script).digest())
 
@@ -115,18 +115,21 @@ def rust_constants(source):
         return re.findall(r'"([^"]+)"', body)
 
     def string(name):
-        return re.search(r'const %s: &str = "([^"]+)";' % name, source).group(1)
+        return re.search(r'const %s: &str =\s*"([^"]+)";' % name, source).group(1)  # rustfmt breaks a long one after the =
 
-    return array("TPUB"), array("XPUB"), string("TESTNET_2_OF_3"), string("MAINNET_2_OF_3")
+    return (array("TPUB"), array("XPUB"), string("TESTNET_2_OF_3"), string("MAINNET_2_OF_3"),
+            string("TESTNET_2_OF_3_CHANGE_0"))
 
 
 def main():
     lib = pathlib.Path(__file__).resolve().parent.parent / "rust" / "src" / "lib.rs"
-    tpub, xpub, want_testnet, want_mainnet = rust_constants(lib.read_text())
+    tpub, xpub, want_testnet, want_mainnet, want_change = rust_constants(lib.read_text())
     cases = [
         ("2-of-3 testnet", p2wsh_sortedmulti(tpub, 2, 0, "tb"), want_testnet),
         ("2-of-3 testnet, keys rotated", p2wsh_sortedmulti(tpub[1:] + tpub[:1], 2, 0, "tb"), want_testnet),
         ("2-of-3 mainnet", p2wsh_sortedmulti(xpub, 2, 0, "bc"), want_mainnet),
+        ("2-of-3 testnet change 0", p2wsh_sortedmulti(tpub, 2, 0, "tb", branch=1), want_change),
+        ("2-of-3 testnet change 0, keys rotated", p2wsh_sortedmulti(tpub[1:] + tpub[:1], 2, 0, "tb", branch=1), want_change),
     ]
     failed = 0
     for name, got, want in cases:
