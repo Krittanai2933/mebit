@@ -86,6 +86,7 @@ import com.mebit.app.feature.vault.T20VaultActionsScreen
 import com.mebit.app.feature.vault.VaultCreatedScreen
 import com.mebit.app.feature.vault.VaultDetailScreen
 import com.mebit.app.feature.vault.VaultListScreen
+import com.mebit.app.feature.send.keyInUseLine
 import com.mebit.app.feature.send.S1HomeSingleSigScreen
 import com.mebit.app.feature.send.S2ReceiveBackupGateScreen
 import com.mebit.app.feature.send.S3ReceiveScreen
@@ -164,6 +165,7 @@ fun MebitNavHost(
     var keyFlow by remember { mutableStateOf(KeyFlow.Keyring) }
     var verifyRetryRoute by remember { mutableStateOf(MovieRoute.HardwareWallet) }
     var unsupportedModel by remember { mutableStateOf<String?>(null) }
+    var blockedKeyFingerprint by remember { mutableStateOf<String?>(null) }
     // The row a tap opened, whole, so the detail draws at once. The catalog opens the demo row until a tap.
     var openedTx by remember { mutableStateOf(DEMO_TX) }
 
@@ -432,7 +434,10 @@ fun MebitNavHost(
                     MovieRoute.Keyring -> KeyringScreen(
                         store = keyring,
                         onAddKey = { navigate(MovieRoute.AddKey) },
-                        onDeleteBlocked = { navigate(MovieRoute.T15DeleteBlocked) },
+                        onDeleteBlocked = { key ->
+                            blockedKeyFingerprint = key.fingerprint
+                            navigate(MovieRoute.T15DeleteBlocked)
+                        },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
@@ -523,6 +528,7 @@ fun MebitNavHost(
                         onOpenCatalog = openCatalog,
                     )
                     MovieRoute.T15DeleteBlocked -> T15DeleteBlockedScreen(
+                        line = keyInUseLine(vaults.current.vaults, blockedKeyFingerprint),
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )

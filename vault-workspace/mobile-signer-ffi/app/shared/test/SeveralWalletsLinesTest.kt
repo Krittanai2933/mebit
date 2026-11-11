@@ -3,6 +3,8 @@ package com.mebit.app.feature.send
 import com.mebit.app.Place
 import com.mebit.app.data.AddRefusal
 import com.mebit.app.data.Cause
+import com.mebit.app.data.CreatedVault
+import com.mebit.app.data.CustodyPolicy
 import com.mebit.app.data.UnlockResult
 import com.mebit.app.data.addRefusalLine
 import com.mebit.app.data.unopenedNotice
@@ -31,6 +33,15 @@ class SeveralWalletsLinesTest {
         assertEquals("ลบไม่ได้ในตอนนี้ · อ่านรายการ Wallet ไม่ได้", removeBlockedLine(RemoveRow.Unreadable))
         assertNull(removeBlockedLine(RemoveRow.Offered))
         assertNull(removeBlockedLine(RemoveRow.Hidden))
+    }
+
+    @Test
+    fun theKeyringsRefusalNamesEveryWalletThatUsesTheKeyInPenpotsWords() {
+        fun wallet(name: String, vararg fps: String) = CreatedVault("id_$name", name, 2, 3, CustodyPolicy.PersonalCustody, "tb1q", "", fps.toList())
+        val vaults = listOf(wallet("Vault 1", "aaaa0001", "bbbb0002", "cccc0003"), wallet("Wallet 2", "AAAA0001", "dddd0004", "eeee0005"))
+        assertEquals("ลบไม่ได้ · กุญแจนี้ใช้อยู่ใน Vault 1, Wallet 2", keyInUseLine(vaults, "aaaa0001"), "both wallets, the fingerprint matched without case")
+        assertEquals("ลบไม่ได้ · กุญแจนี้ใช้อยู่ใน Wallet 2", keyInUseLine(vaults, "dddd0004"))
+        assertEquals("ลบไม่ได้ · กุญแจนี้ใช้อยู่ใน Wallet", keyInUseLine(vaults, null), "the debug catalog opens it with no key")
     }
 
     @Test

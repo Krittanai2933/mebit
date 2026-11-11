@@ -327,13 +327,13 @@ fun VerifyKeyScreen(
 
 /**
  * Penpot 2.1, in 6.2's order and subtitle while a key is unconfirmed. 6.2's two buttons and its "ไปที่ Wallet" text are not built.
- * [onDeleteBlocked] runs when a key a vault uses cannot be deleted.
+ * [onDeleteBlocked] runs with the key when a vault uses it, so it cannot be deleted.
  */
 @Composable
 fun KeyringScreen(
     store: KeyringStore,
     onAddKey: () -> Unit,
-    onDeleteBlocked: () -> Unit,
+    onDeleteBlocked: (SavedKey) -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
@@ -365,7 +365,7 @@ fun KeyringScreen(
         Spacer(modifier = Modifier.height(29.dp))
         keys.forEach { key ->
             KeyCard(key, phone)
-            if (store.canDelete(key)) DeleteLink(key) { if (!store.tryDelete(key.id)) onDeleteBlocked() }
+            if (store.canDelete(key)) DeleteLink(key) { if (!store.tryDelete(key.id)) onDeleteBlocked(key) }
             Spacer(modifier = Modifier.height(10.dp))
         }
     }
@@ -483,6 +483,7 @@ fun T15UnverifiedFirstScreen(
 
 @Composable
 fun T15DeleteBlockedScreen(
+    line: String,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
@@ -494,9 +495,10 @@ fun T15DeleteBlockedScreen(
         tag = "screen_critical/t15-delete",
     ) {
         Text(
-            text = "ยังถูกใช้ใน Wallet · ลบ Wallet หรือถอดกุญแจออกจากนโยบายก่อน",
+            text = line,
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.testTag("t15_delete_line"),
         )
         Spacer(modifier = Modifier.height(20.dp))
         PrimaryCta("กลับ", "cta_t15_delete_back", { onBack?.invoke() })

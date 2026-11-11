@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mebit.app.data.CreatedVault
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
 import com.mebit.app.ui.theme.MbBody
@@ -38,10 +39,17 @@ internal fun removeRow(listedWallets: Int, saved: Boolean, usesKey: Boolean?, va
 }
 
 internal fun removeBlockedLine(row: RemoveRow): String? = when (row) {
-    is RemoveRow.InVault -> "ลบไม่ได้ · กุญแจนี้ใช้อยู่ใน ${row.vaultName}"
+    is RemoveRow.InVault -> inUseLine(row.vaultName)
     RemoveRow.Unreadable -> "ลบไม่ได้ในตอนนี้ · อ่านรายการ Wallet ไม่ได้"
     RemoveRow.Hidden, RemoveRow.Offered -> null
 }
+
+/** Penpot 4.1.1.3's line for a key a several-key wallet uses, shared by a wallet's removal and the Keyring's delete. */
+private fun inUseLine(walletNames: String) = "ลบไม่ได้ · กุญแจนี้ใช้อยู่ใน $walletNames"
+
+/** Pure. The Keyring's refusal for the key [fingerprint], naming every several-key wallet that uses it. */
+internal fun keyInUseLine(vaults: List<CreatedVault>, fingerprint: String?): String =
+    inUseLine(vaults.filter { v -> v.keyFingerprints.any { it.equals(fingerprint, ignoreCase = true) } }.joinToString(", ") { it.name }.ifEmpty { "Wallet" })
 
 internal const val REMOVE_ROW_LABEL = "ลบกระเป๋านี้ออกจากเครื่อง"
 
