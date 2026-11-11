@@ -286,7 +286,7 @@ internal fun OnboardingSession.ownKey(): SavedKey? = fingerprint.takeIf { it.isN
 internal fun OnboardingSession.vaultsOwner(): String? = fingerprint.takeIf { saved == SaveState.Saved && it.isNotBlank() }
 
 /** The extended keys in the descriptor line of [bsms], in order. Empty when the text is not the shape [walletBsms] writes, which then fails the address check. */
-private fun xpubsIn(bsms: String): List<String> =
+internal fun xpubsIn(bsms: String): List<String> =
     bsms.lines().getOrNull(1)?.substringAfter("sortedmulti(")?.substringBeforeLast("))")?.split(",")?.drop(1)?.map { it.substringAfterLast(']') }.orEmpty()
 
 /** "MV1", then every value as "<length in UTF-16 units> <text>\n", so labels, Thai and BSMS newlines need no escaping. `verified` is not written, because a key is here only after Verify Key. */

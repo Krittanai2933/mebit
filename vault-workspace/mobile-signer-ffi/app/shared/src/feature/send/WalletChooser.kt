@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.Place
 import com.mebit.app.data.CreatedVault
+import com.mebit.app.data.FiatQuote
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_chevron
 import com.mebit.app.resources.ic_vault_row
@@ -61,19 +62,26 @@ sealed interface WalletChoice {
     data class Vault(val vault: CreatedVault) : WalletChoice
 }
 
-/** One individual wallet on a list, with its own name and balance. */
-data class SpendingLine(val place: Place, val name: String, val balance: String, val baht: String?)
+/** One wallet's row on the chooser, with its own name, its balance and the baht under it. */
+data class WalletLine(val name: String, val balance: String, val baht: String?)
+
+/**
+ * A vault's row. Its balance and baht once [knownSats] is known, as a one-key row shows them, and a dash with no baht until then.
+ * Penpot 4.2 and 4.7 draw "0.8420 BTC" over "≈ ฿3,033,100".
+ */
+internal fun vaultLine(vault: CreatedVault, knownSats: Long?, quote: FiatQuote?): WalletLine =
+    WalletLine(vault.name, homeBalanceText(knownSats ?: 0L, known = knownSats != null, loading = false), knownSats?.let { fiatLine(it, quote) })
 
 /** Every individual wallet in place order, then the vaults in the order they were made. */
 internal fun walletChoices(spending: List<Place>, vaults: List<CreatedVault>): List<WalletChoice> =
     spending.map { WalletChoice.Spending(it) } + vaults.map { WalletChoice.Vault(it) }
 
-/** Penpot 4.3.0 and 4.4.0: the wallets to pick from before a Receive or Send. A vault's balance is a dash, because the app cannot read it yet. */
+/** Penpot 4.2 and 4.7: the wallets to pick from before a Receive or Send, each with its own balance. */
 @Composable
 fun ChooseWalletScreen(
     send: Boolean,
     choices: List<WalletChoice>,
-    line: (Place) -> SpendingLine,
+    line: (WalletChoice) -> WalletLine,
     onChoose: (WalletChoice) -> Unit,
     onSwitch: () -> Unit,
     onBack: (() -> Unit)?,
@@ -100,7 +108,7 @@ fun ChooseWalletScreen(
         choices.forEachIndexed { i, choice ->
             if (i > 0) Spacer(modifier = Modifier.height(16.dp))
             when (choice) {
-                is WalletChoice.Spending -> line(choice.place).let { l ->
+                is WalletChoice.Spending -> line(choice).let { l ->
                     WalletCard(
                         name = l.name,
                         policy = "Single-sig · กุญแจ 1 ใบ",
@@ -111,15 +119,17 @@ fun ChooseWalletScreen(
                         onClick = { onChoose(choice) },
                     )
                 }
-                is WalletChoice.Vault -> WalletCard(
-                    name = choice.vault.name,
-                    policy = "Multisig · ใช้กุญแจ ${choice.vault.m} จาก ${choice.vault.n} ใบ",
-                    balance = "—",
-                    baht = null,
-                    vault = true,
-                    tag = "choose_vault_${choice.vault.id}",
-                    onClick = { onChoose(choice) },
-                )
+                is WalletChoice.Vault -> line(choice).let { l ->
+                    WalletCard(
+                        name = l.name,
+                        policy = "Multisig · ใช้กุญแจ ${choice.vault.m} จาก ${choice.vault.n} ใบ",
+                        balance = l.balance,
+                        baht = l.baht,
+                        vault = true,
+                        tag = "choose_vault_${choice.vault.id}",
+                        onClick = { onChoose(choice) },
+                    )
+                }
             }
         }
         Spacer(modifier = Modifier.height(24.dp))

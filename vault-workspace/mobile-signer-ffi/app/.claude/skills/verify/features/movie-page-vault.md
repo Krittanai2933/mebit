@@ -8,6 +8,7 @@ A user starts a wallet from the Wallet list's +, picks single-sig or a 2-of-3 or
 - `mp-choose-keys` Choose Keys counts the picks, enables its button at exactly N, and adds a key without losing the picks.
 - `mp-vault-created-bsms` Wallet Created saves or shares the BSMS file after create.
 - `mp-vault-list-detail` lists created vaults and opens detail/actions.
+- `mp-vault-balance` a vault's card, the list's total and the Receive and Send chooser show its balance once its read lands.
 
 ## How to get to it (user POV)
 
@@ -29,6 +30,7 @@ Preconditions:
 - **Created BSMS.** `tap id:cta_create_vault`, `see id:screen_vault/created`, `see id:created_subtitle`, `see id:cta_bsms_save`, `see id:cta_bsms_share`, `gone id:back`. Each button opens a system sheet, and closing it without choosing leaves no `id:error`. Confirm no QR affordance. Shot `mp-vault-created-bsms`.
 - **Refused keys (T18).** Add Key → "mebit บนเครื่องอื่น" with a pasted vpub key (built from the fixture in MebitOtherPasteTest), confirm it, pick it with two other keys, `tap id:cta_create_vault`, `see id:screen_critical/t18`. Shot `mp-t18`.
 - **List/detail/T20.** `tap id:cta_open_vaults` or catalog vaults, `see id:screen_vaults` (the list is the only entry on the stack, so there is no back chip), open a vault, `see id:screen_vaults/detail`, `tap id:cta_vault_actions`, `see id:screen_critical/t20`, `see id:t20_bsms`. Shot `mp-vault-list-detail`.
+- **Vault balance.** On `id:screen_vaults` a new vault's card `id:cta_open_vault_1` reads "—" until its read lands, then "0.0000" for a vault of three demo keys nobody paid, and `id:vaults_total` adds it to the one-key cards. `tap id:tab_receive_send`, and `id:choose_vault_vault_1_balance` reads "0.0000 BTC" with "≈ ฿0" under it. For a figure above zero, send testnet4 coins to the address `id:screen_vaults/receive` shows and open the list again a minute later, because a vault read in the last minute is not asked again. Shot `mp-vault-balance`.
 
 ## Gotchas
 

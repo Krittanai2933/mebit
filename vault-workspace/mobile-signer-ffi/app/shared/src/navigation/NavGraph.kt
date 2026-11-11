@@ -101,8 +101,9 @@ import com.mebit.app.feature.send.ChooseWalletScreen
 import com.mebit.app.feature.send.DEMO_TX
 import com.mebit.app.feature.send.VaultReceiveScreen
 import com.mebit.app.feature.send.REMOVE_FAILED_LINE
-import com.mebit.app.feature.send.SpendingLine
 import com.mebit.app.feature.send.WalletChoice
+import com.mebit.app.feature.send.WalletLine
+import com.mebit.app.feature.send.vaultLine
 import com.mebit.app.feature.send.removeReason
 import com.mebit.app.feature.send.walletDeleteItem
 import com.mebit.app.feature.send.fiatLine
@@ -488,7 +489,8 @@ fun MebitNavHost(
                         onOpenCatalog = openCatalog,
                     )
                     MovieRoute.VaultList -> {
-                        LaunchedEffect(Unit) { wallets.refreshBalances(first = current.place) }
+                        // Keyed on the book, so a vault it loads after the list first drew, or one made since, is read on this visit.
+                        LaunchedEffect(vaultDraft.created) { wallets.refreshBalances(vaultDraft.created, first = current.place) }
                         VaultListScreen(
                             draft = vaultDraft,
                             vaults = vaults,
@@ -502,6 +504,7 @@ fun MebitNavHost(
                                 )
                                 SpendingCard(w.place, w.session.walletName, w.chain.balanceSats, spendingKnown(w), w.session.backupConfirmed, delete)
                             },
+                            vaultSats = wallets::vaultSats,
                             inUse = session,
                             unopenedNotice = unopenedNotice(wallets.unopened),
                             removeLine = removeLine,
@@ -703,18 +706,22 @@ fun MebitNavHost(
                     MovieRoute.ChooseWalletReceive, MovieRoute.ChooseWalletSend -> {
                         val send = current.route == MovieRoute.ChooseWalletSend
                         val quote = rememberFiatQuote(quotes)
-                        LaunchedEffect(Unit) { wallets.refreshBalances() }
+                        LaunchedEffect(vaultDraft.created) { wallets.refreshBalances(vaultDraft.created) }
                         ChooseWalletScreen(
                             send = send,
                             choices = walletChoices(wallets.listed.map { it.place }, vaultDraft.created),
-                            line = { place ->
-                                val w = wallets.at(place)
-                                SpendingLine(
-                                    place,
-                                    w.session.walletName,
-                                    homeBalanceText(w.chain.balanceSats, spendingKnown(w), loading = false),
-                                    baht = if (w.chain.mode == WalletMode.Live && w.chain.balanceKnown) fiatLine(w.chain.balanceSats, quote) else null,
-                                )
+                            line = { choice ->
+                                when (choice) {
+                                    is WalletChoice.Spending -> {
+                                        val w = wallets.at(choice.place)
+                                        WalletLine(
+                                            w.session.walletName,
+                                            homeBalanceText(w.chain.balanceSats, spendingKnown(w), loading = false),
+                                            baht = if (w.chain.mode == WalletMode.Live && w.chain.balanceKnown) fiatLine(w.chain.balanceSats, quote) else null,
+                                        )
+                                    }
+                                    is WalletChoice.Vault -> vaultLine(choice.vault, wallets.vaultSats(choice.vault), quote)
+                                }
                             },
                             onChoose = { if (send) openSend(it) else openReceive(it) },
                             onSwitch = { backStack[backStack.lastIndex] = current.copy(route = if (send) MovieRoute.ChooseWalletReceive else MovieRoute.ChooseWalletSend) },

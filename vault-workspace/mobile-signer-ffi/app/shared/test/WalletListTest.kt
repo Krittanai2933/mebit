@@ -22,27 +22,43 @@ class WalletListTest {
 
     @Test
     fun theTotalAddsEveryOneKeyWallet() {
-        assertEquals("0.0312 BTC", spendingTotal(listOf(card(3_000_000), card(120_000)), vaultListed = false, walletUnopened = false))
-        assertEquals("0.0000 BTC", spendingTotal(listOf(card(0)), vaultListed = false, walletUnopened = false))
+        assertEquals("0.0312 BTC", walletsTotal(listOf(card(3_000_000), card(120_000)), vaults = emptyList(), walletUnopened = false))
+        assertEquals("0.0000 BTC", walletsTotal(listOf(card(0)), vaults = emptyList(), walletUnopened = false))
+    }
+
+    @Test
+    fun theTotalAddsEveryVaultInAsPenpot180Does() {
+        assertEquals("0.8882 BTC", walletsTotal(listOf(card(3_120_000), card(1_500_000)), vaults = listOf(84_200_000), walletUnopened = false))
+    }
+
+    @Test
+    fun vaultsAloneStillHaveATotal() {
+        assertEquals("0.8420 BTC", walletsTotal(emptyList(), vaults = listOf(84_200_000), walletUnopened = false))
+        assertEquals("0.0000 BTC", walletsTotal(emptyList(), vaults = listOf(0), walletUnopened = false), "a fresh vault read to the end holds 0")
     }
 
     @Test
     fun theTotalIsADashWhileAnyWalletsBalanceIsUnknown() {
-        assertEquals("—", spendingTotal(listOf(card(3_000_000), card(0, known = false)), vaultListed = false, walletUnopened = false))
+        assertEquals("—", walletsTotal(listOf(card(3_000_000), card(0, known = false)), vaults = emptyList(), walletUnopened = false))
+    }
+
+    @Test
+    fun theTotalIsADashWhileAnyVaultIsUnknown() {
+        assertEquals("—", walletsTotal(listOf(card(3_120_000)), vaults = listOf(null), walletUnopened = false), "a vault whose first read is still out")
+        assertEquals("—", walletsTotal(emptyList(), vaults = listOf(84_200_000, null), walletUnopened = false))
     }
 
     // The interrogate review's probe: wallet 2 answered TryLater, so the list held wallet 1 alone and the total read its 0.0300 BTC as all of it.
     @Test
     fun theTotalIsADashWhileAWalletDidNotOpen() {
-        assertEquals("—", spendingTotal(listOf(card(3_000_000)), vaultListed = false, walletUnopened = true))
-        assertEquals("—", spendingTotal(emptyList(), vaultListed = false, walletUnopened = true), "a wallet waiting to open is still money")
-        assertNull(spendingTotal(listOf(card(3_000_000)), vaultListed = true, walletUnopened = true), "a vault hides the line first")
+        assertEquals("—", walletsTotal(listOf(card(3_000_000)), vaults = emptyList(), walletUnopened = true))
+        assertEquals("—", walletsTotal(emptyList(), vaults = emptyList(), walletUnopened = true), "a wallet waiting to open is still money")
+        assertEquals("—", walletsTotal(listOf(card(3_000_000)), vaults = listOf(84_200_000), walletUnopened = true), "a wallet waiting to open is still money beside a vault")
     }
 
     @Test
-    fun theTotalHidesWhileAVaultIsListedOrNoWalletIs() {
-        assertNull(spendingTotal(listOf(card(3_000_000)), vaultListed = true, walletUnopened = false))
-        assertNull(spendingTotal(emptyList(), vaultListed = false, walletUnopened = false))
+    fun theTotalHidesOnlyWhileNoWalletIs() {
+        assertNull(walletsTotal(emptyList(), emptyList(), walletUnopened = false))
     }
 
     @Test

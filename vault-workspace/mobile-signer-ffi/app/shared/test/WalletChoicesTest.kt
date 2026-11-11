@@ -3,8 +3,10 @@ package com.mebit.app.feature.send
 import com.mebit.app.Place
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.CustodyPolicy
+import com.mebit.app.data.FiatQuote
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WalletChoicesTest {
@@ -29,6 +31,15 @@ class WalletChoicesTest {
     @Test
     fun noWalletsGiveAnEmptyList() {
         assertTrue(walletChoices(emptyList(), emptyList()).isEmpty())
+    }
+
+    @Test
+    fun aVaultRowShowsItsBalanceAndBahtOnceKnownAndADashUntilThen() {
+        val quote = FiatQuote(thbPerBtc = 3_602_257.0, fetchedAtSeconds = 0)
+        assertEquals(WalletLine("vault_1", "0.8420 BTC", "≈ ฿3,033,100"), vaultLine(first, 84_200_000, quote), "Penpot 4.2 and 4.7")
+        val unknown = vaultLine(first, null, quote)
+        assertEquals("—", unknown.balance)
+        assertNull(unknown.baht, "no baht for a figure nobody knows")
     }
 
     private fun vault(id: String) = CreatedVault(

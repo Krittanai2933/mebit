@@ -1,6 +1,7 @@
 package com.mebit.app.data
 
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
@@ -14,11 +15,16 @@ import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
+import com.mebit.ffi.signer.VaultSnapshot
 import com.mebit.ffi.signer.generateSoftwareMultisigKey
 import com.mebit.ffi.signer.hotForgetScanState
 import com.mebit.ffi.signer.restoreSoftwareMultisigKey
+import com.mebit.ffi.signer.vaultSnapshot
+import kotlinx.atomicfu.locks.SynchronizedObject
+import kotlinx.atomicfu.locks.synchronized
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.time.Clock
 
 /** One wallet in memory. Nothing here is shared with another wallet, so one wallet's pay-twice guard, held payment or draft cannot reach another. */
 class OpenWallet internal constructor(val place: Place, val session: OnboardingSession, val chain: SingleSigWallet) {
@@ -98,6 +104,8 @@ class Wallets internal constructor(
     private val newKey: (String, KeyNetwork, UInt) -> SoftwareAccountKey = { p, n, a -> generateSoftwareMultisigKey(p, n, a) },
     private val restoreKey: (List<String>, String, KeyNetwork, UInt) -> SoftwareAccountKey = { w, p, n, a -> restoreSoftwareMultisigKey(w, p, n, a) },
     private val newChain: () -> SingleSigWallet = { SingleSigWallet() },
+    private val vaultSnapshotOf: (xpubs: List<String>, m: UByte) -> VaultSnapshot = { x, m -> vaultSnapshot(x, m) },
+    private val nowSeconds: () -> Long = { Clock.System.now().epochSeconds },
 ) {
     private val saved = mutableMapOf<Place, SavedWallet>()
 
@@ -252,6 +260,9 @@ class Wallets internal constructor(
         forgetBook()
         lastUsed?.delete()
         all.forEach { it.session.clear() }
+        // Outside the snapshot below, so a vault read that lands on another thread meanwhile cannot make its apply fail.
+        vaultGeneration++
+        vaultReads.clear()
         Snapshot.withMutableSnapshot {
             all = listOf(empty(Place.FIRST, locked = false))
             unopened = emptyMap()
@@ -331,17 +342,61 @@ class Wallets internal constructor(
     /** Called when the app returns. Each session repeats its own failed save. */
     fun flushPendingSaves() = all.forEach { it.session.flushPendingSave() }
 
+    /** One vault's last read this run, with the core's answer, or null for a read that failed, and when it ended. */
+    private class VaultRead(val snapshot: VaultSnapshot?, val atSeconds: Long)
+
     /**
-     * For a list on screen. One wallet at a time, never in parallel, and skips a wallet read in the last minute, so N wallets cost N
-     * routine syncs at most per visit. A public host that limits one wallet would limit the next, so a scan that came back Continuing
-     * ends the pass, and Home's own retry goes on later. The wallet at [first] goes first, so the one in use is bound even when another scan stops the pass.
+     * Each vault's last read, keyed by its receive address, which only its keys and m make, so a book edit that renumbers ids never moves
+     * a figure to another vault. In memory only, because plain files hold no amount. State, so a card redraws when its read lands.
      */
-    suspend fun refreshBalances(first: Place? = null) {
+    private val vaultReads = mutableStateMapOf<String, VaultRead>()
+
+    /** One vault read at a time across every pass, with the freshness check under the same lock, so two screens never read one vault twice. */
+    private val vaultLock = SynchronizedObject()
+
+    /** Counts erases, so a read that ends after [forgetEvery] writes nothing back. */
+    private var vaultGeneration by mutableStateOf(0)
+
+    /**
+     * [vault]'s balance in sats once a read reached the end of both its chains. Null before its first read this run, after a failed read, and
+     * while its scan stopped short or a host lied. Null is a dash on every screen and makes any total a dash, so part of a vault never reads as
+     * all of it. The one rule for a vault's figure, as [figuresKnown] is for a one-key wallet's. A vault has no demo, because stand-in keys still
+     * make a real address.
+     */
+    fun vaultSats(vault: CreatedVault): Long? =
+        vaultReads[vault.address]?.snapshot?.takeIf { it.scan == HotScan.COMPLETE }?.balanceSats?.toLong()
+
+    /**
+     * For a list on screen. One wallet at a time, never in parallel, the one-key wallets first, then [vaults] in book order. Skips a wallet
+     * read in the last minute, a failed read included, so N wallets cost N routine syncs at most per visit. A public host that limits one
+     * wallet would limit the next, so a scan that came back Continuing ends the pass, whichever kind of wallet it was, and Home's own retry
+     * or the next visit goes on later. The wallet at [first] goes first, so the one in use is bound even when another scan stops the pass.
+     * [vaults] is required, so no screen that shows a vault can forget to read it.
+     */
+    suspend fun refreshBalances(vaults: List<CreatedVault>, first: Place? = null) {
         for (w in listed.sortedBy { it.place != first }) {
             if (!w.session.addressTypeConfirmed || w.chain.boundWithin(BALANCE_FRESH_SECONDS)) continue // an unfinished wallet has no final address type to scan
             withContext(Dispatchers.Default) { w.chain.bindSession(w.session) }
             if (w.chain.scan == HotScan.CONTINUING) return
         }
+        for (v in vaults) {
+            if (withContext(Dispatchers.Default) { readVault(v) } == HotScan.CONTINUING) return
+        }
+    }
+
+    /** Reads [vault] unless a read of it ended in the last minute. Blocks on the network. How far its scan got, or null when nothing was asked or the read failed. */
+    private fun readVault(vault: CreatedVault): HotScan? = synchronized(vaultLock) {
+        val last = vaultReads[vault.address]
+        if (last != null && nowSeconds() - last.atSeconds in 0..BALANCE_FRESH_SECONDS) return@synchronized null
+        val generation = vaultGeneration
+        // A mainnet vault, a malformed BSMS and a lost host all leave the figure unknown, never guessed.
+        val snapshot = try {
+            vaultSnapshotOf(xpubsIn(vault.bsms), vault.m.toUByte())
+        } catch (_: Exception) {
+            null
+        }
+        if (generation == vaultGeneration) vaultReads[vault.address] = VaultRead(snapshot, nowSeconds())
+        snapshot?.scan
     }
 
     private var lastNoted: Place? = null

@@ -82,28 +82,34 @@ data class SpendingCard(val place: Place, val name: String, val sats: Long, val 
 internal fun cardBalanceText(sats: Long, known: Boolean): String = if (known) formatBtcCompact(sats) else "—"
 
 /**
- * Penpot 1.8's total adds up every one-key wallet's balance, and is a dash while any is unknown, a wallet that did not open this run
- * included ([walletUnopened]), so part of the money never reads as all of it. Null, so no line, while a vault is listed, because the app
- * cannot read a vault's balance, and while no wallet is listed or waiting to open.
+ * Penpot 1.8's total adds every wallet's balance, one-key and several-key, as 1.8.0 adds 0.0312, 0.0150 and 0.8420 to 0.8882 BTC. A dash
+ * while any figure is unknown, a wallet that did not open this run included ([walletUnopened]), so part of the money never reads as all
+ * of it. [vaults] holds each listed vault's [com.mebit.app.data.Wallets.vaultSats], null while unknown. Null, so no line, only while no
+ * wallet of either kind is listed or waiting to open.
  */
-internal fun spendingTotal(cards: List<SpendingCard>, vaultListed: Boolean, walletUnopened: Boolean): String? = when {
-    vaultListed -> null
+internal fun walletsTotal(cards: List<SpendingCard>, vaults: List<Long?>, walletUnopened: Boolean): String? = when {
     walletUnopened -> "—"
-    cards.isEmpty() -> null
-    else -> homeBalanceText(cards.sumOf { it.sats }, cards.all { it.known }, loading = false)
+    cards.isEmpty() && vaults.isEmpty() -> null
+    else -> homeBalanceText(
+        cards.sumOf { it.sats } + vaults.sumOf { it ?: 0L },
+        known = cards.all { it.known } && vaults.all { it != null },
+        loading = false,
+    )
 }
 
 /**
  * Penpot 1.8 Wallet list: the title, the + that opens Policy, the total, one card per one-key wallet with its backup tag, then one card
  * per vault. No back chip, no Keyring link, no buttons under the list. Kept though no board draws them: the vaults notice, the line for
  * places that did not open, and [inUse]'s not-saved line, which tells the user straight after setup that this phone does not hold the key.
- * Each card's ⋯ removes it after a confirm (1.8.8 and 1.8.9), and [removeLine] says a removal failed.
+ * Each card's ⋯ removes it after a confirm (1.8.8 and 1.8.9), and [removeLine] says a removal failed. [vaultSats] is a vault's balance, null
+ * while unknown.
  */
 @Composable
 fun VaultListScreen(
     draft: VaultDraft,
     vaults: SavedVaults,
     spending: List<SpendingCard>,
+    vaultSats: (CreatedVault) -> Long?,
     inUse: OnboardingSession,
     unopenedNotice: String?,
     removeLine: String?,
@@ -133,7 +139,7 @@ fun VaultListScreen(
             // Penpot 1.8 puts the + 29 dp from the screen's right edge, so 9 dp past the screen's own padding.
             PlusButton("cta_vaults_add", "สร้าง Wallet", onCreate, Modifier.padding(end = 9.dp))
         }
-        spendingTotal(spending, vaultListed = draft.created.isNotEmpty(), walletUnopened = unopenedNotice != null)?.let { TotalLine(it) }
+        walletsTotal(spending, draft.created.map(vaultSats), walletUnopened = unopenedNotice != null)?.let { TotalLine(it) }
         Spacer(modifier = Modifier.height(16.dp))
         VaultsNotice(vaults)
         unopenedNotice?.let {
@@ -167,7 +173,7 @@ fun VaultListScreen(
                 kind = "MULTISIG ${vault.m}-of-${vault.n}",
                 name = vault.name,
                 detail = "ต้องเซ็น ${vault.m} จาก ${vault.n} กุญแจ",
-                balance = "—",
+                balance = vaultSats(vault).let { cardBalanceText(it ?: 0L, known = it != null) },
                 dark = true,
                 badge = null,
                 tag = "cta_open_${vault.id}",

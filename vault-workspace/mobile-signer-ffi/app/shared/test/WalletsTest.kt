@@ -18,6 +18,7 @@ import com.mebit.app.walletName
 import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.SoftwareAccountKey
+import com.mebit.ffi.signer.VaultSnapshot
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -43,6 +44,16 @@ private fun check(words: List<String>, passphrase: String = ""): String =
 
 private val SENT_AT = 1_792_740_720L
 
+/** The keys vault [n]'s BSMS names, in order. */
+private fun vaultKeys(n: Int): List<String> = listOf("tpub$n-a", "tpub$n-b", "tpub$n-c")
+
+/** Vault [n] of the book, a 2-of-3 whose BSMS descriptor line names [vaultKeys] of [n]. */
+private fun vault(n: Int, address: String = "tb1qvault$n") = CreatedVault(
+    "vault_$n", "Wallet $n", 2, 3, CustodyPolicy.PersonalCustody, address,
+    "BSMS 1.0\nwsh(sortedmulti(2,${vaultKeys(n).joinToString(",") { "[0000000$n/48'/1'/0'/2']$it" }}))\n/0/*,/1/*\n$address",
+    List(3) { "0000000$n" },
+)
+
 /** One place's record as an earlier launch saved it, the words of wallet [n]. */
 private fun recordOf(n: Int, addressTypeConfirmed: Boolean = true, backupConfirmed: Boolean = true) =
     testRecord(words = words(n), fingerprint = check(words(n)), backupConfirmed = backupConfirmed, addressTypeConfirmed = addressTypeConfirmed)
@@ -66,6 +77,15 @@ private class ShelfPhone {
     var nowSeconds = 1_000L
     val binds = mutableListOf<String>()
     var scanResult = HotScan.COMPLETE
+
+    /** Each vault read the core was asked for, as its keys and m. */
+    val vaultReads = mutableListOf<Pair<List<String>, UByte>>()
+    var vaultScan = HotScan.COMPLETE
+    var vaultSatsOnChain = 84_200_000uL
+    var vaultFails = false
+
+    /** Runs inside each vault read, so a test can erase the phone while one is out. */
+    var duringVaultRead: () -> Unit = {}
 
     /** Writes a record at [place] as an earlier launch did, and forgets that write, so a test sees only what this launch writes. */
     fun saved(place: Place, record: WalletRecord): ShelfPhone {
@@ -98,6 +118,13 @@ private class ShelfPhone {
                 nowSeconds = { nowSeconds },
             )
         },
+        vaultSnapshotOf = { xpubs, m ->
+            vaultReads += xpubs to m
+            duringVaultRead()
+            if (vaultFails) error("network error: down")
+            VaultSnapshot(vaultSatsOnChain, vaultScan)
+        },
+        nowSeconds = { nowSeconds },
     )
 
     private fun key(w: List<String>, passphrase: String) = SoftwareAccountKey(w, derive(w, passphrase), "tpub-${derive(w, passphrase)}", "m/48'/1'/0'/2'")
@@ -527,19 +554,19 @@ class WalletsTest {
         first.at(P1).session.generateThisDevice()
         first.at(P1).session.confirmAddressType()
         endSetup(first.at(P1).session)
-        first.refreshBalances()
+        first.refreshBalances(vaults = emptyList())
         assertEquals(listOf(check(words(5))), fresh.binds, "a first wallet on a fresh phone")
 
         val phone = ShelfPhone().saved(P1, 1)
         val wallets = phone.unlocked()
-        wallets.refreshBalances()
+        wallets.refreshBalances(vaults = emptyList())
         phone.binds.clear()
         phone.nextWords = words(6)
         val w = assertNotNull(wallets.beginAdd())
         w.session.generateThisDevice()
         w.session.confirmAddressType()
         endSetup(w.session)
-        wallets.refreshBalances()
+        wallets.refreshBalances(vaults = emptyList())
         assertEquals(listOf(check(words(6))), phone.binds, "a second wallet beside one read a moment ago")
     }
 
@@ -548,7 +575,7 @@ class WalletsTest {
         val phone = ShelfPhone().saved(P1, 1).saved(P2, 2)
         val wallets = phone.unlocked()
         phone.scanResult = HotScan.CONTINUING
-        wallets.refreshBalances(first = P2)
+        wallets.refreshBalances(vaults = emptyList(), first = P2)
         assertEquals(listOf(check(words(2))), phone.binds)
     }
 
@@ -879,20 +906,106 @@ class WalletsTest {
     fun aListRefreshReadsEachWalletOnceSkipsARecentOneAndStopsWhenAHostLimits(): Unit = runBlocking {
         val phone = ShelfPhone().saved(P1, 1).saved(P2, 2).saved(P3, recordOf(3, addressTypeConfirmed = false))
         val wallets = phone.unlocked()
-        wallets.refreshBalances()
+        wallets.refreshBalances(vaults = emptyList())
         assertEquals(listOf(check(words(1)), check(words(2))), phone.binds, "the unfinished wallet is left alone")
         assertTrue(wallets.at(P1).chain.boundWithin(60))
 
         phone.binds.clear()
         phone.nowSeconds += 30
-        wallets.refreshBalances()
+        wallets.refreshBalances(vaults = emptyList())
         assertTrue(phone.binds.isEmpty(), "a wallet read in the last minute is not asked again")
 
         phone.binds.clear()
         phone.nowSeconds += 61
         phone.scanResult = HotScan.CONTINUING
-        wallets.refreshBalances()
+        wallets.refreshBalances(vaults = emptyList())
         assertEquals(listOf(check(words(1))), phone.binds, "a host that limits one wallet would limit the next")
+    }
+
+    @Test
+    fun aListRefreshReadsVaultsAfterEveryOneKeyWalletOneAtATime(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P1, 1).saved(P2, 2)
+        val wallets = phone.unlocked()
+        val bindsBeforeEachVault = mutableListOf<Int>()
+        phone.duringVaultRead = { bindsBeforeEachVault += phone.binds.size }
+        wallets.refreshBalances(listOf(vault(1), vault(2)))
+        assertEquals(listOf(check(words(1)), check(words(2))), phone.binds)
+        assertEquals(listOf(2, 2), bindsBeforeEachVault, "both one-key wallets are read before the first vault")
+        assertEquals(listOf(vaultKeys(1) to 2.toUByte(), vaultKeys(2) to 2.toUByte()), phone.vaultReads, "each vault once, in book order, with its own keys and m")
+        assertEquals(84_200_000L, wallets.vaultSats(vault(1)))
+    }
+
+    @Test
+    fun aVaultReadInTheLastMinuteIsNotAskedAgainAndAFailedReadCountsAsRead(): Unit = runBlocking {
+        val phone = ShelfPhone()
+        val wallets = phone.launch()
+        wallets.refreshBalances(listOf(vault(1)))
+        phone.nowSeconds += 30
+        wallets.refreshBalances(listOf(vault(1)))
+        assertEquals(1, phone.vaultReads.size, "a vault read in the last minute is not asked again")
+
+        phone.vaultFails = true
+        phone.nowSeconds += 61
+        wallets.refreshBalances(listOf(vault(1)))
+        assertEquals(2, phone.vaultReads.size)
+        assertNull(wallets.vaultSats(vault(1)), "a failed read leaves the figure unknown, never the last one")
+
+        phone.nowSeconds += 30
+        wallets.refreshBalances(listOf(vault(1)))
+        assertEquals(2, phone.vaultReads.size, "a failed read is fresh for a minute, as a failed bind is")
+    }
+
+    @Test
+    fun aOneKeyScanThatContinuesLeavesEveryVaultUnread(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P1, 1)
+        val wallets = phone.unlocked()
+        phone.scanResult = HotScan.CONTINUING
+        wallets.refreshBalances(listOf(vault(1)))
+        assertEquals(listOf(check(words(1))), phone.binds)
+        assertTrue(phone.vaultReads.isEmpty(), "a host that limits one wallet would limit the vault next")
+        assertNull(wallets.vaultSats(vault(1)))
+    }
+
+    @Test
+    fun aVaultScanThatContinuesEndsThePassAndItsCardIsADash(): Unit = runBlocking {
+        val phone = ShelfPhone()
+        val wallets = phone.launch()
+        phone.vaultScan = HotScan.CONTINUING
+        wallets.refreshBalances(listOf(vault(1), vault(2)))
+        assertEquals(listOf(vaultKeys(1) to 2.toUByte()), phone.vaultReads, "a host that limits one vault would limit the next")
+        assertNull(wallets.vaultSats(vault(1)), "part of a vault never reads as all of it")
+
+        phone.vaultScan = HotScan.UNVERIFIED
+        phone.nowSeconds += 61
+        wallets.refreshBalances(listOf(vault(1), vault(2)))
+        assertEquals(listOf(1, 1, 2).map { vaultKeys(it) to 2.toUByte() }, phone.vaultReads, "a host that lied ends no pass")
+        assertNull(wallets.vaultSats(vault(1)))
+        assertNull(wallets.vaultSats(vault(2)), "a figure a host lied about is a dash")
+    }
+
+    @Test
+    fun aVaultsFigureFollowsItsAddressNotItsId(): Unit = runBlocking {
+        val phone = ShelfPhone()
+        val wallets = phone.launch()
+        wallets.refreshBalances(listOf(vault(1)))
+        assertEquals(84_200_000L, wallets.vaultSats(vault(1).copy(id = "vault_9")), "a renumbered vault keeps its figure")
+        assertNull(wallets.vaultSats(vault(1).copy(address = "tb1qother")), "another vault never shows this one's figure")
+    }
+
+    @Test
+    fun eraseDropsEveryVaultFigureAndALateReadWritesNothingBack(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P1, 1)
+        val wallets = phone.unlocked()
+        wallets.refreshBalances(listOf(vault(1)))
+        assertEquals(84_200_000L, wallets.vaultSats(vault(1)))
+        assertTrue(wallets.forgetEvery())
+        assertNull(wallets.vaultSats(vault(1)), "an erase drops every vault figure")
+
+        var erasedDuringRead: Boolean? = null
+        phone.duringVaultRead = { erasedDuringRead = wallets.forgetEvery() }
+        wallets.refreshBalances(listOf(vault(1)))
+        assertEquals(true, erasedDuringRead, "the erase ran while the read was out")
+        assertNull(wallets.vaultSats(vault(1)), "a read that ends after the erase leaves nothing")
     }
 
     @Test
