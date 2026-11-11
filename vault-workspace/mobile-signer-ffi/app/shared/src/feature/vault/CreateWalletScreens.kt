@@ -214,17 +214,21 @@ private fun RowScope.PresetChip(title: String, sub: String, selected: Boolean, e
 
 /**
  * Penpot 3.2: one row per confirmed key, the counter and its bar, and the way to add another key. "ต่อไป ตรวจสอบ" is on exactly when the picks
- * make a [ReadyPlan]. The screen decides nothing about navigation, and a key added from here comes back unticked.
+ * make a [ReadyPlan] that no saved wallet in [wallets] already is, and that wallet's name is shown instead. The screen decides nothing about
+ * navigation, and a key added from here comes back unticked.
  */
 @Composable
 fun ChooseKeysScreen(
     draft: CreateWalletDraft,
     keys: List<SavedKey>,
+    wallets: List<CreatedVault>,
     onAddKey: () -> Unit,
     onContinue: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
+    val plan = draft.ready(keys)
+    val duplicate = plan?.duplicateOf(wallets)
     MebitScreen(
         eyebrow = MovieRoute.ChooseKeys.eyebrow,
         title = MovieRoute.ChooseKeys.titleTh,
@@ -232,11 +236,15 @@ fun ChooseKeysScreen(
         onOpenCatalog = onOpenCatalog,
         tag = "screen_vault/choose-keys",
         bottom = {
-            PrimaryCta("ต่อไป ตรวจสอบ", "cta_choose_next", onContinue, enabled = draft.ready(keys) != null)
+            PrimaryCta("ต่อไป ตรวจสอบ", "cta_choose_next", onContinue, enabled = plan != null && duplicate == null)
             Spacer(modifier = Modifier.height(BelowPrimary))
         },
     ) {
         PickCounter(draft.livePicks(keys).size, draft.preset.n)
+        if (duplicate != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(duplicateLine(duplicate.name), color = MaterialTheme.colorScheme.error, fontSize = 13.sp, lineHeight = 20.sp, modifier = Modifier.testTag("choose_duplicate"))
+        }
         Spacer(modifier = Modifier.height(19.dp))
         // A skipped backup leaves a phone's key unconfirmed, and it stays off the list until it is backed up.
         keys.filter { it.verified }.forEach { key ->
@@ -555,6 +563,8 @@ private fun RowScope.FileButton(label: String, tag: String, enabled: Boolean, on
 }
 
 internal fun pickCountLine(picked: Int, n: Int): String = "เลือกแล้ว $picked / $n ใบ"
+
+internal fun duplicateLine(walletName: String): String = "Wallet นี้อยู่ในเครื่องนี้แล้ว · $walletName"
 
 internal fun reviewHeadline(preset: Preset): String = "ต้องใช้กุญแจ ${preset.m} ใบจากทั้งหมด ${preset.n} ใบ เซ็นร่วมกัน จึงจะใช้จ่ายจาก Wallet นี้ได้"
 

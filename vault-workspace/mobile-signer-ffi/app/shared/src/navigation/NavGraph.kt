@@ -452,6 +452,7 @@ fun MebitNavHost(
                     MovieRoute.ChooseKeys -> ChooseKeysScreen(
                         draft = createDraft,
                         keys = keyring.keys,
+                        wallets = vaults.current.vaults,
                         onAddKey = { navigate(MovieRoute.AddKey) },
                         onContinue = { navigate(MovieRoute.ScriptType) },
                         onBack = onBack,

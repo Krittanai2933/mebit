@@ -17,6 +17,11 @@ class CreateWalletTextTest {
     }
 
     @Test
+    fun theDuplicateLineNamesTheSavedWallet() {
+        assertEquals("Wallet นี้อยู่ในเครื่องนี้แล้ว · Vault 1", duplicateLine("Vault 1"))
+    }
+
+    @Test
     fun theHeadlineAndTheSpareKeysAreComputedFromThePreset() {
         assertEquals("ต้องใช้กุญแจ 2 ใบจากทั้งหมด 3 ใบ เซ็นร่วมกัน จึงจะใช้จ่ายจาก Wallet นี้ได้", reviewHeadline(Preset.TwoOfThree))
         assertEquals("ต้องใช้กุญแจ 3 ใบจากทั้งหมด 5 ใบ เซ็นร่วมกัน จึงจะใช้จ่ายจาก Wallet นี้ได้", reviewHeadline(Preset.ThreeOfFive))

@@ -113,6 +113,36 @@ class CreateWalletDraftTest {
         assertNotNull(ReadyPlan.of(Preset.ThreeOfFive, keys))
     }
 
+    private fun saved(name: String, m: Int, n: Int, vararg fingerprints: String) =
+        CreatedVault("id_$name", name, m, n, CustodyPolicy.PersonalCustody, "addr", "bsms", fingerprints.toList())
+
+    @Test
+    fun theSameKeysInAnotherTapOrderAreTheSavedWallet() {
+        val wallet = saved("Vault 1", 2, 3, "aaaa0003", "aaaa0002", "aaaa0001")
+        val other = saved("other", 2, 3, "aaaa0001", "aaaa0002", "aaaa0004")
+        assertSame(wallet, draft().apply { pick(1, 2, 3) }.ready(keys)!!.duplicateOf(listOf(other, wallet)))
+        assertSame(wallet, draft().apply { pick(3, 1, 2) }.ready(keys)!!.duplicateOf(listOf(other, wallet)))
+        assertSame(wallet, draft().apply { pick(2, 3, 1) }.ready(keys)!!.duplicateOf(listOf(other, wallet)))
+    }
+
+    @Test
+    fun oneDifferentKeyOrAnotherMOrAnotherNIsAnotherWallet() {
+        val plan = ReadyPlan.of(Preset.TwoOfThree, keys.take(3))!!
+        assertNull(plan.duplicateOf(listOf(saved("a", 2, 3, "aaaa0001", "aaaa0002", "aaaa0004"))), "one key differs")
+        assertNull(plan.duplicateOf(listOf(saved("b", 3, 3, "aaaa0001", "aaaa0002", "aaaa0003"))), "the same keys at another M")
+        assertNull(plan.duplicateOf(listOf(saved("c", 2, 5, "aaaa0001", "aaaa0002", "aaaa0003"))), "the same keys at another N")
+        assertNull(plan.duplicateOf(listOf(saved("d", 2, 3))), "a wallet with no known keys")
+        assertNull(ReadyPlan.of(Preset.ThreeOfFive, keys)!!.duplicateOf(listOf(saved("e", 2, 3, "aaaa0001", "aaaa0002", "aaaa0003"))))
+    }
+
+    @Test
+    fun fingerprintsMatchWithoutCaseAndAnEmptyBookMatchesNothing() {
+        val plan = ReadyPlan.of(Preset.TwoOfThree, listOf(key(1), key(2), key(3)).map { it.copy(fingerprint = it.fingerprint.uppercase()) })!!
+        val lower = saved("Vault 1", 2, 3, "aaaa0003", "aaaa0001", "aaaa0002")
+        assertSame(lower, plan.duplicateOf(listOf(lower)))
+        assertNull(plan.duplicateOf(emptyList()))
+    }
+
     @Test
     fun theDescriptorShownIsTheLineTheFileCarries() {
         val plan = ReadyPlan.of(Preset.TwoOfThree, keys.take(3))!!

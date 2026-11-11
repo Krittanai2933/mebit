@@ -32,6 +32,12 @@ class ReadyPlan private constructor(val preset: Preset, val keys: List<SavedKey>
 
     fun bsms(address: String): String = walletBsms(descriptor, keys, address)
 
+    /** The saved wallet with this plan's M, N and keys. wsh(sortedmulti) sorts the keys, so the tap order and the keyring order never matter. */
+    fun duplicateOf(wallets: List<CreatedVault>): CreatedVault? {
+        val mine = keys.map { it.fingerprint.lowercase() }.sorted()
+        return wallets.firstOrNull { it.m == preset.m && it.n == preset.n && it.keyFingerprints.map { f -> f.lowercase() }.sorted() == mine }
+    }
+
     companion object {
         fun of(preset: Preset, keys: List<SavedKey>): ReadyPlan? =
             if (keys.size == preset.n && keys.all { it.verified }) ReadyPlan(preset, keys) else null
