@@ -241,7 +241,11 @@ int64_t uniffi_mobile_signer_ffi_fn_func_scan_wallets(RustBuffer kind
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_sign_psbt(RustBuffer psbtJson, RustBuffer borrowerPubkey, UniffiRustCallStatus *_Nonnull out_status
 );
+RustBuffer uniffi_mobile_signer_ffi_fn_func_vault_finalize_psbt(RustBuffer xpubs, int8_t threshold, RustBuffer held, UniffiRustCallStatus *_Nonnull out_status
+);
 RustBuffer uniffi_mobile_signer_ffi_fn_func_vault_history(RustBuffer xpubs, int8_t threshold, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_vault_sign_psbt(RustBuffer xpubs, int8_t threshold, RustBuffer held, int32_t keyIndex, RustBuffer mnemonicWords, RustBuffer passphrase, UniffiRustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_vault_snapshot(RustBuffer xpubs, int8_t threshold, UniffiRustCallStatus *_Nonnull out_status
 );
@@ -444,7 +448,13 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_scan_wallets(void
 int16_t uniffi_mobile_signer_ffi_checksum_func_sign_psbt(void
     
 );
+int16_t uniffi_mobile_signer_ffi_checksum_func_vault_finalize_psbt(void
+    
+);
 int16_t uniffi_mobile_signer_ffi_checksum_func_vault_history(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_vault_sign_psbt(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_func_vault_snapshot(void

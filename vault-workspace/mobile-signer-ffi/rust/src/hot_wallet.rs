@@ -44,6 +44,8 @@ use bitcoin::{
 };
 use vault_core::descriptor::{Branch, build_multisig_descriptor_on, derive_address_at};
 
+pub(crate) mod vault_spend;
+
 /// How long after a sync of a wallet ended the next call shares its answer with no request, so the
 /// app's snapshot followed by history costs one sync. A used address's balance is never older than this.
 const SHARE_TTL: Duration = Duration::from_secs(10);
@@ -107,7 +109,7 @@ fn mnemonic_from(words: &[String]) -> Result<Mnemonic, MobileSignerError> {
         .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Chain {
     External = 0,
     Internal = 1,

@@ -945,6 +945,14 @@ mod tests {
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_history(),
             ),
             (
+                "func_vault_sign_psbt",
+                hot_wallet::vault_spend::uniffi_mobile_signer_ffi_checksum_func_vault_sign_psbt(),
+            ),
+            (
+                "func_vault_finalize_psbt",
+                hot_wallet::vault_spend::uniffi_mobile_signer_ffi_checksum_func_vault_finalize_psbt(),
+            ),
+            (
                 "func_scan_wallets",
                 ble::uniffi_mobile_signer_ffi_checksum_func_scan_wallets(),
             ),

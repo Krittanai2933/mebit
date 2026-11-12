@@ -620,6 +620,54 @@ public data class SoftwareAccountKey (
 
 
 /**
+ * One payment from a several-key wallet, from `vault_prepare_send` to `vault_finalize_psbt`. The app holds the latest one
+ * and passes it back whole. Every field but `psbt` is what the user confirmed or what the core read from `psbt` once it
+ * passed every check, so the record never says anything its PSBT does not.
+ */
+
+public data class VaultPsbt (
+    /**
+     * The PSBT, base64.
+     */
+    var `psbt`: kotlin.String, 
+    /**
+     * The id of the finished transaction. A segwit id leaves the signatures out, so it is fixed from the unsigned PSBT on,
+     * and the app's pay-twice guard names the payment by it.
+     */
+    var `txid`: kotlin.String, 
+    /**
+     * What the first output pays, as the user typed it.
+     */
+    var `destination`: kotlin.String, 
+    var `amountSats`: kotlin.ULong, 
+    /**
+     * Inputs less outputs. Every input's value is read from its parent transaction, which the PSBT carries.
+     */
+    var `feeSats`: kotlin.ULong, 
+    /**
+     * The one output back to the wallet's change chain, 1/i. 0 when there is none.
+     */
+    var `changeSats`: kotlin.ULong, 
+    /**
+     * The highest change index the payment may pay its change to: the one the wallet handed out next when the payment was
+     * prepared, so no PSBT parks change past the addresses a scan reads.
+     */
+    var `maxChangeIndex`: kotlin.UInt, 
+    /**
+     * The finished transaction's virtual size: exact for the phone's signatures, an upper bound for shorter ones.
+     */
+    var `vsize`: kotlin.ULong, 
+    /**
+     * Positions in `xpubs` of the keys with a valid SIGHASH_ALL signature on every input, ascending, each once.
+     */
+    var `signedKeys`: List<kotlin.UInt>
+) {
+    public companion object
+}
+
+
+
+/**
  * A several-key wallet's balance as one sync of both its chains found it. Not `HotWalletSnapshot`, because a vault
  * has no spendable figure while multisig spend is a mock, and a next unused receive address would contradict the
  * Receive screen, which shows address 0.
@@ -1079,6 +1127,8 @@ public enum class WalletKind {
 
 
 
+
+
 /**
  * The words that turn `first_words` into a valid mnemonic, in list order. For 23
  * words that is 8: the last word carries 3 entropy bits and 8 checksum bits.
@@ -1358,6 +1408,15 @@ public expect suspend fun `scanWallets`(`kind`: WalletKind): List<FoundWallet>
 public expect fun `signPsbt`(`psbtJson`: kotlin.String, `borrowerPubkey`: kotlin.String): kotlin.String
 
 /**
+ * The signed transaction of `held` once at least `threshold` keys of the wallet signed every input, for `hot_broadcast`.
+ * Runs every check `vault_sign_psbt` runs, refuses fewer signers than `threshold`, puts `threshold` of their signatures in
+ * each input's witness in the order its script names their keys, and refuses bytes heavier than the size the fee was
+ * priced at or a fee past the network's 10,000 sat/vB. Testnet4 only. No network call.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `vaultFinalizePsbt`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte, `held`: VaultPsbt): PreparedSend
+
+/**
  * The latest transactions of the `threshold`-of-`xpubs.len()` sorted multisig that `vault_snapshot` reads, over every
  * used address of its receive and change chains, each once, as the wallet saw it: the mempool first, then confirmed
  * transactions newest first. Only each address's first page comes back (about 25 confirmed transactions plus the
@@ -1368,6 +1427,17 @@ public expect fun `signPsbt`(`psbtJson`: kotlin.String, `borrowerPubkey`: kotlin
  */
 @Throws(MobileSignerException::class)
 public expect fun `vaultHistory`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte): List<HotTx>
+
+/**
+ * `held` with key `key_index`'s signature on every input, made with the words and passphrase of a phone key, whose BIP-48
+ * account key at m/48'/1'/0'/2' must be key `key_index` of the `threshold`-of-`xpubs.len()` wallet on public key and chain
+ * code. Before it signs it refuses, naming the rule, a PSBT that is not this wallet's payment of `held.amount_sats` to
+ * `held.destination` for `held.fee_sats` with at most one change output back to the wallet's change chain at or below
+ * `held.max_change_index`, a txid other than `held.txid`, any sighash but ALL, and a signature that does not verify. The
+ * same words sign the same PSBT the same way, so signing again changes nothing. Testnet4 only. No network call.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `vaultSignPsbt`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte, `held`: VaultPsbt, `keyIndex`: kotlin.UInt, `mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String): VaultPsbt
 
 /**
  * The confirmed + mempool balance over every address of both chains, receive `0/i` and change `1/i`, of the
