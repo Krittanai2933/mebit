@@ -40,8 +40,8 @@ sealed interface VaultSendState {
      */
     data class Collecting(val psbt: VaultPsbt, val stale: Boolean = false) : VaultSendState
 
-    /** The node took [txid]. */
-    data class Sent(val txid: String) : VaultSendState
+    /** The node took [psbt]'s transaction, which 5.2 still draws while it leaves. */
+    data class Sent(val psbt: VaultPsbt) : VaultSendState
 }
 
 /** What a [VaultSend] call is doing. One runs at a time, and the screens hold every button while one runs. */
@@ -194,7 +194,7 @@ class VaultSend(
             val pending = UnconfirmedSend(ready.txid, nowSeconds(), ready.hex.takeIf { txidOf(it) == ready.txid })
             when (val claim = guards.claim(guardKey, pending)) {
                 Claim.Written -> firstPost(held, pending, ready.hex)
-                is Claim.Taken -> if (claim.earlier.txid == ready.txid) repostSame(claim.earlier) else refused(claim.earlier)
+                is Claim.Taken -> if (claim.earlier.txid == ready.txid) repostSame(held, claim.earlier) else refused(claim.earlier)
                 Claim.Damaged -> refused(DamagedGuard)
                 Claim.NotSaved -> fail(GUARD_NOT_SAVED)
             }
@@ -243,7 +243,7 @@ class VaultSend(
 
     private fun firstPost(held: VaultPsbt, pending: UnconfirmedSend, hex: String): Boolean = try {
         postHex(KeyNetwork.TEST, hex, pending.txid)
-        out(pending)
+        out(held, pending)
     } catch (e: MobileSignerException.BroadcastUnknown) {
         unknown(pending)
     } catch (e: MobileSignerException.InvalidPsbtJson) {
@@ -255,9 +255,9 @@ class VaultSend(
         unknown(pending)
     }
 
-    private fun repostSame(earlier: UnconfirmedSend): Boolean =
+    private fun repostSame(held: VaultPsbt, earlier: UnconfirmedSend): Boolean =
         when (guards.repost(guardKey, earlier) { hex -> posted(hex, earlier.txid) } ?: Repost.Failed) {
-            Repost.Out -> out(earlier)
+            Repost.Out -> out(held, earlier)
             Repost.Unknown -> unknown(earlier)
             Repost.Refused, Repost.Failed -> {
                 guard = earlier
@@ -265,10 +265,10 @@ class VaultSend(
             }
         }
 
-    private fun out(sent: UnconfirmedSend): Boolean {
+    private fun out(held: VaultPsbt, sent: UnconfirmedSend): Boolean {
         guards.settle(guardKey, sent)
         guard = null
-        state = VaultSendState.Sent(sent.txid)
+        state = VaultSendState.Sent(held)
         return true
     }
 

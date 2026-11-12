@@ -193,7 +193,7 @@ class VaultSendTest {
         }
         val send = signed(rust, PendingPayments(file))
         assertTrue(send.broadcast())
-        assertEquals(VaultSendState.Sent(txid), send.state)
+        assertEquals(txid, assertIs<VaultSendState.Sent>(send.state).psbt.txid)
         assertEquals(listOf(txid), rust.posts)
         assertEquals("", file.text.orEmpty(), "the guard went with the payment out")
         assertFalse(send.broadcast(), "a payment out is not posted again")

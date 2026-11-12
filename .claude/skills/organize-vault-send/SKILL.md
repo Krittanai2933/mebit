@@ -22,8 +22,10 @@ The Penpot Organize page (`2067de56-df70-80bd-8008-da9f7127d68a`), section 5, is
 Run this check when a change touches any of these:
 
 - `vault-workspace/mobile-signer-ffi/app/shared/src/data/VaultSend.kt`: `VaultSend.prepare`, `sign`, `broadcast`, `signedFingerprints`, `readyToBroadcast`, and `keySigners`.
+- `vault-workspace/mobile-signer-ffi/app/shared/src/feature/send/VaultSendScreens.kt`: `VaultSendScreen` (5.1, `cta_m1_review` calls `prepare`) and `CollectSignaturesScreen` (5.2, each `cta_m2_sign_<i>` calls `sign` with the owner check, `cta_m2_send` calls `broadcast` and is on only at `readyToBroadcast`).
+- `vault-workspace/mobile-signer-ffi/app/shared/src/navigation/NavGraph.kt`: the `confirmSign` the 5.2 route passes, and every way that makes a `VaultSend`.
 - `vault-workspace/mobile-signer-ffi/app/shared/test/OrganizeVaultSendSpec.kt`.
-- A call site in the Coverage table below, or a new call of `sign` or `broadcast`.
+- A new call of `sign` or `broadcast` anywhere.
 
 Leave the check alone when the diff does not touch those.
 
@@ -68,10 +70,10 @@ Move the sync commit below only after you have read the covered functions at the
 
 | | |
 |---|---|
-| Sync commit | the commit that adds `app/shared/src/data/VaultSend.kt` (`git log --diff-filter=A -- vault-workspace/mobile-signer-ffi/app/shared/src/data/VaultSend.kt`) |
+| Sync commit | the commit that adds `app/shared/src/feature/send/VaultSendScreens.kt` (`git log --diff-filter=A -- vault-workspace/mobile-signer-ffi/app/shared/src/feature/send/VaultSendScreens.kt`) |
 | Spec | `vault-workspace/mobile-signer-ffi/app/shared/test/OrganizeVaultSendSpec.kt`, `broadcastRequiresDistinctVaultFingerprints` |
 | Draft | `VaultSend.kt`: `prepare`, `sign`, `broadcast`, `signedFingerprints`, `readyToBroadcast` |
-| Call sites | none yet: the M1 to M4 screens still call `MultisigSendDraft`, which posts nothing real |
+| Call sites | `VaultSendScreens.kt`: 5.1 `cta_m1_review`, 5.2 `cta_m2_sign_<i>` per key, 5.2 `cta_m2_send`. `NavGraph.kt`: the 5.2 route's `confirmSign` |
 | Rust gate | `rust/src/hot_wallet/vault_spend.rs`: `assembled` and its tests |
 
 ## Left out

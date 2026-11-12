@@ -24,7 +24,7 @@ class BackStackTest {
             "a finished vault" to stops(p1, MovieRoute.VaultList, MovieRoute.Policy, MovieRoute.ChooseKeys, MovieRoute.Review, MovieRoute.VaultCreated),
             "a detail pushed after a vault send, which its X closes to the list" to stops(
                 p1, MovieRoute.VaultList, MovieRoute.VaultDetail, MovieRoute.M1SendVault, MovieRoute.M2CollectSignatures,
-                MovieRoute.M4ReadyToBroadcast, MovieRoute.VaultDetail,
+                MovieRoute.VaultDetail,
             ),
         )
         for ((case, stack) in stacks) for (tab in MovieRoute.entries.filter { it.tab }) {
@@ -127,6 +127,17 @@ class BackStackTest {
         assertFalse(inCreateFlow(stackAfterOpen(detour, Stop(MovieRoute.Keyring, p1))), "a tab drops it")
         assertFalse(inCreateFlow(stackAfterOpen(detour, Stop(MovieRoute.VaultList, p1))), "the Wallet list drops it")
         assertFalse(inCreateFlow(stackAfterCreate(wizard + stops(p1, MovieRoute.ScriptType, MovieRoute.Review))), "a created wallet drops it")
+    }
+
+    @Test
+    fun aVaultPaymentOutLandsOnTheWalletsDetailWithNoSendScreenToGoBackTo() {
+        val fromDetail = stops(p1, MovieRoute.VaultList, MovieRoute.VaultDetail, MovieRoute.M1SendVault, MovieRoute.M2CollectSignatures)
+        assertEquals(stops(p1, MovieRoute.VaultList, MovieRoute.VaultDetail), stackAfterVaultSend(fromDetail), "back to the detail it began on")
+        val viaReceive = stops(p1, MovieRoute.VaultList, MovieRoute.VaultDetail, MovieRoute.M1SendVault, MovieRoute.VaultReceive, MovieRoute.M1SendVault, MovieRoute.M2CollectSignatures)
+        assertEquals(stops(p1, MovieRoute.VaultList, MovieRoute.VaultDetail), stackAfterVaultSend(viaReceive), "every send and Receive screen above the detail goes")
+        val fromChooser = stops(p1, MovieRoute.VaultList, MovieRoute.ChooseWalletSend, MovieRoute.M1SendVault, MovieRoute.M2CollectSignatures)
+        assertEquals(stops(p1, MovieRoute.VaultList, MovieRoute.ChooseWalletSend, MovieRoute.VaultDetail), stackAfterVaultSend(fromChooser), "the detail on top of what opened the send")
+        assertEquals(stops(p1, MovieRoute.VaultList, MovieRoute.VaultDetail), stackAfterVaultSend(stops(p1, MovieRoute.M1SendVault, MovieRoute.M2CollectSignatures)), "the catalog's send alone")
     }
 
     @Test

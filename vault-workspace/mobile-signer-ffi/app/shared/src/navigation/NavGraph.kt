@@ -38,13 +38,16 @@ import com.mebit.app.data.AppLockState
 import com.mebit.app.data.CreateWalletDraft
 import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.OwnerCheck
-import com.mebit.app.data.MultisigSendDraft
+import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.Replacement
 import com.mebit.app.data.SaveState
 import com.mebit.app.data.SavedVaults
 import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.data.StartNotice
 import com.mebit.app.data.VaultDraft
+import com.mebit.app.data.VaultSend
+import com.mebit.app.data.keySigners
+import com.mebit.app.data.vaultGuardKey
 import com.mebit.app.data.OpenWallet
 import com.mebit.app.data.WalletRemoval
 import com.mebit.app.data.Wallets
@@ -109,10 +112,8 @@ import com.mebit.app.feature.send.walletDeleteItem
 import com.mebit.app.feature.send.fiatLine
 import com.mebit.app.feature.send.homeBalanceText
 import com.mebit.app.feature.send.walletChoices
-import com.mebit.app.feature.send.M1SendVaultScreen
-import com.mebit.app.feature.send.M2CollectSignaturesScreen
-import com.mebit.app.feature.send.M3SignOnJadeScreen
-import com.mebit.app.feature.send.M4ReadyToBroadcastScreen
+import com.mebit.app.feature.send.CollectSignaturesScreen
+import com.mebit.app.feature.send.VaultSendScreen
 import com.mebit.app.rememberBiometrics
 import com.mebit.app.rememberIsDebugBuild
 import com.mebit.app.ui.components.LocalDebugLinkLift
@@ -152,7 +153,8 @@ fun MebitNavHost(
     // One draft per wizard run: it lives while Policy is on the Back stack.
     val createDraft = remember(vaults, inCreateFlow(backStack)) { CreateWalletDraft(vaults) }
     val quotes = remember { liveQuoteCache() }
-    val multisigSend = remember { MultisigSendDraft() }
+    // One send from one several-key wallet, made new by every way into 5.1, so a payment and its signatures never outlive the visit.
+    var vaultSend by remember { mutableStateOf<VaultSend?>(null) }
     // Import Seed's words and passphrase. They outlive the detour to Address Type and back, and a fresh draft replaces them once
     // the import goes on to the lock step or the user leaves Import Seed by its back chip. Memory only: never rememberSaveable,
     // which Android writes to disk.
@@ -249,6 +251,12 @@ fun MebitNavHost(
         }
     }
 
+    // A wallet the core cannot read makes no send, and 5.1 says so.
+    fun startVaultSend(vault: CreatedVault?) {
+        vaultSend = vault?.let { runCatching { VaultSend(it, wallets.vaultPayments) }.getOrNull() }
+        navigate(MovieRoute.M1SendVault)
+    }
+
     fun openSend(choice: WalletChoice) = when (choice) {
         is WalletChoice.Spending -> openWallet(choice.place) {
             it.sendDraft.reset() // the chosen wallet's own draft, never the one on screen
@@ -256,8 +264,7 @@ fun MebitNavHost(
         }
         is WalletChoice.Vault -> {
             vaultDraft.selectVault(choice.vault.id)
-            multisigSend.startForm()
-            navigate(MovieRoute.M1SendVault)
+            startVaultSend(choice.vault)
         }
     }
 
@@ -529,11 +536,8 @@ fun MebitNavHost(
                         keyring = keyring,
                         quotes = quotes,
                         onReceive = { navigate(MovieRoute.VaultReceive) },
-                        onSend = {
-                            multisigSend.startForm()
-                            navigate(MovieRoute.M1SendVault)
-                        },
-                        // The Wallet list is a tab, so it opens as the only entry, and a detail pushed after a vault send closes to the list, not to M4.
+                        onSend = { startVaultSend(vaultDraft.selectedVault()) },
+                        // The Wallet list is a tab, so it opens as the only entry, and a detail a vault send lands on closes to the list.
                         onClose = { navigate(MovieRoute.VaultList) },
                         onOpenCatalog = openCatalog,
                     )
@@ -685,24 +689,30 @@ fun MebitNavHost(
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
-                    MovieRoute.M1SendVault -> M1SendVaultScreen(
-                        vault = vaultDraft.selectedVault(),
-                        draft = multisigSend,
-                        onContinue = { navigate(MovieRoute.M2CollectSignatures) },
+                    MovieRoute.M1SendVault -> VaultSendScreen(
+                        send = vaultSend,
+                        quotes = quotes,
+                        confirmRepost = confirmRepost,
+                        otherGuardKeys = { vaultDraft.created.filter { it.address != vaultSend?.vault?.address }.map(::vaultGuardKey) },
+                        onReview = { navigate(MovieRoute.M2CollectSignatures) },
+                        onReceive = { vaultSend?.vault?.let { openReceive(WalletChoice.Vault(it)) } },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
-                    MovieRoute.M2CollectSignatures -> M2CollectSignaturesScreen(
-                        store = keyring,
-                        draft = multisigSend,
-                        onSignJade = { navigate(MovieRoute.M3SignOnJade) },
-                        onReady = { navigate(MovieRoute.M4ReadyToBroadcast) },
-                        onBack = onBack,
-                        onOpenCatalog = openCatalog,
-                    )
-                    MovieRoute.M3SignOnJade -> M3SignOnJadeScreen(
-                        draft = multisigSend,
-                        onSigned = { navigate(MovieRoute.M2CollectSignatures) },
+                    MovieRoute.M2CollectSignatures -> CollectSignaturesScreen(
+                        send = vaultSend,
+                        signers = vaultSend?.let { keySigners(it.vault, wallets.listed.map { w -> w.session }, keyring.keys) }.orEmpty(),
+                        keyring = keyring.keys,
+                        quotes = quotes,
+                        // Lead decision 3: the owner check of the wallet in use, once per signature, as S5 asks before it signs.
+                        confirmSign = { appLock.confirm(biometrics, session.appLockEnabled, "ยืนยันการเซ็นส่งเงิน") },
+                        onSent = {
+                            vaultSend?.vault?.let { sent ->
+                                wallets.forgetVaultRead(sent)
+                                vaultDraft.selectVault(sent.id)
+                                land(stackAfterVaultSend(backStack))
+                            }
+                        },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
@@ -734,16 +744,7 @@ fun MebitNavHost(
                     }
                     MovieRoute.VaultReceive -> VaultReceiveScreen(
                         vault = vaultDraft.selectedVault(),
-                        onSend = {
-                            multisigSend.startForm()
-                            navigate(MovieRoute.M1SendVault)
-                        },
-                        onBack = onBack,
-                        onOpenCatalog = openCatalog,
-                    )
-                    MovieRoute.M4ReadyToBroadcast -> M4ReadyToBroadcastScreen(
-                        draft = multisigSend,
-                        onBroadcast = { navigate(MovieRoute.VaultDetail) },
+                        onSend = { startVaultSend(vaultDraft.selectedVault()) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )

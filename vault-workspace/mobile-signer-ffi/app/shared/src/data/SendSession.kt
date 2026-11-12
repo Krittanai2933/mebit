@@ -1,7 +1,6 @@
 package com.mebit.app.data
 
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
@@ -950,86 +949,6 @@ class SendDraft(val typicalVsize: Long) {
         sendAllMarked = false
         amountSats = v
         amountText = formatBtc(v).trimEnd('0').trimEnd('.')
-        return true
-    }
-}
-
-/**
- * One send from one vault. [resetSignatures] binds the vault being spent, and [markSigned] keeps a fingerprint only when it is a
- * key of that vault, once, so [signedFingerprints] is the set of distinct vault signers and [readyToBroadcast] compares its size
- * with the vault's own `m`. Nothing a screen passes in can lower the threshold or count a key from outside the vault.
- */
-class MultisigSendDraft {
-    var amountSats: Long by mutableStateOf(100_000L)
-    var destination: String by mutableStateOf("tb1qvaultdestinationdemo000000000000000")
-    var vault: CreatedVault? by mutableStateOf(null)
-        private set
-    private val signed = mutableStateListOf<String>()
-    /** Uppercase master fingerprints of the vault keys that have signed this send, each once. */
-    val signedFingerprints: List<String> get() = signed
-    var psbtBase64: String by mutableStateOf("")
-        private set
-    var lastError: String? by mutableStateOf(null)
-        private set
-    var broadcastTxid: String by mutableStateOf("")
-        private set
-
-    /** Empties the recipient and amount, so a send opened from a vault starts blank. */
-    fun startForm() {
-        destination = ""
-        amountSats = 0L
-        lastError = null
-    }
-
-    fun resetSignatures(vault: CreatedVault) {
-        this.vault = vault
-        signed.clear()
-        broadcastTxid = ""
-        lastError = null
-        // Placeholder PSBT body until vault PSBT builder lands; HW sign still goes through WalletLink.
-        psbtBase64 = "cHNidP8BAF4CAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/////wAAAAA="
-    }
-
-    /** Records that a vault key signed. False, with [lastError], when no send is started or [fingerprint] is not a key of its vault. */
-    fun markSigned(fingerprint: String): Boolean {
-        val fp = fingerprint.uppercase()
-        val keys = vault?.keyFingerprints.orEmpty()
-        if (keys.none { it.equals(fp, ignoreCase = true) }) {
-            lastError = "กุญแจนี้ไม่ใช่กุญแจของ Wallet นี้"
-            return false
-        }
-        if (fp !in signed) signed.add(fp)
-        return true
-    }
-
-    fun setSignedPsbt(base64: String) {
-        psbtBase64 = base64
-    }
-
-    fun signaturesNeeded(): Int = ((vault?.m ?: 0) - signed.size).coerceAtLeast(0)
-
-    fun readyToBroadcast(): Boolean = vault?.let { signed.size >= it.m } ?: false
-
-    /** Destination + amount gate before HW sign (vault-core real-PSBT policy is Term-2). */
-    fun policyAllowsSign(): Boolean {
-        if (destination.isBlank() || amountSats <= 0L) {
-            lastError = "ปลายทางหรือจำนวนไม่ถูกต้อง"
-            return false
-        }
-        return true
-    }
-
-    /** Stand-in for the network broadcast: it only mints a txid. A send that already has one is not broadcast again. */
-    fun broadcastMock(): Boolean {
-        if (!readyToBroadcast()) {
-            lastError = "ลายเซ็นยังไม่ครบ"
-            return false
-        }
-        if (broadcastTxid.isNotBlank()) {
-            lastError = "ส่งธุรกรรมนี้ไปแล้ว"
-            return false
-        }
-        broadcastTxid = "mockvaulttx_${signed.size}_${amountSats.toString(16)}"
         return true
     }
 }

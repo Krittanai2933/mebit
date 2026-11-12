@@ -281,18 +281,6 @@ enum class MovieRoute(
         "เก็บลายเซ็น",
         "เลือกกุญแจที่พร้อมเซ็น",
     ),
-    M3SignOnJade(
-        "send/m3",
-        "SIGN ON JADE",
-        "เซ็นบน Jade",
-        "Bluetooth เท่านั้น",
-    ),
-    M4ReadyToBroadcast(
-        "send/m4",
-        "READY TO BROADCAST",
-        "พร้อมส่งธุรกรรม",
-        "ลายเซ็นครบแล้ว",
-    ),
     ChooseWalletReceive(
         "wallets/choose-receive",
         "RECEIVE · เลือกกระเป๋า",
