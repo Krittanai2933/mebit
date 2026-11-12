@@ -115,6 +115,7 @@ import com.mebit.app.feature.send.walletChoices
 import com.mebit.app.feature.send.CollectSignaturesScreen
 import com.mebit.app.feature.send.VaultReviewScreen
 import com.mebit.app.feature.send.VaultSendScreen
+import com.mebit.app.feature.send.VaultSentScreen
 import com.mebit.app.rememberBiometrics
 import com.mebit.app.rememberIsDebugBuild
 import com.mebit.app.ui.components.LocalDebugLinkLift
@@ -723,6 +724,14 @@ fun MebitNavHost(
                                 land(stackAfterVaultSend(backStack))
                             }
                         },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.M9SentVault -> VaultSentScreen(
+                        send = vaultSend,
+                        quotes = quotes,
+                        // stackAfterVaultSend puts the slip on the wallet's detail, so home is one step Back.
+                        onHome = { goBack() },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )

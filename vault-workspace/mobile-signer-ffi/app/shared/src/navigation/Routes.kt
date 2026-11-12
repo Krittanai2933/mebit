@@ -287,6 +287,12 @@ enum class MovieRoute(
         "ตรวจก่อนส่ง",
         "ลายเซ็นครบแล้ว ตรวจแล้วส่ง",
     ),
+    M9SentVault(
+        "send/m9",
+        "SENT · WALLET",
+        "ส่งสำเร็จ",
+        "สลิปส่ง Bitcoin",
+    ),
     ChooseWalletReceive(
         "wallets/choose-receive",
         "RECEIVE · เลือกกระเป๋า",

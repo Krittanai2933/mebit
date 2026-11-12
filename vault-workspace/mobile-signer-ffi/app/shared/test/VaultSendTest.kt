@@ -203,6 +203,22 @@ class VaultSendTest {
     }
 
     @Test
+    fun aPaymentOutKeepsWhatItsSlipShowsTheTimeItWentOutAmongThem(): Unit = runBlocking {
+        val rust = Rust()
+        val send = rust.send(now = 1_762_934_400L)
+        send.draft.destination = "tb1qdestination"
+        send.draft.setAmountInSats(600_000)
+        assertTrue(send.prepare())
+        assertTrue(send.sign(phone(0)) { true })
+        assertTrue(send.sign(phone(2)) { true })
+        assertTrue(send.broadcast())
+        val sent = assertIs<VaultSendState.Sent>(send.state)
+        assertEquals(1_762_934_400L, sent.atSeconds, "5.9's date line")
+        assertEquals(listOf(txid, "tb1qdestination"), listOf(sent.psbt.txid, sent.psbt.destination))
+        assertEquals(600_000uL to 402uL, sent.psbt.amountSats to sent.psbt.feeSats)
+    }
+
+    @Test
     fun anUnknownOutcomeKeepsTheGuardAndASecondTapPostsTheSameBytes() {
         val file = FakePlainFile()
         val rust = Rust()

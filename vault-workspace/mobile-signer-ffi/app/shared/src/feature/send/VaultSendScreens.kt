@@ -36,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.QrScanSheet
+import com.mebit.app.SystemBack
 import com.mebit.app.data.AmountEntry
 import com.mebit.app.data.KeySigner
 import com.mebit.app.data.QuoteCache
@@ -503,9 +504,40 @@ fun VaultReviewScreen(
     }
 }
 
+/**
+ * Penpot 5.9 Sent · wallet, S6's slip ([SentSlip]) for the payment this send put out: when the node took it, the amount and its baht, from
+ * this wallet, to its destination, the fee at the rate picked on 5.1, the txid, แชร์สลิป, and กลับหน้าหลัก ([onHome]), which the system Back
+ * also does. Only a payment that went out has a slip, so anything else shows one line.
+ */
+@Composable
+fun VaultSentScreen(send: VaultSend?, quotes: QuoteCache, onHome: () -> Unit, onBack: (() -> Unit)?, onOpenCatalog: () -> Unit) {
+    val sent = send?.state as? VaultSendState.Sent
+    if (send == null || sent == null) {
+        MebitScreen(eyebrow = "SENT · WALLET", title = "สลิปส่ง Bitcoin", onBack = onBack, onOpenCatalog = onOpenCatalog, tag = "screen_send/m9") {
+            Text(NO_SLIP, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("m9_none"))
+        }
+        return
+    }
+    SystemBack(onHome)
+    SentSlip(
+        tag = "screen_send/m9",
+        txid = sent.psbt.txid,
+        sentAtSeconds = sent.atSeconds,
+        amountSats = sent.psbt.amountSats.toLong(),
+        feeSats = sent.psbt.feeSats.toLong(),
+        rateSatVb = send.draft.rateSatVb,
+        destination = sent.psbt.destination,
+        walletName = send.vault.name,
+        quotes = quotes,
+        onHome = onHome,
+        onOpenCatalog = onOpenCatalog,
+    )
+}
+
 /** Draft copy, no board draws these. */
 private const val NO_SEND = "ยังส่งจาก Wallet นี้ไม่ได้ · กลับไปหน้าก่อน"
 private const val NO_PAYMENT = "ยังไม่มีรายการให้เซ็น · กลับไปหน้าก่อน"
 private const val NO_REVIEW = "ยังไม่มีรายการให้ส่ง · กลับไปหน้าก่อน"
+private const val NO_SLIP = "ยังไม่มีรายการที่ส่งออก · กลับไปหน้าก่อน"
 private const val BALANCE_UNKNOWN = "ยังดึงยอดที่ใช้ได้ของ Wallet นี้ไม่ได้ จึงยังส่งไม่ได้ ลองใหม่ภายหลัง"
 private const val PAYMENT_UNCONFIRMED = "การส่งครั้งก่อนจาก Wallet นี้ยังยืนยันไม่ได้ เปิดรายละเอียด Wallet เพื่อตรวจรายการก่อนส่งอีกครั้ง"

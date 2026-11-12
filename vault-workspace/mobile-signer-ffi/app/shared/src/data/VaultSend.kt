@@ -40,8 +40,8 @@ sealed interface VaultSendState {
      */
     data class Collecting(val psbt: VaultPsbt, val stale: Boolean = false) : VaultSendState
 
-    /** The node took [psbt]'s transaction, which the review still draws while it leaves. */
-    data class Sent(val psbt: VaultPsbt) : VaultSendState
+    /** The node took [psbt]'s transaction, which the review still draws while it leaves, and the phone learned so at [atSeconds], 5.9's date. */
+    data class Sent(val psbt: VaultPsbt, val atSeconds: Long) : VaultSendState
 }
 
 /** What a [VaultSend] call is doing. One runs at a time, and the screens hold every button while one runs. */
@@ -276,7 +276,7 @@ class VaultSend(
     private fun out(held: VaultPsbt, sent: UnconfirmedSend): Boolean {
         guards.settle(guardKey, sent)
         guard = null
-        state = VaultSendState.Sent(held)
+        state = VaultSendState.Sent(held, nowSeconds())
         return true
     }
 

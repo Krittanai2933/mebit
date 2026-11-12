@@ -7,7 +7,7 @@ import kotlin.test.assertTrue
 class MovieRouteTest {
     @Test
     fun coversEveryMoviePageBoard() {
-        assertEquals(47, MovieRoute.entries.size)
+        assertEquals(48, MovieRoute.entries.size)
         assertEquals(MovieRoute.Welcome, MovieRoute.start)
         assertEquals("onboarding/import-seed", MovieRoute.ImportSeed.path)
         assertEquals("IMPORT SEED", MovieRoute.ImportSeed.eyebrow)
@@ -38,10 +38,11 @@ class MovieRouteTest {
     }
 
     @Test
-    fun aSeveralKeyWalletsReviewHasTheRouteOf58() {
-        // The recipes open it as catalog_send/m8: the step of Organize 5.8, drawn as S5.
+    fun aSeveralKeyWalletsReviewAndSlipHaveTheRoutesOf58And59() {
+        // The recipes open them as catalog_send/m8, the step of Organize 5.8 drawn as S5, and catalog_send/m9, board 5.9.
         assertEquals("send/m8", MovieRoute.M8ReviewVault.path)
-        assertEquals(null, MovieRoute.M8ReviewVault.bar, "a send screen shows no bottom bar")
+        assertEquals("send/m9", MovieRoute.M9SentVault.path)
+        assertEquals(listOf(null, null), listOf(MovieRoute.M8ReviewVault.bar, MovieRoute.M9SentVault.bar), "send screens show no bottom bar")
     }
 
     @Test
