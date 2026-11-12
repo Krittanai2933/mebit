@@ -1769,7 +1769,7 @@ fn coins_overflow() -> MobileSignerError {
     MobileSignerError::InvalidPsbtJson("esplora utxo: the coins' values do not fit u64".into())
 }
 
-/// The coins a payment may spend, each with its key, and their sum: every confirmed coin of a
+/// The coins a payment may spend, each with its owner, and their sum: every confirmed coin of a
 /// funded address, and the wallet's own change unconfirmed too, because it is this wallet's own
 /// transaction and waiting for it would lock the balance after every payment. Own change is an
 /// unconfirmed coin on an internal address whose transaction spends one of the wallet's own coins,
@@ -1778,23 +1778,36 @@ fn coins_overflow() -> MobileSignerError {
 /// every call, never cached, plus one `/tx` lookup per transaction with unconfirmed change. An
 /// outpoint listed twice, a sum past u64 or a lookup that is not that transaction fails the whole
 /// call.
-type Coins<'w> = Vec<(Utxo, &'w OwnKey)>;
+type Coins<'w, K = OwnKey> = Vec<(Utxo, &'w K)>;
 
 fn spendable_coins<'w>(
     source: &dyn ChainSource,
     wallet: &'w Wallet,
 ) -> Result<(Coins<'w>, u64), MobileSignerError> {
-    let owners: Vec<(Chain, &OwnKey)> = wallet.funded().collect();
-    let addresses: Vec<&Address> = owners.iter().map(|(_, k)| &k.address).collect();
+    let owners: Vec<(Chain, &OwnKey, &Address)> =
+        wallet.funded().map(|(c, k)| (c, k, &k.address)).collect();
+    let own = wallet.addresses();
+    let own: Vec<&str> = own.iter().map(String::as_str).collect();
+    spendable_among(source, &owners, &own)
+}
+
+/// `spendable_coins`' rule over `owners`, each a funded address with its chain and whoever owns its coins, and `own`, every
+/// address of the wallet, which own change must spend from. The one rule for a one-key wallet and a several-key wallet.
+fn spendable_among<'o, K>(
+    source: &dyn ChainSource,
+    owners: &[(Chain, &'o K, &Address)],
+    own: &[&str],
+) -> Result<(Coins<'o, K>, u64), MobileSignerError> {
+    let addresses: Vec<&Address> = owners.iter().map(|(_, _, a)| *a).collect();
     let lists = source.utxos(&addresses)?;
-    let mut listed: Vec<(Utxo, &OwnKey, Chain)> = Vec::new();
-    for ((chain, owner), list) in owners.iter().zip(lists) {
+    let mut listed: Vec<(Utxo, &K, Chain)> = Vec::new();
+    for ((chain, owner, _), list) in owners.iter().zip(lists) {
         for utxo in list {
-            listed.push((utxo, owner, *chain));
+            listed.push((utxo, *owner, *chain));
         }
     }
-    let own_change = own_change_transactions(source, wallet, &listed)?;
-    let spendable: Coins = listed
+    let own_change = own_change_transactions(source, own, &listed)?;
+    let spendable: Coins<K> = listed
         .into_iter()
         .filter(|(utxo, _, chain)| {
             utxo.confirmed || (matches!(chain, Chain::Internal) && own_change.contains(&utxo.txid))
@@ -1809,12 +1822,12 @@ fn spendable_coins<'w>(
 }
 
 /// Among the transactions of the unconfirmed coins on internal addresses in `listed`, the ones this
-/// wallet signed: each spends a coin of one of the wallet's own addresses. One lookup per
+/// wallet signed: each spends a coin of one of the wallet's own addresses, `own`. One lookup per
 /// transaction, none when there is no such coin.
-fn own_change_transactions(
+fn own_change_transactions<K>(
     source: &dyn ChainSource,
-    wallet: &Wallet,
-    listed: &[(Utxo, &OwnKey, Chain)],
+    own: &[&str],
+    listed: &[(Utxo, &K, Chain)],
 ) -> Result<HashSet<Txid>, MobileSignerError> {
     let mut pending: Vec<Txid> = Vec::new();
     for (utxo, _, chain) in listed {
@@ -1826,8 +1839,6 @@ fn own_change_transactions(
         return Ok(HashSet::new());
     }
     let spends = source.spends_from(&pending)?;
-    let own = wallet.addresses();
-    let own: Vec<&str> = own.iter().map(String::as_str).collect();
     let mut signed = HashSet::new();
     for (txid, from) in pending.iter().zip(&spends) {
         if from.iter().any(|a| own.contains(&a.as_str())) {
@@ -1847,11 +1858,21 @@ fn prove_values(
     source: &dyn ChainSource,
     selected: &[(&Utxo, &OwnKey)],
 ) -> Result<(), MobileSignerError> {
+    let legacy = selected
+        .iter()
+        .filter(|(_, owner)| !owner.address_type.commits_to_value())
+        .map(|(utxo, owner)| (*utxo, &owner.address));
+    proven_parents(source, legacy).map(|_| ())
+}
+
+/// `prove_values`' reads and refusals for every coin of `coins`, each with the address it pays, and the parents it read,
+/// by txid. A several-key wallet proves every input this way and puts each parent in its PSBT.
+fn proven_parents<'u>(
+    source: &dyn ChainSource,
+    coins: impl Iterator<Item = (&'u Utxo, &'u Address)>,
+) -> Result<HashMap<Txid, Transaction>, MobileSignerError> {
     let mut read: HashMap<Txid, Transaction> = HashMap::new();
-    for (utxo, owner) in selected {
-        if owner.address_type.commits_to_value() {
-            continue;
-        }
+    for (utxo, address) in coins {
         let coin = OutPoint {
             txid: utxo.txid,
             vout: utxo.vout,
@@ -1879,10 +1900,9 @@ fn prove_values(
             .output
             .get(utxo.vout as usize)
             .ok_or_else(|| lie(format!("its transaction has {} outputs", tx.output.len())))?;
-        if paid.script_pubkey != owner.address.script_pubkey() {
+        if paid.script_pubkey != address.script_pubkey() {
             return Err(lie(format!(
-                "its transaction pays it to another script than {}",
-                owner.address
+                "its transaction pays it to another script than {address}"
             )));
         }
         if paid.value.to_sat() != utxo.value {
@@ -1893,7 +1913,7 @@ fn prove_values(
             )));
         }
     }
-    Ok(())
+    Ok(read)
 }
 
 /// `selected` spent to `outputs`, once `prove_values` holds for them on `source`, each input signed with
@@ -1996,10 +2016,11 @@ enum SendAmount {
 }
 
 /// What `signed` spends and pays for one payment, decided from one sync and one read of the coin
-/// lists, before any proof or signature.
-struct Plan<'c> {
+/// lists, before any proof or signature. `K` owns each coin: a one-key wallet's key, or a several-key
+/// wallet's address.
+struct Plan<'c, K = OwnKey> {
     /// In input order: largest first for an exact amount, the listing order for send all.
-    selected: Vec<(&'c Utxo, &'c OwnKey)>,
+    selected: Vec<(&'c Utxo, &'c K)>,
     /// The destination first, then change if any, as `prepared` reads them.
     outputs: Vec<TxOut>,
     /// Inputs less outputs, change that went into the fee included.
@@ -2014,7 +2035,7 @@ struct Plan<'c> {
 fn checked(
     destination: &str,
     network: KeyNetwork,
-    address_type: AddressType,
+    own: InputWeightPrediction,
     amount: SendAmount,
     rate_sat_vb: u64,
 ) -> Result<Address, MobileSignerError> {
@@ -2030,13 +2051,7 @@ fn checked(
         )));
     }
     check_rate(rate_sat_vb)?;
-    need(
-        address_type.input_weight(),
-        dest.script_pubkey().len(),
-        amount_sats,
-        rate_sat_vb,
-        1,
-    )?;
+    need(own, dest.script_pubkey().len(), amount_sats, rate_sat_vb, 1)?;
     Ok(dest)
 }
 
@@ -2074,7 +2089,8 @@ fn planned<T>(
     store: &ScanStore,
     finish: impl FnOnce(Plan<'_>) -> Result<T, MobileSignerError>,
 ) -> Result<T, MobileSignerError> {
-    let dest = checked(destination, network, address_type, amount, rate_sat_vb)?;
+    let own = address_type.input_weight();
+    let dest = checked(destination, network, own, amount, rate_sat_vb)?;
     check_network(network)?;
     let wallet = complete(synced(
         source,
@@ -2086,40 +2102,54 @@ fn planned<T>(
         store,
     )?)?;
     let (spendable, have) = spendable_coins(source, &wallet)?;
-    let own = address_type.input_weight();
-    let plan = match amount {
+    let change_script = wallet.next_unused(Chain::Internal).address.script_pubkey();
+    let plan = plan_for(amount, &spendable, have, change_script, own, &dest, rate_sat_vb)?;
+    finish(plan)
+}
+
+/// The plan for `amount` over `spendable`, with any change to `change_script`: the one place an exact amount and send all
+/// pick their plan, so a one-key wallet and a several-key wallet never decide a payment differently. Pure.
+fn plan_for<'c, K>(
+    amount: SendAmount,
+    spendable: &'c [(Utxo, &'c K)],
+    have: u64,
+    change_script: ScriptBuf,
+    own: InputWeightPrediction,
+    dest: &Address,
+    rate_sat_vb: u64,
+) -> Result<Plan<'c, K>, MobileSignerError> {
+    match amount {
         SendAmount::Exact(amount_sats) => plan_payment(
-            &spendable,
+            spendable,
             have,
-            wallet.next_unused(Chain::Internal).address.script_pubkey(),
+            change_script,
             own,
-            &dest,
+            dest,
             amount_sats,
             rate_sat_vb,
-        )?,
-        SendAmount::All => plan_send_all(&spendable, have, own, &dest, rate_sat_vb)?,
-    };
-    finish(plan)
+        ),
+        SendAmount::All => plan_send_all(spendable, have, own, dest, rate_sat_vb),
+    }
 }
 
 /// The coins an exact amount spends and where its leftover goes. `select` picks the coins and how what
 /// they hold beyond the amount settles. Change the network would refuse as an output, or too little
 /// to pay for its own, goes into the fee, as Bitcoin Core's wallet does, and the plan names it for
 /// Review. Pure: no lookup and no key use.
-fn plan_payment<'c>(
-    spendable: &'c [(Utxo, &'c OwnKey)],
+fn plan_payment<'c, K>(
+    spendable: &'c [(Utxo, &'c K)],
     have: u64,
     change_script: ScriptBuf,
     own: InputWeightPrediction,
     dest: &Address,
     amount_sats: u64,
     rate_sat_vb: u64,
-) -> Result<Plan<'c>, MobileSignerError> {
+) -> Result<Plan<'c, K>, MobileSignerError> {
     let refuse = |what: String| Err(MobileSignerError::InvalidPsbtJson(what));
     let dest_len = dest.script_pubkey().len();
     // Largest first, ties by outpoint: which coins pay never depends on the host's listing order,
     // and dust is touched only once the big coins fall short.
-    let mut every: Vec<&(Utxo, &OwnKey)> = spendable.iter().collect();
+    let mut every: Vec<&(Utxo, &K)> = spendable.iter().collect();
     every.sort_by(|(a, _), (b, _)| {
         b.value
             .cmp(&a.value)
@@ -2128,12 +2158,12 @@ fn plan_payment<'c>(
     });
     // Confirmed coins first. The wallet's own unconfirmed change joins only when they fall short, and
     // then every coin is tried in the same order.
-    let walk = |coins: &[&(Utxo, &OwnKey)]| {
+    let walk = |coins: &[&(Utxo, &K)]| {
         let spends: Vec<(u64, InputWeightPrediction)> =
             coins.iter().map(|(u, _)| (u.value, own)).collect();
         select(&spends, amount_sats, rate_sat_vb, dest_len, &change_script)
     };
-    let confirmed: Vec<&(Utxo, &OwnKey)> =
+    let confirmed: Vec<&(Utxo, &K)> =
         every.iter().copied().filter(|(u, _)| u.confirmed).collect();
     let picked = match walk(&confirmed) {
         Ok(found) => Ok((confirmed, found)),
@@ -2156,7 +2186,7 @@ fn plan_payment<'c>(
         }
         Err(Short::Limit { fee, vsize: size }) => return refuse(above_limit(fee, size)),
     };
-    let selected: Vec<(&Utxo, &OwnKey)> = coins
+    let selected: Vec<(&Utxo, &K)> = coins
         .into_iter()
         .take(count)
         .map(|(u, k)| (u, *k))
@@ -2184,13 +2214,13 @@ fn plan_payment<'c>(
 
 /// Every coin in listing order paying `dest` the whole balance less the fee, in one output and no
 /// change. The fee is the size of that transaction times the rate. Pure.
-fn plan_send_all<'c>(
-    spendable: &'c [(Utxo, &'c OwnKey)],
+fn plan_send_all<'c, K>(
+    spendable: &'c [(Utxo, &'c K)],
     have: u64,
     own: InputWeightPrediction,
     dest: &Address,
     rate_sat_vb: u64,
-) -> Result<Plan<'c>, MobileSignerError> {
+) -> Result<Plan<'c, K>, MobileSignerError> {
     let refuse = |what: String| Err(MobileSignerError::InvalidPsbtJson(what));
     // One input and one output is the smallest this transaction can be, so a wallet with nothing
     // to spend is short by that fee and the destination's dust floor.
