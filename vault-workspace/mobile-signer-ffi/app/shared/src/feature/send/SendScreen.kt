@@ -151,28 +151,7 @@ fun S4SendScreen(
         ) {
             ReceiveSendSwitch(sendSelected = true, onReceive = repost.unlessRunning(onReceive), onSend = {})
             Spacer(modifier = Modifier.height(20.dp))
-            DestinationField(draft, invalid = issue == SendIssue.InvalidAddress, enter, onScan = if (cameraAvailable) ({ scanning = true }) else null)
-            Spacer(modifier = Modifier.height(14.dp))
-            AmountCard(wallet, entry, quote, short = issue is SendIssue.Insufficient)
-            Spacer(modifier = Modifier.height(20.dp))
-            Text("ค่าธรรมเนียมเครือข่าย", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp)
-            Spacer(modifier = Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                (draft.tiers ?: LiveFeeTiers.DEFAULT).tiles(draft.typicalVsize).forEach { tile ->
-                    FeeCard(tile, selected = tile.tier == draft.tier, quote, modifier = Modifier.weight(1f)) { entry.chooseTier(tile.tier, wallet.spendableSats) }
-                }
-            }
-            if (draft.tiers?.live == false) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    "ใช้ค่าธรรมเนียมโดยประมาณ เพราะดึงค่าจริงไม่ได้",
-                    color = MbSlate,
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.Medium,
-                    lineHeight = 15.sp,
-                    modifier = Modifier.testTag("fee_fallback"),
-                )
-            }
+            SendFormFields(draft, entry, quote, wallet.balanceKnown, wallet.spendableSats, issue, enter, onScan = if (cameraAvailable) ({ scanning = true }) else null)
             when (issue) {
                 SendIssue.InvalidAddress -> {
                     Spacer(modifier = Modifier.height(20.dp))
@@ -196,6 +175,46 @@ fun S4SendScreen(
             // Outside the panel, which leaves with the guard the repost settled.
             RepostedNote(repost, wallet)
         }
+    }
+}
+
+/**
+ * The middle that Penpot 4.4 and 5.1 draw alike: the address field, the amount card, the network fee's label, its three tiles and the
+ * fallback line. [known] says the balance could be read, and [spendableSats] is what a payment can spend, as the caption, ส่งทั้งหมด and a
+ * tier pick read it. The tags are S4's on both screens, which their screen tags tell apart.
+ */
+@Composable
+internal fun SendFormFields(
+    draft: SendDraft,
+    entry: AmountEntry,
+    quote: FiatQuote?,
+    known: Boolean,
+    spendableSats: Long,
+    issue: SendIssue?,
+    enter: (String) -> Unit,
+    onScan: (() -> Unit)?,
+) {
+    DestinationField(draft, invalid = issue == SendIssue.InvalidAddress, enter, onScan = onScan)
+    Spacer(modifier = Modifier.height(14.dp))
+    AmountCard(known, spendableSats, entry, quote, short = issue is SendIssue.Insufficient)
+    Spacer(modifier = Modifier.height(20.dp))
+    Text("ค่าธรรมเนียมเครือข่าย", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp)
+    Spacer(modifier = Modifier.height(10.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        (draft.tiers ?: LiveFeeTiers.DEFAULT).tiles(draft.typicalVsize).forEach { tile ->
+            FeeCard(tile, selected = tile.tier == draft.tier, quote, modifier = Modifier.weight(1f)) { entry.chooseTier(tile.tier, spendableSats) }
+        }
+    }
+    if (draft.tiers?.live == false) {
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            "ใช้ค่าธรรมเนียมโดยประมาณ เพราะดึงค่าจริงไม่ได้",
+            color = MbSlate,
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.Medium,
+            lineHeight = 15.sp,
+            modifier = Modifier.testTag("fee_fallback"),
+        )
     }
 }
 
@@ -273,7 +292,7 @@ private fun DestinationField(draft: SendDraft, invalid: Boolean, enter: (String)
 }
 
 @Composable
-private fun AmountCard(wallet: SingleSigWallet, entry: AmountEntry, quote: FiatQuote?, short: Boolean) {
+private fun AmountCard(known: Boolean, spendableSats: Long, entry: AmountEntry, quote: FiatQuote?, short: Boolean) {
     val shape = RoundedCornerShape(22.dp)
     val amount = TextStyle(color = MbNavyInk, fontSize = 44.sp, fontWeight = FontWeight.Bold, lineHeight = 56.sp)
     val baht = entry.inBaht(quote)
@@ -319,7 +338,7 @@ private fun AmountCard(wallet: SingleSigWallet, entry: AmountEntry, quote: FiatQ
             Spacer(modifier = Modifier.height(11.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(
-                    text = (if (wallet.balanceKnown) entry.caption(wallet.spendableSats, quote) else "ใช้ได้ —") + if (short) " · ไม่พอ" else "",
+                    text = (if (known) entry.caption(spendableSats, quote) else "ใช้ได้ —") + if (short) " · ไม่พอ" else "",
                     color = if (short) MbEyebrow else MbBody,
                     fontSize = 12.5.sp,
                     fontWeight = FontWeight.Medium,
@@ -332,7 +351,7 @@ private fun AmountCard(wallet: SingleSigWallet, entry: AmountEntry, quote: FiatQ
                     fontSize = 12.5.sp,
                     fontWeight = FontWeight.Bold,
                     lineHeight = 17.sp,
-                    modifier = Modifier.clickable(role = Role.Button) { entry.sendAll(wallet.spendableSats) }.testTag("s4_send_all"),
+                    modifier = Modifier.clickable(role = Role.Button) { entry.sendAll(spendableSats) }.testTag("s4_send_all"),
                 )
             }
         }
@@ -429,7 +448,7 @@ private fun FeeCard(tile: FeeTile, selected: Boolean, quote: FiatQuote?, modifie
 }
 
 @Composable
-private fun IssuePanel(label: String, message: String) {
+internal fun IssuePanel(label: String, message: String) {
     val shape = RoundedCornerShape(16.dp)
     Column(
         modifier = Modifier
