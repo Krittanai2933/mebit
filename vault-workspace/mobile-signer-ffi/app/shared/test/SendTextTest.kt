@@ -70,4 +70,18 @@ class SendTextTest {
         assertEquals("฿0 · 8 sat/vB", slipFeeText(0, 8, null))
         assertEquals("฿0 · 8 sat/vB", slipFeeText(0, 8, boardPrice))
     }
+
+    @Test
+    fun reviewKeepsTheBalanceLessWhatLeaves() {
+        // Board 4.5: 0.0312 BTC less 0.00501128 BTC taken leaves 0.02618872 BTC.
+        assertEquals("0.02618872 BTC", keptText(3_120_000, 501_128))
+        assertEquals("0.0000 BTC", keptText(501_128, 501_128))
+    }
+
+    @Test
+    fun reviewKeepsADashWhileTheBalanceOrThePaymentIsUnknownAndNeverLessThanNothing() {
+        assertEquals("—", keptText(null, 501_128))
+        assertEquals("—", keptText(3_120_000, null))
+        assertEquals("0.0000 BTC", keptText(400_000, 501_128), "a balance read before coins left")
+    }
 }

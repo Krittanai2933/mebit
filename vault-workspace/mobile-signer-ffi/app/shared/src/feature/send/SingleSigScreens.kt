@@ -44,6 +44,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -125,13 +126,25 @@ fun S5ReviewSignScreen(
             attempt.end(paid = out)
         }
     }
-    MebitScreen(
-        eyebrow = "SEND · ตรวจสอบ",
-        title = "ตรวจก่อนส่ง",
+    ReviewPage(
+        tag = "screen_send/s5",
         onBack = leave,
         onOpenCatalog = onOpenCatalog,
-        subtitle = "ส่งแล้วยกเลิกไม่ได้ เทียบที่อยู่กับคนรับอีกครั้ง",
-        tag = "screen_send/s5",
+        amountSats = shown?.amountSats ?: draft.amountSats,
+        sendAll = draft.isSendAll,
+        // Send all before its quote: the Send screen's one-coin estimate, which the quote replaces with what leaves. Open item 76.
+        estimate = draft.isSendAll && shown == null,
+        destination = draft.destination,
+        from = session.walletName,
+        fee = when (val state = load) {
+            QuoteLoad.Loading -> "กำลังคำนวณ…"
+            is QuoteLoad.Failed -> "—"
+            is QuoteLoad.Quoted -> realFeeText(state.quote.feeSats, quote)
+        },
+        totalSats = shown?.totalSats,
+        // A scan that has not found the whole wallet leaves no balance to take the payment from.
+        balanceSats = wallet.balanceSats.takeIf { wallet.balanceKnown },
+        quote = quote,
         bottom = {
             BottomActions(
                 primaryLabel = when {
@@ -166,29 +179,6 @@ fun S5ReviewSignScreen(
             )
         },
     ) {
-        Spacer(modifier = Modifier.height(27.dp))
-        SendSummary(draft, shown, quote)
-        Spacer(modifier = Modifier.height(14.dp))
-        val rows = RoundedCornerShape(20.dp)
-        Column(
-            modifier = Modifier.fillMaxWidth().height(196.dp).clip(rows).background(MbWhite).border(1.dp, MbBorder, rows).padding(start = 16.dp, end = 16.dp, top = 6.dp),
-        ) {
-            ReviewRow("จาก", session.walletName)
-            ReviewDivider()
-            ReviewRow(
-                "ค่าธรรมเนียม",
-                when (val state = load) {
-                    QuoteLoad.Loading -> "กำลังคำนวณ…"
-                    is QuoteLoad.Failed -> "—"
-                    is QuoteLoad.Quoted -> realFeeText(state.quote.feeSats, quote)
-                },
-            )
-            ReviewDivider()
-            ReviewRow("หักจากกระเป๋ารวม", shown?.let { "${formatBtcCompact(it.totalSats)} BTC" } ?: "—", bold = true)
-            ReviewDivider()
-            // A scan that has not found the whole wallet leaves no balance to take the payment from.
-            ReviewRow("คงเหลือ", if (wallet.balanceKnown && shown != null) "${formatBtcCompact((wallet.balanceSats - shown.totalSats).coerceAtLeast(0))} BTC" else "—")
-        }
         question?.let { (held, why) ->
             HighFeeConfirm(
                 held,
@@ -222,6 +212,56 @@ fun S5ReviewSignScreen(
             Spacer(modifier = Modifier.height(12.dp))
             Text("ยอดไม่พอ", color = MaterialTheme.colorScheme.error)
         }
+    }
+}
+
+/**
+ * Penpot 4.5's page, which S5 and a several-key wallet's review draw alike: the header, the navy card of what leaves and where to, and the
+ * rows จาก, ค่าธรรมเนียม, หักจากกระเป๋ารวม ([totalSats]) and คงเหลือ ([keptText] of [balanceSats]), a dash while unknown, over [bottom],
+ * with [content] under the rows. The tags are S5's on both screens, which their screen tags tell apart.
+ */
+@Composable
+internal fun ReviewPage(
+    tag: String,
+    onBack: (() -> Unit)?,
+    onOpenCatalog: () -> Unit,
+    amountSats: Long,
+    sendAll: Boolean,
+    estimate: Boolean,
+    destination: String,
+    from: String,
+    fee: String,
+    totalSats: Long?,
+    balanceSats: Long?,
+    quote: FiatQuote?,
+    bottom: @Composable ColumnScope.() -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    MebitScreen(
+        eyebrow = "SEND · ตรวจสอบ",
+        title = "ตรวจก่อนส่ง",
+        onBack = onBack,
+        onOpenCatalog = onOpenCatalog,
+        subtitle = "ส่งแล้วยกเลิกไม่ได้ เทียบที่อยู่กับคนรับอีกครั้ง",
+        tag = tag,
+        bottom = bottom,
+    ) {
+        Spacer(modifier = Modifier.height(27.dp))
+        SendSummary(amountSats, sendAll, estimate, destination, quote)
+        Spacer(modifier = Modifier.height(14.dp))
+        val rows = RoundedCornerShape(20.dp)
+        Column(
+            modifier = Modifier.fillMaxWidth().height(196.dp).clip(rows).background(MbWhite).border(1.dp, MbBorder, rows).padding(start = 16.dp, end = 16.dp, top = 6.dp),
+        ) {
+            ReviewRow("จาก", from)
+            ReviewDivider()
+            ReviewRow("ค่าธรรมเนียม", fee)
+            ReviewDivider()
+            ReviewRow("หักจากกระเป๋ารวม", totalSats?.let { "${formatBtcCompact(it)} BTC" } ?: "—", bold = true)
+            ReviewDivider()
+            ReviewRow("คงเหลือ", keptText(balanceSats, totalSats))
+        }
+        content()
     }
 }
 
@@ -317,12 +357,9 @@ internal fun reviewIssue(refused: Boolean, failed: Boolean, unconfirmedSend: Boo
     else -> null
 }
 
-/** Penpot 4.5: what leaves, in the first 4 decimals, its baht when there is a price, and where to. [shown] is Review's quote once it came. */
+/** Penpot 4.5: what leaves, in the first 4 decimals, its baht when there is a price, and where to. [estimate] marks a send all not yet quoted. */
 @Composable
-private fun SendSummary(draft: SendDraft, shown: SendQuote?, quote: FiatQuote?) {
-    val amountSats = shown?.amountSats ?: draft.amountSats
-    // Send all before its quote: the Send screen's one-coin estimate, which the quote replaces with what leaves. Open item 76.
-    val estimate = draft.isSendAll && shown == null
+private fun SendSummary(amountSats: Long, sendAll: Boolean, estimate: Boolean, destination: String, quote: FiatQuote?) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -335,7 +372,7 @@ private fun SendSummary(draft: SendDraft, shown: SendQuote?, quote: FiatQuote?) 
         Spacer(modifier = Modifier.height(20.dp))
         val label = when {
             estimate -> "ส่งทั้งหมด · จำนวนโดยประมาณ"
-            draft.isSendAll -> "ส่งทั้งหมด"
+            sendAll -> "ส่งทั้งหมด"
             else -> "ส่ง"
         }
         Text(label, color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
@@ -353,7 +390,7 @@ private fun SendSummary(draft: SendDraft, shown: SendQuote?, quote: FiatQuote?) 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("ถึง", color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
             Spacer(modifier = Modifier.width(18.dp))
-            Text(groupedAddress(draft.destination), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, lineHeight = 19.sp, modifier = Modifier.testTag("send_to"))
+            Text(groupedAddress(destination), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, lineHeight = 19.sp, modifier = Modifier.testTag("send_to"))
         }
     }
 }
