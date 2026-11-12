@@ -292,11 +292,7 @@ fun CollectSignaturesScreen(
 ) {
     val state = send?.state
     LaunchedEffect(state) { if (state is VaultSendState.Sent) onSent() }
-    val payment = when (state) {
-        is VaultSendState.Collecting -> state.psbt
-        is VaultSendState.Sent -> state.psbt
-        else -> null
-    }
+    val payment = send?.payment
     if (send == null || payment == null) {
         MebitScreen(eyebrow = "SEND · WALLET", title = "เก็บลายเซ็น", onBack = onBack, onOpenCatalog = onOpenCatalog, tag = "screen_send/m2") {
             Text(NO_PAYMENT, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("m2_none"))
@@ -378,7 +374,7 @@ private fun KeyRows(send: VaultSend, signers: List<KeySigner>, keyring: List<Sav
     val texts = vaultKeyRows(vault, keyring)
     val xpubs = xpubsIn(vault.bsms)
     val phone = remember { getPlatform().phoneMonogram }
-    val signedKeys = (send.state as? VaultSendState.Collecting)?.psbt?.signedKeys.orEmpty()
+    val signedKeys = send.payment?.signedKeys.orEmpty()
     val shape = RoundedCornerShape(20.dp)
     Column(modifier = Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(horizontal = 14.dp)) {
         signers.forEachIndexed { i, signer ->

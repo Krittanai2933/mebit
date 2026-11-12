@@ -704,7 +704,7 @@ fun MebitNavHost(
                         signers = vaultSend?.let { keySigners(it.vault, wallets.listed.map { w -> w.session }, keyring.keys) }.orEmpty(),
                         keyring = keyring.keys,
                         quotes = quotes,
-                        // Lead decision 3: the owner check of the wallet in use, once per signature, as S5 asks before it signs.
+                        // The owner check of the wallet in use, once per signature, as S5 asks before it signs.
                         confirmSign = { appLock.confirm(biometrics, session.appLockEnabled, "ยืนยันการเซ็นส่งเงิน") },
                         onSent = {
                             vaultSend?.vault?.let { sent ->

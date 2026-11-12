@@ -99,9 +99,17 @@ class VaultSend(
     var spendableSats: Long? by mutableStateOf(null)
         private set
 
-    /** The uppercase fingerprints of the wallet's keys that Rust found signed on every input of the payment held, each once. */
+    /** The payment 5.2 shows: the one held for signatures, or the one that went out. */
+    val payment: VaultPsbt?
+        get() = when (val now = state) {
+            is VaultSendState.Collecting -> now.psbt
+            is VaultSendState.Sent -> now.psbt
+            VaultSendState.Form -> null
+        }
+
+    /** The uppercase fingerprints of the wallet's keys that Rust found signed on every input of [payment], each once. */
     val signedFingerprints: Set<String>
-        get() = (state as? VaultSendState.Collecting)?.psbt?.signedKeys.orEmpty()
+        get() = payment?.signedKeys.orEmpty()
             .mapNotNull { vault.keyFingerprints.getOrNull(it.toInt())?.uppercase() }
             .toSet()
 
@@ -324,7 +332,7 @@ sealed interface KeySigner {
 }
 
 /**
- * Lead decision 2, one rule for every row of 5.2: vault key i is [KeySigner.Phone] when a wallet of [listed] ([Wallets.listed]: past setup,
+ * One rule for every row of 5.2, so only a key whose words are in memory signs: vault key i is [KeySigner.Phone] when a wallet of [listed] ([Wallets.listed]: past setup,
  * words in memory) has fingerprint == keyFingerprints[i], ignoring case, and xpub == xpubsIn(bsms)[i], the pair [vaultKeyRows] names a key by.
  * Otherwise [KeySigner.Elsewhere] with why, from the [keyring] entry that names the key: a stand-in, a hardware key, another phone's, or none.
  */
