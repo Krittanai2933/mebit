@@ -51,7 +51,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 - [Several wallets](./several-wallets.md) covers adding a wallet apart from a key for a Vault, the wallet lists, switching, removing and the full Forget.
 - [Movie Page keys](./movie-page-keys.md) covers AddKey, T13, T14.
 - [Movie Page vault](./movie-page-vault.md) covers policy → BSMS file → list/detail/T20.
-- [Movie Page send](./movie-page-send.md) covers S1 to S6, live on testnet4 for a real key and mocked for the demo wallet, and M* (mocked).
+- [Movie Page send](./movie-page-send.md) covers S1 to S6, live on testnet4 for a real key and mocked for the demo wallet, and M*, a several-key wallet's real testnet4 send from 5.1 through its review to 5.9's slip.
 - [Movie Page history](./movie-page-history.md) covers S7, the full transaction list behind Home's ดูทั้งหมด link, and its empty state.
 - [Movie Page transaction detail](./movie-page-tx-detail.md) covers S8, the detail a tap on a Home or history row opens, with its status, addresses, cost, TXID, technical parts, and the loading, not-found and failed states.
 
