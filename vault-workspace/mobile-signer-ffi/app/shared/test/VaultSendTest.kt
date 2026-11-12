@@ -180,6 +180,27 @@ class VaultSendTest {
     }
 
     @Test
+    fun aKeyIsNeededUntilItsFingerprintSignedOrTheWalletHasM(): Unit = runBlocking {
+        val send = Rust().send()
+        assertTrue(send.prepare())
+        assertEquals(listOf(true, true, true), (0..2).map(send::needsKey))
+        assertTrue(send.sign(phone(0)) { true })
+        assertEquals(listOf(false, true, true), (0..2).map(send::needsKey))
+        assertTrue(send.sign(phone(2)) { true })
+        assertEquals(listOf(false, false, false), (0..2).map(send::needsKey), "5.8: every row left reads ไม่ต้องใช้รอบนี้")
+    }
+
+    @Test
+    fun aSignatureKeepsThePhoneClockOfItsSignUnderItsFingerprintUntilANewPayment(): Unit = runBlocking {
+        val send = Rust().send(now = 1_762_934_400L, vault = vault.copy(keyFingerprints = listOf("AAAA0000", "BBBB0000", "cccc0000")))
+        assertTrue(send.prepare())
+        assertTrue(send.sign(phone(2)) { true })
+        assertEquals(mapOf("CCCC0000" to 1_762_934_400L), send.signedAt, "the time on key 3's row")
+        assertTrue(send.prepare())
+        assertEquals(emptyMap(), send.signedAt, "a new payment has no signature yet")
+    }
+
+    @Test
     fun aSignWhoseOwnerCheckEndsAfterTheLastNeededSignatureAsksRustNothing(): Unit = runBlocking {
         val rust = Rust()
         val send = rust.send()
@@ -200,6 +221,7 @@ class VaultSendTest {
         rust.sign = { held, key -> held.copy(txid = "ef".repeat(32), signedKeys = listOf(key)) }
         assertFalse(send.sign(phone(0)) { true }, "an answer of another payment")
         assertEquals(emptySet(), send.signedFingerprints)
+        assertEquals(emptyMap(), send.signedAt, "a refused answer has no time")
         rust.sign = { _, _ -> throw MobileSignerException.InvalidPsbtJson("invalid PSBT json: vault key: the words are not key 0 of the wallet") }
         assertFalse(send.sign(phone(0)) { true })
         assertEquals("กุญแจนี้ไม่ใช่กุญแจของ Wallet นี้", send.lastError)

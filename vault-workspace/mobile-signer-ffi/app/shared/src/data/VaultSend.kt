@@ -84,6 +84,10 @@ class VaultSend(
     var state: VaultSendState by mutableStateOf(VaultSendState.Form)
         private set
 
+    /** When this phone signed the payment held, in epoch seconds by uppercase fingerprint: the time on 5.2's rows, which counts no signer. */
+    var signedAt: Map<String, Long> by mutableStateOf(emptyMap())
+        private set
+
     var busy: VaultBusy? by mutableStateOf(null)
         private set
 
@@ -153,6 +157,7 @@ class VaultSend(
         try {
             val amount = request.amountSats.toULong().takeUnless { request.sendAll }
             state = VaultSendState.Collecting(prepareSend(xpubs, m, request.destination, amount, request.rateSatVb.toULong()))
+            signedAt = emptyMap()
             true
         } catch (e: Exception) {
             fail(sendErrorThai(e.message))
@@ -181,6 +186,7 @@ class VaultSend(
                         fail(NOT_SIGNED)
                     } else {
                         state = VaultSendState.Collecting(next)
+                        signedAt = signedAt + (vault.keyFingerprints[signer.index].uppercase() to nowSeconds())
                         true
                     }
                 } catch (e: Exception) {

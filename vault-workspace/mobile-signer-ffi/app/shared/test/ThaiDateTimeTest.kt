@@ -23,6 +23,12 @@ class ThaiDateTimeTest {
     }
 
     @Test
+    fun theTimeAloneIsTheClockTheShortFormEndsWith() {
+        assertEquals("14:02", thaiTime(1_787_036_520, BANGKOK))
+        assertEquals("00:00", thaiTime(1_798_736_400, BANGKOK))
+    }
+
+    @Test
     fun theLongFormKeepsItsSuffix() {
         assertEquals("18 ส.ค. 2569 · 14:02 น.", thaiDateTime(1_787_036_520, BANGKOK))
         assertEquals("1 ม.ค. 2570 · 00:00 น.", thaiDateTime(1_798_736_400, BANGKOK, withSuffix = true))

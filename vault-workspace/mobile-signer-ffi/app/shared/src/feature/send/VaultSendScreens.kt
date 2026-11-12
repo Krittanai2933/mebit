@@ -56,6 +56,7 @@ import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.data.sendIssue
 import com.mebit.app.data.xpubsIn
 import com.mebit.app.feature.vault.vaultKeyRows
+import com.mebit.app.formatThaiTime
 import com.mebit.app.getPlatform
 import com.mebit.app.rememberCameraAvailable
 import com.mebit.app.ui.components.BottomActions
@@ -67,6 +68,7 @@ import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbBtcOrange
 import com.mebit.app.ui.theme.MbChip
 import com.mebit.app.ui.theme.MbEyebrow
+import com.mebit.app.ui.theme.MbGreenWash
 import com.mebit.app.ui.theme.MbIconWash
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
@@ -278,8 +280,10 @@ private fun GuardNote(line: String, tag: String) {
  * Penpot 5.2 Collect Signatures for the payment [VaultSend.prepare] holds: the navy card of what leaves and where, "เซ็นแล้ว x / m" over m
  * bars, a row per key of the wallet in BSMS order, the checklist of what the payment does, and ต่อไป ตรวจสอบ, on only at
  * [VaultSend.readyToBroadcast], which opens the review that posts ([onReview]), with "ต้องเซ็นอีก k ดอก" under it. A row this phone signs
- * ([KeySigner.Phone]) has a filled เซ็น that asks the owner ([confirmSign]) and then Rust, a signed key shows a check, and any other key an
- * outlined เซ็น that does nothing, with its reason under its line. A null [send], or one with nothing prepared, shows one line.
+ * ([KeySigner.Phone]) has a filled เซ็น that asks the owner ([confirmSign]) and then Rust, a signed key shows 5.8's green เซ็นแล้ว ✓ and the
+ * time this phone signed it, any other key an outlined เซ็น that does nothing, with its reason under its line, and a key the payment no
+ * longer needs ([VaultSend.needsKey]) no เซ็น at all. Once ready the bars turn green beside ครบแล้ว ส่งได้เลย, as 5.8 draws. A null [send],
+ * or one with nothing prepared, shows one line.
  */
 @Composable
 fun CollectSignaturesScreen(
@@ -304,6 +308,7 @@ fun CollectSignaturesScreen(
     val scope = rememberCoroutineScope()
     val signed = send.signedFingerprints.size
     val needed = send.signaturesNeeded
+    val ready = send.readyToBroadcast()
     MebitScreen(
         eyebrow = "SEND · ${vault.name}",
         title = "เก็บลายเซ็น",
@@ -312,7 +317,7 @@ fun CollectSignaturesScreen(
         tag = "screen_send/m2",
         bottom = {
             Spacer(modifier = Modifier.height(12.dp))
-            PrimaryCta("ต่อไป ตรวจสอบ", "cta_m2_review", onReview, enabled = send.readyToBroadcast() && send.busy == null)
+            PrimaryCta("ต่อไป ตรวจสอบ", "cta_m2_review", onReview, enabled = ready && send.busy == null)
             Box(modifier = Modifier.fillMaxWidth().height(38.dp), contentAlignment = Alignment.Center) {
                 if (needed > 0) Text("ต้องเซ็นอีก $needed ดอก", color = MbSlate, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.testTag("m2_needed"))
             }
@@ -324,12 +329,16 @@ fun CollectSignaturesScreen(
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("เซ็นแล้ว $signed / ${vault.m}", color = MbNavyInk, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("m2_progress"))
             Spacer(modifier = Modifier.weight(1f))
-            Text("ใช้กุญแจดอกไหนก็ได้ ${vault.m} ดอก", color = MbSlate, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            if (ready) {
+                Text("ครบแล้ว ส่งได้เลย", color = MbSuccess, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, modifier = Modifier.testTag("m2_ready"))
+            } else {
+                Text("ใช้กุญแจดอกไหนก็ได้ ${vault.m} ดอก", color = MbSlate, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            }
         }
         Spacer(modifier = Modifier.height(10.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             repeat(vault.m) { i ->
-                Box(modifier = Modifier.weight(1f).height(6.dp).clip(CircleShape).background(if (i < signed) MbNavy else MbChip))
+                Box(modifier = Modifier.weight(1f).height(6.dp).clip(CircleShape).background(if (ready) MbSuccess else if (i < signed) MbNavy else MbChip))
             }
         }
         Spacer(modifier = Modifier.height(14.dp))
@@ -362,7 +371,10 @@ private fun PaymentCard(payment: VaultPsbt, quote: com.mebit.app.data.FiatQuote?
     }
 }
 
-/** 5.2's white card: a row per key of the wallet, in the order [signers] gives, which is the BSMS order. */
+/**
+ * 5.2's white card: a row per key of the wallet, in the order [signers] gives, which is the BSMS order. A signed key's line ends with the time
+ * this phone signed it, and a key the payment no longer needs ([VaultSend.needsKey]) reads ไม่ต้องใช้รอบนี้ with no เซ็น, as 5.8 draws.
+ */
 @Composable
 private fun KeyRows(send: VaultSend, signers: List<KeySigner>, keyring: List<SavedKey>, onSign: (KeySigner.Phone) -> Unit) {
     val vault = send.vault
@@ -375,6 +387,8 @@ private fun KeyRows(send: VaultSend, signers: List<KeySigner>, keyring: List<Sav
         signers.forEachIndexed { i, signer ->
             if (i > 0) Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(1.dp).background(MbBorder))
             val source = keyring.find { it.xpub == xpubs.getOrNull(signer.index) && it.fingerprint.equals(vault.keyFingerprints.getOrNull(signer.index), ignoreCase = true) }?.source
+            val signed = signer.index.toUInt() in signedKeys
+            val needed = !signed && send.needsKey(signer.index)
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp).testTag("m2_key_${signer.index}"), verticalAlignment = Alignment.CenterVertically) {
                 Box(modifier = Modifier.size(38.dp).clip(RoundedCornerShape(12.dp)).background(MbIconWash), contentAlignment = Alignment.Center) {
                     Text(source?.let { keyMonogram(it, phone) } ?: "${signer.index + 1}", color = if (signer is KeySigner.Phone) MbNavy else MbEyebrow, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
@@ -383,26 +397,42 @@ private fun KeyRows(send: VaultSend, signers: List<KeySigner>, keyring: List<Sav
                 Column(modifier = Modifier.weight(1f)) {
                     val text = texts.getOrNull(signer.index)
                     Text(text?.name.orEmpty(), color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(text?.line.orEmpty(), color = MbSlate, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (signer is KeySigner.Elsewhere) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (signed || needed) text?.line.orEmpty() else "ไม่ต้องใช้รอบนี้",
+                            color = MbSlate,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false).testTag("m2_key_line_${signer.index}"),
+                        )
+                        // A Text of its own, so a long line is cut before the time is.
+                        val at = vault.keyFingerprints.getOrNull(signer.index)?.let { send.signedAt[it.uppercase()] }
+                        if (signed && at != null) Text(" · ${formatThaiTime(at)}", color = MbSlate, fontSize = 11.sp, maxLines = 1, modifier = Modifier.testTag("m2_signed_at_${signer.index}"))
+                    }
+                    if (needed && signer is KeySigner.Elsewhere) {
                         Text(signer.reason, color = MbBody, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.testTag("m2_key_reason_${signer.index}"))
                     }
                 }
-                Spacer(modifier = Modifier.width(8.dp))
-                SignButton(signer, signed = signer.index.toUInt() in signedKeys, signing = send.busy == VaultBusy.Signing(signer.index), idle = send.busy == null, onSign)
+                if (signed || needed) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    SignButton(signer, signed, signing = send.busy == VaultBusy.Signing(signer.index), idle = send.busy == null, onSign)
+                }
             }
         }
     }
 }
 
-/** A row's เซ็น: filled navy for a key this phone signs, outlined and inert for any other, and a green check once Rust found the key signed. */
+/** A row's เซ็น: filled navy for a key this phone signs, outlined and inert for any other, and 5.8's green เซ็นแล้ว ✓ once Rust found the key signed. */
 @Composable
 private fun SignButton(signer: KeySigner, signed: Boolean, signing: Boolean, idle: Boolean, onSign: (KeySigner.Phone) -> Unit) {
+    val shape = RoundedCornerShape(17.dp)
     if (signed) {
-        Text("✓ เซ็นแล้ว", color = MbSuccess, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("m2_signed_${signer.index}"))
+        Box(modifier = Modifier.height(34.dp).clip(shape).background(MbGreenWash).padding(horizontal = 17.dp).testTag("m2_signed_${signer.index}"), contentAlignment = Alignment.Center) {
+            Text("เซ็นแล้ว ✓", color = MbSuccess, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+        }
         return
     }
-    val shape = RoundedCornerShape(17.dp)
     val base = Modifier.size(width = 64.dp, height = 34.dp).clip(shape)
     val phone = signer as? KeySigner.Phone
     val look = if (phone != null) {

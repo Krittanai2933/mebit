@@ -26,10 +26,12 @@ fun formatThaiDateTime(epochSeconds: Long, timeZoneId: String? = null): String =
 fun formatThaiDateTimeShort(epochSeconds: Long, timeZoneId: String? = null): String =
     thaiDateTime(epochSeconds, utcOffsetSeconds(epochSeconds, timeZoneId), withSuffix = false)
 
+/** [epochSeconds] as the local 24-hour time alone, such as `14:32`, the time [formatThaiDateTime] gives. [timeZoneId] works as it does there. */
+fun formatThaiTime(epochSeconds: Long, timeZoneId: String? = null): String = thaiTime(epochSeconds, utcOffsetSeconds(epochSeconds, timeZoneId))
+
 // Own date maths (Howard Hinnant's civil_from_days) so that no platform locale or calendar decides the Buddhist year.
 internal fun thaiDateTime(epochSeconds: Long, utcOffsetSeconds: Int, withSuffix: Boolean = true): String {
     val local = epochSeconds + utcOffsetSeconds
-    val secondOfDay = local.mod(86_400)
     val daysSinceYear0March1 = local.floorDiv(86_400) + 719_468
     val era = daysSinceYear0March1.floorDiv(146_097)
     val dayOfEra = (daysSinceYear0March1 - era * 146_097).toInt()
@@ -39,7 +41,11 @@ internal fun thaiDateTime(epochSeconds: Long, utcOffsetSeconds: Int, withSuffix:
     val day = dayOfYear - (153 * monthFromMarch + 2) / 5 + 1
     val month = if (monthFromMarch < 10) monthFromMarch + 3 else monthFromMarch - 9
     val year = era * 400 + yearOfEra + (if (month <= 2) 1 else 0)
-    val hour = (secondOfDay / 3_600).toString().padStart(2, '0')
-    val minute = (secondOfDay % 3_600 / 60).toString().padStart(2, '0')
-    return "$day ${thaiMonths[month - 1]} ${year + 543} · $hour:$minute" + if (withSuffix) " น." else ""
+    return "$day ${thaiMonths[month - 1]} ${year + 543} · ${thaiTime(epochSeconds, utcOffsetSeconds)}" + if (withSuffix) " น." else ""
+}
+
+/** The 24-hour local time alone, such as `14:32`. */
+internal fun thaiTime(epochSeconds: Long, utcOffsetSeconds: Int): String {
+    val secondOfDay = (epochSeconds + utcOffsetSeconds).mod(86_400)
+    return (secondOfDay / 3_600).toString().padStart(2, '0') + ":" + (secondOfDay % 3_600 / 60).toString().padStart(2, '0')
 }
