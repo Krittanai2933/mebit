@@ -27,13 +27,14 @@ fun WalletGate() {
     remember(scanDir) { scanDir?.let(::hotUseStateDir) }
     val storage = rememberVaultsStorage()
     val shelf = rememberSecureShelf()
-    // The pay-twice guard file and the last-used wallet sit beside the scan files.
+    // The pay-twice guard files, one-key and several-key, and the last-used wallet sit beside the scan files.
     val wallets = remember(shelf, scanDir, storage) {
         Wallets(
             shelf,
             payments = PendingPayments(scanDir?.let { plainFile("$it/pending-payment") }),
             lastUsed = scanDir?.let { plainFile("$it/last-wallet") },
             forgetBook = { storage?.delete() },
+            vaultPayments = PendingPayments(scanDir?.let { plainFile("$it/pending-vault-payment") }),
         )
     }
     val vaults = remember(wallets, storage) { SavedVaults(storage, owners = { wallets.vaultOwners() }) }

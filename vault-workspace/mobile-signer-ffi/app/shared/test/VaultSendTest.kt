@@ -147,7 +147,7 @@ class VaultSendTest {
     }
 
     @Test
-    fun signAsksTheOwnerBeforeRustAndAFailedCheckAsksRustNothing() = runBlocking {
+    fun signAsksTheOwnerBeforeRustAndAFailedCheckAsksRustNothing(): Unit = runBlocking {
         val rust = Rust()
         val send = rust.send()
         assertTrue(send.prepare())
@@ -159,7 +159,7 @@ class VaultSendTest {
     }
 
     @Test
-    fun signKeepsRustsAnswerOnlyWhenItNamesTheKeyOnTheSamePayment() = runBlocking {
+    fun signKeepsRustsAnswerOnlyWhenItNamesTheKeyOnTheSamePayment(): Unit = runBlocking {
         val rust = Rust()
         val send = rust.send()
         assertTrue(send.prepare())
@@ -174,7 +174,7 @@ class VaultSendTest {
     }
 
     @Test
-    fun broadcastBelowMDistinctFingerprintsAsksRustNothing() = runBlocking {
+    fun broadcastBelowMDistinctFingerprintsAsksRustNothing(): Unit = runBlocking {
         val rust = Rust()
         val send = rust.send()
         assertTrue(send.prepare())

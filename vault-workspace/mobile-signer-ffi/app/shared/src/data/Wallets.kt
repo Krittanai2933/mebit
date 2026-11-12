@@ -109,6 +109,8 @@ class Wallets internal constructor(
     private val vaultSnapshotOf: (xpubs: List<String>, m: UByte) -> VaultSnapshot = { x, m -> vaultSnapshot(x, m) },
     private val vaultHistoryOf: (xpubs: List<String>, m: UByte) -> List<HotTx> = { x, m -> vaultHistory(x, m) },
     private val nowSeconds: () -> Long = { Clock.System.now().epochSeconds },
+    /** The several-key wallets' pay-twice guards, keyed by [vaultGuardKey], in a file apart from [payments], whose format a vault line would break. */
+    internal val vaultPayments: PendingPayments = PendingPayments(null),
 ) {
     private val saved = mutableMapOf<Place, SavedWallet>()
 
@@ -447,7 +449,23 @@ class Wallets internal constructor(
         }
         val endedAt = nowSeconds()
         synchronized(vaultWriteLock) { if (generation == vaultGeneration) vaultReads[vault.address] = VaultRead(snapshot, endedAt, history) }
+        // Only a history that lists the payment settles its guard, as a one-key bind settles its own. The empty list of a failed read says nothing.
+        history?.getOrNull()?.let { listed ->
+            val key = vaultGuardKey(vault)
+            (vaultPayments.of(key) as? SingleSigWallet.UnconfirmedSend)?.takeIf { it.settledBy(listed) }?.let { vaultPayments.settle(key, it) }
+        }
         snapshot?.scan
+    }
+
+    /**
+     * Drops [vault]'s read once a payment from it went out, so the detail it lands on reads it again, and bumps the generation an erase bumps,
+     * so a read that began before the payment writes nothing back. The core marked every scan stale at the post, so that read is a routine sync.
+     */
+    fun forgetVaultRead(vault: CreatedVault) {
+        synchronized(vaultWriteLock) {
+            vaultGeneration++
+            vaultReads.remove(vault.address)
+        }
     }
 
     private var lastNoted: Place? = null

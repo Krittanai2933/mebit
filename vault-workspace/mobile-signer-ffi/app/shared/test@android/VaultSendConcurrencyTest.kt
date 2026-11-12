@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
 /** Two เซ็น taps that run at once on the JVM's threads: each Rust call builds on the PSBT the other returned, so no signature is lost. */
 class VaultSendConcurrencyTest {
     @Test
-    fun twoSignsStartedTogetherKeepBothSignatures() = runBlocking {
+    fun twoSignsStartedTogetherKeepBothSignatures(): Unit = runBlocking {
         val vault = CreatedVault("vault_1", "Wallet 1", 2, 3, CustodyPolicy.PersonalCustody, "tb1qvault", "", listOf("AAAA0000", "BBBB0000", "CCCC0000"))
         val send = VaultSend(
             vault,
