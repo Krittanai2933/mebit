@@ -921,9 +921,9 @@ fn vault_id(keys: &[Xpub], threshold: u8) -> WalletId {
     sha256::Hash::hash(&bytes).to_byte_array()
 }
 
-/// A several-key wallet's balance as one sync of both its chains found it. Not `HotWalletSnapshot`, because a vault
-/// has no spendable figure while multisig spend is a mock, and a next unused receive address would contradict the
-/// Receive screen, which shows address 0.
+/// A several-key wallet's balance as one sync of both its chains found it. Not `HotWalletSnapshot`, because a vault's
+/// spendable figure is `vault_spendable`'s, read apart so a list that shows balances pays for no coin list, and a next
+/// unused receive address would contradict the Receive screen, which shows address 0.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct VaultSnapshot {
     /// Confirmed plus mempool over every address of both chains the scan counts. Before `scan` is `Complete`, only
@@ -952,7 +952,7 @@ pub fn vault_snapshot(
 }
 
 /// `vault_snapshot` on `source`, `clock` and `store`, so tests run it on `Fake`. No coin list is read, because a
-/// vault's figure is the scan's sum and nothing spends from it in this build.
+/// vault's figure is the scan's sum. `vault_spendable` reads the coins a payment may spend.
 fn vault_snapshot_from(
     source: &dyn ChainSource,
     xpubs: &[String],
@@ -1029,6 +1029,208 @@ fn counted_addresses(
         }
     }
     Ok(counted_all)
+}
+
+/// The virtual size the 5.1 Send screen prices a payment of the `threshold`-of-`xpubs.len()` sorted multisig at, before
+/// `vault_prepare_send` builds the real one: one of its coins paying a P2WSH address, with change, signed by `threshold`
+/// keys. 201 for a 2-of-3. Testnet4 only. No network call.
+#[uniffi::export]
+pub fn vault_typical_vsize(xpubs: Vec<String>, threshold: u8) -> Result<u64, MobileSignerError> {
+    let vault = Multisig::new(&xpubs, threshold)?;
+    let p2wsh = vault.address(Chain::External, 0)?.script_pubkey().len();
+    Ok(vsize(&[vault_spend::input_weight(&vault)?], &[p2wsh, p2wsh]))
+}
+
+/// What a payment from a several-key wallet could spend now, as a one-key wallet's `spendable_sats` is read.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct VaultSpendable {
+    /// The coins `vault_prepare_send` would consider: every confirmed coin of both chains and the wallet's own
+    /// unconfirmed change. 0 unless `scan` is `Complete`.
+    pub spendable_sats: u64,
+    pub scan: HotScan,
+}
+
+/// What a payment from the `threshold`-of-`xpubs.len()` sorted multisig could spend now, for the 5.1 Send screen: every
+/// confirmed coin of its receive and change chains and its own unconfirmed change, by the sync `vault_snapshot` makes,
+/// which a read within ten seconds shares, and one coin list per funded address once that scan is complete. A scan that
+/// goes on or that a host lied in answers 0 with how far it got. Testnet4 only, so mainnet `xpub` keys are refused before
+/// any request. Call it off the main thread.
+#[uniffi::export]
+pub fn vault_spendable(
+    xpubs: Vec<String>,
+    threshold: u8,
+) -> Result<VaultSpendable, MobileSignerError> {
+    vault_spendable_from(
+        &EsploraSource(&testnet4()),
+        &xpubs,
+        threshold,
+        &SystemTime::now,
+        &SCAN_STORE,
+    )
+}
+
+/// `vault_spendable` on `source`, `clock` and `store`, so tests run it on `Fake`. A request limit on the coin lists ends it
+/// `Continuing` with 0, as a one-key snapshot does.
+fn vault_spendable_from(
+    source: &dyn ChainSource,
+    xpubs: &[String],
+    threshold: u8,
+    clock: &dyn Fn() -> SystemTime,
+    store: &ScanStore,
+) -> Result<VaultSpendable, MobileSignerError> {
+    let vault = Multisig::new(xpubs, threshold)?;
+    let synced = sync_scan(source, &vault, Anchor::Testnet4, clock, store)?;
+    let (scan, spendable_sats) = match HotScan::from(&synced.status) {
+        HotScan::Complete => {
+            let (funded, own) = vault_coin_owners(&vault, &synced)?;
+            match vault_coins(source, &funded, &own) {
+                Ok((_, have)) => (HotScan::Complete, have),
+                Err(e) if throttled(&e).is_some() => (HotScan::Continuing, 0),
+                Err(e) => return Err(e),
+            }
+        }
+        scan @ (HotScan::Continuing | HotScan::Unverified) => (scan, 0),
+    };
+    Ok(VaultSpendable {
+        spendable_sats,
+        scan,
+    })
+}
+
+/// The unsigned payment of `amount_sats` to `destination` from the `threshold`-of-`xpubs.len()` sorted multisig at
+/// `fee_rate_sat_vb`, or with a null amount everything it can spend less the fee in one output, as a PSBT every key of the
+/// wallet signs with `vault_sign_psbt` and `vault_finalize_psbt` finishes. Coins, change and fee as
+/// `hot_prepare_send_at_rate` and `hot_prepare_send_all` pick them, with their refusals, change to the first unused address
+/// of the change chain, and every input's parent transaction in the PSBT, read once per transaction and refused when it does
+/// not pay the coin as listed, so each signer proves the fee. Fails unless the scan reached the end of both chains. Signs and
+/// posts nothing. Testnet4 only, so mainnet `xpub` keys are refused before any request. About 40 Esplora calls for a wallet
+/// nobody paid, so call it off the main thread.
+#[uniffi::export]
+pub fn vault_prepare_send(
+    xpubs: Vec<String>,
+    threshold: u8,
+    destination: String,
+    amount_sats: Option<u64>,
+    fee_rate_sat_vb: u64,
+) -> Result<vault_spend::VaultPsbt, MobileSignerError> {
+    vault_prepared(
+        &EsploraSource(&testnet4()),
+        &xpubs,
+        threshold,
+        &destination,
+        amount_sats.map_or(SendAmount::All, SendAmount::Exact),
+        fee_rate_sat_vb,
+        &SystemTime::now,
+        &SCAN_STORE,
+    )
+}
+
+/// `vault_prepare_send` on `source`, `clock` and `store`, so tests run it on `Fake`. The several-key wallet's `planned`:
+/// `Multisig::new` and `checked` before the store or any host hears of the payment, then one sync, `finished`, the coins
+/// by `spendable_among`, `plan_for`, the parents by `proven_parents`, and the PSBT `vault_spend::unsigned` builds, which
+/// `vault_spend::described` holds to the plan's own figures.
+#[allow(clippy::too_many_arguments)]
+fn vault_prepared(
+    source: &dyn ChainSource,
+    xpubs: &[String],
+    threshold: u8,
+    destination: &str,
+    amount: SendAmount,
+    rate_sat_vb: u64,
+    clock: &dyn Fn() -> SystemTime,
+    store: &ScanStore,
+) -> Result<vault_spend::VaultPsbt, MobileSignerError> {
+    let vault = Multisig::new(xpubs, threshold)?;
+    let own = vault_spend::input_weight(&vault)?;
+    let dest = checked(destination, KeyNetwork::Test, own, amount, rate_sat_vb)?;
+    let synced = sync_scan(source, &vault, Anchor::Testnet4, clock, store)?;
+    finished(&synced.status)?;
+    let (funded, addresses) = vault_coin_owners(&vault, &synced)?;
+    let (spendable, have) = vault_coins(source, &funded, &addresses)?;
+    let change = synced.scan.chains[1].issued();
+    let change_script = vault.address(Chain::Internal, change)?.script_pubkey();
+    let plan = plan_for(amount, &spendable, have, change_script, own, &dest, rate_sat_vb)?;
+    let parents = proven_parents(
+        source,
+        plan.selected.iter().map(|(utxo, slot)| (*utxo, &slot.address)),
+    )?;
+    let coins: Vec<(OutPoint, Chain, u32)> = plan
+        .selected
+        .iter()
+        .map(|(utxo, slot)| {
+            let outpoint = OutPoint {
+                txid: utxo.txid,
+                vout: utxo.vout,
+            };
+            (outpoint, slot.chain, slot.index)
+        })
+        .collect();
+    let amount_sats = plan.outputs[0].value.to_sat();
+    let has_change = plan.outputs.len() > 1;
+    let psbt = vault_spend::unsigned(
+        &vault,
+        &coins,
+        &parents,
+        plan.outputs,
+        has_change.then_some(change),
+    )?;
+    let confirmed = vault_spend::Confirmed {
+        destination,
+        amount_sats,
+        fee_sats: plan.fee_sats,
+        max_change_index: change,
+        txid: None,
+    };
+    vault_spend::described(&vault, psbt, &confirmed)
+}
+
+/// A funded address of a several-key wallet and where it sits: what a payment from it spends.
+struct VaultSlot {
+    chain: Chain,
+    index: u32,
+    address: Address,
+}
+
+/// The wallet's funded addresses, picked as `Wallet::funded` picks a one-key wallet's (used and holding more than nothing,
+/// among the indices `counted` gives), and every address `counted` gives of both chains, which its own change spends from.
+/// No request.
+fn vault_coin_owners(
+    vault: &Multisig,
+    synced: &Synced,
+) -> Result<(Vec<VaultSlot>, Vec<String>), MobileSignerError> {
+    let (mut funded, mut own) = (Vec::new(), Vec::new());
+    for chain in [Chain::External, Chain::Internal] {
+        let c = chain as usize;
+        let (scan, balances) = (&synced.scan.chains[c], &synced.balances[c]);
+        for index in 0..counted(scan) {
+            let address = vault.address(chain, index as u32)?;
+            own.push(address.to_string());
+            if scan.seen.get(index).is_some_and(|seen| seen.used)
+                && balances.get(index).is_some_and(|balance| *balance > 0)
+            {
+                funded.push(VaultSlot {
+                    chain,
+                    index: index as u32,
+                    address,
+                });
+            }
+        }
+    }
+    Ok((funded, own))
+}
+
+/// The coins of `funded` a payment may spend and their sum, by `spendable_among`, with `own` the wallet's every address.
+fn vault_coins<'s>(
+    source: &dyn ChainSource,
+    funded: &'s [VaultSlot],
+    own: &[String],
+) -> Result<(Coins<'s, VaultSlot>, u64), MobileSignerError> {
+    let owners: Vec<(Chain, &VaultSlot, &Address)> = funded
+        .iter()
+        .map(|slot| (slot.chain, slot, &slot.address))
+        .collect();
+    let own: Vec<&str> = own.iter().map(String::as_str).collect();
+    spendable_among(source, &owners, &own)
 }
 
 /// One transaction of the hot wallet, seen from the wallet's side.
@@ -13625,6 +13827,362 @@ mod tests {
                 vault_addr(Branch::Change, 0)
             ],
             "receive 2 has no balance beside it and change 22 is past the gap"
+        );
+    }
+
+    /// The words of three phone keys of three seeds, each at account 0 as a phone wallet makes its key, so every key of
+    /// `phone_vault_keys()` signs with its own words, which only key 0 of `vault_keys()` can.
+    const PHONE_WORDS: [&str; 3] = [
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "legal winner thank year wave sausage worth useful legal winner thank yellow",
+        "letter advice cage absurd amount doctor acoustic avoid letter advice cage above",
+    ];
+
+    fn phone_words(i: usize) -> Vec<String> {
+        PHONE_WORDS[i].split(' ').map(str::to_string).collect()
+    }
+
+    fn phone_vault_keys() -> Vec<String> {
+        (0..3)
+            .map(|i| {
+                crate::restore_software_multisig_key(phone_words(i), String::new(), KeyNetwork::Test, 0)
+                    .unwrap()
+                    .xpub
+            })
+            .collect()
+    }
+
+    /// Address `index` of `branch` of the `m`-of-`keys` wallet, from vault-core.
+    fn address_of(keys: &[String], m: u8, branch: Branch, index: u32) -> String {
+        let keys = crate::parse_and_check_xpubs(keys).unwrap();
+        let descriptor = build_multisig_descriptor_on(&keys, m.into(), branch).unwrap();
+        derive_address_at(&descriptor, index, Network::Testnet4)
+            .unwrap()
+            .to_string()
+    }
+
+    /// The stats of an address only the mempool paid, which a scan counts as used with no proof.
+    fn mempool_stats(funded: u64, spent: u64) -> String {
+        format!(
+            r#"{{"chain_stats":{{"funded_txo_sum":0,"spent_txo_sum":0,"tx_count":0}},"mempool_stats":{{"funded_txo_sum":{funded},"spent_txo_sum":{spent},"tx_count":1}}}}"#
+        )
+    }
+
+    fn output_to(to: &str, sats: u64) -> TxOut {
+        TxOut {
+            value: Amount::from_sat(sats),
+            script_pubkey: Address::from_str(to).unwrap().assume_checked().script_pubkey(),
+        }
+    }
+
+    impl Fake {
+        /// A coin of `value` at `address`, a vault's, as output 1 of a transaction this host serves raw. Its stats show it in
+        /// the mempool, because no proof block pays a vault address, and its coin list calls it confirmed, so a scan counts it
+        /// and a payment may spend it. `listed` is the coin list's value, which an honest host makes `value`.
+        fn fund_vault(&mut self, address: &str, value: u64, listed: u64, digit: char) -> Txid {
+            let tx = paying(digit, vec![output_to(SOMEONE, 1_000), output_to(address, value)]);
+            let txid = tx.compute_txid();
+            self.stats.insert(address.into(), mempool_stats(listed, 0));
+            self.utxos.insert(
+                address.into(),
+                format!(r#"[{{"txid":"{txid}","vout":1,"status":{{"confirmed":true}},"value":{listed}}}]"#),
+            );
+            self.raw.insert(txid.to_string(), serialize_hex(&tx));
+            txid
+        }
+
+        /// The wallet's own change of `value` at `address`, still in the mempool, as output 1 of a transaction this host
+        /// serves raw and lists as spending a coin of `from`, another address of the wallet.
+        fn fund_vault_change(&mut self, address: &str, from: &str, value: u64, digit: char) -> Txid {
+            let tx = paying(digit, vec![output_to(SOMEONE, 1_000), output_to(address, value)]);
+            let txid = tx.compute_txid();
+            self.stats.insert(address.into(), mempool_stats(value, 0));
+            self.utxos.insert(
+                address.into(),
+                format!(r#"[{{"txid":"{txid}","vout":1,"status":{{"confirmed":false}},"value":{value}}}]"#),
+            );
+            self.raw.insert(txid.to_string(), serialize_hex(&tx));
+            self.parents.insert(
+                txid.to_string(),
+                tx_of(&txid.to_string(), &[spent(from, value + 2_000)], &[txo(address, value)], MEMPOOL),
+            );
+            txid
+        }
+
+        fn vault_prepare(
+            &self,
+            keys: &[String],
+            m: u8,
+            to: &str,
+            amount: Option<u64>,
+            rate: u64,
+        ) -> Result<vault_spend::VaultPsbt, MobileSignerError> {
+            vault_prepared(
+                &EsploraSource(&Reads(&|url| self.get(url))),
+                keys,
+                m,
+                to,
+                amount.map_or(SendAmount::All, SendAmount::Exact),
+                rate,
+                &|| self.now(),
+                &self.store,
+            )
+        }
+
+        fn vault_spendable(&self, keys: &[String], m: u8) -> Result<VaultSpendable, MobileSignerError> {
+            vault_spendable_from(
+                &EsploraSource(&Reads(&|url| self.get(url))),
+                keys,
+                m,
+                &|| self.now(),
+                &self.store,
+            )
+        }
+    }
+
+    fn psbt_of(held: &vault_spend::VaultPsbt) -> bitcoin::psbt::Psbt {
+        bitcoin::psbt::Psbt::from_str(&held.psbt).unwrap()
+    }
+
+    #[test]
+    fn a_2_of_3_wallet_prices_a_payment_with_change_at_201_vb() {
+        assert_eq!(vault_typical_vsize(vault_keys(), 2).unwrap(), 201);
+    }
+
+    #[test]
+    fn a_vault_can_spend_its_confirmed_coins_and_its_own_change_but_not_a_strangers_unconfirmed_coin() {
+        let keys = vault_keys();
+        let mut fake = Fake::new();
+        fake.fund_vault(&vault_addr(Branch::Receive, 3), 84_000_000, 84_000_000, '1');
+        fake.fund_vault_change(
+            &vault_addr(Branch::Change, 0),
+            &vault_addr(Branch::Receive, 3),
+            200_000,
+            '2',
+        );
+        fake.fund_unconfirmed(&vault_addr(Branch::Change, 1), 30_000, '3');
+        assert_eq!(
+            fake.vault_spendable(&keys, 2).unwrap(),
+            VaultSpendable {
+                spendable_sats: 84_200_000,
+                scan: HotScan::Complete
+            }
+        );
+        assert_eq!(
+            fake.vault(&keys, 2).unwrap().balance_sats,
+            84_230_000,
+            "the stranger's coin is in the balance and not in what a payment spends"
+        );
+    }
+
+    #[test]
+    fn a_vault_nobody_paid_can_spend_nothing_and_asks_no_coin_list() {
+        let fake = Fake::new();
+        assert_eq!(
+            fake.vault_spendable(&vault_keys(), 2).unwrap(),
+            VaultSpendable {
+                spendable_sats: 0,
+                scan: HotScan::Complete
+            }
+        );
+        assert_eq!(fake.requests(), 40, "GAP lookups per chain and no coin list");
+    }
+
+    #[test]
+    fn a_vault_spendable_read_while_every_host_is_limited_goes_on_later() {
+        let fake = Fake::new();
+        let read = vault_spendable_from(
+            &EsploraSource(&Refusing(EVERY_HOST_LIMITED)),
+            &vault_keys(),
+            2,
+            &|| fake.now(),
+            &fake.store,
+        )
+        .unwrap();
+        assert_eq!(
+            read,
+            VaultSpendable {
+                spendable_sats: 0,
+                scan: HotScan::Continuing
+            }
+        );
+    }
+
+    #[test]
+    fn prepare_pays_the_destination_first_and_change_to_the_first_unused_change_address() {
+        let mut fake = Fake::new();
+        fake.fund_vault(&vault_addr(Branch::Receive, 3), 1_000_000, 1_000_000, '1');
+        fake.stats.insert(vault_addr(Branch::Change, 0), mempool_stats(5_000, 5_000));
+        let held = fake.vault_prepare(&vault_keys(), 2, SOMEONE, Some(600_000), 2).unwrap();
+        assert_eq!(
+            psbt_of(&held).unsigned_tx.output.iter().map(pays).collect::<Vec<_>>(),
+            [SOMEONE.to_string(), vault_addr(Branch::Change, 1)]
+        );
+        assert_eq!(
+            (held.amount_sats, held.max_change_index, held.signed_keys.len()),
+            (600_000, 1, 0)
+        );
+        assert_eq!(held.change_sats, 1_000_000 - 600_000 - held.fee_sats);
+    }
+
+    #[test]
+    fn prepare_prices_the_fee_at_the_rate_times_the_size_as_finished() {
+        let mut fake = Fake::new();
+        fake.fund_vault(&vault_addr(Branch::Receive, 3), 1_000_000, 1_000_000, '1');
+        let held = fake.vault_prepare(&vault_keys(), 2, SOMEONE, Some(600_000), 7).unwrap();
+        let vault = Multisig::new(&vault_keys(), 2).unwrap();
+        let input = vault_spend::input_weight(&vault).unwrap();
+        assert_eq!(held.vsize, vsize(&[input], &[SOMEONE_SCRIPT, 34]));
+        assert_eq!(held.fee_sats, 7 * held.vsize);
+    }
+
+    #[test]
+    fn prepare_reads_each_parent_once_and_puts_it_in_its_input() {
+        let mut fake = Fake::new();
+        let first = fake.fund_vault(&vault_addr(Branch::Receive, 0), 400_000, 400_000, '1');
+        let second = fake.fund_vault(&vault_addr(Branch::Receive, 1), 400_000, 400_000, '2');
+        let held = fake.vault_prepare(&vault_keys(), 2, SOMEONE, Some(600_000), 2).unwrap();
+        let mut parents: Vec<Txid> = psbt_of(&held)
+            .inputs
+            .iter()
+            .map(|input| input.non_witness_utxo.as_ref().unwrap().compute_txid())
+            .collect();
+        parents.sort();
+        let mut expected = vec![first, second];
+        expected.sort();
+        assert_eq!(parents, expected);
+        assert_eq!((fake.reads_of(first), fake.reads_of(second)), (1, 1));
+    }
+
+    #[test]
+    fn prepare_send_all_spends_every_spendable_coin_in_one_output() {
+        let mut fake = Fake::new();
+        fake.fund_vault(&vault_addr(Branch::Receive, 0), 300_000, 300_000, '1');
+        fake.fund_vault_change(
+            &vault_addr(Branch::Change, 0),
+            &vault_addr(Branch::Receive, 0),
+            200_000,
+            '2',
+        );
+        let held = fake.vault_prepare(&vault_keys(), 2, SOMEONE, None, 2).unwrap();
+        let tx = psbt_of(&held).unsigned_tx;
+        assert_eq!((tx.input.len(), tx.output.len(), held.change_sats), (2, 1, 0));
+        assert_eq!(held.amount_sats + held.fee_sats, 500_000);
+    }
+
+    #[test]
+    fn prepare_refuses_before_any_request_what_a_one_key_payment_refuses_and_mainnet_keys() {
+        let fake = Fake::new();
+        let keys = vault_keys();
+        let mainnet: Vec<String> = (0..3)
+            .map(|account| {
+                crate::restore_software_multisig_key(abandon_about(), String::new(), KeyNetwork::Main, account)
+                    .unwrap()
+                    .xpub
+            })
+            .collect();
+        let refused = |keys: &[String], to: &str, amount: Option<u64>, rate: u64| {
+            fake.vault_prepare(keys, 2, to, amount, rate)
+                .unwrap_err()
+                .to_string()
+        };
+        let mainnet_destination = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+        assert_eq!(
+            refused(&mainnet, SOMEONE, Some(10_000), 2),
+            "invalid PSBT json: mainnet Esplora is not enabled in this build"
+        );
+        assert_eq!(
+            refused(&keys, mainnet_destination, Some(10_000), 2),
+            destination_on(mainnet_destination, KeyNetwork::Test)
+                .unwrap_err()
+                .to_string()
+        );
+        assert_eq!(
+            refused(&keys, SOMEONE, Some(293), 2),
+            "invalid PSBT json: amount 293 is below the network's 294 sat dust floor"
+        );
+        assert_eq!(
+            refused(&keys, SOMEONE, Some(10_000), 0),
+            "invalid PSBT json: fee rate 0 is below 1 sat/vB"
+        );
+        assert_eq!(
+            refused(&keys, SOMEONE, None, 10_001),
+            "invalid PSBT json: fee rate 10001 is above the network's 10000 sat/vB limit"
+        );
+        assert_eq!(fake.requests(), 0);
+    }
+
+    #[test]
+    fn prepare_refuses_a_scan_that_did_not_reach_the_end() {
+        let fake = Fake::new();
+        let refused = vault_prepared(
+            &EsploraSource(&Refusing(EVERY_HOST_LIMITED)),
+            &vault_keys(),
+            2,
+            SOMEONE,
+            SendAmount::Exact(10_000),
+            2,
+            &|| fake.now(),
+            &fake.store,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(refused.starts_with("invalid PSBT json: esplora get: "), "{refused}");
+    }
+
+    #[test]
+    fn prepare_refuses_too_little_with_the_one_key_text() {
+        let mut fake = Fake::new();
+        fake.fund_vault(&vault_addr(Branch::Receive, 0), 5_000, 5_000, '1');
+        let refused = fake
+            .vault_prepare(&vault_keys(), 2, SOMEONE, Some(600_000), 2)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.starts_with("invalid PSBT json: insufficient funds: have 5000 confirmed, need "),
+            "{refused}"
+        );
+    }
+
+    #[test]
+    fn prepare_refuses_a_host_whose_parent_pays_the_coin_another_value() {
+        let mut fake = Fake::new();
+        fake.fund_vault(&vault_addr(Branch::Receive, 0), 1_000_000, 1_000_001, '1');
+        let refused = fake
+            .vault_prepare(&vault_keys(), 2, SOMEONE, Some(600_000), 2)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("esplora scan: coin ")
+                && refused.ends_with("listed at 1000001 sats, and its transaction pays 1000000"),
+            "{refused}"
+        );
+    }
+
+    #[test]
+    fn a_vault_payment_signed_by_two_phone_keys_posts_once_with_the_prepared_txid_and_the_next_read_syncs() {
+        let keys = phone_vault_keys();
+        let mut fake = Fake::new();
+        fake.fund_vault(&address_of(&keys, 2, Branch::Receive, 0), 1_000_000, 1_000_000, '1');
+        let held = fake.vault_prepare(&keys, 2, SOMEONE, Some(600_000), 2).unwrap();
+        let held =
+            vault_spend::vault_sign_psbt(keys.clone(), 2, held, 0, phone_words(0), String::new())
+                .unwrap();
+        let held =
+            vault_spend::vault_sign_psbt(keys.clone(), 2, held, 2, phone_words(2), String::new())
+                .unwrap();
+        assert_eq!(held.signed_keys, [0, 2]);
+        let ready = vault_spend::vault_finalize_psbt(keys.clone(), 2, held.clone()).unwrap();
+        assert_eq!(ready.txid, held.txid);
+        assert_eq!(
+            fake.broadcast(&ready, answer(200, &ready.txid)).unwrap().txid,
+            held.txid
+        );
+        let before = fake.requests();
+        fake.vault(&keys, 2).unwrap();
+        assert!(
+            fake.requests() > before,
+            "the post made every scan stale, so the next read syncs"
         );
     }
 }

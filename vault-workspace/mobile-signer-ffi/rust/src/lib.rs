@@ -945,6 +945,18 @@ mod tests {
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_history(),
             ),
             (
+                "func_vault_typical_vsize",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_typical_vsize(),
+            ),
+            (
+                "func_vault_spendable",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_spendable(),
+            ),
+            (
+                "func_vault_prepare_send",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_prepare_send(),
+            ),
+            (
                 "func_vault_sign_psbt",
                 hot_wallet::vault_spend::uniffi_mobile_signer_ffi_checksum_func_vault_sign_psbt(),
             ),

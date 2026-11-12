@@ -668,9 +668,9 @@ public data class VaultPsbt (
 
 
 /**
- * A several-key wallet's balance as one sync of both its chains found it. Not `HotWalletSnapshot`, because a vault
- * has no spendable figure while multisig spend is a mock, and a next unused receive address would contradict the
- * Receive screen, which shows address 0.
+ * A several-key wallet's balance as one sync of both its chains found it. Not `HotWalletSnapshot`, because a vault's
+ * spendable figure is `vault_spendable`'s, read apart so a list that shows balances pays for no coin list, and a next
+ * unused receive address would contradict the Receive screen, which shows address 0.
  */
 
 public data class VaultSnapshot (
@@ -679,6 +679,23 @@ public data class VaultSnapshot (
      * what the scan has found so far, which no screen may show as the balance.
      */
     var `balanceSats`: kotlin.ULong, 
+    var `scan`: HotScan
+) {
+    public companion object
+}
+
+
+
+/**
+ * What a payment from a several-key wallet could spend now, as a one-key wallet's `spendable_sats` is read.
+ */
+
+public data class VaultSpendable (
+    /**
+     * The coins `vault_prepare_send` would consider: every confirmed coin of both chains and the wallet's own
+     * unconfirmed change. 0 unless `scan` is `Complete`.
+     */
+    var `spendableSats`: kotlin.ULong, 
     var `scan`: HotScan
 ) {
     public companion object
@@ -1429,6 +1446,19 @@ public expect fun `vaultFinalizePsbt`(`xpubs`: List<kotlin.String>, `threshold`:
 public expect fun `vaultHistory`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte): List<HotTx>
 
 /**
+ * The unsigned payment of `amount_sats` to `destination` from the `threshold`-of-`xpubs.len()` sorted multisig at
+ * `fee_rate_sat_vb`, or with a null amount everything it can spend less the fee in one output, as a PSBT every key of the
+ * wallet signs with `vault_sign_psbt` and `vault_finalize_psbt` finishes. Coins, change and fee as
+ * `hot_prepare_send_at_rate` and `hot_prepare_send_all` pick them, with their refusals, change to the first unused address
+ * of the change chain, and every input's parent transaction in the PSBT, read once per transaction and refused when it does
+ * not pay the coin as listed, so each signer proves the fee. Fails unless the scan reached the end of both chains. Signs and
+ * posts nothing. Testnet4 only, so mainnet `xpub` keys are refused before any request. About 40 Esplora calls for a wallet
+ * nobody paid, so call it off the main thread.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `vaultPrepareSend`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte, `destination`: kotlin.String, `amountSats`: kotlin.ULong?, `feeRateSatVb`: kotlin.ULong): VaultPsbt
+
+/**
  * `held` with key `key_index`'s signature on every input, made with the words and passphrase of a phone key, whose BIP-48
  * account key at m/48'/1'/0'/2' must be key `key_index` of the `threshold`-of-`xpubs.len()` wallet on public key and chain
  * code. Before it signs it refuses, naming the rule, a PSBT that is not this wallet's payment of `held.amount_sats` to
@@ -1448,4 +1478,22 @@ public expect fun `vaultSignPsbt`(`xpubs`: List<kotlin.String>, `threshold`: kot
  */
 @Throws(MobileSignerException::class)
 public expect fun `vaultSnapshot`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte): VaultSnapshot
+
+/**
+ * What a payment from the `threshold`-of-`xpubs.len()` sorted multisig could spend now, for the 5.1 Send screen: every
+ * confirmed coin of its receive and change chains and its own unconfirmed change, by the sync `vault_snapshot` makes,
+ * which a read within ten seconds shares, and one coin list per funded address once that scan is complete. A scan that
+ * goes on or that a host lied in answers 0 with how far it got. Testnet4 only, so mainnet `xpub` keys are refused before
+ * any request. Call it off the main thread.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `vaultSpendable`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte): VaultSpendable
+
+/**
+ * The virtual size the 5.1 Send screen prices a payment of the `threshold`-of-`xpubs.len()` sorted multisig at, before
+ * `vault_prepare_send` builds the real one: one of its coins paying a P2WSH address, with change, signed by `threshold`
+ * keys. 201 for a 2-of-3. Testnet4 only. No network call.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `vaultTypicalVsize`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte): kotlin.ULong
 

@@ -1078,6 +1078,12 @@ internal typealias UniffiVTableCallbackInterfacePairingCodesUniffiByValue = Unif
 
 
 
+
+
+
+
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -1210,10 +1216,19 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_vault_history() != 23274.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
+        if (uniffi_mobile_signer_ffi_checksum_func_vault_prepare_send() != 8086.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
         if (uniffi_mobile_signer_ffi_checksum_func_vault_sign_psbt() != 33788.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_vault_snapshot() != 54531.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_vault_spendable() != 34762.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_vault_typical_vsize() != 28052.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code() != 55814.toShort()) {
@@ -1337,10 +1352,19 @@ internal object IntegrityCheckingUniffiLib : Library {
     external fun uniffi_mobile_signer_ffi_checksum_func_vault_history(
     ): Short
     @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_vault_prepare_send(
+    ): Short
+    @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_vault_sign_psbt(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_vault_snapshot(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_vault_spendable(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_vault_typical_vsize(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(
@@ -1658,6 +1682,15 @@ internal object UniffiLib : Library {
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_vault_prepare_send(
+        `xpubs`: RustBufferByValue,
+        `threshold`: Byte,
+        `destination`: RustBufferByValue,
+        `amountSats`: RustBufferByValue,
+        `feeRateSatVb`: Long,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_func_vault_sign_psbt(
         `xpubs`: RustBufferByValue,
         `threshold`: Byte,
@@ -1673,6 +1706,18 @@ internal object UniffiLib : Library {
         `threshold`: Byte,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_vault_spendable(
+        `xpubs`: RustBufferByValue,
+        `threshold`: Byte,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_vault_typical_vsize(
+        `xpubs`: RustBufferByValue,
+        `threshold`: Byte,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Long
     @JvmStatic
     external fun ffi_mobile_signer_ffi_rustbuffer_alloc(
         `size`: Long,
@@ -3164,6 +3209,28 @@ public object FfiConverterTypeVaultSnapshot: FfiConverterRustBuffer<VaultSnapsho
 
 
 
+public object FfiConverterTypeVaultSpendable: FfiConverterRustBuffer<VaultSpendable> {
+    override fun read(buf: ByteBuffer): VaultSpendable {
+        return VaultSpendable(
+            FfiConverterULong.read(buf),
+            FfiConverterTypeHotScan.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: VaultSpendable): ULong = (
+            FfiConverterULong.allocationSize(value.`spendableSats`) +
+            FfiConverterTypeHotScan.allocationSize(value.`scan`)
+    )
+
+    override fun write(value: VaultSpendable, buf: ByteBuffer) {
+        FfiConverterULong.write(value.`spendableSats`, buf)
+        FfiConverterTypeHotScan.write(value.`scan`, buf)
+    }
+}
+
+
+
+
 public object FfiConverterTypeWalletInfo: FfiConverterRustBuffer<WalletInfo> {
     override fun read(buf: ByteBuffer): WalletInfo {
         return WalletInfo(
@@ -4393,6 +4460,30 @@ public actual fun `vaultHistory`(`xpubs`: List<kotlin.String>, `threshold`: kotl
 }
 
 /**
+ * The unsigned payment of `amount_sats` to `destination` from the `threshold`-of-`xpubs.len()` sorted multisig at
+ * `fee_rate_sat_vb`, or with a null amount everything it can spend less the fee in one output, as a PSBT every key of the
+ * wallet signs with `vault_sign_psbt` and `vault_finalize_psbt` finishes. Coins, change and fee as
+ * `hot_prepare_send_at_rate` and `hot_prepare_send_all` pick them, with their refusals, change to the first unused address
+ * of the change chain, and every input's parent transaction in the PSBT, read once per transaction and refused when it does
+ * not pay the coin as listed, so each signer proves the fee. Fails unless the scan reached the end of both chains. Signs and
+ * posts nothing. Testnet4 only, so mainnet `xpub` keys are refused before any request. About 40 Esplora calls for a wallet
+ * nobody paid, so call it off the main thread.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `vaultPrepareSend`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte, `destination`: kotlin.String, `amountSats`: kotlin.ULong?, `feeRateSatVb`: kotlin.ULong): VaultPsbt {
+    return FfiConverterTypeVaultPsbt.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_vault_prepare_send(
+            FfiConverterSequenceString.lower(`xpubs`),
+            FfiConverterUByte.lower(`threshold`),
+            FfiConverterString.lower(`destination`),
+            FfiConverterOptionalULong.lower(`amountSats`),
+            FfiConverterULong.lower(`feeRateSatVb`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
  * `held` with key `key_index`'s signature on every input, made with the words and passphrase of a phone key, whose BIP-48
  * account key at m/48'/1'/0'/2' must be key `key_index` of the `threshold`-of-`xpubs.len()` wallet on public key and chain
  * code. Before it signs it refuses, naming the rule, a PSBT that is not this wallet's payment of `held.amount_sats` to
@@ -4426,6 +4517,40 @@ public actual fun `vaultSignPsbt`(`xpubs`: List<kotlin.String>, `threshold`: kot
 public actual fun `vaultSnapshot`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte): VaultSnapshot {
     return FfiConverterTypeVaultSnapshot.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_vault_snapshot(
+            FfiConverterSequenceString.lower(`xpubs`),
+            FfiConverterUByte.lower(`threshold`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * What a payment from the `threshold`-of-`xpubs.len()` sorted multisig could spend now, for the 5.1 Send screen: every
+ * confirmed coin of its receive and change chains and its own unconfirmed change, by the sync `vault_snapshot` makes,
+ * which a read within ten seconds shares, and one coin list per funded address once that scan is complete. A scan that
+ * goes on or that a host lied in answers 0 with how far it got. Testnet4 only, so mainnet `xpub` keys are refused before
+ * any request. Call it off the main thread.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `vaultSpendable`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte): VaultSpendable {
+    return FfiConverterTypeVaultSpendable.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_vault_spendable(
+            FfiConverterSequenceString.lower(`xpubs`),
+            FfiConverterUByte.lower(`threshold`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The virtual size the 5.1 Send screen prices a payment of the `threshold`-of-`xpubs.len()` sorted multisig at, before
+ * `vault_prepare_send` builds the real one: one of its coins paying a P2WSH address, with change, signed by `threshold`
+ * keys. 201 for a 2-of-3. Testnet4 only. No network call.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `vaultTypicalVsize`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte): kotlin.ULong {
+    return FfiConverterULong.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_vault_typical_vsize(
             FfiConverterSequenceString.lower(`xpubs`),
             FfiConverterUByte.lower(`threshold`),
             uniffiRustCallStatus,
