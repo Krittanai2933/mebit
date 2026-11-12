@@ -44,8 +44,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.FiatQuote
 import com.mebit.app.data.QuoteCache
-import com.mebit.app.data.SendDraft
-import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.formatThaiDateTime
@@ -68,23 +66,36 @@ private val SlipFiat = Color(0xFF56748A)
 private val SlipHairline = Color(0xFFEDF2F6)
 
 /**
- * Penpot 4.6 Sent · slip: the card, its date line (only after a send in this run) and baht line (only with a price),
- * the "แชร์สลิป" button that shares the card as a picture, and the link home.
+ * Penpot 4.6 Sent · slip, which 5.9 draws alike for a several-key wallet: the card of [txid] from [walletName] to [destination], its date
+ * line (only once [sentAtSeconds] is set, after a send in this run) and baht line (only with a price), the "แชร์สลิป" button that shares the
+ * card as a picture, and the link home. The tags are S6's on both screens, which [tag] tells apart.
  */
 @Composable
-fun SentSlip(wallet: SingleSigWallet, draft: SendDraft, quotes: QuoteCache, walletName: String, onHome: () -> Unit, onOpenCatalog: () -> Unit) {
+fun SentSlip(
+    tag: String,
+    txid: String,
+    sentAtSeconds: Long,
+    amountSats: Long,
+    feeSats: Long,
+    rateSatVb: Long,
+    destination: String,
+    walletName: String,
+    quotes: QuoteCache,
+    onHome: () -> Unit,
+    onOpenCatalog: () -> Unit,
+) {
     val quote = rememberFiatQuote(quotes)
     val card = rememberGraphicsLayer()
     val frame = rememberGraphicsLayer()
     val sharer = rememberSharer()
     val scope = rememberCoroutineScope()
-    Box(modifier = Modifier.fillMaxSize().background(SlipPage).testTag("screen_send/s6_slip")) {
+    Box(modifier = Modifier.fillMaxSize().background(SlipPage).testTag(tag)) {
         Column(
             // Scrolls so the share button and the link home cannot fall off a screen shorter than the card plus both buttons (open item 48).
             // The bottom padding is the debug link's height (about 24 dp of Thai text at 11 sp) plus 8 dp, so the link home sits clear of it when the column ends at the screen bottom.
             modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(top = 54.dp, bottom = 32.dp),
         ) {
-            Slip(wallet, draft, quote, walletName, card)
+            Slip(txid, sentAtSeconds, amountSats, feeSats, rateSatVb, destination, quote, walletName, card)
             Spacer(modifier = Modifier.height(14.dp))
             Box(
                 modifier = Modifier
@@ -96,7 +107,7 @@ fun SentSlip(wallet: SingleSigWallet, draft: SendDraft, quotes: QuoteCache, wall
                         scope.launch {
                             // shortcut: a share that fails does nothing, because the board has no error for it and a crash right after a payment is worse. Add one when it does.
                             try {
-                                val name = if (wallet.lastTxid.isEmpty()) "mebit-slip" else "mebit-slip-" + wallet.lastTxid.take(8)
+                                val name = if (txid.isEmpty()) "mebit-slip" else "mebit-slip-" + txid.take(8)
                                 sharer.imageOfCard(card, frame, SlipPage, name)
                             } catch (e: CancellationException) {
                                 throw e
@@ -122,7 +133,17 @@ fun SentSlip(wallet: SingleSigWallet, draft: SendDraft, quotes: QuoteCache, wall
 }
 
 @Composable
-private fun Slip(wallet: SingleSigWallet, draft: SendDraft, quote: FiatQuote?, walletName: String, layer: GraphicsLayer) {
+private fun Slip(
+    txid: String,
+    sentAtSeconds: Long,
+    amountSats: Long,
+    feeSats: Long,
+    rateSatVb: Long,
+    destination: String,
+    quote: FiatQuote?,
+    walletName: String,
+    layer: GraphicsLayer,
+) {
     val shape = RoundedCornerShape(24.dp)
     Box(
         modifier = Modifier
@@ -164,9 +185,9 @@ private fun Slip(wallet: SingleSigWallet, draft: SendDraft, quote: FiatQuote?, w
             lineHeight = 27.sp,
             modifier = Modifier.align(Alignment.TopCenter).offset(y = 143.dp),
         )
-        if (wallet.lastSentAtSeconds > 0) {
+        if (sentAtSeconds > 0) {
             Text(
-                text = formatThaiDateTime(wallet.lastSentAtSeconds),
+                text = formatThaiDateTime(sentAtSeconds),
                 color = SlipMuted,
                 fontSize = 12.5.sp,
                 fontWeight = FontWeight.Medium,
@@ -176,14 +197,14 @@ private fun Slip(wallet: SingleSigWallet, draft: SendDraft, quote: FiatQuote?, w
             )
         }
         Text(
-            text = formatBtcCompact(wallet.lastAmountSats) + " BTC",
+            text = formatBtcCompact(amountSats) + " BTC",
             color = SlipNavy,
             fontSize = 40.sp,
             fontWeight = FontWeight.Bold,
             lineHeight = 56.sp,
             modifier = Modifier.align(Alignment.TopCenter).offset(y = 202.dp).testTag("send_amount"),
         )
-        fiatLine(wallet.lastAmountSats, quote)?.let {
+        fiatLine(amountSats, quote)?.let {
             Text(
                 text = it,
                 color = SlipFiat,
@@ -205,10 +226,10 @@ private fun Slip(wallet: SingleSigWallet, draft: SendDraft, quote: FiatQuote?, w
         }
         SlipRow("จาก", walletName, top = 320.dp)
         SlipHairline(354.dp)
-        SlipRow("ถึง", shorten(draft.destination, "…"), top = 360.dp, tag = "slip_to")
+        SlipRow("ถึง", shorten(destination, "…"), top = 360.dp, tag = "slip_to")
         SlipHairline(394.dp)
         // The fee the signed transaction pays, at the rate the user chose. PreparedSend carries no size, so the rate is the chosen one, not fee over size.
-        SlipRow("ค่าธรรมเนียม", slipFeeText(wallet.lastFeeSats, draft.rateSatVb, quote), top = 400.dp)
+        SlipRow("ค่าธรรมเนียม", slipFeeText(feeSats, rateSatVb, quote), top = 400.dp)
         SlipHairline(434.dp)
         Text("สถานะ", color = SlipMuted, fontSize = 13.5.sp, lineHeight = 19.sp, modifier = Modifier.offset(x = 24.dp, y = 440.dp))
         Row(
@@ -226,7 +247,7 @@ private fun Slip(wallet: SingleSigWallet, draft: SendDraft, quote: FiatQuote?, w
             Text("รอยืนยันในบล็อก", color = SlipNavy, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 19.sp)
         }
         SlipHairline(474.dp)
-        SlipRow("TXID", wallet.lastTxid.ifEmpty { "—" }.let { shorten(it, "...") }, top = 480.dp, tag = "s6_txid")
+        SlipRow("TXID", txid.ifEmpty { "—" }.let { shorten(it, "...") }, top = 480.dp, tag = "s6_txid")
         SlipHairline(532.dp)
         Text(
             text = "ตรวจสอบได้บน blockchain · ออกโดย mebit",

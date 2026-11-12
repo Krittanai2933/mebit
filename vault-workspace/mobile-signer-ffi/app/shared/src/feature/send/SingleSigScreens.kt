@@ -445,7 +445,19 @@ fun S6SentScreen(
     onOpenCatalog: () -> Unit,
 ) {
     if (variant == "slip") {
-        SentSlip(wallet, draft, quotes, walletName, onHome, onOpenCatalog)
+        SentSlip(
+            tag = "screen_send/s6_slip",
+            txid = wallet.lastTxid,
+            sentAtSeconds = wallet.lastSentAtSeconds,
+            amountSats = wallet.lastAmountSats,
+            feeSats = wallet.lastFeeSats,
+            rateSatVb = draft.rateSatVb,
+            destination = draft.destination,
+            walletName = walletName,
+            quotes = quotes,
+            onHome = onHome,
+            onOpenCatalog = onOpenCatalog,
+        )
         return
     }
     val eyebrow = when (variant) {
