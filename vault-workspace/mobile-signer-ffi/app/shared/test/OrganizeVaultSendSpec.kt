@@ -12,8 +12,9 @@ import kotlin.test.fail
 /**
  * Organize section 5, Penpot 5.2 and the review after it. A several-key wallet's send may finish and post a payment only while at least
  * m distinct fingerprints of that wallet have signed it, as Rust read the signatures from the PSBT it returned, and only the payment the
- * last prepare made. Walks every sequence of the calls the screens make on [VaultSend], replayed on a fresh one, with fake Rust answers,
- * two of them lies a bindings bug could tell. The fakes keep the model: which keys truly signed the payment the last prepare made.
+ * last prepare made. No sign reaches Rust once that payment has m, or for a key whose fingerprint already signed it. Walks every sequence
+ * of the calls the screens make on [VaultSend], replayed on a fresh one, with fake Rust answers, two of them lies a bindings bug could tell.
+ * The fakes keep the model: which keys truly signed the payment the last prepare made.
  */
 class OrganizeVaultSendSpec {
     @Test
@@ -116,6 +117,8 @@ class OrganizeVaultSendSpec {
             },
             signPsbt = { _, _, held, keyIndex, _, _ ->
                 signCalls++
+                if (distinct() >= m) note("sign at ${distinct()} distinct fingerprints of $m reached Rust")
+                if (keys[keyIndex.toInt()] in modelSigned.map { keys[it] }) note("sign of key $keyIndex, whose fingerprint already counts, reached Rust")
                 answer(held, keyIndex.toInt())
             },
             finalizePsbt = { _, _, held ->

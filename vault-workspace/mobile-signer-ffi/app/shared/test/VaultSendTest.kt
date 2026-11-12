@@ -50,7 +50,7 @@ class VaultSendTest {
         var post: (String) -> HotSendResult = { HotSendResult(it) }
         var spendable = VaultSpendable(84_200_000uL, HotScan.COMPLETE)
 
-        fun send(guards: PendingPayments = PendingPayments(FakePlainFile()), now: Long = 1_000L) = VaultSend(
+        fun send(guards: PendingPayments = PendingPayments(FakePlainFile()), now: Long = 1_000L, vault: CreatedVault = this@VaultSendTest.vault) = VaultSend(
             vault,
             guards,
             nowSeconds = { now },
@@ -156,6 +156,38 @@ class VaultSendTest {
         assertEquals(1 to 0, asked to rust.signs)
         assertTrue(send.sign(phone(0)) { asked++; true })
         assertEquals(2 to 1, asked to rust.signs)
+    }
+
+    @Test
+    fun signAsksNeitherTheOwnerNorRustOnceMDistinctFingerprintsSigned(): Unit = runBlocking {
+        val rust = Rust()
+        val send = signed(rust)
+        var asked = 0
+        assertFalse(send.sign(phone(1)) { asked++; true })
+        assertEquals(0 to 2, asked to rust.signs)
+        assertEquals(setOf("AAAA0000", "CCCC0000"), send.signedFingerprints)
+    }
+
+    @Test
+    fun aSecondKeyOfTheSameSeedAsksNeitherTheOwnerNorRust(): Unit = runBlocking {
+        val rust = Rust()
+        val send = rust.send(vault = vault.copy(keyFingerprints = listOf("AAAA0000", "aaaa0000", "CCCC0000")))
+        assertTrue(send.prepare())
+        assertTrue(send.sign(phone(0)) { true })
+        var asked = 0
+        assertFalse(send.sign(phone(1)) { asked++; true })
+        assertEquals(0 to 1, asked to rust.signs)
+    }
+
+    @Test
+    fun aSignWhoseOwnerCheckEndsAfterTheLastNeededSignatureAsksRustNothing(): Unit = runBlocking {
+        val rust = Rust()
+        val send = rust.send()
+        assertTrue(send.prepare())
+        assertTrue(send.sign(phone(0)) { true })
+        assertFalse(send.sign(phone(2)) { send.sign(phone(1)) { true } }, "key 1 made the payment ready while key 2's owner check was open")
+        assertEquals(2, rust.signs)
+        assertEquals(setOf("AAAA0000", "BBBB0000"), send.signedFingerprints)
     }
 
     @Test

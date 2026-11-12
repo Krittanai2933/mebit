@@ -119,6 +119,12 @@ class VaultSend(
     /** The organize-vault-send property: a payment the node may still take, signed by at least m distinct fingerprints of this wallet. */
     fun readyToBroadcast(): Boolean = (state as? VaultSendState.Collecting)?.stale == false && signedFingerprints.size >= vault.m
 
+    /** Whether key [index]'s signature would still count toward m: fewer than m distinct fingerprints signed, none of them that key's. */
+    fun needsKey(index: Int): Boolean {
+        val fingerprint = vault.keyFingerprints.getOrNull(index)?.uppercase() ?: return false
+        return signedFingerprints.size < vault.m && fingerprint !in signedFingerprints
+    }
+
     /** 5.1's read on open: the guard file, what the wallet can spend, and the fee tiers, the board's fixed ones when the fetch fails. Blocks. */
     fun load(): LiveFeeTiers {
         guard = guards.of(guardKey)
@@ -158,14 +164,15 @@ class VaultSend(
     /**
      * 5.2's เซ็น on a row this phone signs. Asks the owner first ([confirm], once per signature), then Rust on [worker]. Keeps Rust's
      * answer only when it is the same payment and names [signer]'s key among the signers, so a key counts only once Rust returned a PSBT
-     * that carries its valid signature. False, with Rust never asked, when the owner check fails.
+     * that carries its valid signature. False, with Rust never asked, when the owner check fails. False, with neither asked, once the
+     * payment no longer [needsKey] [signer]'s key, checked again under the lock because another sign can end during the owner check.
      */
     suspend fun sign(signer: KeySigner.Phone, confirm: suspend () -> Boolean): Boolean {
-        if ((state as? VaultSendState.Collecting)?.stale != false) return false
+        if (heldFor(signer) == null) return false
         if (!confirm()) return fail(OWNER_NOT_CONFIRMED)
         return withContext(worker) {
             synchronized(lock) {
-                val held = (state as? VaultSendState.Collecting)?.takeIf { !it.stale }?.psbt ?: return@synchronized false
+                val held = heldFor(signer) ?: return@synchronized false
                 lastError = null
                 busy = VaultBusy.Signing(signer.index)
                 try {
@@ -248,6 +255,10 @@ class VaultSend(
         guard = null
         true
     }
+
+    /** The payment [signer] may sign now: held, one the node may still take, and still needing [signer]'s key. */
+    private fun heldFor(signer: KeySigner.Phone): VaultPsbt? =
+        (state as? VaultSendState.Collecting)?.takeIf { !it.stale && needsKey(signer.index) }?.psbt
 
     private fun firstPost(held: VaultPsbt, pending: UnconfirmedSend, hex: String): Boolean = try {
         postHex(KeyNetwork.TEST, hex, pending.txid)
