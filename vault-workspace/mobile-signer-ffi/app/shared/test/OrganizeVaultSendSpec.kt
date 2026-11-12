@@ -10,10 +10,10 @@ import kotlin.test.assertEquals
 import kotlin.test.fail
 
 /**
- * Organize section 5, Penpot 5.2. A several-key wallet's send may finish and post a payment only while at least m distinct fingerprints
- * of that wallet have signed it, as Rust read the signatures from the PSBT it returned, and only the payment the last prepare made.
- * Walks every sequence of the calls the screens make on [VaultSend], replayed on a fresh one, with fake Rust answers, two of them lies a
- * bindings bug could tell. The fakes keep the model: which keys truly signed the payment the last prepare made.
+ * Organize section 5, Penpot 5.2 and the review after it. A several-key wallet's send may finish and post a payment only while at least
+ * m distinct fingerprints of that wallet have signed it, as Rust read the signatures from the PSBT it returned, and only the payment the
+ * last prepare made. Walks every sequence of the calls the screens make on [VaultSend], replayed on a fresh one, with fake Rust answers,
+ * two of them lies a bindings bug could tell. The fakes keep the model: which keys truly signed the payment the last prepare made.
  */
 class OrganizeVaultSendSpec {
     @Test
@@ -193,7 +193,7 @@ class OrganizeVaultSendSpec {
         /** 5.2's เซ็น on key 0's row, Rust answering key 0 and a position past the wallet's keys. */
         data object LieOutOfRange : Step("LieOutOfRange")
 
-        /** 5.2's ส่งธุรกรรม: [VaultSend.broadcast]. */
+        /** The review's ส่งธุรกรรม: [VaultSend.broadcast]. */
         data object Broadcast : Step("Broadcast")
     }
 

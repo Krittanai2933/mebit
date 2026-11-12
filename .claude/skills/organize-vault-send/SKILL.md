@@ -2,7 +2,7 @@
 name: organize-vault-send
 description: >-
   Use when a change touches a several-key wallet's send: VaultSend, keySigners,
-  the 5.1 or 5.2 screens, or hot_wallet/vault_spend.rs. Checks that a vault
+  the 5.1, 5.2 or review screens, or hot_wallet/vault_spend.rs. Checks that a vault
   payment is finished and posted only after m distinct fingerprints of that
   wallet signed it, as Rust read the signatures from the PSBT.
 ---
@@ -15,14 +15,14 @@ description: >-
 
 Two gates hold it. Kotlin's `VaultSend.readyToBroadcast` counts the distinct fingerprints of the wallet among the key positions Rust returned in `VaultPsbt.signedKeys`, and `broadcast` refuses below m. Rust's `vault_finalize_psbt` refuses fewer than m keys with a valid signature on every input (`vault signatures: k of m`). This skill checks the Kotlin gate. The Rust gate has its own tests in `vault-workspace/mobile-signer-ffi/rust/src/hot_wallet/vault_spend.rs`, among them `finishing_succeeds_exactly_when_m_distinct_keys_signed`.
 
-The Penpot Organize page (`2067de56-df70-80bd-8008-da9f7127d68a`), section 5, is the screen map: 5.1 is the form, 5.2 collects signatures and posts. Hardware signing (5.3 onward) has no Kotlin step yet.
+The Penpot Organize page (`2067de56-df70-80bd-8008-da9f7127d68a`), section 5, is the screen map: 5.1 is the form, 5.2 collects signatures, and the review after it, which the app draws as Penpot 4.5 in place of 5.8, posts and ends on 5.9's slip. Hardware signing (5.3 to 5.7) has no Kotlin step yet.
 
 ## When to run
 
 Run this check when a change touches any of these:
 
 - `vault-workspace/mobile-signer-ffi/app/shared/src/data/VaultSend.kt`: `VaultSend.prepare`, `sign`, `broadcast`, `signedFingerprints`, `readyToBroadcast`, and `keySigners`.
-- `vault-workspace/mobile-signer-ffi/app/shared/src/feature/send/VaultSendScreens.kt`: `VaultSendScreen` (5.1, `cta_m1_review` calls `prepare`) and `CollectSignaturesScreen` (5.2, each `cta_m2_sign_<i>` calls `sign` with the owner check, `cta_m2_send` calls `broadcast` and is on only at `readyToBroadcast`).
+- `vault-workspace/mobile-signer-ffi/app/shared/src/feature/send/VaultSendScreens.kt`: `VaultSendScreen` (5.1, `cta_m1_review` calls `prepare`), `CollectSignaturesScreen` (5.2, each `cta_m2_sign_<i>` calls `sign` with the owner check, and `cta_m2_review`, on only at `readyToBroadcast`, opens the review) and `VaultReviewScreen` (the review, whose `cta_m8_send` calls `broadcast` and is on only at `readyToBroadcast`).
 - `vault-workspace/mobile-signer-ffi/app/shared/src/navigation/NavGraph.kt`: the `confirmSign` the 5.2 route passes, and every way that makes a `VaultSend`.
 - `vault-workspace/mobile-signer-ffi/app/shared/test/OrganizeVaultSendSpec.kt`.
 - A new call of `sign` or `broadcast` anywhere.
@@ -70,10 +70,10 @@ Move the sync commit below only after you have read the covered functions at the
 
 | | |
 |---|---|
-| Sync commit | the commit that adds `app/shared/src/feature/send/VaultSendScreens.kt` (`git log --diff-filter=A -- vault-workspace/mobile-signer-ffi/app/shared/src/feature/send/VaultSendScreens.kt`) |
+| Sync commit | the commit that adds the review route, `M8ReviewVault` (the first line of `git log --reverse --format=%h -S M8ReviewVault -- vault-workspace/mobile-signer-ffi/app/shared/src/navigation/Routes.kt`) |
 | Spec | `vault-workspace/mobile-signer-ffi/app/shared/test/OrganizeVaultSendSpec.kt`, `broadcastRequiresDistinctVaultFingerprints` |
 | Draft | `VaultSend.kt`: `prepare`, `sign`, `broadcast`, `signedFingerprints`, `readyToBroadcast` |
-| Call sites | `VaultSendScreens.kt`: 5.1 `cta_m1_review`, 5.2 `cta_m2_sign_<i>` per key, 5.2 `cta_m2_send`. `NavGraph.kt`: the 5.2 route's `confirmSign` |
+| Call sites | `VaultSendScreens.kt`: 5.1 `cta_m1_review`, 5.2 `cta_m2_sign_<i>` per key, the review's `cta_m8_send`. `NavGraph.kt`: the 5.2 route's `confirmSign` |
 | Rust gate | `rust/src/hot_wallet/vault_spend.rs`: `assembled` and its tests |
 
 ## Left out

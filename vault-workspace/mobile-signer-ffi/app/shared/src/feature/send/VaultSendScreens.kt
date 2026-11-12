@@ -57,6 +57,7 @@ import com.mebit.app.data.xpubsIn
 import com.mebit.app.feature.vault.vaultKeyRows
 import com.mebit.app.getPlatform
 import com.mebit.app.rememberCameraAvailable
+import com.mebit.app.ui.components.BottomActions
 import com.mebit.app.ui.components.KeyboardDismissBox
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
@@ -274,10 +275,10 @@ private fun GuardNote(line: String, tag: String) {
 
 /**
  * Penpot 5.2 Collect Signatures for the payment [VaultSend.prepare] holds: the navy card of what leaves and where, "เซ็นแล้ว x / m" over m
- * bars, a row per key of the wallet in BSMS order, the checklist of what the payment does, and ส่งธุรกรรม, on only at
- * [VaultSend.readyToBroadcast], with "ต้องเซ็นอีก k ดอก" under it. A row this phone signs ([KeySigner.Phone]) has a filled เซ็น that asks the
- * owner ([confirmSign]) and then Rust, a signed key shows a check, and any other key an outlined เซ็น that does nothing, with its reason under
- * its line. Once the payment is out it calls [onSent] once. A null [send], or one with nothing prepared, shows one line.
+ * bars, a row per key of the wallet in BSMS order, the checklist of what the payment does, and ต่อไป ตรวจสอบ, on only at
+ * [VaultSend.readyToBroadcast], which opens the review that posts ([onReview]), with "ต้องเซ็นอีก k ดอก" under it. A row this phone signs
+ * ([KeySigner.Phone]) has a filled เซ็น that asks the owner ([confirmSign]) and then Rust, a signed key shows a check, and any other key an
+ * outlined เซ็น that does nothing, with its reason under its line. A null [send], or one with nothing prepared, shows one line.
  */
 @Composable
 fun CollectSignaturesScreen(
@@ -286,12 +287,10 @@ fun CollectSignaturesScreen(
     keyring: List<SavedKey>,
     quotes: QuoteCache,
     confirmSign: suspend () -> Boolean,
-    onSent: () -> Unit,
+    onReview: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
-    val state = send?.state
-    LaunchedEffect(state) { if (state is VaultSendState.Sent) onSent() }
     val payment = send?.payment
     if (send == null || payment == null) {
         MebitScreen(eyebrow = "SEND · WALLET", title = "เก็บลายเซ็น", onBack = onBack, onOpenCatalog = onOpenCatalog, tag = "screen_send/m2") {
@@ -312,12 +311,7 @@ fun CollectSignaturesScreen(
         tag = "screen_send/m2",
         bottom = {
             Spacer(modifier = Modifier.height(12.dp))
-            PrimaryCta(
-                if (send.busy == VaultBusy.Posting) "กำลังส่ง…" else "ส่งธุรกรรม",
-                "cta_m2_send",
-                { scope.launch { withContext(Dispatchers.Default) { send.broadcast() } } },
-                enabled = send.readyToBroadcast() && send.busy == null,
-            )
+            PrimaryCta("ต่อไป ตรวจสอบ", "cta_m2_review", onReview, enabled = send.readyToBroadcast() && send.busy == null)
             Box(modifier = Modifier.fillMaxWidth().height(38.dp), contentAlignment = Alignment.Center) {
                 if (needed > 0) Text("ต้องเซ็นอีก $needed ดอก", color = MbSlate, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.testTag("m2_needed"))
             }
@@ -444,8 +438,74 @@ private fun CheckRow(label: String, value: String, tag: String) {
     }
 }
 
+/**
+ * The page after 5.2, drawn as Penpot 4.5 draws a one-key payment's review ([ReviewPage]): what leaves and where to, from this wallet, the
+ * fee, what leaves it in all, and what it keeps of [balanceSats], the balance of its last read, a dash while unknown. ส่งธุรกรรม finishes and
+ * posts the payment ([VaultSend.broadcast]) and is on only at [VaultSend.readyToBroadcast], with no owner check of its own because each
+ * signature had one. ยกเลิก and Back return to 5.2 with the signatures kept. A refusal, an unknown outcome and the second tap that posts the
+ * same bytes again read as they did on 5.2. Once the payment is out it calls [onSent] once. A null [send], or one with nothing prepared,
+ * shows one line.
+ */
+@Composable
+fun VaultReviewScreen(
+    send: VaultSend?,
+    balanceSats: Long?,
+    quotes: QuoteCache,
+    onSent: () -> Unit,
+    onBack: (() -> Unit)?,
+    onOpenCatalog: () -> Unit,
+) {
+    val state = send?.state
+    LaunchedEffect(state) { if (state is VaultSendState.Sent) onSent() }
+    val payment = send?.payment
+    if (send == null || payment == null) {
+        MebitScreen(eyebrow = "SEND · ตรวจสอบ", title = "ตรวจก่อนส่ง", onBack = onBack, onOpenCatalog = onOpenCatalog, tag = "screen_send/m8") {
+            Text(NO_REVIEW, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("m8_none"))
+        }
+        return
+    }
+    val quote = rememberFiatQuote(quotes)
+    val scope = rememberCoroutineScope()
+    // Back and ยกเลิก wait while the post runs, so no screen is left with a payment half out.
+    val leave = onBack?.let { back -> { if (send.busy == null) back() } }
+    val amount = payment.amountSats.toLong()
+    val fee = payment.feeSats.toLong()
+    ReviewPage(
+        tag = "screen_send/m8",
+        onBack = leave,
+        onOpenCatalog = onOpenCatalog,
+        amountSats = amount,
+        sendAll = send.draft.isSendAll,
+        estimate = false,
+        destination = payment.destination,
+        from = send.vault.name,
+        fee = realFeeText(fee, quote),
+        totalSats = amount + fee,
+        balanceSats = balanceSats,
+        quote = quote,
+        bottom = {
+            BottomActions(
+                primaryLabel = if (send.busy == VaultBusy.Posting) "กำลังส่ง…" else "ส่งธุรกรรม",
+                primaryTag = "cta_m8_send",
+                onPrimary = { scope.launch { withContext(Dispatchers.Default) { send.broadcast() } } },
+                linkLabel = "ยกเลิก",
+                linkTag = "cta_m8_cancel",
+                onLink = leave,
+                enabled = send.readyToBroadcast() && send.busy == null,
+                linkColor = MbBody,
+            )
+        },
+    ) {
+        send.lastError?.let {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(it, color = MbEyebrow, fontSize = 13.sp, fontWeight = FontWeight.Medium, lineHeight = 18.sp, modifier = Modifier.testTag("m8_error"))
+        }
+    }
+}
+
 /** Draft copy, no board draws these. */
 private const val NO_SEND = "ยังส่งจาก Wallet นี้ไม่ได้ · กลับไปหน้าก่อน"
 private const val NO_PAYMENT = "ยังไม่มีรายการให้เซ็น · กลับไปหน้าก่อน"
+private const val NO_REVIEW = "ยังไม่มีรายการให้ส่ง · กลับไปหน้าก่อน"
 private const val BALANCE_UNKNOWN = "ยังดึงยอดที่ใช้ได้ของ Wallet นี้ไม่ได้ จึงยังส่งไม่ได้ ลองใหม่ภายหลัง"
 private const val PAYMENT_UNCONFIRMED = "การส่งครั้งก่อนจาก Wallet นี้ยังยืนยันไม่ได้ เปิดรายละเอียด Wallet เพื่อตรวจรายการก่อนส่งอีกครั้ง"

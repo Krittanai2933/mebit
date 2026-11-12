@@ -113,6 +113,7 @@ import com.mebit.app.feature.send.fiatLine
 import com.mebit.app.feature.send.homeBalanceText
 import com.mebit.app.feature.send.walletChoices
 import com.mebit.app.feature.send.CollectSignaturesScreen
+import com.mebit.app.feature.send.VaultReviewScreen
 import com.mebit.app.feature.send.VaultSendScreen
 import com.mebit.app.rememberBiometrics
 import com.mebit.app.rememberIsDebugBuild
@@ -706,6 +707,15 @@ fun MebitNavHost(
                         quotes = quotes,
                         // The owner check of the wallet in use, once per signature, as S5 asks before it signs.
                         confirmSign = { appLock.confirm(biometrics, session.appLockEnabled, "ยืนยันการเซ็นส่งเงิน") },
+                        onReview = { navigate(MovieRoute.M8ReviewVault) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.M8ReviewVault -> VaultReviewScreen(
+                        send = vaultSend,
+                        // The balance the list or the detail last read, so the review asks the chain nothing.
+                        balanceSats = vaultSend?.vault?.let(wallets::vaultSats),
+                        quotes = quotes,
                         onSent = {
                             vaultSend?.vault?.let { sent ->
                                 wallets.forgetVaultRead(sent)

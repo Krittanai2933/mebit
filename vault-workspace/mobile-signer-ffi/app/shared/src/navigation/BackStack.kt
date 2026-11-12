@@ -45,13 +45,13 @@ internal fun stackAfterAdd(stack: List<Stop>, otherwise: MovieRoute): List<Stop>
 }
 
 /**
- * Pure. The Back stack once a several-key wallet's payment is out: every send screen gone and the wallet's detail on top. A detail under
- * the send stays and the stack is cut back to it, else the detail goes on top of what opened the send, so Back never returns to a payment
- * that went. [stack] is never empty.
+ * Pure. The Back stack once a several-key wallet's payment is out: every send screen, the review included, gone and the wallet's detail on
+ * top. A detail under the send stays and the stack is cut back to it, else the detail goes on top of what opened the send, so Back never
+ * returns to a payment that went. [stack] is never empty.
  */
 internal fun stackAfterVaultSend(stack: List<Stop>): List<Stop> {
     val place = stack.last().place
-    val below = stack.dropLastWhile { it.route == MovieRoute.M1SendVault || it.route == MovieRoute.M2CollectSignatures }
+    val below = stack.dropLastWhile { it.route == MovieRoute.M1SendVault || it.route == MovieRoute.M2CollectSignatures || it.route == MovieRoute.M8ReviewVault }
     val detail = below.indexOfLast { it.route == MovieRoute.VaultDetail }
     if (detail >= 0) return below.take(detail + 1)
     return stackAfterOpen(below.ifEmpty { listOf(Stop(MovieRoute.VaultList, place)) }, Stop(MovieRoute.VaultDetail, place))

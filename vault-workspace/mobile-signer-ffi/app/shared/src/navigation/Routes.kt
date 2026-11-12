@@ -281,6 +281,12 @@ enum class MovieRoute(
         "เก็บลายเซ็น",
         "เลือกกุญแจที่พร้อมเซ็น",
     ),
+    M8ReviewVault(
+        "send/m8",
+        "READY TO BROADCAST",
+        "ตรวจก่อนส่ง",
+        "ลายเซ็นครบแล้ว ตรวจแล้วส่ง",
+    ),
     ChooseWalletReceive(
         "wallets/choose-receive",
         "RECEIVE · เลือกกระเป๋า",

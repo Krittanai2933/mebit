@@ -7,7 +7,7 @@ import kotlin.test.assertTrue
 class MovieRouteTest {
     @Test
     fun coversEveryMoviePageBoard() {
-        assertEquals(46, MovieRoute.entries.size)
+        assertEquals(47, MovieRoute.entries.size)
         assertEquals(MovieRoute.Welcome, MovieRoute.start)
         assertEquals("onboarding/import-seed", MovieRoute.ImportSeed.path)
         assertEquals("IMPORT SEED", MovieRoute.ImportSeed.eyebrow)
@@ -35,6 +35,13 @@ class MovieRouteTest {
     fun transactionDetailRouteExists() {
         assertEquals("send/s8", MovieRoute.S8TxDetail.path)
         assertEquals("TRANSACTION", MovieRoute.S8TxDetail.eyebrow)
+    }
+
+    @Test
+    fun aSeveralKeyWalletsReviewHasTheRouteOf58() {
+        // The recipes open it as catalog_send/m8: the step of Organize 5.8, drawn as S5.
+        assertEquals("send/m8", MovieRoute.M8ReviewVault.path)
+        assertEquals(null, MovieRoute.M8ReviewVault.bar, "a send screen shows no bottom bar")
     }
 
     @Test

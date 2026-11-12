@@ -40,7 +40,7 @@ sealed interface VaultSendState {
      */
     data class Collecting(val psbt: VaultPsbt, val stale: Boolean = false) : VaultSendState
 
-    /** The node took [psbt]'s transaction, which 5.2 still draws while it leaves. */
+    /** The node took [psbt]'s transaction, which the review still draws while it leaves. */
     data class Sent(val psbt: VaultPsbt) : VaultSendState
 }
 
@@ -99,7 +99,7 @@ class VaultSend(
     var spendableSats: Long? by mutableStateOf(null)
         private set
 
-    /** The payment 5.2 shows: the one held for signatures, or the one that went out. */
+    /** The payment 5.2 and the review show: the one held for signatures, or the one that went out. */
     val payment: VaultPsbt?
         get() = when (val now = state) {
             is VaultSendState.Collecting -> now.psbt
@@ -186,10 +186,10 @@ class VaultSend(
     }
 
     /**
-     * 5.2's ส่งธุรกรรม, only while [readyToBroadcast]. Rust finishes the transaction, and its guard reaches the phone before the post, as a
-     * one-key [SingleSigWallet.post] does. A guard that already names this txid means these same bytes may be out, so they go again, which can
-     * never pay twice, and any other guard refuses. Out: the guard goes and [state] is [VaultSendState.Sent]. An unknown outcome keeps the
-     * guard. The node's refusal of a first post drops the guard and makes the payment stale. Blocks.
+     * The review's ส่งธุรกรรม, only while [readyToBroadcast]. Rust finishes the transaction, and its guard reaches the phone before the post,
+     * as a one-key [SingleSigWallet.post] does. A guard that already names this txid means these same bytes may be out, so they go again,
+     * which can never pay twice, and any other guard refuses. Out: the guard goes and [state] is [VaultSendState.Sent]. An unknown outcome
+     * keeps the guard. The node's refusal of a first post drops the guard and makes the payment stale. Blocks.
      */
     fun broadcast(): Boolean = synchronized(lock) {
         lastError = null
