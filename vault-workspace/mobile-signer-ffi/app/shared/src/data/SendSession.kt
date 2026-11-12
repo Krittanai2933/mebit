@@ -622,6 +622,12 @@ fun sendErrorThai(message: String?): String {
         m.startsWith("replace: not this wallet's payment:") -> "รายการเดิมไม่ใช่รายการที่กระเป๋านี้แทนที่ได้"
         m.startsWith("replace: rate ") || m.startsWith("replace: fee ") -> "รายการใหม่ต้องใช้ค่าธรรมเนียมเกิน 10,000 sat/vB ซึ่งเครือข่ายไม่รับ"
         m.startsWith("replace: what is left") && floor != null -> "ยอดที่เหลือหลังหักค่าธรรมเนียมใหม่ต่ำกว่า $floor sat ซึ่งเครือข่ายไม่รับ"
+        // vault_sign_psbt and vault_finalize_psbt: the PSBT broke a rule of their check, so nothing was signed or finished.
+        m.startsWith("vault psbt:") -> "ธุรกรรมไม่ตรงกับที่ตรวจไว้ จึงไม่เซ็น"
+        // vault_sign_psbt: the words are not the key of the row tapped.
+        m.startsWith("vault key:") -> "กุญแจนี้ไม่ใช่กุญแจของ Wallet นี้"
+        // vault_finalize_psbt: fewer keys signed than the wallet needs.
+        m.startsWith("vault signatures:") -> "ลายเซ็นยังไม่ครบ"
         m.startsWith("esplora scan:") -> ABNORMAL_HISTORY
         m.startsWith("esplora utxo:") || m.startsWith("esplora balance:") -> "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง"
         m == "amount plus fee does not fit u64" -> "จำนวนผิดปกติ"
@@ -651,8 +657,8 @@ fun figuresKnown(mode: SingleSigWallet.WalletMode, scan: HotScan): Boolean = whe
 /** Home's red line for a snapshot whose scan a host lied in, or null. */
 fun scanErrorThai(scan: HotScan): String? = ABNORMAL_HISTORY.takeIf { scan == HotScan.UNVERIFIED }
 
-/** [SingleSigWallet.quote], [SingleSigWallet.prepare] and [SingleSigWallet.post] while an earlier payment may be out. */
-private const val EARLIER_UNSETTLED = "การส่งครั้งก่อนยังยืนยันไม่ได้ จึงยังส่งใหม่ไม่ได้"
+/** [SingleSigWallet.quote], [SingleSigWallet.prepare], [SingleSigWallet.post] and a several-key wallet's [VaultSend] while an earlier payment may be out. */
+internal const val EARLIER_UNSETTLED ="การส่งครั้งก่อนยังยืนยันไม่ได้ จึงยังส่งใหม่ไม่ได้"
 
 /** [SingleSigWallet.quote], [SingleSigWallet.prepare] and [SingleSigWallet.prepareReplacement] for a real key whose balance is not known. */
 private const val BALANCE_UNKNOWN = "ยังดึงยอดคงเหลือไม่ได้ จึงยังส่งไม่ได้"
@@ -854,10 +860,13 @@ fun sendIssue(addressOk: Boolean?, amountSats: Long, feeSats: Long, balanceSats:
     else -> null
 }
 
-/** One payment from a wallet of [addressType]. */
-class SendDraft(addressType: AddressType = AddressType.NATIVE_SEGWIT) {
-    /** The size every estimate prices a payment at, from the core that signs it ([hotTypicalVsize]). Native SegWit's is 141 vB. */
-    val typicalVsize: Long = hotTypicalVsize(addressType).toLong()
+/**
+ * One payment, priced at [typicalVsize], the size every estimate prices it at, from the core that signs it: a one-key wallet's
+ * [hotTypicalVsize], Native SegWit's 141 vB, or a several-key wallet's [com.mebit.ffi.signer.vaultTypicalVsize].
+ */
+class SendDraft(val typicalVsize: Long) {
+    /** One payment from a one-key wallet of [addressType]. */
+    constructor(addressType: AddressType = AddressType.NATIVE_SEGWIT) : this(hotTypicalVsize(addressType).toLong())
 
     var amountSats: Long by mutableStateOf(0L)
         private set
