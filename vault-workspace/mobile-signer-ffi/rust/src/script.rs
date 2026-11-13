@@ -397,11 +397,40 @@ fn chain_descriptor(
     .map_err(refuse)
 }
 
-/// The name of the wallet's scan file: SHA-256 of a tag, the shape and the keys' chain xpubs. One key: the tag, the
-/// address type's purpose and its two chain xpubs, since an xpub does not say which path it came from and one listed
-/// under two types is two wallets. No phone wallet's `Account::id`, which hashes the xpubs alone, is ever one of
-/// these. Several keys: the tag, m and each key's two chain xpubs in sorted order, so the order the keys are listed in
-/// never changes it.
+/// Domain tag for vault ids, so no preimage is ever a one-key id's two 78-byte xpubs in the folder both kinds share.
+const VAULT_ID_TAG: &[u8] = b"mebit/wallet-id/wsh-sortedmulti/v1";
+
+/// SHA-256 of `VAULT_ID_TAG`, a network byte (0 main, 1 test), `threshold`, then each key's 33-byte public key and
+/// 32-byte chain code, the 65-byte records in byte order. Public, like a one-key id.
+/// - Sorted, because sortedmulti makes the same keys in any order the same wallet, so a reordered BSMS reuses the scan file.
+/// - Only what makes addresses goes in, so a key re-encoded with another depth or parent fingerprint is the same wallet.
+/// - The network byte keeps a future mainnet build from sharing a testnet vault's file over the same key material.
+/// - `threshold` goes in, because 2-of-3 and 3-of-3 over the same keys pay different scripts.
+pub(crate) fn vault_id(keys: &[Xpub], threshold: u8) -> WalletId {
+    let mut records: Vec<[u8; 65]> = keys
+        .iter()
+        .map(|key| {
+            let mut record = [0; 65];
+            record[..33].copy_from_slice(&key.public_key.serialize());
+            record[33..].copy_from_slice(key.chain_code.as_bytes());
+            record
+        })
+        .collect();
+    records.sort();
+    let mut bytes = VAULT_ID_TAG.to_vec();
+    bytes.push(match keys[0].network {
+        NetworkKind::Main => 0,
+        NetworkKind::Test => 1,
+    });
+    bytes.push(threshold);
+    bytes.extend_from_slice(&records.concat());
+    sha256::Hash::hash(&bytes).to_byte_array()
+}
+
+/// The name of the wallet's scan file. One key: SHA-256 of a tag, the address type's purpose and its two chain xpubs,
+/// since an xpub does not say which path it came from and one listed under two types is two wallets. No phone wallet's
+/// `Account::id`, which hashes the xpubs alone, is ever one of these. Several keys: `vault_id` of the account xpubs and
+/// m, the name of every several-key scan file the app wrote before it read descriptors, in any key order.
 fn id_of(shape: Shape, keys: &[AccountKey]) -> Result<WalletId, MobileSignerError> {
     let secp = Secp256k1::verification_only();
     let chains = |key: &AccountKey| -> Result<Vec<u8>, MobileSignerError> {
@@ -423,12 +452,8 @@ fn id_of(shape: Shape, keys: &[AccountKey]) -> Result<WalletId, MobileSignerErro
             bytes
         }
         Shape::Multi { m } => {
-            let mut each = keys.iter().map(chains).collect::<Result<Vec<_>, _>>()?;
-            each.sort();
-            let mut bytes = b"mebit sortedmulti".to_vec();
-            bytes.push(m as u8);
-            bytes.extend(each.concat());
-            bytes
+            let xpubs: Vec<Xpub> = keys.iter().map(|key| key.xpub).collect();
+            return Ok(vault_id(&xpubs, m as u8));
         }
     };
     Ok(sha256::Hash::hash(&bytes).to_byte_array())
@@ -785,21 +810,40 @@ pub(crate) mod tests {
         );
     }
 
+    /// m and the soft keys of each listing: the 2-of-3 in all six key orders, and the 3-of-5.
+    const LISTED: [(usize, &[u8]); 7] = [
+        (2, &[1, 2, 3]),
+        (2, &[1, 3, 2]),
+        (2, &[2, 1, 3]),
+        (2, &[2, 3, 1]),
+        (2, &[3, 1, 2]),
+        (2, &[3, 2, 1]),
+        (3, &[1, 2, 3, 4, 5]),
+    ];
+
+    // The bytes `vault_id` gave before the descriptor engine named several-key scan files, read off that build: every
+    // several-key scan file a phone keeps, Wallet 1's included, is named by them, whatever order its book lists the keys in.
+    #[test]
+    fn the_several_key_scan_id_is_the_vault_id_every_saved_wallet_file_is_named_by() {
+        let hex = |id: WalletId| id.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        for (m, among) in LISTED {
+            let expected = match m {
+                2 => "ac6839184083edb3851086c9b784b722c68da5c0f7cda92247c4ffcbcfe20442",
+                _ => "66e36a8bcf567bf567832d11689823c31a556317015c0e54bea8fa77d6af7b34",
+            };
+            let wallet = Described::parse(&multisig(m, among)).unwrap();
+            let xpubs: Vec<Xpub> = wallet.keys().iter().map(|key| key.xpub).collect();
+            assert_eq!(hex(vault_id(&xpubs, m as u8)), expected, "{m} of {among:?}");
+            assert_eq!(hex(wallet.id()), expected, "{m} of {among:?}");
+        }
+    }
+
     // Every several-key wallet the app holds was made, paid and scanned at the addresses vault-core derives from its bare
     // xpubs. A described wallet of the same keys pays exactly those, receive and change, in any key order.
     #[test]
     fn a_several_key_wallet_pays_the_addresses_vault_core_derives_on_both_chains() {
         use vault_core::descriptor::{Branch, build_multisig_descriptor_on, derive_address_at};
-        let wallets: [(usize, &[u8]); 7] = [
-            (2, &[1, 2, 3]),
-            (2, &[1, 3, 2]),
-            (2, &[2, 1, 3]),
-            (2, &[2, 3, 1]),
-            (2, &[3, 1, 2]),
-            (2, &[3, 2, 1]),
-            (3, &[1, 2, 3, 4, 5]),
-        ];
-        for (m, among) in wallets {
+        for (m, among) in LISTED {
             let wallet = Described::parse(&multisig(m, among)).unwrap();
             let xpubs: Vec<Xpub> = wallet.keys().iter().map(|key| key.xpub).collect();
             for (chain, branch) in [

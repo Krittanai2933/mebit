@@ -939,7 +939,7 @@ impl Multisig {
             NetworkKind::Test => KeyNetwork::Test,
         })?;
         Ok(Self {
-            id: vault_id(&keys, threshold),
+            id: crate::script::vault_id(&keys, threshold),
             keys,
             threshold: threshold.into(),
         })
@@ -962,36 +962,6 @@ impl AddressSource for Multisig {
         let descriptor = build_multisig_descriptor_on(&self.keys, self.threshold, branch)?;
         Ok(derive_address_at(&descriptor, index, Network::Testnet4)?)
     }
-}
-
-/// Domain tag for vault ids, so no preimage is ever a one-key id's two 78-byte xpubs in the folder both kinds share.
-const VAULT_ID_TAG: &[u8] = b"mebit/wallet-id/wsh-sortedmulti/v1";
-
-/// SHA-256 of `VAULT_ID_TAG`, a network byte (0 main, 1 test), `threshold`, then each key's 33-byte public key and
-/// 32-byte chain code, the 65-byte records in byte order. Public, like a one-key id.
-/// - Sorted, because sortedmulti makes the same keys in any order the same wallet, so a reordered BSMS reuses the scan file.
-/// - Only what makes addresses goes in, so a key re-encoded with another depth or parent fingerprint is the same wallet.
-/// - The network byte keeps a future mainnet build from sharing a testnet vault's file over the same key material.
-/// - `threshold` goes in, because 2-of-3 and 3-of-3 over the same keys pay different scripts.
-fn vault_id(keys: &[Xpub], threshold: u8) -> WalletId {
-    let mut records: Vec<[u8; 65]> = keys
-        .iter()
-        .map(|key| {
-            let mut record = [0; 65];
-            record[..33].copy_from_slice(&key.public_key.serialize());
-            record[33..].copy_from_slice(key.chain_code.as_bytes());
-            record
-        })
-        .collect();
-    records.sort();
-    let mut bytes = VAULT_ID_TAG.to_vec();
-    bytes.push(match keys[0].network {
-        NetworkKind::Main => 0,
-        NetworkKind::Test => 1,
-    });
-    bytes.push(threshold);
-    bytes.extend_from_slice(&records.concat());
-    sha256::Hash::hash(&bytes).to_byte_array()
 }
 
 /// A several-key wallet's balance as one sync of both its chains found it. Not `HotWalletSnapshot`, because a vault's
@@ -14365,35 +14335,6 @@ pub(crate) mod tests {
             .iter()
             .map(|key| key.xpub.to_string())
             .collect()
-    }
-
-    // The bytes `vault_id` gave before the descriptor engine named several-key scan files, read off that build: every
-    // several-key scan file a phone keeps, Wallet 1's included, is named by them.
-    #[test]
-    fn the_several_key_scan_id_is_the_vault_id_every_saved_wallet_file_is_named_by() {
-        use crate::script::tests::{three_of_five, two_of_three};
-        let hex = |id: WalletId| id.iter().map(|b| format!("{b:02x}")).collect::<String>();
-        for (descriptor, m, expected) in [
-            (
-                two_of_three(),
-                2,
-                "ac6839184083edb3851086c9b784b722c68da5c0f7cda92247c4ffcbcfe20442",
-            ),
-            (
-                three_of_five(),
-                3,
-                "66e36a8bcf567bf567832d11689823c31a556317015c0e54bea8fa77d6af7b34",
-            ),
-        ] {
-            let listed = xpubs_of(&descriptor);
-            let keys = crate::parse_and_check_xpubs(&listed).unwrap();
-            assert_eq!(hex(vault_id(&keys, m)), expected, "{descriptor}");
-            assert_eq!(
-                hex(Multisig::new(&listed, m).unwrap().id()),
-                expected,
-                "{descriptor}"
-            );
-        }
     }
 
     // Gate until the vault engine goes: a described several-key wallet's Send screen prices a payment at the size the
