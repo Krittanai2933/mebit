@@ -13623,6 +13623,69 @@ pub(crate) mod tests {
         }
     }
 
+    /// `answer` is the refusal of mainnet, which this build has no host for, word for word.
+    #[track_caller]
+    pub(crate) fn refused_as_mainnet<T: std::fmt::Debug>(answer: Result<T, MobileSignerError>) {
+        assert!(
+            matches!(&answer, Err(MobileSignerError::InvalidPsbtJson(why))
+                if why == "mainnet Esplora is not enabled in this build"),
+            "{answer:?}"
+        );
+    }
+
+    // A described wallet on mainnet is refused before the store or any host hears of it, by each read the app makes.
+    #[test]
+    fn wallet_snapshot_refuses_mainnet_before_any_request() {
+        let fake = Fake::new();
+        refused_as_mainnet(described_snapshot(
+            &EsploraSource(&Reads(&|url| fake.get(url))),
+            &crate::script::tests::two_of_three(),
+            KeyNetwork::Main,
+            &|| fake.now(),
+            &fake.store,
+        ));
+        assert_eq!(fake.requests(), 0);
+    }
+
+    #[test]
+    fn wallet_balance_refuses_mainnet_before_any_request() {
+        let fake = Fake::new();
+        refused_as_mainnet(described_balance(
+            &EsploraSource(&Reads(&|url| fake.get(url))),
+            &crate::script::tests::two_of_three(),
+            KeyNetwork::Main,
+            &|| fake.now(),
+            &fake.store,
+        ));
+        assert_eq!(fake.requests(), 0);
+    }
+
+    #[test]
+    fn wallet_history_refuses_mainnet_before_any_request() {
+        let fake = Fake::new();
+        refused_as_mainnet(described_history(
+            &EsploraSource(&Reads(&|url| fake.get(url))),
+            &crate::script::tests::two_of_three(),
+            KeyNetwork::Main,
+            &|| fake.now(),
+            &fake.store,
+        ));
+        assert_eq!(fake.requests(), 0);
+    }
+
+    #[test]
+    fn wallet_tx_detail_refuses_mainnet_before_any_request() {
+        let fake = Fake::new();
+        refused_as_mainnet(described_detail(
+            &EsploraSource(&Reads(&|url| fake.get(url))),
+            &crate::script::tests::two_of_three(),
+            KeyNetwork::Main,
+            &id('5'),
+            &fake.store,
+        ));
+        assert_eq!(fake.requests(), 0);
+    }
+
     // The id names each wallet's scan file. These are the bytes `Account::id` gave before the scan took an
     // `AddressSource`, read off that build, so every file a phone keeps today is found again.
     #[test]

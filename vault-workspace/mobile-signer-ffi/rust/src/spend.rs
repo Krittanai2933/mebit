@@ -10,19 +10,21 @@ use std::time::SystemTime;
 use bitcoin::absolute::LockTime;
 use bitcoin::bip32::{Fingerprint, Xpriv, Xpub};
 use bitcoin::key::TapTweak;
-use bitcoin::psbt::{self, Psbt};
-use bitcoin::secp256k1::{Message, Secp256k1};
+use bitcoin::psbt::{self, Psbt, SigningKeys, SigningKeysMap};
+use bitcoin::secp256k1::{All, Message, Secp256k1};
 use bitcoin::sighash::{EcdsaSighashType, Prevouts, SighashCache, TapSighashType};
 use bitcoin::transaction::{Version, predict_weight};
-use bitcoin::{Address, Network, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
+use bitcoin::{
+    Address, Network, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness, ecdsa,
+};
 use miniscript::psbt::PsbtExt;
 use vault_core::keys::generate_seed;
 
 use crate::chain::{ChainSource, EsploraSource, check_network};
 use crate::hot_wallet::{
     AddressSource, Chain, MAX_FEE_RATE, MAX_STANDARD_VSIZE, MIN_FEE_RATE, Plan, PreparedSend,
-    SCAN_STORE, SendAmount, Signed, check_node_rate, checked, complete, dust_floor, mnemonic_from,
-    plan_from, prepared, proven_parents, testnet4, vsize,
+    SCAN_STORE, SendAmount, Signed, check_node_rate, checked, complete, dust_floor, full_size,
+    mnemonic_from, plan_from, prepared, proven_parents, testnet4, vsize,
 };
 use crate::scan::GAP;
 use crate::scan_store::ScanStore;
@@ -195,11 +197,12 @@ fn signed_with(
         return Ok(shown);
     }
     let Shown { mut psbt, review } = shown;
-    psbt.sign(master, &secp).map_err(|(_, errors)| {
+    let used = psbt.sign(master, &secp).map_err(|(_, errors)| {
         MobileSignerError::InvalidPsbtJson(format!(
             "signatures: the phrase's key did not sign: {errors:?}"
         ))
     })?;
+    full_sized(&mut psbt, &used, master, &secp)?;
     let after = as_shown(wallet, psbt, &review.unsigned_txid, store)?;
     if !after.review.signed.contains(&fingerprint) {
         return Err(MobileSignerError::InvalidPsbtJson(format!(
@@ -207,6 +210,47 @@ fn signed_with(
         )));
     }
     Ok(after)
+}
+
+/// `master`'s signatures on the several-key inputs `Psbt::sign` signed (`used`), made again by `full_size` at the 72 bytes a
+/// draft prices each. RFC 6979's own, `full_size`'s first try, is a byte shorter about half the time, and a payment under
+/// its price can be over the node's 10,000 sat/vB limit at finish. Taproot and one-key inputs keep `Psbt::sign`'s.
+fn full_sized(
+    psbt: &mut Psbt,
+    used: &SigningKeysMap,
+    master: &Xpriv,
+    secp: &Secp256k1<All>,
+) -> Result<(), MobileSignerError> {
+    let failed = |e: String| MobileSignerError::InvalidPsbtJson(format!("signatures: {e}"));
+    let mut cache = SighashCache::new(psbt.unsigned_tx.clone());
+    for (&i, keys) in used {
+        let SigningKeys::Ecdsa(keys) = keys else {
+            continue;
+        };
+        if psbt.inputs[i].witness_script.is_none() {
+            continue;
+        }
+        let (message, sighash_type) = psbt
+            .sighash_ecdsa(i, &mut cache)
+            .map_err(|e| failed(e.to_string()))?;
+        for key in keys {
+            // Review made every origin the wallet's own, so `key` is listed; were it not, `as_shown` refuses its signature.
+            let Some((_, path)) = psbt.inputs[i].bip32_derivation.get(&key.inner) else {
+                continue;
+            };
+            let mut child = master
+                .derive_priv(secp, path)
+                .map_err(|e| failed(e.to_string()))?;
+            let signature = full_size(secp, &message, &child.private_key);
+            child.private_key.non_secure_erase();
+            let signature = ecdsa::Signature {
+                signature: signature?,
+                sighash_type,
+            };
+            psbt.inputs[i].partial_sigs.insert(*key, signature);
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn parse(psbt: &str) -> Result<Psbt, MobileSignerError> {
@@ -753,7 +797,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::address_type::AddressType;
     use crate::chain::Transport;
-    use crate::hot_wallet::tests::{Fake, SOMEONE};
+    use crate::hot_wallet::tests::{Fake, SOMEONE, refused_as_mainnet};
     use crate::hot_wallet::vsize;
     use crate::scan_store::tests::Folder;
     use crate::script::tests::{
@@ -1784,6 +1828,57 @@ pub(crate) mod tests {
         assert_eq!(all.payments[0].sats + all.fee_sats, 70_000);
         let mainnet = wallet_review(descriptor, KeyNetwork::Main, all.psbt).unwrap_err();
         assert!(mainnet.to_string().contains("mainnet"), "{mainnet}");
+    }
+
+    // A mainnet destination passes the refusals that come before the network's, so the network is what refuses.
+    #[test]
+    fn wallet_draft_refuses_mainnet_before_any_request() {
+        let descriptor = two_of_three();
+        let fake = funded(&descriptor);
+        refused_as_mainnet(draft(
+            &EsploraSource(&WithMulti(&fake)),
+            &descriptor,
+            KeyNetwork::Main,
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+            SendAmount::Exact(30_000),
+            RATE,
+            &|| fake.now(),
+            &fake.store,
+        ));
+        assert_eq!(fake.requests(), 0);
+    }
+
+    // Review, signing and finishing ask no host. On mainnet they refuse before the PSBT is read, so text that is no PSBT
+    // gets the same refusal.
+    #[test]
+    fn wallet_review_refuses_mainnet_before_reading_the_psbt() {
+        refused_as_mainnet(wallet_review(
+            two_of_three(),
+            KeyNetwork::Main,
+            "not a psbt".into(),
+        ));
+    }
+
+    #[test]
+    fn wallet_sign_with_words_refuses_mainnet_before_reading_the_psbt() {
+        refused_as_mainnet(wallet_sign_with_words(
+            two_of_three(),
+            KeyNetwork::Main,
+            "not a psbt".into(),
+            "0".repeat(64),
+            phrase(0),
+            String::new(),
+        ));
+    }
+
+    #[test]
+    fn wallet_finish_refuses_mainnet_before_reading_the_psbt() {
+        refused_as_mainnet(wallet_finish(
+            two_of_three(),
+            KeyNetwork::Main,
+            "not a psbt".into(),
+            "0".repeat(64),
+        ));
     }
 
     #[test]
@@ -2910,6 +3005,8 @@ pub(crate) mod tests {
             .unwrap();
             assert_eq!(ready.txid, txid);
             let tx: Transaction = bitcoin::consensus::encode::deserialize_hex(&ready.hex).unwrap();
+            let wallet = Described::parse(&descriptor).unwrap();
+            assert_eq!(tx.weight(), priced(&wallet, &tx), "{m}-of-{}", among.len());
             let prevout = unsigned.inputs[0].witness_utxo.as_ref().unwrap();
             assert!(spends(&tx, 0, prevout), "{m}-of-{}", among.len());
             if m == 2 {
@@ -2993,5 +3090,84 @@ pub(crate) mod tests {
                 );
             }
         }
+    }
+
+    /// The weight the fee of `tx` was sized for: each input spent as `wallet` prices it.
+    fn priced(wallet: &Described, tx: &Transaction) -> bitcoin::Weight {
+        predict_weight(
+            vec![wallet.spend_weight(); tx.input.len()],
+            tx.output.iter().map(|o| o.script_pubkey.len()),
+        )
+    }
+
+    /// `paid`'s wallet drafts `amount` to `SOMEONE` at `rate`, keys 1 and 2 sign it as this phone does once the words made
+    /// their master key, and the payment is finished. Returns the draft, with the refusal or the weight that differs from
+    /// the price, if any.
+    fn finished_at(paid: &Paid, amount: u64, rate: u64) -> (SpendReview, Option<String>) {
+        let store = &paid.fake.store;
+        let drafted = draft(
+            &EsploraSource(&WithMulti(&paid.fake)),
+            &two_of_three(),
+            KeyNetwork::Test,
+            SOMEONE,
+            SendAmount::Exact(amount),
+            rate,
+            &|| paid.fake.now(),
+            store,
+        )
+        .unwrap();
+        let unsigned = parse(&drafted.psbt).unwrap();
+        let mut shown = as_shown(&paid.wallet, unsigned, &drafted.unsigned_txid, store).unwrap();
+        for key in [1, 2] {
+            shown = signed_with(&paid.wallet, shown, &soft_master(key), store).unwrap();
+        }
+        let wrong = match finished(&paid.wallet, &shown) {
+            Err(e) => Some(format!("{amount}: {e}")),
+            Ok(sent) => {
+                let (weight, priced) = (sent.tx.weight(), priced(&paid.wallet, &sent.tx));
+                (weight != priced).then(|| format!("{amount}: weighs {weight}, priced {priced}"))
+            }
+        };
+        (drafted, wrong)
+    }
+
+    // A payment at the top rate a draft takes is priced at a 72-byte signature per key. A key of this phone signs at that
+    // size, so the bytes weigh what the fee was sized for and stay inside the node's 10,000 sat/vB limit. RFC 6979's own
+    // signature is a byte shorter about half the time, and one byte under the price is over that limit.
+    #[test]
+    fn a_several_key_payment_at_the_top_rate_finishes_once_m_phone_keys_signed() {
+        let paid = paid();
+        let wrong: Vec<String> = (60_000_000..60_000_012)
+            .filter_map(|amount| finished_at(&paid, amount, MAX_FEE_RATE).1)
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "{} of 12:\n{}",
+            wrong.len(),
+            wrong.join("\n")
+        );
+    }
+
+    // Below the top rate, a leftover too small for change goes into the fee and lifts the rate on the priced size close to
+    // the node's limit, so these payments too finish only at the size they were priced at.
+    #[test]
+    fn a_several_key_payment_whose_leftover_went_to_the_fee_finishes_once_m_phone_keys_signed() {
+        let paid = paid();
+        let wrong: Vec<String> = (87_495_000..87_495_012)
+            .filter_map(|amount| {
+                let (drafted, wrong) = finished_at(&paid, amount, 8_600);
+                assert_eq!(
+                    drafted.change_sats, 0,
+                    "{amount}: the leftover went to the fee"
+                );
+                wrong
+            })
+            .collect();
+        assert!(
+            wrong.is_empty(),
+            "{} of 12:\n{}",
+            wrong.len(),
+            wrong.join("\n")
+        );
     }
 }
