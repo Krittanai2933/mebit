@@ -4,6 +4,7 @@ internal fun parseExternalKeyPaste(text: String): PendingKey {
     val trimmed = text.trim()
     if (trimmed.isEmpty()) throw IllegalArgumentException("ว่าง")
     val cosigner = if (trimmed.startsWith("BSMS 1.0")) parseBsmsCosigner(trimmed) else parsePlainCosigner(trimmed)
+    bip48Refusal(cosigner.derivationPath, cosigner.xpub)?.let { throw IllegalArgumentException("$NOT_FOR_MULTISIG · $it") }
     return PendingKey(
         label = "mebit · เครื่องอื่น · ${cosigner.fingerprint}",
         fingerprint = cosigner.fingerprint,
@@ -165,4 +166,58 @@ private fun requireAccountXpub(token: String): String {
         throw IllegalArgumentException("xpub ไม่ถูกต้อง")
     }
     return xpub
+}
+
+private const val NOT_FOR_MULTISIG = "ใช้กุญแจนี้สร้าง Wallet แบบ Multisig (Native SegWit) ไม่ได้"
+private const val BIP48_PATH = "m/48'/1'/N'/2'"
+private val bip48NativeSegwit = Regex("^m/48'/1'/\\d{1,9}'/2'$")
+private val bip48NestedSegwit = Regex("^m/48'/1'/\\d{1,9}'/1'$")
+private val singleKeyPurpose = Regex("^m/(44|49|84|86)'(/|$)")
+
+/**
+ * Why a pasted key is not a key of a several-key wallet, or null when it is one. In this testnet build that key is a tpub at
+ * m/48'/1'/N'/2', BIP48's Native SegWit (P2WSH) script type, the rule script.rs holds such a key to, so the paste refuses what
+ * Choose Keys could never make into a wallet.
+ */
+private fun bip48Refusal(path: String, xpub: String): String? {
+    val prefix = xpub.take(4)
+    val purpose = singleKeyPurpose.find(path)?.groupValues?.get(1)
+    return when {
+        prefix == "ypub" || prefix == "upub" -> "$prefix เป็นกุญแจของกระเป๋ากุญแจเดียวตาม BIP49 · ต้องเป็น tpub ที่ $BIP48_PATH ตาม BIP48"
+        prefix == "zpub" || prefix == "vpub" -> "$prefix เป็นกุญแจของกระเป๋ากุญแจเดียวตาม BIP84 · ต้องเป็น tpub ที่ $BIP48_PATH ตาม BIP48"
+        prefix == "xpub" -> "xpub เป็นกุญแจ mainnet · แอปนี้ใช้ tpub ของ testnet ที่ $BIP48_PATH"
+        purpose != null -> "$path เป็น path ของกระเป๋ากุญแจเดียวตาม BIP$purpose · ต้องเป็น $BIP48_PATH ตาม BIP48"
+        bip48NestedSegwit.matches(path) -> "$path ลงท้ายด้วย 1' คือ Nested SegWit (P2SH-P2WSH) · ต้องลงท้ายด้วย 2' คือ Native SegWit (P2WSH)"
+        !bip48NativeSegwit.matches(path) -> "ต้องเป็น $BIP48_PATH ตาม BIP48 แต่กุญแจนี้อยู่ที่ $path"
+        !sitsAtNativeSegwitMultisig(xpub) -> "xpub นี้ไม่ได้อยู่ที่ $path · คัดลอก xpub และ path จากกุญแจดอกเดียวกัน"
+        else -> null
+    }
+}
+
+private const val BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+/**
+ * Whether the xpub's own depth and child number are those of m/48'/1'/N'/2' (depth 4, child 2'), as script.rs checks, so a key
+ * copied from another level does not pass under a path it does not sit at.
+ * shortcut: the base58 checksum is not checked here; script.rs checks it before Choose Keys makes the wallet.
+ */
+private fun sitsAtNativeSegwitMultisig(xpub: String): Boolean {
+    val bytes = mutableListOf<Int>()
+    for (c in xpub) {
+        var carry = BASE58.indexOf(c)
+        if (carry < 0) return false
+        for (i in bytes.indices) {
+            carry += bytes[i] * 58
+            bytes[i] = carry and 0xff
+            carry = carry shr 8
+        }
+        while (carry > 0) {
+            bytes.add(carry and 0xff)
+            carry = carry shr 8
+        }
+    }
+    if (bytes.size != 82) return false
+    val serialized = bytes.asReversed()
+    val child = (9..12).fold(0L) { acc, i -> (acc shl 8) or serialized[i].toLong() }
+    return serialized[4] == 4 && child == 0x80000002L
 }

@@ -7,6 +7,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -172,6 +173,8 @@ fun PairMebitOtherScreen(
     onOpenCatalog: () -> Unit,
 ) {
     var paste by remember { mutableStateOf("") }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
     MebitScreen(
         eyebrow = "PAIR DEVICE",
         title = "จับคู่เครื่องอื่น",
@@ -194,6 +197,9 @@ fun PairMebitOtherScreen(
         )
         Spacer(modifier = Modifier.height(12.dp))
         PrimaryCta("นำเข้าจากข้อความ", "cta_pair_paste", {
+            // The refusal line sits under the buttons, where the keyboard would cover it. On iOS clearing the focus alone leaves the keyboard up.
+            keyboard?.hide()
+            focus.clearFocus(force = true)
             if (store.startMebitOtherFromPaste(paste)) onPaired()
         })
         Spacer(modifier = Modifier.height(8.dp))
