@@ -84,7 +84,7 @@ internal fun stackAfterAdd(stack: List<Stop>, otherwise: MovieRoute): List<Stop>
  */
 internal fun stackAfterVaultSend(stack: List<Stop>): List<Stop> {
     val place = stack.last().place
-    val below = stack.dropLastWhile { it.route == MovieRoute.M1SendVault || it.route == MovieRoute.M2CollectSignatures || it.route == MovieRoute.M8ReviewVault }
+    val below = stack.dropLastWhile { it.route == MovieRoute.M1SendVault || it.route == MovieRoute.M2CollectSignatures || it.route == MovieRoute.M3SignOnDevice || it.route == MovieRoute.M8ReviewVault }
     val detail = below.indexOfLast { it.route == MovieRoute.VaultDetail }
     val home = if (detail >= 0) below.take(detail + 1) else stackAfterOpen(below.ifEmpty { listOf(Stop(MovieRoute.VaultList, place)) }, Stop(MovieRoute.VaultDetail, place))
     return home + Stop(MovieRoute.M9SentVault, place)

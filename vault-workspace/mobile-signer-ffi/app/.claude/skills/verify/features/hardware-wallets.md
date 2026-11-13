@@ -2,6 +2,8 @@
 
 A one-key wallet whose key is on a Jade or a Trezor Safe 7 is created from Policy's single-sig card (Penpot 3.1.1, 3.2.2 or 3.2.3, 3.3.2, 2.3.3 to 2.3.6, 2.4.1, 3.5.2), listed after the phone's wallets (1.8.1), opened on a Home like the phone wallet's (4.1.5, 4.1.5.1), and pays through Send, Review 4.5.2, Sign 4.5.3 or 4.5.4, the confirmed 4.5.5 and the slip 4.6. A simulator has no Bluetooth, so a debug build launched with `MEBIT_FAKE_DEVICE=1` reaches a fake Jade and a fake Safe 7 that hold the public test phrase (fingerprint 73c5 da0a) and sign with it. The fake Safe 7 asks for any six digits until it is paired once, then connects with the pairing the phone kept, and forgets it at a relaunch.
 
+A Jade or a Safe 7 key of a several-key wallet signs on its own screen from 5.2 (Penpot 5.3.2 and 5.3.3, "ลายเซ็นที่ k จาก m"), and the signature counts toward m like a phone key's. A Jade registers the wallet at its first signature, as a fourth step (5.3.2.0), with no button of its own. The fake device's behaviour at each signature is picked with a second launch variable.
+
 ## Sub-features
 
 - `hw-choose-key` Choose Key (3.2.1 to 3.2.3) offers this phone and every confirmed Jade or Safe 7 key, one pick at a time, with the line naming the device.
@@ -14,11 +16,16 @@ A one-key wallet whose key is on a Jade or a Trezor Safe 7 is created from Polic
 - `hw-receive` Receive with the wallet's address and no backup gate.
 - `hw-send` Send, Review 4.5.2 with เซ็นบน Jade, Sign 4.5.3 then 4.5.5 with ส่งธุรกรรม.
 - `hw-remove` the card's ⋯ removes it after 1.8.8's sheet and the owner check.
+- `hw-m3-states` the debug catalog's SIGN SAMPLE entries open each state of 5.3.2 to 5.7.3 with the boards' sample data: showing, confirmed, registering, rejected, connection lost, registration declined, Jade cannot register, not ready, answer refused, two devices.
+- `hw-m3-live` 5.2's outlined เซ็น on a Jade or Trezor row opens the sign screen, the fake registers a Jade once and signs, and the row reads "เซ็นบน Jade · HH:MM" with เซ็นแล้ว ✓.
+- `hw-m3-script` `MEBIT_FAKE_SCRIPT` makes the fake sign, decline, drop, decline the registration, give a wrong answer or take long, one word per signature.
 
 ## How to get to it (user POV)
 
 - Wallet list + → Policy (กระเป๋าเดี่ยว) → ต่อไป เลือกกุญแจ → Choose Key. A Jade or Safe 7 key must be on the Keyring first: tab กุญแจ → + → Hardware wallet.
 - Wallet list → the card กระเป๋า Jade → Home → รับ or ส่ง.
+- Several-key wallet → ส่ง → 5.1 → ตรวจสอบ → 5.2 → เซ็น on a Jade or Trezor row.
+- Debug link → the last entries of the catalog, SIGN SAMPLE · …
 
 ## Driving it with verify.sh
 
@@ -41,10 +48,15 @@ Steps, each a shot:
 - **กระเป๋า Trezor, pairing remembered.** In the same run (the fake Safe 7 still holds the pairing): Wallet list + → Policy → single-sig → Choose Key → the Safe 7's row → Address Type → `ios-tap "id:hw_address_type_taproot"` (both fakes hold one phrase, so Native SegWit would be กระเป๋า Jade's addresses again and Confirm Key would refuse it as Wallet นี้อยู่ในเครื่องนี้แล้ว · กระเป๋า Jade) → `ios-tap "id:cta_hw_address_type"`. The card shows `id:hw_pairing_kept` (2.3.5), and the steps say กด Allow บนหน้าจอ Trezor. `ios-tap "id:cta_hw_trezor"`: no code field shows, and Confirm Key follows. Save, then Home of กระเป๋า Trezor, Send to Review (เซ็นบน Trezor), Sign (4.5.4) to the confirmed screen. Shots `hw-read-safe7-kept`, `hw-trezor-confirmed`. A run relaunched with the switch shows 2.3.6 (`id:hw_pairing_forgot`) on the next Safe 7 connect.
 - **Remove.** On the list, `ios-tap "id:cta_more_hw_1"`, then the menu's ลบ Wallet, `id:dialog_remove_wallet` reads ลบกระเป๋า Jade ออกจากเครื่องนี้ไหม and กระเป๋าจะถูกลบออกจากเครื่องนี้ · Jade ยังเก็บกุญแจนี้ไว้. `id:cta_remove_confirm`, then Face ID, and the card leaves the list. Shot `hw-remove`.
 
+- **Several-key states, no device needed.** `ios-tap "id:open_catalog"`, then `ios-tap "id:catalog_sign_<tag>"` (the first tap only scrolls the entry into view, so repeat it until `ios-see "id:screen_send/m3"` passes). Tags: `jade_showing` (5.3.2), `trezor_showing` (5.3.3), `jade_confirmed` (5.4.2), `trezor_confirmed` (5.4.3), `jade_registering` (5.3.2.0, four steps and `id:hw_sign_registration`), `jade_rejected` (5.3.2.1), `trezor_lost` (5.3.3.1), `registration_declined` (5.3.2.2), `cannot_register` (5.3.2.3), `jade_not_ready` (5.3.2.4), `answer_refused` (5.3.x.5), `two_devices` (5.3.x.6). Each shows `id:hw_sign_status` (the pill) and, for a failure, `id:hw_sign_failed_line`. Shots named by board. The proposal failures show the warning bar and end the step list at the step that failed.
+- **Pick the fake's behaviour.** Next to the switch: `SIMCTL_CHILD_MEBIT_FAKE_DEVICE=1 SIMCTL_CHILD_MEBIT_FAKE_SCRIPT=decline,sign xcrun simctl launch --terminate-running-process "$UDID" com.mebit.app`. Words, one per signature and then sign: `sign`, `slow`, `decline`, `drop`, `registration_declined`, `wrong_answer`. On Android `--es MEBIT_FAKE_SCRIPT decline,sign` beside the other extra.
+- **Live 5.2 (needs coins).** A several-key wallet whose keys include the fake Jade's (fingerprint 73c5 da0a) and holds testnet4 coins: 5.1 → ตรวจสอบ → 5.2, `ios-tap "id:cta_m2_sign_<row>"` on the Jade row opens `id:screen_send/m3`. The first time, the steps show four with `id:hw_sign_registration` for about 3 s, then `id:hw_sign_details` for about 3 s, then ยืนยันแล้ว and `id:cta_m3_continue`. ดำเนินการต่อ returns to 5.2, where `id:m2_signed_<row>` shows and `id:m2_signed_at_<row>` follows "เซ็นบน Jade". A second signature of the same wallet shows no registration step until a relaunch. With `decline` the title is อุปกรณ์ปฏิเสธการเซ็น and ลองอีกครั้ง signs. Stop before ส่งธุรกรรม: do not broadcast from a simulator. Not driven in the run that wrote this recipe, because no funded several-key wallet holding the fake's key was at hand.
+
 ## Gotchas
 
 - The rows of Choose Key carry the Keyring's key ids (`pick_<key id>`); read them from `idb ui describe-all` on the Keyring or Choose Key.
 - Taps below y 800 on a simulator are lost: scroll first. The debug link floats over the bottom centre, so tap a wide button at its left end.
+- Back or ยกเลิกการเซ็น while a device request is still out leaves the sign screen at once, but the send stays claimed until the device answers: 5.2 then shows `id:m2_busy` (รอให้การเซ็นที่ค้างอยู่จบก่อน) and holds its buttons.
 - The fake signs only for the public phrase. A wallet made from any other key is refused on Sign with Fingerprint ไม่ตรง.
 - On Android the switch is the launch intent's extra: `adb shell am start -n com.mebit.app/.MainActivity --es MEBIT_FAKE_DEVICE 1`.
 - The fake's pairing lives in memory, so a relaunch makes it a Safe 7 that forgot this phone (2.3.6), while the phone still keeps the pairing in the Keychain.

@@ -33,3 +33,13 @@ actual fun rememberFakeDeviceSwitch(): Boolean {
         isDebuggable(context.applicationInfo.flags) && activity?.intent?.getStringExtra("MEBIT_FAKE_DEVICE") == "1"
     }
 }
+
+@Composable
+actual fun rememberFakeDeviceScript(): String? {
+    val context = LocalContext.current
+    val on = rememberFakeDeviceSwitch()
+    return remember(context, on) {
+        val activity = generateSequence(context) { (it as? ContextWrapper)?.baseContext }.filterIsInstance<Activity>().firstOrNull()
+        if (on) activity?.intent?.getStringExtra("MEBIT_FAKE_SCRIPT") else null
+    }
+}

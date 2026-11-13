@@ -113,6 +113,12 @@ class VaultSend internal constructor(
         }
     }
 
+    /** What a Jade registers for this wallet before it first signs, for 5.3.2.0's card, or null for a wallet it does not register. */
+    fun jadeRegistration(): com.mebit.ffi.signer.JadeRegistration? = com.mebit.ffi.signer.jadeWalletRegistration(descriptor, KeyNetwork.TEST)
+
+    /** The account path key [index] is read at, the same one Rust checks the device against. */
+    fun derivationOf(index: Int): String = shape.keys[index].path
+
     /** 5.1's form, blank at the normal tier and priced at the wallet's own size, 201 vB for a 2-of-3. */
     val draft: SendDraft = SendDraft(shape.typicalVsize.toLong())
 
@@ -475,25 +481,30 @@ internal const val KEY_ON_ANOTHER_PHONE = "กุญแจนี้อยู่�
 internal const val STAND_IN_KEY = "กุญแจจำลอง เซ็นไม่ได้"
 internal const val KEY_NOT_HERE = "ไม่พบกุญแจนี้ในเครื่อง"
 
-// Proposals awaiting the user's approval of the "(proposal)" Penpot boards: no board draws these lines yet.
+// The lines of the signing failures, as the approved boards 5.3.2.2 to 5.3.x.6 write them.
 
-/** A prepare, a broadcast or a signature tried while a signature holds the send. The screens hold every button meanwhile, so only a race meets it. */
+/** A prepare, a broadcast or a signature tried while a signature holds the send, and 5.2's line while a device still holds it after the user left its screen. */
 internal const val BUSY = "รอให้การเซ็นที่ค้างอยู่จบก่อน"
 
 /** More than one device of the kind in range, so the app cannot tell which one holds the key. */
 internal const val SEVERAL_DEVICES_LINE = "เจออุปกรณ์ชนิดเดียวกันมากกว่าหนึ่งเครื่อง ปิดเครื่องที่ไม่ใช้ แล้วลองใหม่"
+internal const val SEVERAL_DEVICES_NOTE = "ยังไม่มีอะไรถูกส่งไปที่อุปกรณ์ · เงินยังไม่ถูกส่ง"
 
-/** The device refused before it showed anything: a locked Jade, a wrong PIN, no internet for the PIN, or a busy device. */
-internal const val NOT_READY_LINE = "ปลดล็อก Jade ด้วย PIN บนตัวเครื่อง และให้มือถือต่ออินเทอร์เน็ต แล้วลองใหม่"
+/** The device refused before it showed anything: a locked device, a wrong PIN, no internet for a Jade's PIN, or a busy device. [word] names it. */
+internal fun notReadyLine(word: String): String = "ปลดล็อก $word ด้วย PIN บนตัวเครื่อง และให้มือถือต่ออินเทอร์เน็ต แล้วลองใหม่"
+internal const val NOT_READY_NOTE = "ไม่มีลายเซ็นถูกบันทึก · เงินยังไม่ถูกส่ง"
 
 /** The device answered, and mebit refused the answer: not the device's refusal. */
-internal const val ANSWER_REFUSED_LINE = "ลายเซ็นที่อุปกรณ์ส่งกลับมาไม่ตรงกับรายการที่คุณเห็น mebit จึงไม่นับ ไม่มีลายเซ็นถูกบันทึก"
+internal const val ANSWER_REFUSED_LINE = "ลายเซ็นที่อุปกรณ์ส่งกลับมาไม่ตรงกับรายการที่คุณเห็น mebit จึงไม่นับ"
+internal const val BAD_ANSWER_NOTE = "ไม่มีลายเซ็นถูกบันทึก · ลองเซ็นอีกครั้ง"
 
 /** The user declined the Jade's registration of the wallet. */
 internal const val REGISTRATION_DECLINED_LINE = "คุณกดปฏิเสธการลงทะเบียนบน Jade จึงยังเซ็นไม่ได้ ไม่มีลายเซ็นถูกบันทึก"
+internal const val REGISTRATION_DECLINED_NOTE = "Jade ต้องรู้จัก Wallet ก่อนจึงจะเซ็นได้ · ลองอีกครั้ง"
 
-/** The Jade cannot register the wallet: its list is full, another wallet holds the name, or the wallet has more than seven signers. */
-internal const val CANNOT_REGISTER_LINE = "Jade เต็ม หรือมี Wallet อื่นใช้ชื่อนี้อยู่แล้ว mebit จึงไม่เซ็น ไม่มีลายเซ็นถูกบันทึก"
+/** The Jade cannot register the wallet [name]: its list is full, another wallet holds the name, or the wallet has more than seven signers. */
+internal fun cannotRegisterLine(name: String): String = "Jade เต็ม หรือมี Wallet อื่นใช้ชื่อ $name อยู่แล้ว mebit จึงไม่เซ็น"
+internal const val CANNOT_REGISTER_NOTE = "ลบ Wallet ที่ไม่ใช้ออกจาก Jade แล้วลองใหม่"
 
 /**
  * The key of [vault]'s line in the vault guard file: 8 lowercase hex of SHA-256 over a tag and its receive address, the shape the guard file's

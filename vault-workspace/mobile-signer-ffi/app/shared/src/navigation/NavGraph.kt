@@ -40,7 +40,9 @@ import com.mebit.app.data.CreateWalletDraft
 import com.mebit.app.data.DeviceLink
 import com.mebit.app.data.FakeDevice
 import com.mebit.app.data.bleLink
+import com.mebit.app.data.KeySigner
 import com.mebit.app.data.fakeDeviceAllowed
+import com.mebit.app.data.fakeScript
 import com.mebit.app.data.HardwareAdd
 import com.mebit.app.data.HardwareRemoval
 import com.mebit.app.data.HardwareWallet
@@ -139,10 +141,13 @@ import com.mebit.app.feature.send.fiatLine
 import com.mebit.app.feature.send.homeBalanceText
 import com.mebit.app.feature.send.walletChoices
 import com.mebit.app.feature.send.CollectSignaturesScreen
+import com.mebit.app.feature.send.DeviceSample
+import com.mebit.app.feature.send.SignOnDeviceScreen
 import com.mebit.app.feature.send.VaultReviewScreen
 import com.mebit.app.feature.send.VaultSendScreen
 import com.mebit.app.feature.send.VaultSentScreen
 import com.mebit.app.rememberBiometrics
+import com.mebit.app.rememberFakeDeviceScript
 import com.mebit.app.rememberFakeDeviceSwitch
 import com.mebit.app.rememberIsDebugBuild
 import com.mebit.app.ui.components.LocalDebugLinkLift
@@ -189,8 +194,8 @@ internal fun MebitNavHost(
     var catalogOpen by remember { mutableStateOf(false) }
     // A simulator has no Bluetooth: a debug build launched with the switch reaches a fake Jade and Safe 7 in its place.
     val fakeSwitch = rememberFakeDeviceSwitch()
-    // shortcut: the fake always signs, since no launch switch picks its behaviour script yet; add one with the 5.3 screens' verify recipe.
-    val fake = remember(fakeSwitch) { if (fakeDeviceAllowed() && fakeSwitch) FakeDevice() else null }
+    val scriptText = rememberFakeDeviceScript()
+    val fake = remember(fakeSwitch, scriptText) { if (fakeDeviceAllowed() && fakeSwitch) FakeDevice(fakeScript(scriptText)) else null }
     val scan: suspend (WalletKind) -> List<FoundWallet> = fake?.let { it::scan } ?: { kind -> scanWallets(kind) }
     val openLink: (FoundWallet) -> DeviceLink = fake?.let { it::open } ?: ::bleLink
     val keyring = remember(vaults, wallets, pairings, fake) {
@@ -203,6 +208,9 @@ internal fun MebitNavHost(
     val quotes = remember { liveQuoteCache() }
     // One send from one several-key wallet, made new by every way into 5.1, so a payment and its signatures never outlive the visit.
     var vaultSend by remember { mutableStateOf<VaultSend?>(null) }
+    // The device row 5.2 opened 5.3.2 or 5.3.3 for, and the debug catalog's sample state of those screens, which shows none of a send.
+    var deviceSigner by remember { mutableStateOf<KeySigner.Device?>(null) }
+    var deviceSample by remember { mutableStateOf<DeviceSample?>(null) }
     // Import Seed's words and passphrase. They outlive the detour to Address Type and back, and a fresh draft replaces them once
     // the import goes on to the lock step or the user leaves Import Seed by its back chip. Memory only: never rememberSaveable,
     // which Android writes to disk.
@@ -867,7 +875,23 @@ internal fun MebitNavHost(
                         quotes = quotes,
                         // The owner check of the wallet in use, once per signature, as S5 asks before it signs.
                         confirmSign = { appLock.confirm(biometrics, session.appLockEnabled, "ยืนยันการเซ็นส่งเงิน") },
+                        onSignOnDevice = { device ->
+                            deviceSample = null
+                            deviceSigner = device
+                            navigate(MovieRoute.M3SignOnDevice)
+                        },
                         onReview = { navigate(MovieRoute.M8ReviewVault) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.M3SignOnDevice -> SignOnDeviceScreen(
+                        send = vaultSend,
+                        signer = deviceSigner,
+                        keyring = keyring.keys,
+                        nearest = { kind -> hardware.nearest(kind) },
+                        pairingKept = hardware.link::keeps,
+                        sample = deviceSample,
+                        onContinue = { goBack() },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
@@ -1067,10 +1091,27 @@ internal fun MebitNavHost(
                             .fillMaxWidth()
                             .clickable {
                                 catalogOpen = false
+                                deviceSample = null
                                 navigate(route)
                             }
                             .padding(horizontal = 24.dp, vertical = 12.dp)
                             .testTag("catalog_" + route.path),
+                    )
+                }
+                // The states of 5.3.2 to 5.7.3 with the boards' sample data, so each can be set beside its board with no device.
+                items(DeviceSample.entries, key = { "sample_" + it.tag }) { sample ->
+                    Text(
+                        text = "SIGN SAMPLE · " + sample.label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                catalogOpen = false
+                                deviceSample = sample
+                                navigate(MovieRoute.M3SignOnDevice)
+                            }
+                            .padding(horizontal = 24.dp, vertical = 12.dp)
+                            .testTag("catalog_sign_" + sample.tag),
                     )
                 }
             }

@@ -82,6 +82,16 @@ internal enum class FakeBehaviour {
 }
 
 /**
+ * Pure. The behaviours [text] names, comma separated and in order: sign, slow, decline, drop, registration_declined, wrong_answer, in any
+ * case, with a dash or no separator in the last two. A name it does not know is skipped, so a typo signs.
+ */
+internal fun fakeScript(text: String?): List<FakeBehaviour> =
+    text.orEmpty().split(',').mapNotNull { word ->
+        val name = word.trim().replace("_", "").replace("-", "")
+        FakeBehaviour.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
+    }
+
+/**
  * A stand-in for a Jade and a Safe 7 on a simulator or an emulator, which have no Bluetooth: one device of each kind in range, each holding
  * [PUBLIC_WORDS_12]. It gives the account key at every path the app reads, signs a wallet's payment with that key through
  * wallet_sign_with_words, and pairs as a Safe 7 does: it asks for its code (any six digits) until it holds this phone's pairing, then

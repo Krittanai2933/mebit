@@ -105,4 +105,14 @@ class FakeDeviceTest {
         assertFailsWith<BleException.Disconnected> { fake.link(WalletKind.JADE).signWalletPsbt(wallet, "psbt", "txid", dropped) }
         assertEquals(listOf("registering", "showing"), dropped.steps, "the declined registration was not kept")
     }
+
+    @Test
+    fun theLaunchSwitchNamesTheBehavioursInOrderAndSkipsATypo() {
+        assertEquals(
+            listOf(FakeBehaviour.Decline, FakeBehaviour.RegistrationDeclined, FakeBehaviour.WrongAnswer, FakeBehaviour.Slow, FakeBehaviour.Drop, FakeBehaviour.Sign),
+            fakeScript("decline, Registration_Declined,wrong-answer,SLOW,drop,sign"),
+        )
+        assertEquals(listOf(FakeBehaviour.Drop), fakeScript("dorp,drop"))
+        assertEquals(emptyList(), fakeScript(null))
+    }
 }

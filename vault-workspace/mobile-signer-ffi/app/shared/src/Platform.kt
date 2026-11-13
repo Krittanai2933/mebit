@@ -28,3 +28,10 @@ expect fun rememberIsDebugBuild(): Boolean
  */
 @Composable
 expect fun rememberFakeDeviceSwitch(): Boolean
+
+/**
+ * The fake device's behaviour script, comma separated ([com.mebit.app.data.fakeScript] reads it), from MEBIT_FAKE_SCRIPT next to the
+ * switch's own variable (SIMCTL_CHILD_MEBIT_FAKE_SCRIPT for xcrun simctl launch, a string extra on Android). Null without the switch.
+ */
+@Composable
+expect fun rememberFakeDeviceScript(): String?
