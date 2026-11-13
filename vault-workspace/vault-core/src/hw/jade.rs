@@ -35,6 +35,7 @@ use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, Xpub};
+use bitcoin::hashes::{Hash, sha256};
 use bitcoin::{Address, Network, NetworkKind, Psbt};
 use ciborium::Value;
 use miniscript::descriptor::{ShInner, Wildcard, WshInner};
@@ -145,6 +146,15 @@ pub enum JadeError {
         "mebit_e2e is not visible; Jade RPC cannot prove the slot empty across wallets; manually verify it and declare VerifiedEmpty"
     )]
     RegistrationRequired,
+
+    /// The name holds a different wallet. Never overwritten.
+    #[error("a different wallet is already registered under this name on the Jade")]
+    WalletNameTaken,
+
+    /// `register_multisig` answered with an error other than the user's decline: its list may be
+    /// full, or it refused the wallet or the name. Code and message are the Jade's own.
+    #[error("the Jade did not register the wallet: device error {code}: {message}")]
+    RegistrationFailed { code: i64, message: String },
 }
 
 /// `JADE_STATE` from `get_version_info` (`docs/index.rst`).
@@ -262,6 +272,12 @@ pub enum JadeEvent {
     /// keys: at least one, one for every signer key its inputs list, and no
     /// other change.
     SignedPsbt(Psbt),
+    /// The names `get_registered_multisigs` listed.
+    RegisteredMultisigs(Vec<String>),
+    /// The answer to [`JadeSession::request_registration`].
+    Registration(Registered),
+    /// The user confirmed on the Jade and the readback is this wallet.
+    WalletRegistered,
 }
 
 /// The protocol state of one connection to one Jade. See the module docs.
@@ -294,6 +310,8 @@ enum Op {
     Xpub(DerivationPath),
     Sign(Box<Signing>),
     Address(Box<AddressVerification>),
+    Names,
+    Wallet(Box<WalletOp>),
 }
 
 const E2E_MULTISIG_NAME: &str = "mebit_e2e";
@@ -571,13 +589,21 @@ impl JadeSession {
             outcome,
             ..
         } = reply;
-        let result = outcome?;
+        let result = match outcome {
+            Err(JadeError::Rpc { code, message }) if matches!(&op, Op::Wallet(w) if w.step == WalletStep::Write) =>
+            {
+                return Err(JadeError::RegistrationFailed { code, message }.into());
+            }
+            outcome => outcome?,
+        };
         match op {
             Op::VersionInfo => Ok(JadeEvent::VersionInfo(VersionInfo::parse(result)?)),
             Op::Unlock => self.on_unlock(result),
             Op::Xpub(path) => Ok(JadeEvent::Xpub(parse_xpub(result, self.network, &path)?)),
             Op::Sign(signing) => self.on_signed_piece(*signing, seqnum, seqlen, result),
             Op::Address(address) => self.on_address(*address, result),
+            Op::Names => self.on_names(result),
+            Op::Wallet(wallet) => self.on_wallet(*wallet, result),
         }
     }
 
@@ -1306,6 +1332,264 @@ fn unsigned(value: &Value, name: &str) -> Result<u64, JadeError> {
         .ok_or_else(|| protocol(format!("{name} is not an unsigned integer")))
 }
 
+/// The most characters a Jade takes for a multisig name: 15. On a Jade Core (firmware 1.0.41,
+/// 2026-11-14) a 16-character name was refused at once with -32602 "Missing or invalid multisig
+/// name parameter", and a 15-character one with a dash was shown in full and registered.
+pub const JADE_WALLET_NAME_LIMIT: usize = 15;
+
+/// A several-key wallet as a Jade registers it, built by [`WalletRegistration::of`].
+///
+/// The name is `mebit`, `{m}of{n}`, `-` and the lowercase hex of SHA-256 over the wallet's
+/// canonical descriptor (keys sorted, no branch, no checksum), cut so the whole name fits
+/// [`JADE_WALLET_NAME_LIMIT`]. The same wallet gets the same name on every phone.
+#[derive(Clone, Debug)]
+pub struct WalletRegistration {
+    name: String,
+    threshold: usize,
+    signers: Vec<Fingerprint>,
+    descriptor: Value,
+}
+
+impl WalletRegistration {
+    /// `wsh(sortedmulti)` over BIP-48 P2WSH account keys of `network`. Refuses anything else,
+    /// and more than seven signers, which a Jade cannot register.
+    pub fn of(
+        descriptor: &Descriptor<DescriptorPublicKey>,
+        network: Network,
+    ) -> Result<Self, JadeError> {
+        let Descriptor::Wsh(script) = descriptor else {
+            return Err(invalid_address("only wsh(sortedmulti) can be registered"));
+        };
+        let WshInner::SortedMulti(multisig) = script.as_inner() else {
+            return Err(invalid_address("only wsh(sortedmulti) can be registered"));
+        };
+        if multisig.pks().len() > 7 {
+            return Err(invalid_address(
+                "at most seven independent signers are supported",
+            ));
+        }
+        let mut keys = multisig
+            .pks()
+            .iter()
+            .map(|key| AddressKey::new(key, 48, network))
+            .collect::<Result<Vec<_>, _>>()?;
+        for (index, key) in keys.iter().enumerate() {
+            if keys[..index].iter().any(|earlier| {
+                earlier.fingerprint == key.fingerprint || earlier.account == key.account
+            }) {
+                return Err(invalid_address("duplicate signer identity or account key"));
+            }
+            if key.branch != keys[0].branch {
+                return Err(invalid_address(
+                    "all signers must use the same receive or change branch",
+                ));
+            }
+        }
+        keys.sort_by_key(|key| (key.fingerprint, key.account));
+        let threshold = multisig.k();
+        let canonical = format!(
+            "wsh(sortedmulti({threshold},{}))",
+            keys.iter()
+                .map(|key| format!("[{}/{}]{}", key.fingerprint, key.origin, key.account))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let hex = sha256::Hash::hash(canonical.as_bytes()).to_string();
+        let head = format!("mebit{threshold}of{}-", keys.len());
+        let keep = JADE_WALLET_NAME_LIMIT.saturating_sub(head.len());
+        Ok(Self {
+            name: format!("{head}{}", &hex[..keep]),
+            threshold,
+            signers: keys.iter().map(|key| key.fingerprint).collect(),
+            descriptor: map([
+                ("variant", text("wsh(multi(k))")),
+                ("sorted", Value::Bool(true)),
+                ("threshold", uint(threshold as u64)),
+                (
+                    "signers",
+                    Value::Array(keys.iter().map(AddressKey::registration).collect()),
+                ),
+            ]),
+        })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Replaces the derived name. For the device check, which tries other lengths; the app uses
+    /// the derived one.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    pub fn threshold(&self) -> usize {
+        self.threshold
+    }
+
+    /// In the order the Jade lists them on its registration screen.
+    pub fn signers(&self) -> &[Fingerprint] {
+        &self.signers
+    }
+
+    /// Whether a `descriptor` read back from the Jade is exactly this wallet.
+    pub fn matches(&self, readback: &Value) -> bool {
+        same_registration(readback, &self.descriptor)
+    }
+}
+
+/// What a Jade holds under a wallet's name, as [`JadeEvent::Registration`] reports it. A name
+/// holding another wallet is [`JadeError::WalletNameTaken`], never a value here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Registered {
+    /// This wallet, exactly.
+    Same,
+    /// Nothing visible under this name. The Jade hides other seeds' records, so a register could
+    /// still overwrite one of those; with a content-derived name that takes a collision.
+    Absent,
+}
+
+#[derive(PartialEq)]
+enum WalletStep {
+    List,
+    Read,
+    Write,
+    Readback,
+}
+
+struct WalletOp {
+    wallet: WalletRegistration,
+    step: WalletStep,
+}
+
+fn parse_named_registration(result: Value, name: &str) -> Result<Value, JadeError> {
+    let Value::Map(fields) = result else {
+        return Err(protocol("get_registered_multisig result is not a map"));
+    };
+    if field(&fields, "multisig_name").and_then(Value::as_text) != Some(name) {
+        return Err(JadeError::RegistrationMismatch);
+    }
+    field(&fields, "descriptor")
+        .cloned()
+        .ok_or(JadeError::RegistrationMismatch)
+}
+
+impl JadeSession {
+    /// The names of the multisigs the unlocked Jade lists (`get_registered_multisigs`).
+    pub fn request_registered_multisigs(&mut self) -> Result<Vec<u8>, VaultCoreError> {
+        let id = self.next_request_id()?;
+        self.request(id, "get_registered_multisigs", None, Op::Names)
+    }
+
+    /// Whether the Jade holds `wallet`, asking nothing of the user: lists, then reads the name
+    /// when listed. Answers [`JadeEvent::Registration`], or [`JadeError::WalletNameTaken`].
+    pub fn request_registration(
+        &mut self,
+        wallet: &WalletRegistration,
+    ) -> Result<Vec<u8>, VaultCoreError> {
+        let id = self.next_request_id()?;
+        let op = WalletOp {
+            wallet: wallet.clone(),
+            step: WalletStep::List,
+        };
+        self.request(
+            id,
+            "get_registered_multisigs",
+            None,
+            Op::Wallet(Box::new(op)),
+        )
+    }
+
+    /// `register_multisig` under the wallet's name (the user confirms on the Jade), then a
+    /// readback. Answers [`JadeEvent::WalletRegistered`]. It never checks the name first, so run
+    /// it only after [`JadeSession::request_registration`] answered `Absent`. Errors are
+    /// `UserCancelled` (declined), `RegistrationMismatch` (readback differs) and
+    /// `RegistrationFailed` (any other device refusal, raw code and message kept).
+    pub fn request_register(
+        &mut self,
+        wallet: &WalletRegistration,
+    ) -> Result<Vec<u8>, VaultCoreError> {
+        let id = self.next_request_id()?;
+        let params = map([
+            ("network", self.network_param()),
+            ("multisig_name", text(&wallet.name)),
+            ("descriptor", wallet.descriptor.clone()),
+        ]);
+        let op = WalletOp {
+            wallet: wallet.clone(),
+            step: WalletStep::Write,
+        };
+        self.request(
+            id,
+            "register_multisig",
+            Some(params),
+            Op::Wallet(Box::new(op)),
+        )
+    }
+
+    fn on_names(&self, result: Value) -> Result<JadeEvent, VaultCoreError> {
+        let Value::Map(registrations) = result else {
+            return Err(protocol("get_registered_multisigs result is not a map").into());
+        };
+        let names = registrations
+            .iter()
+            .map(|(name, _)| name.as_text().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| protocol("a registered multisig name is not text"))?;
+        Ok(JadeEvent::RegisteredMultisigs(names))
+    }
+
+    fn on_wallet(&mut self, mut op: WalletOp, result: Value) -> Result<JadeEvent, VaultCoreError> {
+        let name = op.wallet.name.clone();
+        match op.step {
+            WalletStep::List => {
+                let Value::Map(registrations) = result else {
+                    return Err(protocol("get_registered_multisigs result is not a map").into());
+                };
+                if field(&registrations, &name).is_none() {
+                    return Ok(JadeEvent::Registration(Registered::Absent));
+                }
+                op.step = WalletStep::Read;
+            }
+            WalletStep::Read => {
+                let registration = parse_named_registration(result, &name)?;
+                return if op.wallet.matches(&registration) {
+                    Ok(JadeEvent::Registration(Registered::Same))
+                } else {
+                    Err(JadeError::WalletNameTaken.into())
+                };
+            }
+            WalletStep::Write => {
+                if result != Value::Bool(true) {
+                    return Err(JadeError::RegistrationMismatch.into());
+                }
+                op.step = WalletStep::Readback;
+            }
+            WalletStep::Readback => {
+                let registration = parse_named_registration(result, &name)?;
+                return if op.wallet.matches(&registration) {
+                    Ok(JadeEvent::WalletRegistered)
+                } else {
+                    Err(JadeError::RegistrationMismatch.into())
+                };
+            }
+        }
+        let params = map([
+            ("multisig_name", text(&name)),
+            ("as_file", Value::Bool(false)),
+        ]);
+        let id = self.next_request_id()?;
+        let bytes = self.request(
+            id,
+            "get_registered_multisig",
+            Some(params),
+            Op::Wallet(Box::new(op)),
+        )?;
+        Ok(JadeEvent::Send(bytes))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -1445,6 +1729,10 @@ mod tests {
         registration: Option<Value>,
         registration_count: usize,
         corrupt_readback: bool,
+        /// Wallets registered under their own names, beside the `mebit_e2e` slot.
+        wallets: Vec<(String, Value)>,
+        /// What a `register_multisig` for a named wallet answers instead of success.
+        refuse_register: Option<(i64, &'static str)>,
         requests: Vec<String>,
     }
 
@@ -1459,6 +1747,8 @@ mod tests {
                 registration: None,
                 registration_count: 0,
                 corrupt_readback: false,
+                wallets: Vec::new(),
+                refuse_register: None,
                 requests: Vec::new(),
             }
         }
@@ -1550,22 +1840,44 @@ mod tests {
                     reply(&id, text(&Xpub::from_priv(&secp, &xpub).to_string()))
                 }
                 "get_registered_multisigs" => {
-                    let result = match self.registration {
-                        Some(_) => map([(E2E_MULTISIG_NAME, Value::Bool(true))]),
-                        None => Value::Map(Vec::new()),
-                    };
-                    reply(&id, result)
+                    let mut listed = Vec::new();
+                    if self.registration.is_some() {
+                        listed.push((text(E2E_MULTISIG_NAME), Value::Bool(true)));
+                    }
+                    listed.extend(
+                        self.wallets
+                            .iter()
+                            .map(|(name, _)| (text(name), Value::Bool(true))),
+                    );
+                    reply(&id, Value::Map(listed))
                 }
                 "register_multisig" => {
-                    assert_eq!(param("multisig_name"), Some(text(E2E_MULTISIG_NAME)));
+                    let name = param("multisig_name").unwrap().into_text().unwrap();
+                    if name != E2E_MULTISIG_NAME {
+                        if let Some((code, message)) = self.refuse_register {
+                            return error_reply(&id, code, message);
+                        }
+                        let descriptor = param("descriptor").unwrap();
+                        self.wallets.retain(|(held, _)| *held != name);
+                        self.wallets.push((name, descriptor));
+                        return reply(&id, Value::Bool(true));
+                    }
                     self.registration = param("descriptor");
                     self.registration_count += 1;
                     reply(&id, Value::Bool(true))
                 }
                 "get_registered_multisig" => {
-                    assert_eq!(param("multisig_name"), Some(text(E2E_MULTISIG_NAME)));
+                    let name = param("multisig_name").unwrap().into_text().unwrap();
                     assert_eq!(param("as_file"), Some(Value::Bool(false)));
-                    let mut registration = self.registration.clone().expect("registered wallet");
+                    let stored = if name == E2E_MULTISIG_NAME {
+                        self.registration.clone()
+                    } else {
+                        self.wallets
+                            .iter()
+                            .find(|(held, _)| *held == name)
+                            .map(|(_, descriptor)| descriptor.clone())
+                    };
+                    let mut registration = stored.expect("registered wallet");
                     let Value::Map(fields) = &mut registration else {
                         panic!("registration map")
                     };
@@ -1579,10 +1891,7 @@ mod tests {
                     }
                     reply(
                         &id,
-                        map([
-                            ("multisig_name", text(E2E_MULTISIG_NAME)),
-                            ("descriptor", registration),
-                        ]),
+                        map([("multisig_name", text(&name)), ("descriptor", registration)]),
                     )
                 }
                 "get_receive_address" => {
@@ -2078,6 +2387,199 @@ mod tests {
             address
         );
         assert_eq!(jade.registration_count, 1);
+    }
+
+    fn wallet_of(threshold: usize, signers: &[&Signer]) -> WalletRegistration {
+        WalletRegistration::of(&multisig_descriptor(threshold, signers), NETWORK).unwrap()
+    }
+
+    fn registration_of(event: JadeEvent) -> Registered {
+        match event {
+            JadeEvent::Registration(registered) => registered,
+            other => panic!("expected a registration answer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_wallets_name_has_m_of_n_and_a_hash_cut_to_the_limit() {
+        let keys = [Signer::new(0), Signer::new(1), Signer::new(2)];
+        let wallet = wallet_of(2, &[&keys[0], &keys[1], &keys[2]]);
+        assert_eq!(wallet.name().len(), JADE_WALLET_NAME_LIMIT);
+        let hex = wallet.name().strip_prefix("mebit2of3-").unwrap();
+        assert!(
+            hex.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        );
+        let shuffled = wallet_of(2, &[&keys[2], &keys[0], &keys[1]]);
+        assert_eq!(wallet.name(), shuffled.name());
+        assert_eq!(wallet.signers(), shuffled.signers());
+        assert!(wallet.matches(&shuffled.descriptor));
+        assert_ne!(
+            wallet.name(),
+            wallet_of(3, &[&keys[0], &keys[1], &keys[2]]).name()
+        );
+        let other_key = Signer::new(3);
+        assert_ne!(
+            wallet.name(),
+            wallet_of(2, &[&keys[0], &keys[1], &other_key]).name()
+        );
+        assert!(wallet.name().starts_with("mebit2of3-"));
+        let five: Vec<Signer> = (0..5).map(Signer::new).collect();
+        let three_of_five = wallet_of(3, &five.iter().collect::<Vec<_>>());
+        assert!(three_of_five.name().starts_with("mebit3of5-"));
+        assert_eq!(three_of_five.name().len(), JADE_WALLET_NAME_LIMIT);
+    }
+
+    #[test]
+    fn seven_signers_are_registrable_and_eight_or_other_shapes_are_refused() {
+        let signers: Vec<Signer> = (0..8).map(Signer::new).collect();
+        let refs: Vec<&Signer> = signers.iter().collect();
+        assert_eq!(wallet_of(4, &refs[..7]).signers().len(), 7);
+        let eight = WalletRegistration::of(&multisig_descriptor(5, &refs), NETWORK);
+        assert!(matches!(eight, Err(JadeError::InvalidAddressRequest(_))));
+        let single = single_descriptor(&signers[0], 84, 0);
+        assert!(WalletRegistration::of(&single, NETWORK).is_err());
+        let duplicate = multisig_descriptor(2, &[&signers[0], &signers[0], &signers[1]]);
+        assert!(WalletRegistration::of(&duplicate, NETWORK).is_err());
+    }
+
+    #[test]
+    fn register_then_list_then_compare_equal() {
+        let mut jade = FakeJade::new();
+        let cosigners = [Signer::new(1), Signer::new(2)];
+        let wallet = wallet_of(2, &[&jade.signer, &cosigners[0], &cosigners[1]]);
+        let mut session = session_from_1();
+
+        let request = session.request_registered_multisigs().unwrap();
+        let JadeEvent::RegisteredMultisigs(names) =
+            run(&mut session, &mut jade, request, whole).unwrap()
+        else {
+            panic!("names")
+        };
+        assert!(names.is_empty());
+
+        let request = session.request_registration(&wallet).unwrap();
+        let event = run(&mut session, &mut jade, request, whole).unwrap();
+        assert_eq!(registration_of(event), Registered::Absent);
+
+        let request = session.request_register(&wallet).unwrap();
+        let event = run(&mut session, &mut jade, request, scattered).unwrap();
+        assert!(matches!(event, JadeEvent::WalletRegistered), "{event:?}");
+
+        let request = session.request_registered_multisigs().unwrap();
+        let JadeEvent::RegisteredMultisigs(names) =
+            run(&mut session, &mut jade, request, whole).unwrap()
+        else {
+            panic!("names")
+        };
+        assert_eq!(names, [wallet.name()]);
+
+        let request = session.request_registration(&wallet).unwrap();
+        let event = run(&mut session, &mut jade, request, scattered).unwrap();
+        assert_eq!(registration_of(event), Registered::Same);
+        assert_eq!(jade.registration_count, 0, "the address slot is untouched");
+    }
+
+    #[test]
+    fn another_wallet_under_the_same_name_is_a_conflict_and_never_overwritten() {
+        let mut jade = FakeJade::new();
+        let cosigners = [Signer::new(1), Signer::new(2), Signer::new(3)];
+        let first = wallet_of(2, &[&jade.signer, &cosigners[0], &cosigners[1]]);
+        let other =
+            wallet_of(2, &[&jade.signer, &cosigners[0], &cosigners[2]]).with_name(first.name());
+        let mut session = session_from_1();
+        let request = session.request_register(&first).unwrap();
+        run(&mut session, &mut jade, request, whole).unwrap();
+
+        let request = session.request_registration(&other).unwrap();
+        let error = jade_error(run(&mut session, &mut jade, request, whole));
+        assert!(matches!(error, JadeError::WalletNameTaken), "{error:?}");
+        assert_eq!(
+            jade.requests
+                .iter()
+                .filter(|m| *m == "register_multisig")
+                .count(),
+            1,
+            "nothing was written over it"
+        );
+        let request = session.request_registration(&first).unwrap();
+        let event = run(&mut session, &mut jade, request, whole).unwrap();
+        assert_eq!(registration_of(event), Registered::Same);
+    }
+
+    #[test]
+    fn a_declined_or_refused_registration_has_its_own_result() {
+        let mut jade = FakeJade::new();
+        let cosigners = [Signer::new(1), Signer::new(2)];
+        let wallet = wallet_of(2, &[&jade.signer, &cosigners[0], &cosigners[1]]);
+        let mut session = session_from_1();
+
+        jade.refuse_register = Some((-32000, "User declined"));
+        let request = session.request_register(&wallet).unwrap();
+        let error = jade_error(run(&mut session, &mut jade, request, whole));
+        assert!(matches!(error, JadeError::UserCancelled), "{error:?}");
+
+        jade.refuse_register = Some((-32603, "No room left"));
+        let request = session.request_register(&wallet).unwrap();
+        let error = jade_error(run(&mut session, &mut jade, request, whole));
+        assert!(
+            matches!(&error, JadeError::RegistrationFailed { code: -32603, message } if message == "No room left"),
+            "{error:?}"
+        );
+        // The session is usable after a device error.
+        jade.refuse_register = None;
+        let request = session.request_register(&wallet).unwrap();
+        assert!(matches!(
+            run(&mut session, &mut jade, request, whole).unwrap(),
+            JadeEvent::WalletRegistered
+        ));
+    }
+
+    #[test]
+    fn malformed_registration_replies_are_refused() {
+        let wallet = wallet_of(2, &[&Signer::new(0), &Signer::new(1), &Signer::new(2)]);
+
+        // A list that is not a map breaks the session.
+        let mut session = session_from_1();
+        session.request_registration(&wallet).unwrap();
+        let error = jade_error(session.receive(&reply("1", text("nope"))));
+        assert!(matches!(error, JadeError::Protocol(_)), "{error:?}");
+
+        // A readback under another name, a register that does not answer true.
+        let mut session = session_from_1();
+        session.request_register(&wallet).unwrap();
+        let error = jade_error(session.receive(&reply("1", Value::Bool(false))));
+        assert!(
+            matches!(error, JadeError::RegistrationMismatch),
+            "{error:?}"
+        );
+
+        let mut session = session_from_1();
+        session.request_register(&wallet).unwrap();
+        session.receive(&reply("1", Value::Bool(true))).unwrap();
+        let wrong_name = reply(
+            "2",
+            map([
+                ("multisig_name", text("other")),
+                ("descriptor", wallet.descriptor.clone()),
+            ]),
+        );
+        let error = jade_error(session.receive(&wrong_name));
+        assert!(
+            matches!(error, JadeError::RegistrationMismatch),
+            "{error:?}"
+        );
+
+        // A readback whose threshold differs from the wallet.
+        let mut jade = FakeJade::new();
+        jade.corrupt_readback = true;
+        let mut session = session_from_1();
+        let request = session.request_register(&wallet).unwrap();
+        let error = jade_error(run(&mut session, &mut jade, request, whole));
+        assert!(
+            matches!(error, JadeError::RegistrationMismatch),
+            "{error:?}"
+        );
     }
 
     #[test]

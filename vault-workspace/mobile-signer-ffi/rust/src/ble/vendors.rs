@@ -269,7 +269,9 @@ fn jade_category(error: &JadeError) -> fn(String) -> BleError {
         | E::SignerMismatch
         | E::RegistrationConflict
         | E::RegistrationMismatch
-        | E::RegistrationRequired => BleError::Refused,
+        | E::RegistrationRequired
+        | E::WalletNameTaken
+        | E::RegistrationFailed { .. } => BleError::Refused,
         E::Protocol(_)
         | E::OutOfOrder
         | E::NoSignatures

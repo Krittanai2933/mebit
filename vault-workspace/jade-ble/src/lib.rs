@@ -33,7 +33,8 @@ use futures_util::{Stream, StreamExt};
 use vault_core::error::VaultCoreError;
 use vault_core::hw::AddressRequest;
 use vault_core::hw::jade::{
-    JadeError, JadeEvent, JadeRegistrationPolicy, JadeSession, VersionInfo,
+    JadeError, JadeEvent, JadeRegistrationPolicy, JadeSession, Registered, VersionInfo,
+    WalletRegistration,
 };
 
 // The Jade's GATT interface, from `main/ble/ble.c` in Jade firmware 1.0.41.
@@ -394,6 +395,38 @@ impl JadeBle {
             .request_verify_address_with_registration(request, policy)?;
         match self.drive(request, USER_TIMEOUT).await? {
             JadeEvent::Address(address) => Ok(address),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// The names of the multisigs this unlocked Jade lists. Needs [`JadeBle::unlock`] first.
+    pub async fn registered_multisigs(&mut self) -> Result<Vec<String>, JadeBleError> {
+        let request = self.session.request_registered_multisigs()?;
+        match self.drive(request, REPLY_TIMEOUT).await? {
+            JadeEvent::RegisteredMultisigs(names) => Ok(names),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// Whether the Jade holds `wallet`; asks nothing of the user. A name holding another wallet
+    /// is `JadeError::WalletNameTaken`.
+    pub async fn registration(
+        &mut self,
+        wallet: &WalletRegistration,
+    ) -> Result<Registered, JadeBleError> {
+        let request = self.session.request_registration(wallet)?;
+        match self.drive(request, REPLY_TIMEOUT).await? {
+            JadeEvent::Registration(registered) => Ok(registered),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// Registers `wallet` once the user confirms it on the Jade, then reads it back. Never checks
+    /// the name first: call [`JadeBle::registration`] before.
+    pub async fn register(&mut self, wallet: &WalletRegistration) -> Result<(), JadeBleError> {
+        let request = self.session.request_register(wallet)?;
+        match self.drive(request, USER_TIMEOUT).await? {
+            JadeEvent::WalletRegistered => Ok(()),
             other => Err(unexpected(other)),
         }
     }

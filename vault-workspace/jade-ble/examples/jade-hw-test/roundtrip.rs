@@ -31,6 +31,62 @@ pub struct Fixture {
     change: Address,
     change_sats: u64,
     fee_sats: u64,
+    /// The vault is registered on the Jade, so the Jade may show the change as the wallet's own.
+    registered: bool,
+}
+
+/// The cosigners of the registered test wallet: BIP-39 test vectors 0x7f.. ("legal winner")
+/// and 0x80.. ("letter advice"). `--other` swaps the second for 0xff.. ("zoo ... vote").
+pub const REGISTERED_COSIGNERS: [u8; 2] = [0x7f, 0x80];
+pub const OTHER_COSIGNERS: [u8; 2] = [0x7f, 0xff];
+
+/// `(master key, (fingerprint, account xpub at the BIP-48 P2WSH path))` per software cosigner.
+type Cosigner = (Xpriv, (Fingerprint, Xpub));
+
+fn cosigners(network: Network, entropies: [u8; 2]) -> Result<Vec<Cosigner>, Box<dyn Error>> {
+    let secp = Secp256k1::new();
+    let mut out = Vec::new();
+    for entropy in entropies {
+        let mnemonic = generate_mnemonic(&[entropy; 32])?;
+        let (_, account) =
+            account_multisig_xpub_from_mnemonic(&mnemonic, "", network, 0, ScriptType::P2wsh)?;
+        let master = generate_master_xpriv(network, &generate_seed(&mnemonic, ""))?;
+        out.push((master, (master.fingerprint(&secp), account)));
+    }
+    Ok(out)
+}
+
+/// `wsh(sortedmulti(2, ..))` with the key origins the Jade needs, on `chain` (0 receive, 1 change).
+fn vault_descriptor(
+    network: Network,
+    keys: &[(Fingerprint, Xpub)],
+    chain: u32,
+) -> Result<Descriptor<DescriptorPublicKey>, Box<dyn Error>> {
+    let coin = if network == Network::Bitcoin { 0 } else { 1 };
+    let keys: Vec<String> = keys
+        .iter()
+        .map(|(fingerprint, xpub)| format!("[{fingerprint}/48'/{coin}'/0'/2']{xpub}/{chain}/*"))
+        .collect();
+    Ok(Descriptor::from_str(&format!(
+        "wsh(sortedmulti(2,{}))",
+        keys.join(",")
+    ))?)
+}
+
+/// The 2-of-3 test wallet of the Jade's key and two fixed software keys, on the receive chain.
+pub fn test_wallet(
+    network: Network,
+    jade_fingerprint: Fingerprint,
+    jade_account: Xpub,
+    entropies: [u8; 2],
+) -> Result<Descriptor<DescriptorPublicKey>, Box<dyn Error>> {
+    let mut keys = vec![(jade_fingerprint, jade_account)];
+    keys.extend(
+        cosigners(network, entropies)?
+            .into_iter()
+            .map(|(_, key)| key),
+    );
+    vault_descriptor(network, &keys, 0)
 }
 
 impl Fixture {
@@ -40,33 +96,38 @@ impl Fixture {
         jade_account: Xpub,
         inputs: u32,
     ) -> Result<Self, Box<dyn Error>> {
-        let secp = Secp256k1::new();
+        Self::build_with(
+            network,
+            jade_fingerprint,
+            jade_account,
+            inputs,
+            [1, 2],
+            false,
+        )
+    }
+
+    /// `entropies` make the two software cosigners. `registered` says the vault is registered on
+    /// the Jade, which only changes what [`Fixture::describe`] tells the user to expect.
+    pub fn build_with(
+        network: Network,
+        jade_fingerprint: Fingerprint,
+        jade_account: Xpub,
+        inputs: u32,
+        entropies: [u8; 2],
+        registered: bool,
+    ) -> Result<Self, Box<dyn Error>> {
         let mut keys = vec![(jade_fingerprint, jade_account)];
         let mut cosigners = Vec::new();
-        for entropy in [1u8, 2] {
-            let mnemonic = generate_mnemonic(&[entropy; 32])?;
-            let (_, account) =
-                account_multisig_xpub_from_mnemonic(&mnemonic, "", network, 0, ScriptType::P2wsh)?;
-            let master = generate_master_xpriv(network, &generate_seed(&mnemonic, ""))?;
-            keys.push((master.fingerprint(&secp), account));
+        for (master, key) in self::cosigners(network, entropies)? {
+            keys.push(key);
             cosigners.push(master);
         }
 
         // Key origins are what lets the Jade find its own keys in the PSBT.
-        let coin = if network == Network::Bitcoin { 0 } else { 1 };
-        let descriptor = |chain: u32| -> Result<Descriptor<DescriptorPublicKey>, Box<dyn Error>> {
-            let keys: Vec<String> = keys
-                .iter()
-                .map(|(fingerprint, xpub)| {
-                    format!("[{fingerprint}/48'/{coin}'/0'/2']{xpub}/{chain}/*")
-                })
-                .collect();
-            Ok(Descriptor::from_str(&format!(
-                "wsh(sortedmulti(2,{}))",
-                keys.join(",")
-            ))?)
-        };
-        let (receive, change) = (descriptor(0)?, descriptor(1)?);
+        let (receive, change) = (
+            vault_descriptor(network, &keys, 0)?,
+            vault_descriptor(network, &keys, 1)?,
+        );
 
         // vault-core's descriptor drops the origins, but must still describe
         // the same vault, address for address.
@@ -155,6 +216,7 @@ impl Fixture {
             change: change_at.address(network)?,
             change_sats,
             fee_sats,
+            registered,
         })
     }
 
@@ -170,8 +232,13 @@ impl Fixture {
             "  {PAYMENT_SATS} sats to {} (the vault's own address #1000)",
             self.payment
         );
+        let change_note = if self.registered {
+            "change address #0 of this registered wallet: LOOK whether the Jade hides it or shows it as a payment"
+        } else {
+            "change; shown as an ordinary output: the multisig is not registered"
+        };
         println!(
-            "  {} sats to {} (change; shown as an ordinary output: the multisig is not registered)",
+            "  {} sats to {} ({change_note})",
             self.change_sats, self.change
         );
         println!("  fee {} sats", self.fee_sats);
