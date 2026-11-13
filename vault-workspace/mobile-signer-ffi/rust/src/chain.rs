@@ -701,6 +701,10 @@ fn shows(answer: ureq::Response, txid: &str) -> bool {
 }
 
 /// `broadcast_matching` on `host`. When `host` is the error from `pick_host`, nothing is posted.
+#[expect(
+    clippy::result_large_err,
+    reason = "Answer is ureq's own call() result, so its error stays ureq's"
+)]
 pub(crate) fn broadcast_on(
     host: Result<&str, MobileSignerError>,
     post: &dyn Fn(&str, &str) -> Answer,
@@ -826,6 +830,10 @@ impl Transport for Http {
         )
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Answer is ureq's own call() result, so its error stays ureq's"
+    )]
     fn broadcast(&self, hex: &str, txid: &str) -> Result<String, MobileSignerError> {
         let post = |base: &str, hex: &str| {
             AGENT

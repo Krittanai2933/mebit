@@ -2125,8 +2125,19 @@ pub(crate) fn plan_from<K: Owner, T>(
     finish: impl FnOnce(Plan<'_, K>) -> Result<T, MobileSignerError>,
 ) -> Result<T, MobileSignerError> {
     let (spendable, have) = spendable_coins(source, wallet)?;
-    let change_script = wallet.next_unused(Chain::Internal).address().script_pubkey();
-    let plan = plan_for(amount, &spendable, have, change_script, own, dest, rate_sat_vb)?;
+    let change_script = wallet
+        .next_unused(Chain::Internal)
+        .address()
+        .script_pubkey();
+    let plan = plan_for(
+        amount,
+        &spendable,
+        have,
+        change_script,
+        own,
+        dest,
+        rate_sat_vb,
+    )?;
     finish(plan)
 }
 
@@ -2650,7 +2661,7 @@ fn signed_replacement(
                 let (with, without) = (vsize(&spends, &scripts), vsize(&spends, &scripts[..1]));
                 // The earlier coins hold at least its outputs, so `have` covers the amount.
                 let left = have.saturating_sub(amount);
-                match settle(left, with, without, change_floor, &fee, &least) {
+                match settle(left, with, without, change_floor, fee, least) {
                     Ok(Settle::Change(rest) | Settle::FloorChange(rest)) => {
                         let back = TxOut {
                             value: Amount::from_sat(rest),
@@ -2704,7 +2715,7 @@ fn signed_replacement(
                             SETS_TRIED.with(|n| n.set(n.get() + 1));
                             let (with, without) = sizes[set.count_ones() as usize];
                             let left = holds(set).saturating_sub(amount);
-                            settle(left, with, without, change_floor, &fee, &least).is_ok()
+                            settle(left, with, without, change_floor, fee, least).is_ok()
                         });
                         // The walk's next turn settles that set and signs it.
                         if let Some(set) = found {
@@ -2884,6 +2895,10 @@ fn fee_tiers_from(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::result_large_err,
+    reason = "Answer is ureq's own call() result, so its error stays ureq's"
+)]
 pub(crate) mod tests {
     use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet, VecDeque};
@@ -6173,7 +6188,7 @@ pub(crate) mod tests {
                     let spends = vec![OWN_SPEND; spent.len() + set.len()];
                     let left = had + set.iter().map(|&i| spares[i].0).sum::<u64>() - amount;
                     let sizes = (vsize(&spends, &scripts), vsize(&spends, &scripts[..1]));
-                    let settled = settle(left, sizes.0, sizes.1, 294, &fee, &least);
+                    let settled = settle(left, sizes.0, sizes.1, 294, fee, least);
                     settled.ok().map(|settled| match settled {
                         Settle::Change(rest) | Settle::FloorChange(rest) => left - rest,
                         Settle::Fold(_) | Settle::Fit(_) => left,

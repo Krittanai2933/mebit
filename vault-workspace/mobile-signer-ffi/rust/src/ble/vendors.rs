@@ -208,15 +208,13 @@ impl Wallet for TrezorBle {
 }
 
 fn parse_psbt_base64(psbt_base64: &str) -> Result<Psbt, BleError> {
-    Psbt::from_str(psbt_base64.trim()).map_err(|error| {
-        BleError::Refused(format!("invalid PSBT base64: {error}"))
-    })
+    Psbt::from_str(psbt_base64.trim())
+        .map_err(|error| BleError::Refused(format!("invalid PSBT base64: {error}")))
 }
 
 fn parse_fingerprint(hex: &str) -> Result<Fingerprint, BleError> {
-    Fingerprint::from_str(hex.trim()).map_err(|error| {
-        BleError::Refused(format!("invalid signer fingerprint: {error}"))
-    })
+    Fingerprint::from_str(hex.trim())
+        .map_err(|error| BleError::Refused(format!("invalid signer fingerprint: {error}")))
 }
 
 impl From<jade::JadeState> for JadeState {
@@ -484,7 +482,8 @@ mod tests {
     #[test]
     fn every_error_kind_has_a_documented_variant() {
         use ErrorKind as K;
-        let table: [(ErrorKind, fn(String) -> BleError); 22] = [
+        type Row = (ErrorKind, fn(String) -> BleError);
+        let table: [Row; 22] = [
             (K::NoBluetoothAdapter, BleError::BluetoothOff),
             (K::BluetoothPermissionDenied, BleError::PermissionDenied),
             (K::NoDeviceFound, BleError::NotFound),

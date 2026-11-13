@@ -242,9 +242,13 @@ pub fn restore_software_multisig_key(
 pub enum MnemonicCheck {
     Valid,
     /// The word at `index` (0-based) is not in the BIP-39 English list.
-    UnknownWord { index: u32 },
+    UnknownWord {
+        index: u32,
+    },
     /// BIP-39 mnemonics have 12, 15, 18, 21 or 24 words.
-    BadWordCount { count: u32 },
+    BadWordCount {
+        count: u32,
+    },
     /// Every word is in the list, but the checksum does not match.
     InvalidChecksum,
 }
@@ -810,7 +814,11 @@ mod tests {
     fn last_word_candidates_complete_the_mnemonic() {
         let first23 = vec!["abandon".to_string(); 23];
         let candidates = bip39_last_word_candidates(first23.clone());
-        assert_eq!(candidates.len(), 8, "3 entropy bits leave 8 words: {candidates:?}");
+        assert_eq!(
+            candidates.len(),
+            8,
+            "3 entropy bits leave 8 words: {candidates:?}"
+        );
         assert!(candidates.contains(&"art".to_string()));
         let mut sorted = candidates.clone();
         sorted.sort();
