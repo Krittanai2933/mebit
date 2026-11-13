@@ -2,7 +2,9 @@ package com.mebit.app.data
 
 import com.mebit.app.data.SingleSigWallet.DamagedGuard
 import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
+import com.mebit.ffi.signer.BleException
 import com.mebit.ffi.signer.FeeTiers
+import com.mebit.ffi.signer.FoundWallet
 import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotSendResult
 import com.mebit.ffi.signer.HotWalletSnapshot
@@ -13,7 +15,13 @@ import com.mebit.ffi.signer.SoftwareAccountKey
 import com.mebit.ffi.signer.SpendOutput
 import com.mebit.ffi.signer.SpendReview
 import com.mebit.ffi.signer.WalletKey
+import com.mebit.ffi.signer.WalletKind
 import com.mebit.ffi.signer.WalletShape
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.Test
@@ -75,6 +83,18 @@ class VaultSendTest {
 
         private fun named(descriptor: String) = assertEquals(line2, descriptor, "the wallet is named by its BSMS line 2")
 
+        /** What a scan finds in range: the link to it, for each device the send reaches. */
+        var inRange: (FoundWallet) -> DeviceLink = { error("no device in range") }
+
+        /** A device holding vault key [key]: Rust's signWalletPsbt answers through [sign], as wallet_sign_with_words does for words. */
+        fun device(key: Int): FakeDeviceLink = FakeDeviceLink(fingerprint = vault.keyFingerprints[key].lowercase()) { d, psbt, shownTxid ->
+            named(d)
+            signs++
+            val held = answered.getValue(psbt)
+            assertEquals(held.unsignedTxid, shownTxid, "the txid 5.2 showed")
+            answer(sign(held, vault.keyFingerprints[key].lowercase()))
+        }
+
         fun send(guards: PendingPayments = PendingPayments(FakePlainFile()), now: Long = 1_000L, vault: CreatedVault = this@VaultSendTest.vault) = VaultSend(
             vault,
             guards,
@@ -114,11 +134,15 @@ class VaultSendTest {
                     post(txid)
                 },
             ),
+            link = HardwareLink(pairings = null) { inRange(it) },
         )
     }
 
     /** Row [key]'s signer. Its words name the row, so the fake signs as that key, as Rust signs as the key the words make. */
     private fun phone(key: Int) = KeySigner.Phone(key, listOf("key$key"), "")
+
+    /** Row [key]'s signer when a Jade holds that key. */
+    private fun jade(key: Int) = KeySigner.Device(key, WalletKind.JADE)
 
     private fun signed(rust: Rust, guards: PendingPayments = PendingPayments(FakePlainFile())): VaultSend = runBlocking {
         val send = rust.send(guards)
@@ -266,10 +290,11 @@ class VaultSendTest {
         assertSame(held, send.payment, "the payment held is still the one prepared")
 
         rust.sign = { held, key -> held.signedBy(key).signedBy("5eed0000") }
-        assertTrue(send.sign(phone(0)) { true })
-        assertEquals(setOf("AAAA0000"), send.signedFingerprints, "a fingerprint of no key of the wallet counts nothing")
-        assertEquals(1, send.signaturesNeeded)
-        assertFalse(send.readyToBroadcast())
+        assertFalse(send.sign(phone(0)) { true }, "an answer that names a fingerprint of no key of the wallet beside the row's")
+        assertEquals(NOT_SIGNED, send.lastError)
+        assertEquals(emptySet(), send.signedFingerprints)
+        assertEquals(2, send.signaturesNeeded)
+        assertSame(held, send.payment)
         rust.sign = { _, _ -> throw MobileSignerException.InvalidPsbtJson("invalid PSBT json: not a key of this wallet: the phrase's master fingerprint 73c5da0a holds none of its keys") }
         assertFalse(send.sign(phone(2)) { true })
         assertEquals("กุญแจนี้ไม่ใช่กุญแจของ Wallet นี้", send.lastError)
@@ -568,14 +593,157 @@ class VaultSendTest {
     }
 
     @Test
-    fun hardwareAnotherPhoneAStandInAndAnUnknownKeyEachSayWhy() {
+    fun aJadeOrSafe7KeyIsADeviceRowAndAnotherPhoneAStandInAndAnUnknownKeyEachSayWhy() {
         val keyring = listOf(
             key("aaaa0000", "tpubA", KeySourceLabel.Jade),
-            key("bbbb0000", "tpubB", KeySourceLabel.MebitOther),
-            key("cccc0000", "tpubC", KeySourceLabel.ThisDevice, isMock = true),
+            key("bbbb0000", "tpubB", KeySourceLabel.TrezorSafe7),
+            key("cccc0000", "tpubC", KeySourceLabel.Jade, isMock = true),
         )
-        val reasons = keySigners(vault, emptyList(), keyring).map { (it as KeySigner.Elsewhere).reason }
-        assertEquals(listOf(SIGN_ON_HARDWARE_LATER, KEY_ON_ANOTHER_PHONE, STAND_IN_KEY), reasons)
-        assertEquals(KEY_NOT_HERE, (keySigners(vault, emptyList(), emptyList())[0] as KeySigner.Elsewhere).reason)
+        val signers = keySigners(vault, emptyList(), keyring)
+        assertEquals(listOf(0 to WalletKind.JADE, 1 to WalletKind.TREZOR_SAFE7), signers.filterIsInstance<KeySigner.Device>().map { it.index to it.kind })
+        assertEquals(STAND_IN_KEY, assertIs<KeySigner.Elsewhere>(signers[2]).reason, "a stand-in Jade key")
+        val another = keySigners(vault, emptyList(), listOf(key("bbbb0000", "tpubB", KeySourceLabel.MebitOther)))
+        assertEquals(KEY_ON_ANOTHER_PHONE, assertIs<KeySigner.Elsewhere>(another[1]).reason)
+        val otherAccount = keySigners(vault, emptyList(), listOf(key("aaaa0000", "tpubOtherAccount", KeySourceLabel.Jade)))
+        assertEquals(KEY_NOT_HERE, assertIs<KeySigner.Elsewhere>(otherAccount[0]).reason, "a Jade key that is not the wallet's")
+        assertIs<KeySigner.Phone>(keySigners(vault, listOf(session("aaaa0000", "tpubA", words)), keyring)[0], "words in memory sign on the phone")
+    }
+
+    @Test
+    fun aDeviceSignatureCountsTowardMAsAPhoneKeysDoesAndOnlyBroadcastFinishes(): Unit = runBlocking {
+        val rust = Rust()
+        val device = rust.device(1)
+        rust.inRange = { device }
+        val send = rust.send()
+        assertTrue(send.prepare())
+        assertTrue(send.sign(phone(0)) { true })
+        val heard = HeardSteps()
+        assertTrue(send.signOnDevice(jade(1), JADE_FOUND, NO_CODES, heard))
+        assertEquals(setOf("AAAA0000", "BBBB0000"), send.signedFingerprints)
+        assertEquals(mapOf("AAAA0000" to 1_000L, "BBBB0000" to 1_000L), send.signedAt, "the time on key 2's row")
+        assertTrue(send.readyToBroadcast(), "the m-th signature, a device's, makes the payment ready")
+        assertEquals(0, rust.finishes, "a device's signature never finishes the payment")
+        assertEquals(listOf("connect", "unlock", "accountXpub m/48'/1'/0'/2'", "signWalletPsbt $txid", "disconnect", "close"), device.calls)
+        assertEquals(listOf("showing"), heard.steps, "the screen hears the steps the link tells")
+        assertTrue(send.broadcast())
+        assertEquals(1, rust.finishes)
+    }
+
+    @Test
+    fun aDeviceIsReadAtItsKeysOwnAccountPathAndOneOfAnotherKeyIsShownNothing(): Unit = runBlocking {
+        val rust = Rust()
+        rust.shape = { v -> WalletShape(v.m.toUByte(), v.keyFingerprints.mapIndexed { i, f -> WalletKey(f.lowercase(), "m/48'/1'/$i'/2'", "tpub") }, v.address, 201uL) }
+        val right = rust.device(1)
+        rust.inRange = { right }
+        val send = rust.send()
+        assertTrue(send.prepare())
+        assertTrue(send.signOnDevice(jade(1), JADE_FOUND, NO_CODES, NO_STEPS))
+        assertEquals("accountXpub m/48'/1'/1'/2'", right.calls[2], "the path BSMS line 2 gives key 2, not a one-key path")
+        val other = rust.device(0)
+        rust.inRange = { other }
+        assertFailsWith<BleException.WrongKey> { send.signOnDevice(jade(2), JADE_FOUND, NO_CODES, NO_STEPS) }
+        assertTrue(other.calls.none { it.startsWith("signWalletPsbt") }, "nothing showed on a device of another key")
+        assertEquals(setOf("BBBB0000"), send.signedFingerprints)
+        assertEquals(1, rust.signs)
+        assertNull(send.busy, "a throw ends the claim")
+    }
+
+    @Test
+    fun aDeviceAnswerCountsOnlyWhenItIsThePaymentHeldWithTheRowsKeyAndNoOtherNewlySigned(): Unit = runBlocking {
+        val rust = Rust()
+        rust.inRange = { rust.device(0) }
+        val send = rust.send()
+        assertTrue(send.prepare())
+        val held = send.payment
+        val lies = listOf<Pair<String, (SpendReview, String) -> SpendReview>>(
+            "no new signature" to { h, _ -> h },
+            "another payment" to { h, key -> review("ef".repeat(32), listOf(key), h.payments) },
+            "another key of the wallet" to { h, _ -> h.signedBy("cccc0000") },
+            "the row's key and a fingerprint of no key of the wallet" to { h, key -> h.signedBy(key).signedBy("5eed0000") },
+            "the row's key and another key of the wallet" to { h, key -> h.signedBy(key).signedBy("cccc0000") },
+            "a payment to another address" to { h, key -> review(h.unsignedTxid, listOf(key), listOf(SpendOutput("tb1qstranger", 1_000uL))) },
+        )
+        for ((why, lie) in lies) {
+            rust.sign = lie
+            assertFailsWith<AnswerRefused>(why) { send.signOnDevice(jade(0), JADE_FOUND, NO_CODES, NO_STEPS) }
+            assertNull(send.busy, why)
+        }
+        assertSame(held, send.payment, "the payment held is still the one prepared")
+        assertEquals(emptySet(), send.signedFingerprints)
+        assertEquals(emptyMap(), send.signedAt)
+    }
+
+    @Test
+    fun whileADeviceSignsNothingElseReachesRustAndTheSendIsFreeOnceItAnswers(): Unit = runBlocking {
+        val rust = Rust()
+        val waiting = CompletableDeferred<Unit>()
+        val confirmed = CompletableDeferred<Unit>()
+        val device = rust.device(1)
+        val answer = device.sign
+        device.sign = { d, psbt, shownTxid ->
+            waiting.complete(Unit)
+            confirmed.await()
+            answer(d, psbt, shownTxid)
+        }
+        rust.inRange = { device }
+        val send = rust.send()
+        assertTrue(send.prepare())
+        val signing = async { send.signOnDevice(jade(1), JADE_FOUND, NO_CODES, NO_STEPS) }
+        waiting.await()
+        assertEquals(VaultBusy.Signing(1), send.busy)
+        assertFalse(send.prepare(), "5.1's ตรวจสอบ")
+        assertEquals(BUSY, send.lastError)
+        assertFalse(send.sign(phone(0)) { true }, "another row's เซ็น")
+        assertFalse(send.signOnDevice(jade(2), JADE_FOUND, NO_CODES, NO_STEPS), "another device's")
+        assertFalse(send.broadcast())
+        assertEquals(Repost.Failed, send.repostGuarded())
+        assertEquals(1 to 0, rust.prepares.size to rust.signs, "nothing reached Rust while the device held the send")
+        confirmed.complete(Unit)
+        assertTrue(signing.await())
+        assertNull(send.busy)
+        assertTrue(send.sign(phone(0)) { true }, "the send is free once the device answered")
+        assertEquals(setOf("AAAA0000", "BBBB0000"), send.signedFingerprints)
+    }
+
+    @Test
+    fun aCancelOrALostLinkEndsTheClaimAndKeepsThePaymentAsItWas(): Unit = runBlocking {
+        val rust = Rust()
+        val waiting = CompletableDeferred<Unit>()
+        val device = rust.device(1)
+        device.sign = { _, _, _ ->
+            waiting.complete(Unit)
+            awaitCancellation()
+        }
+        rust.inRange = { device }
+        val send = rust.send()
+        assertTrue(send.prepare())
+        val held = send.payment
+        val signing = launch { send.signOnDevice(jade(1), JADE_FOUND, NO_CODES, NO_STEPS) }
+        waiting.await()
+        signing.cancelAndJoin()
+        assertNull(send.busy, "Back or ยกเลิกการเซ็น ends the claim")
+        assertEquals(listOf("disconnect", "close"), device.calls.takeLast(2), "and the link")
+        val lost = rust.device(1).apply { failAt = "sign" }
+        rust.inRange = { lost }
+        assertFailsWith<BleException.Disconnected> { send.signOnDevice(jade(1), JADE_FOUND, NO_CODES, NO_STEPS) }
+        assertNull(send.busy)
+        assertSame(held, send.payment)
+        assertEquals(emptySet(), send.signedFingerprints)
+        assertTrue(send.prepare(), "nothing holds the send")
+    }
+
+    @Test
+    fun aKeyThePaymentNoLongerNeedsNeverReachesItsDevice(): Unit = runBlocking {
+        val rust = Rust()
+        var reached = 0
+        rust.inRange = {
+            reached++
+            rust.device(1)
+        }
+        assertFalse(rust.send().signOnDevice(jade(1), JADE_FOUND, NO_CODES, NO_STEPS), "nothing prepared")
+        val send = signed(rust)
+        assertFalse(send.signOnDevice(jade(1), JADE_FOUND, NO_CODES, NO_STEPS), "the payment has m")
+        assertFalse(send.signOnDevice(jade(2), JADE_FOUND, NO_CODES, NO_STEPS), "key 3 signed it already")
+        assertEquals(0, reached)
     }
 }

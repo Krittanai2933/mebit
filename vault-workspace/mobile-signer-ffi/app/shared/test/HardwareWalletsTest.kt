@@ -1,6 +1,8 @@
 package com.mebit.app.data
 
 import com.mebit.ffi.signer.AddressType
+import com.mebit.ffi.signer.BleException
+import com.mebit.ffi.signer.FoundWallet
 import com.mebit.ffi.signer.HwAccountKey
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.WalletKind
@@ -10,12 +12,25 @@ import com.mebit.ffi.signer.walletDescribe
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class HardwareWalletsTest {
+    @Test
+    fun nearestTakesTheOnlyDeviceOfItsKindAndRefusesNoneOrSeveral(): Unit = runBlocking {
+        val jade = FoundWallet(WalletKind.JADE, "a", "Jade a")
+        var inRange = listOf(jade)
+        val hardware = HardwareWallets(SavedVaults.memoryOnly(), scan = { inRange })
+        assertEquals(jade, hardware.nearest(WalletKind.JADE))
+        inRange = listOf(jade, FoundWallet(WalletKind.JADE, "b", "Jade b"))
+        assertFailsWith<SeveralDevices>("a PIN typed on the wrong Jade would be wasted") { hardware.nearest(WalletKind.JADE) }
+        inRange = emptyList()
+        assertFailsWith<BleException.NotFound> { hardware.nearest(WalletKind.JADE) }
+    }
+
     @Test
     fun everyAddressTypeIsADescriptorTheCoreReadsAsThePhoneWalletOfThatPhrase() {
         for (type in AddressType.entries) {

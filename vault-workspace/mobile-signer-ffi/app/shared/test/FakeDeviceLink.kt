@@ -67,3 +67,16 @@ internal class FakeDeviceLink(
         if (failAt == step) throw BleException.Disconnected("lost at $step")
     }
 }
+
+/** Hears the steps a device signature reaches, in order. */
+internal class HeardSteps : SignSteps {
+    val steps = mutableListOf<String>()
+
+    override suspend fun registering() {
+        steps += "registering"
+    }
+
+    override suspend fun showing() {
+        steps += "showing"
+    }
+}

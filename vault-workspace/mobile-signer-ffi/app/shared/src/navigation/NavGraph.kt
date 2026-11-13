@@ -189,6 +189,7 @@ internal fun MebitNavHost(
     var catalogOpen by remember { mutableStateOf(false) }
     // A simulator has no Bluetooth: a debug build launched with the switch reaches a fake Jade and Safe 7 in its place.
     val fakeSwitch = rememberFakeDeviceSwitch()
+    // shortcut: the fake always signs, since no launch switch picks its behaviour script yet; add one with the 5.3 screens' verify recipe.
     val fake = remember(fakeSwitch) { if (fakeDeviceAllowed() && fakeSwitch) FakeDevice() else null }
     val scan: suspend (WalletKind) -> List<FoundWallet> = fake?.let { it::scan } ?: { kind -> scanWallets(kind) }
     val openLink: (FoundWallet) -> DeviceLink = fake?.let { it::open } ?: ::bleLink
@@ -323,7 +324,7 @@ internal fun MebitNavHost(
 
     // A wallet the core cannot read makes no send, and 5.1 says so.
     fun startVaultSend(vault: CreatedVault?) {
-        vaultSend = vault?.let { runCatching { VaultSend(it, wallets.vaultPayments) }.getOrNull() }
+        vaultSend = vault?.let { runCatching { VaultSend(it, wallets.vaultPayments, link = hardware.link) }.getOrNull() }
         navigate(MovieRoute.M1SendVault)
     }
 
@@ -978,7 +979,7 @@ internal fun MebitNavHost(
                         HardwareSignScreen(
                             wallet = hardware.chain(w),
                             keyName = hardwareKeyName(w, keyring.keys),
-                            nearest = { hardware.nearest(w) },
+                            nearest = { hardware.nearest(w.kind) },
                             pairingKept = remember(w) { hardware.link.keeps(w.fingerprint) },
                             draft = hardware.sendDraft(w),
                             confirmRepost = confirmRepost,

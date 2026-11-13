@@ -37,11 +37,18 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mebit.app.data.ANSWER_REFUSED_LINE
+import com.mebit.app.data.AnswerRefused
+import com.mebit.app.data.CANNOT_REGISTER_LINE
 import com.mebit.app.data.DescribedWallet
 import com.mebit.app.data.DevicePayment
 import com.mebit.app.data.FieldPairingCodes
+import com.mebit.app.data.NOT_READY_LINE
 import com.mebit.app.data.QuoteCache
+import com.mebit.app.data.REGISTRATION_DECLINED_LINE
+import com.mebit.app.data.SEVERAL_DEVICES_LINE
 import com.mebit.app.data.SendDraft
+import com.mebit.app.data.SeveralDevices
 import com.mebit.app.data.fingerprintGroups
 import com.mebit.app.data.formatBtc
 import com.mebit.app.data.formatBtcCompact
@@ -149,8 +156,15 @@ fun HardwareReviewScreen(
     }
 }
 
-/** How signing on the device went wrong: 5.3.2.1's refusal, 5.3.3.1's lost link, or no device to reach, or a device that holds another key. */
-internal enum class DeviceFailure { Rejected, Lost, WrongKey, NotFound, BluetoothOff }
+/**
+ * How signing on the device went wrong: 5.3.2.1's refusal, 5.3.3.1's lost link, no device to reach, or a device that holds another key, and
+ * five states only proposal boards draw: several devices of the kind in range, a device not ready before it showed anything, an answer
+ * mebit refused, a declined registration, and a Jade that cannot register the wallet.
+ */
+internal enum class DeviceFailure { Rejected, Lost, WrongKey, NotFound, BluetoothOff, Several, NotReady, BadAnswer, RegistrationDeclined, RegistrationRefused }
+
+/** How far a device signature got, which decides what a refusal means: nothing shown yet, the Jade's registration screen, or the payment. */
+internal enum class SignStep { Connecting, Registering, Showing }
 
 /** Where Sign 4.5.3 to 4.5.5 is: reaching the device, the device showing the payment, the device has signed it, or what went wrong. */
 internal sealed interface SignStage {
@@ -175,9 +189,21 @@ internal fun signMarks(stage: SignStage): List<StepMark> = when (stage) {
     is SignStage.Failed -> if (stage.shown) listOf(StepMark.Done, StepMark.Done, StepMark.Failed) else listOf(StepMark.Failed, StepMark.Pending, StepMark.Pending)
 }
 
-/** Pure. Which failure [error] is. The core refusing what the device sent back keeps no signature, as a refusal on the device does. */
-internal fun deviceFailure(error: Throwable): DeviceFailure = when (error) {
-    is BleException.Refused, is MobileSignerException -> DeviceFailure.Rejected
+/**
+ * Pure. Which failure [error] is, at step [at]. A device's refusal and a refusal of the device's answer never share a line: Refused is the
+ * device saying no, so its step decides, the payment declined while it showed, the registration declined, or not ready before anything
+ * showed. Rust refusing the signed PSBT (Protocol), the send refusing Rust's answer ([AnswerRefused]) and the core refusing to finish it
+ * (MobileSignerException) are the device's answer refused, at any step.
+ */
+internal fun deviceFailure(error: Throwable, at: SignStep): DeviceFailure = when (error) {
+    is BleException.Refused -> when (at) {
+        SignStep.Connecting -> DeviceFailure.NotReady
+        SignStep.Registering -> DeviceFailure.RegistrationDeclined
+        SignStep.Showing -> DeviceFailure.Rejected
+    }
+    is BleException.Protocol, is AnswerRefused, is MobileSignerException -> DeviceFailure.BadAnswer
+    is BleException.RegistrationRefused -> DeviceFailure.RegistrationRefused
+    is SeveralDevices -> DeviceFailure.Several
     is BleException.WrongKey, is BleException.WrongDevice -> DeviceFailure.WrongKey
     is BleException.NotFound -> DeviceFailure.NotFound
     is BleException.BluetoothOff, is BleException.PermissionDenied, is BleException.Unsupported -> DeviceFailure.BluetoothOff
@@ -190,6 +216,7 @@ internal class DeviceFailureText(val title: String, val subtitle: String?, val p
 /**
  * Pure. 5.3.2.1's words for a refusal and 5.3.3.1's for a lost link, naming the device by [word]. No board draws the other three: a device
  * of another key takes T14's title, no device in range 2.3.1's line, Bluetooth off 2.3.2's banner, each with 5.3.3.1's pill or 5.3.2.1's.
+ * The five proposal states take the design's titles and the proposal lines in VaultSend.kt, until the user approves their boards.
  */
 internal fun deviceFailureText(failure: DeviceFailure, word: String): DeviceFailureText = when (failure) {
     DeviceFailure.Rejected -> DeviceFailureText(
@@ -215,6 +242,11 @@ internal fun deviceFailureText(failure: DeviceFailure, word: String): DeviceFail
         "BLUETOOTH OFF",
         "มือถือยังมองไม่เห็นอุปกรณ์ เปิด Bluetooth ในตั้งค่า แล้วกลับมาลองใหม่ ไม่มีข้อมูลถูกส่งออก",
     )
+    DeviceFailure.Several -> DeviceFailureText("พบ $word มากกว่าหนึ่งเครื่อง", null, "หลุด", "SEVERAL DEVICES", SEVERAL_DEVICES_LINE)
+    DeviceFailure.NotReady -> DeviceFailureText("ยังเซ็นบน $word ไม่ได้", null, "ปฏิเสธ", "NOT READY", NOT_READY_LINE)
+    DeviceFailure.BadAnswer -> DeviceFailureText("ลายเซ็นจาก $word ใช้ไม่ได้", null, "ปฏิเสธ", "SIGNATURE REFUSED", ANSWER_REFUSED_LINE)
+    DeviceFailure.RegistrationDeclined -> DeviceFailureText("ยังไม่ได้บันทึก Wallet ใน Jade", null, "ปฏิเสธ", "NOT REGISTERED", REGISTRATION_DECLINED_LINE)
+    DeviceFailure.RegistrationRefused -> DeviceFailureText("Jade บันทึก Wallet นี้ไม่ได้", null, "ปฏิเสธ", "REGISTRATION REFUSED", CANNOT_REGISTER_LINE)
 }
 
 /**
@@ -272,7 +304,8 @@ fun HardwareSignScreen(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                SignStage.Failed(deviceFailure(e), shown = stage == SignStage.OnDevice)
+                val shown = stage == SignStage.OnDevice
+                SignStage.Failed(deviceFailure(e, if (shown) SignStep.Showing else SignStep.Connecting), shown)
             }
         }
     }

@@ -39,6 +39,9 @@ sealed interface HardwareAdd {
     data object NotSaved : HardwareAdd
 }
 
+/** More than one device of [kind] answered a scan, so the app cannot tell which holds the key: the user turns the others off. */
+internal class SeveralDevices(kind: WalletKind, count: Int) : Exception("$count devices of $kind in range")
+
 /** How [HardwareWallets.remove] ended. Only [Removed] changed anything. */
 enum class HardwareRemoval {
     Removed,
@@ -90,10 +93,16 @@ class HardwareWallets internal constructor(
     fun sendDraft(wallet: HardwareWallet): SendDraft = drafts.getOrPut(wallet.descriptor) { SendDraft(wallet.addressType) }
 
     /**
-     * The first device of [wallet]'s kind in range, for its payment to be signed on. Throws the scan's BleException, NotFound when none is
-     * seen. [DescribedWallet.sign] then refuses a device that holds another key before anything shows on it.
+     * The one device of [kind] in range, for a payment to be signed on: a one-key wallet's or a several-key wallet's device row. Throws the
+     * scan's BleException, NotFound when none is seen, and [SeveralDevices] when more than one is: a Jade asks its PIN before it tells its
+     * key, so trying each would have the user unlock a device that then gets WrongKey. The signature then refuses a device that holds
+     * another key before anything shows on it.
      */
-    suspend fun nearest(wallet: HardwareWallet): FoundWallet = scan(wallet.kind).firstOrNull() ?: throw BleException.NotFound("no ${wallet.kind} in range")
+    suspend fun nearest(kind: WalletKind): FoundWallet {
+        val found = scan(kind)
+        if (found.size > 1) throw SeveralDevices(kind, found.size)
+        return found.singleOrNull() ?: throw BleException.NotFound("no $kind in range")
+    }
 
     /**
      * For a list on screen, as [Wallets.refreshBalances] does for the phone wallets: one wallet at a time, skipping one refreshed in the

@@ -1,11 +1,15 @@
 package com.mebit.app.data
 
 import com.mebit.ffi.signer.AddressType
+import com.mebit.ffi.signer.BleException
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.PairingCodes
 import com.mebit.ffi.signer.WalletKind
+import com.mebit.ffi.signer.restoreSoftwareMultisigKey
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -20,6 +24,15 @@ class FakeDeviceTest {
             return "123456"
         }
     }
+
+    /** A 2-of-3 of the public phrase's key and two keys of the same phrase under other passphrases, so the fake holds one key of it. */
+    private fun twoOfThree(): String = listOf("", "one", "two").joinToString(",", "wsh(sortedmulti(2,", "))") { passphrase ->
+        val key = restoreSoftwareMultisigKey(PUBLIC_WORDS_12, passphrase, KeyNetwork.TEST, 0u)
+        "[${key.masterFingerprint}/48'/1'/0'/2']${key.xpub}"
+    }
+
+    /** A device of [fake] of [kind], linked anew, as each signature links it. */
+    private suspend fun FakeDevice.link(kind: WalletKind) = open(scan(kind).single())
 
     @Test
     fun theFakeHoldsThePublicPhraseAtEveryPathTheAppReads(): Unit = runBlocking {
@@ -59,6 +72,37 @@ class FakeDeviceTest {
         val added = assertIs<HardwareAdd.Added>(hardware.add(WalletKind.JADE, AddressType.TAPROOT, key, emptyList()))
         assertEquals(PUBLIC_ACCOUNTS.getValue(AddressType.TAPROOT).receive0, added.wallet.address)
         assertEquals("กระเป๋า Jade", added.wallet.name)
-        assertEquals(WalletKind.JADE, hardware.nearest(added.wallet).kind, "Sign finds the fake of the wallet's kind")
+        assertEquals(WalletKind.JADE, hardware.nearest(added.wallet.kind).kind, "Sign finds the fake of the wallet's kind")
+    }
+
+    @Test
+    fun itsJadeRegistersASeveralKeyWalletOncePerLaunchAndTellsTheSteps(): Unit = runBlocking {
+        val wallet = twoOfThree()
+        val fake = FakeDevice(List(4) { FakeBehaviour.Decline }, pause = {})
+        val jade = HeardSteps()
+        repeat(2) { assertFailsWith<BleException.Refused> { fake.link(WalletKind.JADE).signWalletPsbt(wallet, "psbt", "txid", jade) } }
+        assertEquals(listOf("registering", "showing", "showing"), jade.steps, "registered at its first signature only")
+        val safe7 = HeardSteps()
+        assertFailsWith<BleException.Refused> { fake.link(WalletKind.TREZOR_SAFE7).signWalletPsbt(wallet, "psbt", "txid", safe7) }
+        assertEquals(listOf("showing"), safe7.steps, "a Safe 7 registers nothing")
+        val oneKey = HeardSteps()
+        assertFailsWith<BleException.Refused> { fake.link(WalletKind.JADE).signWalletPsbt(PUBLIC_JADE_WALLET.descriptor, "psbt", "txid", oneKey) }
+        assertEquals(listOf("showing"), oneKey.steps, "nor does a one-key wallet")
+        val relaunched = HeardSteps()
+        val next = FakeDevice(listOf(FakeBehaviour.Decline), pause = {})
+        assertFailsWith<BleException.Refused> { next.link(WalletKind.JADE).signWalletPsbt(wallet, "psbt", "txid", relaunched) }
+        assertEquals(listOf("registering", "showing"), relaunched.steps, "a relaunch forgot the wallet, as a wiped Jade would")
+    }
+
+    @Test
+    fun aDeclinedRegistrationIsNotKeptAndADropComesWhileThePaymentShows(): Unit = runBlocking {
+        val wallet = twoOfThree()
+        val fake = FakeDevice(listOf(FakeBehaviour.RegistrationDeclined, FakeBehaviour.Drop), pause = {})
+        val declined = HeardSteps()
+        assertFailsWith<BleException.Refused> { fake.link(WalletKind.JADE).signWalletPsbt(wallet, "psbt", "txid", declined) }
+        assertEquals(listOf("registering"), declined.steps)
+        val dropped = HeardSteps()
+        assertFailsWith<BleException.Disconnected> { fake.link(WalletKind.JADE).signWalletPsbt(wallet, "psbt", "txid", dropped) }
+        assertEquals(listOf("registering", "showing"), dropped.steps, "the declined registration was not kept")
     }
 }

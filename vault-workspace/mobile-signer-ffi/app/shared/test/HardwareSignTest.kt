@@ -1,11 +1,20 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.data.ANSWER_REFUSED_LINE
+import com.mebit.app.data.AnswerRefused
+import com.mebit.app.data.CANNOT_REGISTER_LINE
+import com.mebit.app.data.NOT_READY_LINE
+import com.mebit.app.data.REGISTRATION_DECLINED_LINE
+import com.mebit.app.data.SEVERAL_DEVICES_LINE
+import com.mebit.app.data.SeveralDevices
 import com.mebit.ffi.signer.BleException
 import com.mebit.ffi.signer.MobileSignerException
 import com.mebit.ffi.signer.SpendOutput
 import com.mebit.ffi.signer.SpendReview
+import com.mebit.ffi.signer.WalletKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 
 class HardwareSignTest {
@@ -20,16 +29,43 @@ class HardwareSignTest {
     }
 
     @Test
-    fun eachErrorShowsItsBoard() {
-        assertEquals(DeviceFailure.Rejected, deviceFailure(BleException.Refused("declined on the device")))
-        assertEquals(DeviceFailure.Rejected, deviceFailure(MobileSignerException.InvalidPsbtJson("signatures: 0 of 1")), "the core refused what came back: nothing kept")
-        assertEquals(DeviceFailure.WrongKey, deviceFailure(BleException.WrongKey("another key")))
-        assertEquals(DeviceFailure.WrongKey, deviceFailure(BleException.WrongDevice("a Safe 3")))
-        assertEquals(DeviceFailure.NotFound, deviceFailure(BleException.NotFound("none in range")))
-        assertEquals(DeviceFailure.BluetoothOff, deviceFailure(BleException.BluetoothOff("off")))
-        for (lost in listOf(BleException.Disconnected("down"), BleException.Timeout("slow"), BleException.Link("gatt"), BleException.PairingFailed("code"), IllegalStateException())) {
-            assertEquals(DeviceFailure.Lost, deviceFailure(lost), lost.toString())
+    fun eachErrorShowsItsBoardAtTheStepItCameAt() {
+        val declined = BleException.Refused("declined on the device")
+        assertEquals(DeviceFailure.Rejected, deviceFailure(declined, SignStep.Showing), "5.3.2.1: declined while the payment showed")
+        assertEquals(DeviceFailure.RegistrationDeclined, deviceFailure(declined, SignStep.Registering))
+        assertEquals(DeviceFailure.NotReady, deviceFailure(declined, SignStep.Connecting), "locked, a wrong PIN, no internet: nothing showed yet")
+        for (step in SignStep.entries) {
+            val answered = listOf(
+                BleException.Protocol("the device's signed PSBT: key 73c5da0a has not signed every input"),
+                AnswerRefused("the answer is signed by []"),
+                MobileSignerException.InvalidPsbtJson("signatures: 0 of 1"),
+            )
+            for (refusedAnswer in answered) {
+                assertEquals(DeviceFailure.BadAnswer, deviceFailure(refusedAnswer, step), "$refusedAnswer at $step: the device answered and mebit refused it")
+            }
+            assertEquals(DeviceFailure.RegistrationRefused, deviceFailure(BleException.RegistrationRefused("full"), step))
+            assertEquals(DeviceFailure.Several, deviceFailure(SeveralDevices(WalletKind.JADE, 2), step))
+            assertEquals(DeviceFailure.WrongKey, deviceFailure(BleException.WrongKey("another key"), step))
+            assertEquals(DeviceFailure.WrongKey, deviceFailure(BleException.WrongDevice("a Safe 3"), step))
+            assertEquals(DeviceFailure.NotFound, deviceFailure(BleException.NotFound("none in range"), step))
+            assertEquals(DeviceFailure.BluetoothOff, deviceFailure(BleException.BluetoothOff("off"), step))
+            for (lost in listOf(BleException.Disconnected("down"), BleException.Timeout("slow"), BleException.Link("gatt"), BleException.PairingFailed("code"), IllegalStateException())) {
+                assertEquals(DeviceFailure.Lost, deviceFailure(lost, step), "$lost at $step")
+            }
         }
+    }
+
+    @Test
+    fun theProposalStatesSayTheProposedLinesAndARefusedAnswerNeverReadsAsTheDevicesRefusal() {
+        val proposals = listOf(DeviceFailure.Several, DeviceFailure.NotReady, DeviceFailure.BadAnswer, DeviceFailure.RegistrationDeclined, DeviceFailure.RegistrationRefused)
+        assertEquals(
+            listOf(SEVERAL_DEVICES_LINE, NOT_READY_LINE, ANSWER_REFUSED_LINE, REGISTRATION_DECLINED_LINE, CANNOT_REGISTER_LINE),
+            proposals.map { deviceFailureText(it, "Jade").line },
+        )
+        val rejected = deviceFailureText(DeviceFailure.Rejected, "Jade")
+        val badAnswer = deviceFailureText(DeviceFailure.BadAnswer, "Jade")
+        assertNotEquals(rejected.title, badAnswer.title)
+        assertNotEquals(rejected.kicker, badAnswer.kicker)
     }
 
     @Test
