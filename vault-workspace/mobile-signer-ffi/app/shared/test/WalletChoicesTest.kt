@@ -4,6 +4,8 @@ import com.mebit.app.Place
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.CustodyPolicy
 import com.mebit.app.data.FiatQuote
+import com.mebit.app.data.PUBLIC_JADE_WALLET
+import com.mebit.ffi.signer.WalletKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -16,21 +18,25 @@ class WalletChoicesTest {
     private val p3 = Place.parse(3)!!
 
     @Test
-    fun everyWalletComesFirstInPlaceOrderThenTheVaultsInOrder() {
+    fun phoneWalletsInPlaceOrderThenHardwareWalletsThenSeveralKeyWalletsEachInTheOrderMade() {
         assertEquals(
-            listOf(WalletChoice.Spending(p1), WalletChoice.Spending(p3), WalletChoice.Vault(first), WalletChoice.Vault(second)),
-            walletChoices(spending = listOf(p1, p3), vaults = listOf(first, second)),
+            listOf(
+                WalletChoice.Spending(p1), WalletChoice.Spending(p3),
+                WalletChoice.Hardware(trezor), WalletChoice.Hardware(jade),
+                WalletChoice.Vault(first), WalletChoice.Vault(second),
+            ),
+            walletChoices(spending = listOf(p1, p3), hardware = listOf(trezor, jade), vaults = listOf(first, second)),
         )
     }
 
     @Test
     fun withoutAKeyOnlyTheVaultsShow() {
-        assertEquals(listOf(WalletChoice.Vault(first), WalletChoice.Vault(second)), walletChoices(emptyList(), listOf(first, second)))
+        assertEquals(listOf(WalletChoice.Vault(first), WalletChoice.Vault(second)), walletChoices(emptyList(), emptyList(), listOf(first, second)))
     }
 
     @Test
     fun noWalletsGiveAnEmptyList() {
-        assertTrue(walletChoices(emptyList(), emptyList()).isEmpty())
+        assertTrue(walletChoices(emptyList(), emptyList(), emptyList()).isEmpty())
     }
 
     @Test
@@ -41,6 +47,9 @@ class WalletChoicesTest {
         assertEquals("—", unknown.balance)
         assertNull(unknown.baht, "no baht for a figure nobody knows")
     }
+
+    private val trezor = PUBLIC_JADE_WALLET.copy(id = "hw_1", name = "Trezor", kind = WalletKind.TREZOR_SAFE7)
+    private val jade = PUBLIC_JADE_WALLET.copy(id = "hw_2")
 
     private fun vault(id: String) = CreatedVault(
         id = id,

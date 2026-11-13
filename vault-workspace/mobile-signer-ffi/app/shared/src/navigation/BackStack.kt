@@ -1,5 +1,6 @@
 package com.mebit.app.navigation
 
+import com.mebit.app.Place
 import com.mebit.app.data.OnboardingSession
 
 /**
@@ -11,6 +12,37 @@ internal fun stackAfterOpen(stack: List<Stop>, stop: Stop): List<Stop> = when {
     stop.route.tab -> listOf(stop)
     stack.last() == stop -> stack
     else -> stack + stop
+}
+
+/**
+ * Pure. The Stop a plain open of [route] from [top] makes: a hardware wallet's screen ([MovieRoute.hardware]) stays on the wallet [top]
+ * names, and any other screen names none, so no phone screen ever carries a hardware wallet along.
+ */
+internal fun stopFor(top: Stop, route: MovieRoute, place: Place = top.place): Stop = Stop(route, place, top.hardware.takeIf { route.hardware })
+
+/**
+ * Pure. Wallet Created 3.5.2 alone, for the hardware wallet [id] just saved. The wizard leaves the stack, as [stackAfterCreate] has it for
+ * a several-key wallet, so nothing can reach Confirm Key and save the device's key again.
+ */
+internal fun stackAfterHardwareCreate(stack: List<Stop>, id: String): List<Stop> = listOf(Stop(MovieRoute.HardwareCreated, stack.last().place, id))
+
+/** The screens of one hardware payment, from the form to the device, which the slip takes the place of once the payment is out. */
+private val HardwarePaymentRoutes = setOf(MovieRoute.HardwareSend, MovieRoute.HardwareReview, MovieRoute.HardwareSign)
+
+/**
+ * Pure. The slip 4.6 of the hardware wallet on top of [stack], once its payment is out. Send, Review and Sign leave, so Back from the slip
+ * lands where the payment began, Home or a chooser, and never on a screen that could sign the same payment again.
+ */
+internal fun stackAfterHardwareSent(stack: List<Stop>): List<Stop> {
+    val top = stack.last()
+    val kept = stack.dropLastWhile { it.route in HardwarePaymentRoutes }.ifEmpty { listOf(Stop(MovieRoute.VaultList, top.place)) }
+    return kept + Stop(MovieRoute.HardwareSent, top.place, top.hardware)
+}
+
+/** Pure. The slip's way home: Back when its wallet's Home is right under it, else that Home on top, as the phone wallet's slip opens Home. */
+internal fun stackAfterSlipHome(stack: List<Stop>): List<Stop> {
+    val home = stopFor(stack.last(), MovieRoute.HardwareHome)
+    return if (stack.getOrNull(stack.lastIndex - 1) == home) stack.dropLast(1) else stackAfterOpen(stack, home)
 }
 
 /**

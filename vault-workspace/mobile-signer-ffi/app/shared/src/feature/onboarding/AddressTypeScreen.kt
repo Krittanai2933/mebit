@@ -15,6 +15,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -32,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.SaveState
+import com.mebit.app.feature.vault.duplicateLine
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.theme.MbBody
@@ -133,8 +135,13 @@ fun AddressTypeScreen(
         Column(modifier = Modifier.selectableGroup()) {
             AddressTypeRows.forEachIndexed { i, row ->
                 if (i > 0) Spacer(modifier = Modifier.height(8.dp))
-                TypeRow(row, session.network, row.type == session.addressType) { session.chooseAddressType(row.type) }
+                TypeRow(row, session.network, row.type == session.addressType, taken = session.takenBy(row.type) != null) { session.chooseAddressType(row.type) }
             }
+        }
+        // A type whose addresses a Jade or Trezor wallet of this key has is greyed, and the line names that wallet.
+        AddressTypeRows.mapNotNull { session.takenBy(it.type) }.distinct().forEach {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(duplicateLine(it), color = MaterialTheme.colorScheme.error, fontSize = 13.sp, lineHeight = 20.sp, modifier = Modifier.testTag("address_type_taken"))
         }
     }
     sheet?.let { copy ->
@@ -165,7 +172,7 @@ fun AddressTypeScreen(
 }
 
 @Composable
-private fun TypeRow(row: AddressTypeRow, network: KeyNetwork, selected: Boolean, onSelect: () -> Unit) {
+private fun TypeRow(row: AddressTypeRow, network: KeyNetwork, selected: Boolean, taken: Boolean, onSelect: () -> Unit) {
     // Read at render, so the rows follow the session's network.
     val enabled = row.enabled(network)
     // The badge marks the default, so it stays on Native SegWit whatever is picked.
@@ -174,7 +181,7 @@ private fun TypeRow(row: AddressTypeRow, network: KeyNetwork, selected: Boolean,
         !enabled -> NOT_ON_MAINNET
         else -> null
     }
-    RadioRow(row.label, row.detail(network), badge, selected, enabled, "address_type_" + row.type.name.lowercase(), onSelect)
+    RadioRow(row.label, row.detail(network), badge, selected, enabled && !taken, "address_type_" + row.type.name.lowercase(), onSelect)
 }
 
 /** The tag after "Native SegWit" on Penpot 1.5.1 and 3.3. */

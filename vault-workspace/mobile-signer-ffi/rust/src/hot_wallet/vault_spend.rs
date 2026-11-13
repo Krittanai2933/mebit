@@ -28,7 +28,7 @@ use vault_core::hw::psbt_check::validate_signing_policy;
 use vault_core::keys::{ScriptType, account_multisig_xpub_from_mnemonic};
 
 use super::{
-    Addresses, Chain, MAX_FEE_RATE, MAX_STANDARD_VSIZE, MIN_FEE_RATE, Multisig, PreparedSend,
+    AddressSource, Chain, MAX_FEE_RATE, MAX_STANDARD_VSIZE, MIN_FEE_RATE, Multisig, PreparedSend,
     check_node_rate, destination_on, dust_floor, full_size, mnemonic_from, vsize,
 };
 use crate::{KeyNetwork, MobileSignerError};

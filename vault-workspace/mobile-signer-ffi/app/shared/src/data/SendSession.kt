@@ -12,7 +12,6 @@ import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.HotTxDetail
 import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.KeyNetwork
-import com.mebit.ffi.signer.MobileSignerException
 import com.mebit.ffi.signer.PreparedSend
 import com.mebit.ffi.signer.QuotedSend
 import com.mebit.ffi.signer.hotBroadcast
@@ -52,7 +51,7 @@ class SingleSigWallet(
     private val bumpAtRate: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType, earlierHex: String, feeRateSatVb: ULong) -> PreparedSend = ::hotPrepareFeeBump,
     private val cancelAtRate: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType, earlierHex: String, feeRateSatVb: ULong) -> PreparedSend = ::hotPrepareCancel,
     private val quoteSend: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType, destination: String, amountSats: ULong?, feeRateSatVb: ULong) -> QuotedSend = ::hotQuoteSend,
-) {
+) : HomeSource {
     /** What the wallet is. A real key is only ever [Live] or [Unavailable], so a real wallet never looks like the demo. */
     enum class WalletMode {
         /** No real key, fewer than 12 words. The offline fixture, whose payments are mocked. */
@@ -102,51 +101,51 @@ class SingleSigWallet(
     data class HeldReplacement(val prepared: PreparedSend, val network: KeyNetwork, val replaces: UnconfirmedSend, val kind: Replacement, val rateSatVb: Long)
 
     /** The [WalletMode] the last [bindSession] left. [WalletMode.Demo] until the first bind. */
-    var mode: WalletMode by mutableStateOf(WalletMode.Demo)
+    override var mode: WalletMode by mutableStateOf(WalletMode.Demo)
         private set
 
     /** How far the scan behind the last snapshot got. The figures are the wallet's only once it is [HotScan.COMPLETE], see [figuresKnown]. */
-    var scan: HotScan by mutableStateOf(HotScan.COMPLETE)
+    override var scan: HotScan by mutableStateOf(HotScan.COMPLETE)
         private set
     /** What the wallet holds, confirmed and mempool: Home's figure. */
-    var balanceSats: Long by mutableStateOf(0L)
+    override var balanceSats: Long by mutableStateOf(0L)
         private set
 
     /** What a payment could spend now, from the same coin lists the core spends: the Send screen's figure. At most [balanceSats]. */
-    var spendableSats: Long by mutableStateOf(0L)
+    override var spendableSats: Long by mutableStateOf(0L)
         private set
-    var receiveAddress: String by mutableStateOf("")
+    override var receiveAddress: String by mutableStateOf("")
         private set
-    var lastTxid: String by mutableStateOf("")
+    override var lastTxid: String by mutableStateOf("")
         private set
 
     /** The fee the last payment that went out pays, in sats: the signed transaction's, not the Send screen's estimate. 0 until a payment goes out. */
-    var lastFeeSats: Long by mutableStateOf(0L)
+    override var lastFeeSats: Long by mutableStateOf(0L)
         private set
 
     /** What the last payment that went out pays its destination, in sats: the signed transaction's, which for send all is the balance less the real fee. 0 until a payment goes out. */
-    var lastAmountSats: Long by mutableStateOf(0L)
+    override var lastAmountSats: Long by mutableStateOf(0L)
         private set
 
     /** When the last payment went out, in Unix seconds on the phone clock. 0 until a payment goes out, and again after [useDemoFixture]. */
-    var lastSentAtSeconds: Long by mutableStateOf(0L)
+    override var lastSentAtSeconds: Long by mutableStateOf(0L)
         private set
-    var lastError: String? by mutableStateOf(null)
+    override var lastError: String? by mutableStateOf(null)
         private set
 
     /** The Rust text of what the last [bindSession] could not load, after "snapshot: " or "history: ". Only a debug build shows it, so a phone screenshot names the request that failed. Null after a bind that loaded both. */
-    var lastFailure: String? by mutableStateOf(null)
+    override var lastFailure: String? by mutableStateOf(null)
         private set
     val live: Boolean get() = mode == WalletMode.Live
 
     /** False when the snapshot failed or its scan has not reached the end of the wallet. Screens then show a dash, not [balanceSats], and no payment can start. */
-    val balanceKnown: Boolean get() = figuresKnown(mode, scan)
+    override val balanceKnown: Boolean get() = figuresKnown(mode, scan)
 
     /** True when [receiveAddress] belongs to the key, so money sent to it arrives. The demo's address is made up. */
-    val addressIsReal: Boolean get() = mode != WalletMode.Demo && receiveAddress.isNotEmpty()
+    override val addressIsReal: Boolean get() = mode != WalletMode.Demo && receiveAddress.isNotEmpty()
 
     /** Recent transactions of the wallet address in Esplora's order: mempool first, then confirmed newest first. First page only. Empty for the demo fixture and after a failed history call. */
-    var history: List<HotTx> by mutableStateOf(emptyList())
+    override var history: List<HotTx> by mutableStateOf(emptyList())
         private set
 
     /**
@@ -154,7 +153,7 @@ class SingleSigWallet(
      * The session keeps it in the guard file ([OnboardingSession.unconfirmedSend]), so a wallet built after a restart, or another live instance of the wallet, takes it at its next bind, and clearing it here clears the file too.
      * A damaged guard file is [DamagedGuard] here: no history can settle it, so only the user's clear does.
      */
-    var unconfirmedSend: Unsettled? by mutableStateOf(null)
+    override var unconfirmedSend: Unsettled? by mutableStateOf(null)
         private set
 
     /**
@@ -181,7 +180,7 @@ class SingleSigWallet(
     private var lastBoundSeconds: Long? = null
 
     /** Whether a bind ended within the last [seconds]. A list reads it so a visit does not ask the server about every wallet again. */
-    fun boundWithin(seconds: Long): Boolean = lastBoundSeconds?.let { nowSeconds() - it in 0..seconds } == true
+    override fun boundWithin(seconds: Long): Boolean = lastBoundSeconds?.let { nowSeconds() - it in 0..seconds } == true
 
     fun bindSession(session: OnboardingSession, network: KeyNetwork = KeyNetwork.TEST): Unit = synchronized(bindLock) {
         lastError = null
@@ -362,45 +361,25 @@ class SingleSigWallet(
         }
         val (prepared, network) = heldSend ?: return false
         heldSend = null
-        // The guard reaches the phone before the post, so an app killed during the post still refuses this payment after the restart.
         // It keeps the signed bytes only when they are this txid's transaction. Without them the payment still goes, with no repost.
         val pending = UnconfirmedSend(prepared.txid, nowSeconds(), prepared.hex.takeIf { txidOf(it) == prepared.txid })
-        when (val claim = session.recordUnconfirmedSend(pending.txid, pending.sinceSeconds, pending.hex)) {
-            Claim.Written -> unconfirmedSend = pending
-            is Claim.Taken -> {
-                // Another live instance of this wallet, or a run before a restart, guarded a payment that may be out.
-                unconfirmedSend = claim.earlier
-                lastError = EARLIER_UNSETTLED
-                return false
-            }
-            Claim.Damaged -> {
-                // The file can no longer say whose payment may be out, so it may be this wallet's.
-                unconfirmedSend = DamagedGuard
-                lastError = EARLIER_UNSETTLED
-                return false
-            }
-            Claim.NotSaved -> {
-                lastError = GUARD_NOT_SAVED
-                return false
-            }
+        val posted = postWithGuard(
+            pending,
+            prepared.hex,
+            network,
+            postHex,
+            claim = { send -> session.recordUnconfirmedSend(send.txid, send.sinceSeconds, send.hex).also { if (it == Claim.Written) unconfirmedSend = send } },
+            clear = { clearUnconfirmedSend(session, it) },
+        )
+        when (posted) {
+            // Another live instance of this wallet, or a run before a restart, guarded a payment that may be out.
+            is Posted.Taken -> unconfirmedSend = posted.earlier
+            // The file can no longer say whose payment may be out, so it may be this wallet's.
+            Posted.Damaged -> unconfirmedSend = DamagedGuard
+            else -> Unit
         }
-        try {
-            postHex(network, prepared.hex, prepared.txid)
-        } catch (e: MobileSignerException.BroadcastUnknown) {
-            // The guard stays. Plain Thai, because Home prints lastError raw until its next bind clears it, and the Rust text is English.
-            lastError = "ยังไม่ทราบว่าการส่งออกไปแล้วหรือยัง อย่าส่งซ้ำ"
-            return false
-        } catch (e: MobileSignerException.InvalidPsbtJson) {
-            // The node refused the transaction, or hot_broadcast refused before it posted anything: nothing is out and the guard goes.
-            clearUnconfirmedSend(session, pending)
-            lastError = sendErrorThai(e.message)
-            return false
-        } catch (e: Exception) {
-            // Any other failure could have come after the post, so the guard stays and the payment reads as unknown.
-            lastError = "ยังไม่ทราบว่าการส่งออกไปแล้วหรือยัง อย่าส่งซ้ำ"
-            return false
-        }
-        clearUnconfirmedSend(session, pending)
+        lastError = postedLine(posted)
+        if (posted != Posted.Out) return false
         lastTxid = prepared.txid
         lastFeeSats = prepared.feeSats.toLong()
         lastAmountSats = prepared.amountSats.toLong()
@@ -437,7 +416,7 @@ class SingleSigWallet(
      */
     fun repost(session: OnboardingSession, network: KeyNetwork = KeyNetwork.TEST): Repost {
         val pending = unconfirmedSend as? UnconfirmedSend ?: return Repost.Failed
-        val outcome = session.repostUnconfirmedSend(pending) { hex -> posted(network, hex, pending.txid) } ?: Repost.Failed
+        val outcome = session.repostUnconfirmedSend(pending) { hex -> postAgain(postHex, network, hex, pending.txid) } ?: Repost.Failed
         if (outcome == Repost.Out && !pending.holdsCancel) {
             // Out is known, so the wallet lets go even while another instance's repost of these bytes keeps the phone's copy. A claim still
             // meets that copy until its repost ends out or a bind lists the txid. A replacement's guard that took this one's place stays.
@@ -445,19 +424,6 @@ class SingleSigWallet(
             if (unconfirmedSend == pending) unconfirmedSend = null
         }
         return outcome
-    }
-
-    /** Posts [hex], whose txid is [txid], and says how it ended. */
-    private fun posted(network: KeyNetwork, hex: String, txid: String): Repost = try {
-        postHex(network, hex, txid)
-        Repost.Out
-    } catch (e: MobileSignerException.BroadcastUnknown) {
-        Repost.Unknown
-    } catch (e: MobileSignerException.InvalidPsbtJson) {
-        // "esplora post:" is the node's own answer. Every other refusal came before anything was posted.
-        if (e.message.orEmpty().removePrefix("invalid PSBT json: ").startsWith("esplora post:")) Repost.Refused else Repost.Failed
-    } catch (e: Exception) {
-        Repost.Failed
     }
 
     /**
@@ -526,7 +492,7 @@ class SingleSigWallet(
             }
             Swap.NotSaved -> return Repost.Failed
         }
-        val outcome = session.repostUnconfirmedSend(next) { hex -> posted(held.network, hex, next.txid) } ?: Repost.Failed
+        val outcome = session.repostUnconfirmedSend(next) { hex -> postAgain(postHex, held.network, hex, next.txid) } ?: Repost.Failed
         if (outcome == Repost.Out && !next.holdsCancel) {
             clearUnconfirmedSend(session, next)
             lastTxid = prepared.txid
@@ -538,11 +504,7 @@ class SingleSigWallet(
     }
 
     /** Whether the screen may offer the clear control now: by [offersUnconfirmedClear] for a payment the guard names, and at once for a damaged guard, which has no post time to wait on. False without a guard. */
-    fun unconfirmedClearOffered(): Boolean = when (val pending = unconfirmedSend) {
-        null -> false
-        DamagedGuard -> true
-        is UnconfirmedSend -> offersUnconfirmedClear(pending.sinceSeconds, nowSeconds())
-    }
+    override fun unconfirmedClearOffered(): Boolean = clearOffered(unconfirmedSend, nowSeconds())
 
     /** Offline fixture for catalog / no-seed CI. */
     fun useDemoFixture() {
@@ -656,11 +618,14 @@ fun figuresKnown(mode: SingleSigWallet.WalletMode, scan: HotScan): Boolean = whe
 /** Home's red line for a snapshot whose scan a host lied in, or null. */
 fun scanErrorThai(scan: HotScan): String? = ABNORMAL_HISTORY.takeIf { scan == HotScan.UNVERIFIED }
 
-/** [SingleSigWallet.quote], [SingleSigWallet.prepare], [SingleSigWallet.post] and a several-key wallet's [VaultSend] while an earlier payment may be out. */
-internal const val EARLIER_UNSETTLED ="การส่งครั้งก่อนยังยืนยันไม่ได้ จึงยังส่งใหม่ไม่ได้"
+/** [SingleSigWallet.quote], [SingleSigWallet.prepare] and [SingleSigWallet.post], the same of a [DescribedWallet], and a several-key wallet's [VaultSend] while an earlier payment may be out. */
+internal const val EARLIER_UNSETTLED = "การส่งครั้งก่อนยังยืนยันไม่ได้ จึงยังส่งใหม่ไม่ได้"
 
-/** [SingleSigWallet.quote], [SingleSigWallet.prepare] and [SingleSigWallet.prepareReplacement] for a real key whose balance is not known. */
-private const val BALANCE_UNKNOWN = "ยังดึงยอดคงเหลือไม่ได้ จึงยังส่งไม่ได้"
+/** [SingleSigWallet.quote], [SingleSigWallet.prepare] and [SingleSigWallet.prepareReplacement], and a [DescribedWallet]'s draft, for a real key whose balance is not known. */
+internal const val BALANCE_UNKNOWN = "ยังดึงยอดคงเหลือไม่ได้ จึงยังส่งไม่ได้"
+
+/** A post whose outcome is unknown, [Posted.Unknown]: the guard stays. Plain Thai, because Home prints lastError raw until its next bind clears it, and the Rust text is English. */
+internal const val SEND_UNKNOWN = "ยังไม่ทราบว่าการส่งออกไปแล้วหรือยัง อย่าส่งซ้ำ"
 
 /** [SingleSigWallet.post] when the guard file could not take the payment's guard ([Claim.NotSaved]), so nothing was posted. Review shows it too. */
 internal const val GUARD_NOT_SAVED = "บันทึกสถานะการส่งไม่ได้ จึงยังไม่ส่ง ลองใหม่ภายหลัง"

@@ -170,13 +170,15 @@ void * uniffi_mobile_signer_ffi_fn_constructor_walletlink_new(RustBuffer wallet,
 );
 int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_account_xpub(void * ptr, RustBuffer derivationPath
 );
-int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_connect(void * ptr, void * codes
+int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_connect(void * ptr, void * codes, RustBuffer pairing
 );
 int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_disconnect(void * ptr
 );
 int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_info(void * ptr
 );
 int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_sign_psbt(void * ptr, RustBuffer psbtBase64, RustBuffer signerFingerprint
+);
+int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_sign_wallet_psbt(void * ptr, RustBuffer descriptor, RustBuffer psbtBase64, RustBuffer unsignedTxid
 );
 int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_unlock(void * ptr
 );
@@ -254,6 +256,22 @@ RustBuffer uniffi_mobile_signer_ffi_fn_func_vault_snapshot(RustBuffer xpubs, int
 RustBuffer uniffi_mobile_signer_ffi_fn_func_vault_spendable(RustBuffer xpubs, int8_t threshold, UniffiRustCallStatus *_Nonnull out_status
 );
 int64_t uniffi_mobile_signer_ffi_fn_func_vault_typical_vsize(RustBuffer xpubs, int8_t threshold, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_describe(RustBuffer descriptor, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_draft(RustBuffer descriptor, RustBuffer network, RustBuffer destination, RustBuffer amountSats, int64_t feeRateSatVb, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_finish(RustBuffer descriptor, RustBuffer network, RustBuffer psbt, RustBuffer unsignedTxid, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_history(RustBuffer descriptor, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_review(RustBuffer descriptor, RustBuffer network, RustBuffer psbt, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_sign_with_words(RustBuffer descriptor, RustBuffer network, RustBuffer psbt, RustBuffer expectedTxid, RustBuffer mnemonicWords, RustBuffer passphrase, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_snapshot(RustBuffer descriptor, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_tx_detail(RustBuffer descriptor, RustBuffer network, RustBuffer txid, UniffiRustCallStatus *_Nonnull out_status
 );
 RustBuffer ffi_mobile_signer_ffi_rustbuffer_alloc(int64_t size, UniffiRustCallStatus *_Nonnull out_status
 );
@@ -475,6 +493,30 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_vault_spendable(void
 int16_t uniffi_mobile_signer_ffi_checksum_func_vault_typical_vsize(void
     
 );
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_describe(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_draft(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_finish(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_history(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_review(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_sign_with_words(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_snapshot(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_tx_detail(void
+    
+);
 int16_t uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(void
     
 );
@@ -491,6 +533,9 @@ int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_info(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_psbt(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_wallet_psbt(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_unlock(void

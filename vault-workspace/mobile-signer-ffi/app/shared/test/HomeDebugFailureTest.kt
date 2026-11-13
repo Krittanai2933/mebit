@@ -13,8 +13,26 @@ class HomeDebugFailureTest {
     }
 
     @Test
-    fun aDebugBuildShowsTheRustTextAsItCame() {
-        assertEquals(FAILURE, debugFailureLine(FAILURE, debugBuild = true))
+    fun aDebugBuildShowsTheRustTextWithTheServerHidden() {
+        assertEquals(
+            "snapshot: invalid PSBT json: esplora get: <host>/api/address/tb1qexample: Network Error: connection reset by peer, gave up after 3 attempts",
+            debugFailureLine(FAILURE, debugBuild = true),
+        )
+    }
+
+    @Test
+    fun noServerAddressOrPortIsLeftWhenEveryHostFailed() {
+        val everyHost = "history: esplora get: no testnet4 host is reachable (http://192.0.2.10:8889/api: Connection Failed; " +
+            "https://blockstream.info/testnet4/api: HTTP status 429; https://mempool.space/testnet4/api/block-height/0: No route to host; 192.0.2.11:50001 refused)"
+        val line = debugFailureLine(everyHost, debugBuild = true)!!
+        for (gone in listOf("192.0.2", "8889", "50001", "blockstream.info", "mempool.space")) {
+            assertEquals(false, gone in line, "$gone is still in: $line")
+        }
+        assertEquals(
+            "history: esplora get: no testnet4 host is reachable (<host>/api: Connection Failed; <host>/testnet4/api: HTTP status 429; " +
+                "<host>/testnet4/api/block-height/0: No route to host; <host> refused)",
+            line,
+        )
     }
 
     @Test

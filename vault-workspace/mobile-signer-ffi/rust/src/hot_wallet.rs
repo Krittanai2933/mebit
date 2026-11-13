@@ -30,6 +30,7 @@ use crate::chain::{
 use crate::proof::{Anchor, NotProven, prove_use, verify};
 use crate::scan::{ChainScan, Event, GAP, Proof, ScanStatus, Seen, Step, step};
 use crate::scan_store::{FullPass, Last, ScanStore, WalletId, WalletScan};
+use crate::script::Described;
 use crate::{KeyNetwork, MobileSignerError};
 use bip39::Mnemonic;
 use bitcoin::absolute::LockTime;
@@ -103,20 +104,20 @@ fn network_of(key_network: KeyNetwork) -> Network {
     }
 }
 
-fn mnemonic_from(words: &[String]) -> Result<Mnemonic, MobileSignerError> {
+pub(crate) fn mnemonic_from(words: &[String]) -> Result<Mnemonic, MobileSignerError> {
     let phrase = words.join(" ");
     Mnemonic::parse_normalized(&phrase)
         .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Chain {
+pub(crate) enum Chain {
     External = 0,
     Internal = 1,
 }
 
 impl Chain {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Chain::External => "receive",
             Chain::Internal => "change",
@@ -133,8 +134,28 @@ pub(crate) struct OwnKey {
     pub(crate) address: Address,
 }
 
+/// What a scan needs of a wallet: the address at each index of its two chains, and the name its scan is
+/// kept under. The phone wallet's `Account` derives both from its words; a wallet the book describes and a
+/// several-key wallet's `Multisig`, from their keys alone. The id travels with the addresses it names, so no
+/// call can pair one wallet's addresses with another's file.
+pub(crate) trait AddressSource {
+    fn address(&self, chain: Chain, index: u32) -> Result<Address, MobileSignerError>;
+    fn id(&self) -> WalletId;
+}
+
+/// What a `Wallet` keeps of each index it derived: its address, and whatever a payment from it needs.
+pub(crate) trait Owner {
+    fn address(&self) -> &Address;
+}
+
+impl Owner for OwnKey {
+    fn address(&self) -> &Address {
+        &self.address
+    }
+}
+
 /// The account's two chain keys, derived once per call. `key` derives one index offline.
-struct Account {
+pub(crate) struct Account {
     secp: Secp256k1<All>,
     network: Network,
     address_type: AddressType,
@@ -142,7 +163,7 @@ struct Account {
 }
 
 impl Account {
-    fn new(
+    pub(crate) fn new(
         words: &[String],
         passphrase: &str,
         network: Network,
@@ -170,7 +191,7 @@ impl Account {
         })
     }
 
-    fn key(&self, chain: Chain, index: u32) -> Result<OwnKey, MobileSignerError> {
+    pub(crate) fn key(&self, chain: Chain, index: u32) -> Result<OwnKey, MobileSignerError> {
         let bad = |e: String| MobileSignerError::InvalidPsbtJson(e);
         let step = ChildNumber::from_normal_idx(index).map_err(|e| bad(e.to_string()))?;
         let child = self.chains[chain as usize]
@@ -189,15 +210,7 @@ impl Account {
     }
 }
 
-/// A wallet as a scan sees it. Its public id names its store entry and scan file, and `address` gives each index of each
-/// chain. A sync needs nothing else, so one sync serves a seed's wallet and a several-key wallet. The id travels with the
-/// addresses it names, so no call can pair one wallet's addresses with another's file.
-trait Addresses {
-    fn id(&self) -> WalletId;
-    fn address(&self, chain: Chain, index: u32) -> Result<Address, MobileSignerError>;
-}
-
-impl Addresses for Account {
+impl AddressSource for Account {
     /// SHA-256 of the two chain xpubs. Public data, so the store can name a wallet without holding
     /// a key, and different words, passphrase or network give a different id.
     fn id(&self) -> WalletId {
@@ -222,7 +235,7 @@ fn anchor_of(network: KeyNetwork) -> Anchor {
 }
 
 /// Every wallet's scan, in the folder `hot_use_state_dir` names once the app has called it.
-static SCAN_STORE: LazyLock<ScanStore> = LazyLock::new(ScanStore::default);
+pub(crate) static SCAN_STORE: LazyLock<ScanStore> = LazyLock::new(ScanStore::default);
 
 /// The testnet4 hosts this wallet reads and posts through outside a sync. A GET that loses the host
 /// in use marks every wallet's picture stale, so the next call syncs on the host chosen next.
@@ -231,7 +244,7 @@ static TESTNET4: EsploraSource = EsploraSource(&TESTNET4_HOSTS);
 
 /// The testnet4 hosts for one call that syncs. A host the scan catches lying is left for the next
 /// one for the rest of the call.
-fn testnet4() -> Http {
+pub(crate) fn testnet4() -> Http {
     Http::new(mark_scans_stale)
 }
 
@@ -240,23 +253,25 @@ fn mark_scans_stale() {
 }
 
 /// Both chains as a sync left them, with the key of every index it asked about and of the address each
-/// chain hands out, and each index's balance by that sync.
-struct Wallet {
+/// chain hands out, and each index's balance by that sync. A wallet the book describes keeps each
+/// index's address and where it sits in place of a key, so `K` is the phone wallet's `OwnKey` or a
+/// `script::Derived`.
+pub(crate) struct Wallet<K = OwnKey> {
     scans: [ChainScan; 2],
-    keys: [Vec<OwnKey>; 2],
+    keys: [Vec<K>; 2],
     balances: [Vec<u64>; 2],
     status: ScanStatus,
 }
 
-impl Wallet {
+impl<K: Owner> Wallet<K> {
     /// The address the wallet hands out next on `chain`, by `ChainScan::issued`.
-    fn next_unused(&self, chain: Chain) -> &OwnKey {
+    pub(crate) fn next_unused(&self, chain: Chain) -> &K {
         let chain = chain as usize;
         &self.keys[chain][self.scans[chain].issued() as usize]
     }
 
     /// Each index the sync saw, with its key, what it keeps of the index and its balance.
-    fn indices(&self) -> impl Iterator<Item = (Chain, &OwnKey, &Seen, u64)> {
+    fn indices(&self) -> impl Iterator<Item = (Chain, &K, &Seen, u64)> {
         [Chain::External, Chain::Internal]
             .into_iter()
             .flat_map(move |chain| {
@@ -269,7 +284,7 @@ impl Wallet {
             })
     }
 
-    fn used(&self) -> impl Iterator<Item = (Chain, &OwnKey)> {
+    fn used(&self) -> impl Iterator<Item = (Chain, &K)> {
         self.indices()
             .filter(|(_, _, seen, _)| seen.used)
             .map(|(chain, key, _, _)| (chain, key))
@@ -278,7 +293,7 @@ impl Wallet {
     /// The used addresses whose balance is above zero: the only ones whose coin lists are worth a
     /// request. A host whose list for an emptied address still holds a coin contradicts its own
     /// stats, and the coin is left alone.
-    fn funded(&self) -> impl Iterator<Item = (Chain, &OwnKey)> {
+    fn funded(&self) -> impl Iterator<Item = (Chain, &K)> {
         self.indices()
             .filter(|(_, _, seen, balance)| seen.used && *balance > 0)
             .map(|(chain, key, _, _)| (chain, key))
@@ -288,7 +303,7 @@ impl Wallet {
         self.keys
             .iter()
             .flatten()
-            .map(|key| key.address.to_string())
+            .map(|key| key.address().to_string())
             .collect()
     }
 
@@ -299,7 +314,7 @@ impl Wallet {
 
 /// `wallet` when its scan reached the end of the wallet, so no payment or history works from part of it.
 /// A scan that goes on fails with `esplora get:` and one a host lied in with `esplora scan:`, as the app maps them.
-fn complete(wallet: Wallet) -> Result<Wallet, MobileSignerError> {
+pub(crate) fn complete<K>(wallet: Wallet<K>) -> Result<Wallet<K>, MobileSignerError> {
     finished(&wallet.status)?;
     Ok(wallet)
 }
@@ -344,7 +359,7 @@ struct Synced {
 /// a sync ends, and the period of full passes from when one starts.
 fn sync_scan(
     source: &dyn ChainSource,
-    wallet: &dyn Addresses,
+    wallet: &dyn AddressSource,
     anchor: Anchor,
     clock: &dyn Fn() -> SystemTime,
     store: &ScanStore,
@@ -430,7 +445,7 @@ fn sync_scan(
     })
 }
 
-/// The one-key wallet `words` and `passphrase` make, by `sync_scan`, with every key derived again. `Account::new` and
+/// The one-key wallet `words` and `passphrase` make, by `synced_by`, with every key derived again. `Account::new` and
 /// `check_network` run before the store or any host hears of the wallet.
 fn synced(
     source: &dyn ChainSource,
@@ -443,8 +458,22 @@ fn synced(
 ) -> Result<Wallet, MobileSignerError> {
     let account = Account::new(words, passphrase, network_of(network), address_type)?;
     check_network(network)?;
-    let synced = sync_scan(source, &account, anchor_of(network), clock, store)?;
-    wallet_of(&account, synced)
+    synced_by(source, &account, network, clock, store, |chain, index| {
+        account.key(chain, index)
+    })
+}
+
+/// The wallet `addresses` names, by `sync_scan`, keeping `key` of each index, derived again with no lock held.
+pub(crate) fn synced_by<K>(
+    source: &dyn ChainSource,
+    addresses: &dyn AddressSource,
+    network: KeyNetwork,
+    clock: &dyn Fn() -> SystemTime,
+    store: &ScanStore,
+    key: impl Fn(Chain, u32) -> Result<K, MobileSignerError>,
+) -> Result<Wallet<K>, MobileSignerError> {
+    let synced = sync_scan(source, addresses, anchor_of(network), clock, store)?;
+    wallet_of(&key, synced)
 }
 
 /// How often a full pass runs on the host the next read goes to, by who runs it.
@@ -472,12 +501,15 @@ fn unix_seconds(at: SystemTime) -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
-/// `synced` as the wallet it describes, with every key derived again. No request.
-fn wallet_of(account: &Account, synced: Synced) -> Result<Wallet, MobileSignerError> {
+/// `synced` as the wallet it describes, with `key` of every index derived again. No request.
+fn wallet_of<K>(
+    key: &impl Fn(Chain, u32) -> Result<K, MobileSignerError>,
+    synced: Synced,
+) -> Result<Wallet<K>, MobileSignerError> {
     Ok(Wallet {
         keys: [
-            keys_of(account, Chain::External, &synced.scan.chains[0])?,
-            keys_of(account, Chain::Internal, &synced.scan.chains[1])?,
+            keys_of(key, Chain::External, &synced.scan.chains[0])?,
+            keys_of(key, Chain::Internal, &synced.scan.chains[1])?,
         ],
         scans: synced.scan.chains,
         balances: synced.balances,
@@ -492,7 +524,7 @@ fn wallet_of(account: &Account, synced: Synced) -> Result<Wallet, MobileSignerEr
 fn scan_chains(
     source: &dyn ChainSource,
     anchor: Anchor,
-    wallet: &dyn Addresses,
+    wallet: &dyn AddressSource,
     scans: &mut [ChainScan; 2],
     balances: &mut [Vec<u64>; 2],
     routine: &mut [usize; 2],
@@ -541,7 +573,7 @@ fn scan_chains(
 fn scan_chain(
     source: &dyn ChainSource,
     anchor: Anchor,
-    wallet: &dyn Addresses,
+    wallet: &dyn AddressSource,
     chain: Chain,
     scan: &mut ChainScan,
     balances: &mut Vec<u64>,
@@ -619,13 +651,13 @@ fn counted(scan: &ChainScan) -> usize {
 /// The key of every index `scan` has seen below its frontier plus `GAP`, and of the one it hands out, which a
 /// pass cut short may not have reached, derived again. No request. The index the scan file holds moves no
 /// frontier before a source proves it used again, so a file never makes this derive keys a source did not prove.
-fn keys_of(
-    account: &Account,
+fn keys_of<K>(
+    key: &impl Fn(Chain, u32) -> Result<K, MobileSignerError>,
     chain: Chain,
     scan: &ChainScan,
-) -> Result<Vec<OwnKey>, MobileSignerError> {
+) -> Result<Vec<K>, MobileSignerError> {
     (0..counted(scan) as u32)
-        .map(|index| account.key(chain, index))
+        .map(|index| key(chain, index))
         .collect()
 }
 
@@ -646,7 +678,7 @@ fn held(scans: &[ChainScan; 2], balances: &[Vec<u64>; 2]) -> Result<u64, MobileS
 /// What the source says of `indices` of `chain`, in order.
 fn lookup(
     source: &dyn ChainSource,
-    wallet: &dyn Addresses,
+    wallet: &dyn AddressSource,
     chain: Chain,
     indices: impl IntoIterator<Item = u32>,
 ) -> Result<Vec<Summary>, MobileSignerError> {
@@ -675,7 +707,7 @@ fn lookup(
 /// nothing here.
 fn refresh(
     source: &dyn ChainSource,
-    wallet: &dyn Addresses,
+    wallet: &dyn AddressSource,
     chain: Chain,
     scan: &mut ChainScan,
     balances: &mut Vec<u64>,
@@ -790,6 +822,38 @@ pub fn hot_wallet_snapshot(
     )
 }
 
+/// What `hot_wallet_snapshot` answers, for the wallet `descriptor` describes, whose keys are not on this phone.
+#[uniffi::export]
+pub fn wallet_snapshot(
+    descriptor: String,
+    network: KeyNetwork,
+) -> Result<HotWalletSnapshot, MobileSignerError> {
+    described_snapshot(
+        &EsploraSource(&testnet4()),
+        &descriptor,
+        network,
+        &SystemTime::now,
+        &SCAN_STORE,
+    )
+}
+
+/// `snapshot_from` for the wallet `descriptor` describes.
+pub(crate) fn described_snapshot(
+    source: &dyn ChainSource,
+    descriptor: &str,
+    network: KeyNetwork,
+    clock: &dyn Fn() -> SystemTime,
+    store: &ScanStore,
+) -> Result<HotWalletSnapshot, MobileSignerError> {
+    check_network(network)?;
+    let wallet = Described::parse(descriptor)?;
+    snapshot_of(
+        source,
+        &wallet.synced(source, network, clock, store)?,
+        network,
+    )
+}
+
 /// Keeps each wallet's scan in `dir`, app storage that no backup copies, so the first sync after a restart
 /// asks only what can have changed. Call it once at app start. Without it scans live in memory only.
 #[uniffi::export]
@@ -827,8 +891,17 @@ fn snapshot_from(
         clock,
         store,
     )?;
+    snapshot_of(source, &wallet, network)
+}
+
+/// `snapshot_from`'s figures for `wallet`, as a sync left it, plus its coin lists once the scan is complete.
+pub(crate) fn snapshot_of<K: Owner>(
+    source: &dyn ChainSource,
+    wallet: &Wallet<K>,
+    network: KeyNetwork,
+) -> Result<HotWalletSnapshot, MobileSignerError> {
     let (scan, spendable_sats) = match HotScan::from(&wallet.status) {
-        HotScan::Complete => match spendable_coins(source, &wallet) {
+        HotScan::Complete => match spendable_coins(source, wallet) {
             Ok((_, have)) => (HotScan::Complete, have),
             // The request limit a read of the sync can meet, so the snapshot goes on later the same way.
             Err(e) if throttled(&e).is_some() => (HotScan::Continuing, 0),
@@ -837,7 +910,7 @@ fn snapshot_from(
         scan @ (HotScan::Continuing | HotScan::Unverified) => (scan, 0),
     };
     Ok(HotWalletSnapshot {
-        receive_address: wallet.next_unused(Chain::External).address.to_string(),
+        receive_address: wallet.next_unused(Chain::External).address().to_string(),
         balance_sats: wallet.balance()?,
         spendable_sats,
         network,
@@ -873,7 +946,7 @@ impl Multisig {
     }
 }
 
-impl Addresses for Multisig {
+impl AddressSource for Multisig {
     fn id(&self) -> WalletId {
         self.id
     }
@@ -1016,7 +1089,7 @@ fn vault_history_from(
 /// used. These are the addresses a one-key `Wallet` derives, and the used ones are those `Wallet::used` walks: an index
 /// counts as used only where the scan holds both what it saw there and its balance. No request.
 fn counted_addresses(
-    wallet: &dyn Addresses,
+    wallet: &dyn AddressSource,
     synced: &Synced,
 ) -> Result<Vec<(Address, bool)>, MobileSignerError> {
     let mut counted_all = Vec::new();
@@ -1276,6 +1349,37 @@ pub fn hot_wallet_history(
     )
 }
 
+/// What `hot_wallet_history` answers, for the wallet `descriptor` describes, whose keys are not on this phone.
+#[uniffi::export]
+pub fn wallet_history(
+    descriptor: String,
+    network: KeyNetwork,
+) -> Result<Vec<HotTx>, MobileSignerError> {
+    described_history(
+        &EsploraSource(&testnet4()),
+        &descriptor,
+        network,
+        &SystemTime::now,
+        &SCAN_STORE,
+    )
+}
+
+/// `history_of` for the wallet `descriptor` describes.
+pub(crate) fn described_history(
+    source: &dyn ChainSource,
+    descriptor: &str,
+    network: KeyNetwork,
+    clock: &dyn Fn() -> SystemTime,
+    store: &ScanStore,
+) -> Result<Vec<HotTx>, MobileSignerError> {
+    check_network(network)?;
+    let wallet = Described::parse(descriptor)?;
+    history_by(
+        source,
+        &complete(wallet.synced(source, network, clock, store)?)?,
+    )
+}
+
 /// The latest transactions of every used address of the wallet, each once, as the wallet saw it:
 /// the mempool first, then confirmed transactions newest first. Only each address's first page
 /// comes back (about 25 confirmed transactions plus the mempool), so older history is not here.
@@ -1302,7 +1406,15 @@ fn history_of(
         clock,
         store,
     )?)?;
-    let used: Vec<&Address> = wallet.used().map(|(_, k)| &k.address).collect();
+    history_by(source, &wallet)
+}
+
+/// `history_of`'s rows for `wallet`, whose scan is complete.
+pub(crate) fn history_by<K: Owner>(
+    source: &dyn ChainSource,
+    wallet: &Wallet<K>,
+) -> Result<Vec<HotTx>, MobileSignerError> {
+    let used: Vec<&Address> = wallet.used().map(|(_, k)| k.address()).collect();
     history_over(source, &used, &wallet.addresses())
 }
 
@@ -1442,6 +1554,30 @@ pub fn hot_tx_detail(
     )
 }
 
+/// One transaction of the wallet `descriptor` describes in full, or None when the explorer does not know `txid`.
+#[uniffi::export]
+pub fn wallet_tx_detail(
+    descriptor: String,
+    network: KeyNetwork,
+    txid: String,
+) -> Result<Option<HotTxDetail>, MobileSignerError> {
+    described_detail(&TESTNET4, &descriptor, network, &txid, &SCAN_STORE)
+}
+
+/// `detail_of` for the wallet `descriptor` describes, refusing in the same order.
+pub(crate) fn described_detail(
+    source: &dyn ChainSource,
+    descriptor: &str,
+    network: KeyNetwork,
+    txid: &str,
+    store: &ScanStore,
+) -> Result<Option<HotTxDetail>, MobileSignerError> {
+    let txid = Txid::from_str(txid)
+        .map_err(|e| tx_error(format!("txid is not 64 hex characters: {e}")))?;
+    check_network(network)?;
+    detail_by(source, &Described::parse(descriptor)?, &txid, store)
+}
+
 /// Refuses a txid that is not 64 hex before any request. Then `/tx/{txid}` and, second so a block landing between the
 /// two only adds a confirmation, the tip. A 404 for that transaction is None and asks nothing more. There is no scan, because
 /// the wallet's own addresses are derived offline, as far as `own_addresses` says.
@@ -1458,21 +1594,31 @@ fn detail_of(
         .map_err(|e| tx_error(format!("txid is not 64 hex characters: {e}")))?;
     check_network(network)?;
     let account = Account::new(words, passphrase, network_of(network), address_type)?;
-    let Some((tx, tip)) = source.tx(&txid)? else {
+    detail_by(source, &account, &txid, store)
+}
+
+/// `detail_of` once the txid and the wallet are known: `/tx/{txid}`, then the tip.
+pub(crate) fn detail_by(
+    source: &dyn ChainSource,
+    addresses: &dyn AddressSource,
+    txid: &Txid,
+    store: &ScanStore,
+) -> Result<Option<HotTxDetail>, MobileSignerError> {
+    let Some((tx, tip)) = source.tx(txid)? else {
         return Ok(None);
     };
-    hot_detail(&tx, tip, &txid, &own_addresses(&account, store)?).map(Some)
+    hot_detail(&tx, tip, txid, &own_addresses(addresses, store)?).map(Some)
 }
 
 /// Every address a scan of this wallet reaches, with its chain. That is each index below its chain's `frontier + GAP`
 /// in the stored scan, which for a wallet never scanned, or one whose file no sync has proven again since the app
 /// started, is the first `GAP` of each chain.
 fn own_addresses(
-    account: &Account,
+    addresses: &dyn AddressSource,
     store: &ScanStore,
 ) -> Result<HashMap<String, Chain>, MobileSignerError> {
     let reach = store
-        .wallet(&account.id())
+        .wallet(&addresses.id())
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .scan
@@ -1482,7 +1628,7 @@ fn own_addresses(
     let mut own = HashMap::new();
     for chain in [Chain::External, Chain::Internal] {
         for index in 0..reach[chain as usize] {
-            own.insert(account.key(chain, index)?.address.to_string(), chain);
+            own.insert(addresses.address(chain, index)?.to_string(), chain);
         }
     }
     Ok(own)
@@ -1668,14 +1814,14 @@ pub fn hot_prepare_send_at_rate(
 /// A transaction a builder signed, with the fee it pays, the change below its floor that went into
 /// that fee and what a fee bump cut from the destination's amount. Named fields, because the sums side
 /// by side would swap silently.
-struct Signed {
-    tx: Transaction,
-    fee_sats: u64,
-    dust_change_sats: u64,
-    amount_cut_sats: u64,
+pub(crate) struct Signed {
+    pub(crate) tx: Transaction,
+    pub(crate) fee_sats: u64,
+    pub(crate) dust_change_sats: u64,
+    pub(crate) amount_cut_sats: u64,
 }
 
-fn prepared(signed: Signed) -> PreparedSend {
+pub(crate) fn prepared(signed: Signed) -> PreparedSend {
     PreparedSend {
         txid: signed.tx.compute_txid().to_string(),
         hex: serialize_hex(&signed.tx),
@@ -1808,7 +1954,7 @@ pub(crate) const MAX_FEE_RATE: u64 = 10_000;
 /// The node's test on the signed bytes: `fee_sats` at most `MAX_FEE_RATE` times `vsize`, the signed
 /// transaction's virtual size. `signed` makes that the size the fee was built for, and change put into
 /// the fee raises the fee, so the real rate can sit above the rate asked.
-fn check_node_rate(fee_sats: u64, vsize: u64) -> Result<(), String> {
+pub(crate) fn check_node_rate(fee_sats: u64, vsize: u64) -> Result<(), String> {
     if fee_sats > MAX_FEE_RATE * vsize {
         return Err(above_limit(fee_sats, vsize));
     }
@@ -1823,7 +1969,7 @@ fn above_limit(fee_sats: u64, vsize: u64) -> String {
 /// scripts are `output_scripts` bytes long, every count at its real varint width: from 253 inputs
 /// the input count takes 3 bytes. Exact for what `signed` builds, which spends every input at its
 /// type's `AddressType::input_weight`.
-fn vsize(inputs: &[InputWeightPrediction], output_scripts: &[usize]) -> u64 {
+pub(crate) fn vsize(inputs: &[InputWeightPrediction], output_scripts: &[usize]) -> u64 {
     predict_weight(inputs.iter().copied(), output_scripts.iter().copied()).to_vbytes_ceil()
 }
 
@@ -1982,14 +2128,14 @@ fn coins_overflow() -> MobileSignerError {
 /// every call, never cached, plus one `/tx` lookup per transaction with unconfirmed change. An
 /// outpoint listed twice, a sum past u64 or a lookup that is not that transaction fails the whole
 /// call.
-type Coins<'w, K = OwnKey> = Vec<(Utxo, &'w K)>;
+pub(crate) type Coins<'w, K = OwnKey> = Vec<(Utxo, &'w K)>;
 
-fn spendable_coins<'w>(
+pub(crate) fn spendable_coins<'w, K: Owner>(
     source: &dyn ChainSource,
-    wallet: &'w Wallet,
-) -> Result<(Coins<'w>, u64), MobileSignerError> {
-    let owners: Vec<(Chain, &OwnKey, &Address)> =
-        wallet.funded().map(|(c, k)| (c, k, &k.address)).collect();
+    wallet: &'w Wallet<K>,
+) -> Result<(Coins<'w, K>, u64), MobileSignerError> {
+    let owners: Vec<(Chain, &K, &Address)> =
+        wallet.funded().map(|(c, k)| (c, k, k.address())).collect();
     let own = wallet.addresses();
     let own: Vec<&str> = own.iter().map(String::as_str).collect();
     spendable_among(source, &owners, &own)
@@ -2055,9 +2201,7 @@ fn own_change_transactions<K>(
 /// Refuses unless each coin of `selected` whose signature commits to no value, a Legacy one, is output
 /// `vout` of the transaction `source` serves for its txid, paying the coin's key exactly the value the
 /// selection used. A host that listed a Legacy coin at another value would otherwise get a valid payment
-/// whose fee is not the one Review shows. One read per transaction, none for the other types. A read
-/// that got no answer fails with `esplora get:`, which asking again may pass, and an answer that is not
-/// that coin, or does not know its transaction, with `esplora scan:`, as a scan maps the same answers.
+/// whose fee is not the one Review shows. One read per transaction, none for the other types.
 fn prove_values(
     source: &dyn ChainSource,
     selected: &[(&Utxo, &OwnKey)],
@@ -2069,9 +2213,12 @@ fn prove_values(
     proven_parents(source, legacy).map(|_| ())
 }
 
-/// `prove_values`' reads and refusals for every coin of `coins`, each with the address it pays, and the parents it read,
-/// by txid. A several-key wallet proves every input this way and puts each parent in its PSBT.
-fn proven_parents<'u>(
+/// The transaction behind each of `coins`, each with the address it pays, read once per txid, once each is proven: its id
+/// is the coin's txid, and its output `vout` pays that address exactly the value the coin was listed at. Handed back by
+/// txid, so a several-key wallet puts each parent in its PSBT. A read that got no answer fails with `esplora get:`, which
+/// asking again may pass, and an answer that is not that coin, or does not know its transaction, with `esplora scan:`, as
+/// a scan maps the same answers.
+pub(crate) fn proven_parents<'u>(
     source: &dyn ChainSource,
     coins: impl Iterator<Item = (&'u Utxo, &'u Address)>,
 ) -> Result<HashMap<Txid, Transaction>, MobileSignerError> {
@@ -2214,29 +2361,29 @@ pub(crate) fn full_size(
 
 /// What a payment sends: the amount the user typed, or the whole balance less the fee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SendAmount {
+pub(crate) enum SendAmount {
     Exact(u64),
     All,
 }
 
 /// What `signed` spends and pays for one payment, decided from one sync and one read of the coin
-/// lists, before any proof or signature. `K` owns each coin: a one-key wallet's key, or a several-key
-/// wallet's address.
-struct Plan<'c, K = OwnKey> {
+/// lists, before any proof or signature. `K` owns each coin: a one-key wallet's key, a several-key
+/// wallet's address, or a described wallet's `script::Derived`.
+pub(crate) struct Plan<'c, K = OwnKey> {
     /// In input order: largest first for an exact amount, the listing order for send all.
-    selected: Vec<(&'c Utxo, &'c K)>,
+    pub(crate) selected: Vec<(&'c Utxo, &'c K)>,
     /// The destination first, then change if any, as `prepared` reads them.
-    outputs: Vec<TxOut>,
+    pub(crate) outputs: Vec<TxOut>,
     /// Inputs less outputs, change that went into the fee included.
-    fee_sats: u64,
+    pub(crate) fee_sats: u64,
     dust_change_sats: u64,
 }
 
 /// The refusals before any lookup, each kind in the order it has always made them, and the
 /// destination they parsed. An exact amount: the destination, the amount against its dust floor, the
 /// rate, then the amount with one coin's fee, which must fit u64. Send all: the rate, then the
-/// destination.
-fn checked(
+/// destination. `own` is how one of the wallet's coins is spent.
+pub(crate) fn checked(
     destination: &str,
     network: KeyNetwork,
     own: InputWeightPrediction,
@@ -2305,9 +2452,24 @@ fn planned<T>(
         clock,
         store,
     )?)?;
-    let (spendable, have) = spendable_coins(source, &wallet)?;
-    let change_script = wallet.next_unused(Chain::Internal).address.script_pubkey();
-    let plan = plan_for(amount, &spendable, have, change_script, own, &dest, rate_sat_vb)?;
+    plan_from(source, &wallet, own, &dest, amount, rate_sat_vb, finish)
+}
+
+/// What `amount` to `dest` at `rate_sat_vb` spends and pays from `wallet`, whose scan is complete and whose
+/// coins each spend as `own`, handed to `finish`: one `spendable_coins` and `plan_for`, change to the next
+/// unused change address.
+pub(crate) fn plan_from<K: Owner, T>(
+    source: &dyn ChainSource,
+    wallet: &Wallet<K>,
+    own: InputWeightPrediction,
+    dest: &Address,
+    amount: SendAmount,
+    rate_sat_vb: u64,
+    finish: impl FnOnce(Plan<'_, K>) -> Result<T, MobileSignerError>,
+) -> Result<T, MobileSignerError> {
+    let (spendable, have) = spendable_coins(source, wallet)?;
+    let change_script = wallet.next_unused(Chain::Internal).address().script_pubkey();
+    let plan = plan_for(amount, &spendable, have, change_script, own, dest, rate_sat_vb)?;
     finish(plan)
 }
 
@@ -2367,8 +2529,7 @@ fn plan_payment<'c, K>(
             coins.iter().map(|(u, _)| (u.value, own)).collect();
         select(&spends, amount_sats, rate_sat_vb, dest_len, &change_script)
     };
-    let confirmed: Vec<&(Utxo, &K)> =
-        every.iter().copied().filter(|(u, _)| u.confirmed).collect();
+    let confirmed: Vec<&(Utxo, &K)> = every.iter().copied().filter(|(u, _)| u.confirmed).collect();
     let picked = match walk(&confirmed) {
         Ok(found) => Ok((confirmed, found)),
         Err(first) => walk(&every)
@@ -3066,7 +3227,7 @@ fn fee_tiers_from(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet, VecDeque};
     use std::sync::Mutex;
@@ -3082,7 +3243,7 @@ mod tests {
 
     const OWN_SPEND: InputWeightPrediction = AddressType::NativeSegwit.input_weight();
 
-    fn abandon_about() -> Vec<String> {
+    pub(crate) fn abandon_about() -> Vec<String> {
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
             .split_whitespace()
             .map(str::to_string)
@@ -4125,7 +4286,7 @@ mod tests {
     const UNUSED: &str = r#"{"chain_stats":{"funded_txo_sum":0,"spent_txo_sum":0,"tx_count":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0,"tx_count":0}}"#;
 
     // A real testnet address that is not the wallet's: the coinbase payee of the recording.
-    const SOMEONE: &str = REAL_COINBASE_PAYEE;
+    pub(crate) const SOMEONE: &str = REAL_COINBASE_PAYEE;
     /// A P2WPKH output's script, this wallet's change and `SOMEONE`: 22 bytes.
     const P2WPKH_SCRIPT: usize = 22;
     /// `SOMEONE`'s script length.
@@ -4170,12 +4331,12 @@ mod tests {
     /// history. One set up lists its payment in `PROOF` when that block pays it, so a claim of use
     /// proves like a real one. Each Fake has its own scan cache and a clock that moves only by `tick`,
     /// so no test sleeps and none sees another's cache.
-    struct Fake {
+    pub(crate) struct Fake {
         stats: HashMap<String, String>,
-        txs: HashMap<String, String>,
+        pub(crate) txs: HashMap<String, String>,
         utxos: HashMap<String, String>,
         /// What `/tx/{txid}` answers. A transaction not set up is a stranger's: it spends none of the wallet's coins.
-        parents: HashMap<String, String>,
+        pub(crate) parents: HashMap<String, String>,
         /// Transactions this host does not know, so every read of one answers 404: a payment a reorg undid, or one
         /// in a block the host never saw.
         unknown: HashSet<String>,
@@ -4186,13 +4347,13 @@ mod tests {
         tip: String,
         calls: Mutex<Vec<String>>,
         now: Mutex<SystemTime>,
-        store: ScanStore,
+        pub(crate) store: ScanStore,
         /// The type of the wallet every call reads and signs, Native SegWit unless a test sets another.
         address_type: AddressType,
     }
 
     impl Fake {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             Self {
                 stats: HashMap::new(),
                 txs: HashMap::new(),
@@ -4209,11 +4370,11 @@ mod tests {
             }
         }
 
-        fn now(&self) -> SystemTime {
+        pub(crate) fn now(&self) -> SystemTime {
             *self.now.lock().unwrap()
         }
 
-        fn tick(&self, by: Duration) {
+        pub(crate) fn tick(&self, by: Duration) {
             *self.now.lock().unwrap() += by;
         }
 
@@ -4222,7 +4383,7 @@ mod tests {
         }
 
         /// `address` holds one coin of `value` sats, in a transaction whose id repeats `digit`.
-        fn fund(&mut self, address: &str, value: u64, digit: char) {
+        pub(crate) fn fund(&mut self, address: &str, value: u64, digit: char) {
             self.stats.insert(address.into(), used_stats(value));
             self.utxos
                 .insert(address.into(), format!("[{}]", coin(digit, 0, value, true)));
@@ -4230,7 +4391,13 @@ mod tests {
 
         /// `address` holds output 1 of a confirmed transaction that this host serves raw and that pays it `value` sats,
         /// and the coin list says `listed`, which an honest host makes `value`. Returns the transaction's id.
-        fn fund_raw(&mut self, address: &str, value: u64, listed: u64, digit: char) -> Txid {
+        pub(crate) fn fund_raw(
+            &mut self,
+            address: &str,
+            value: u64,
+            listed: u64,
+            digit: char,
+        ) -> Txid {
             let pay = |to: &str, sats| TxOut {
                 value: Amount::from_sat(sats),
                 script_pubkey: Address::from_str(to)
@@ -4251,7 +4418,7 @@ mod tests {
 
         /// `address` holds one coin of each of `values`, each output 1 of its own confirmed transaction that this
         /// host serves raw, the first made with digit `1`, the next with `2`. Returns the transactions' ids.
-        fn fund_coins(&mut self, address: &str, values: &[u64]) -> Vec<Txid> {
+        pub(crate) fn fund_coins(&mut self, address: &str, values: &[u64]) -> Vec<Txid> {
             let pay = |to: &str, sats| TxOut {
                 value: Amount::from_sat(sats),
                 script_pubkey: Address::from_str(to)
@@ -4318,11 +4485,11 @@ mod tests {
         }
 
         /// `address` was paid once and emptied again: used, with nothing to spend.
-        fn touch(&mut self, address: &str) {
+        pub(crate) fn touch(&mut self, address: &str) {
             self.stats.insert(address.into(), used_stats(0));
         }
 
-        fn get(&self, url: &str) -> Result<String, MobileSignerError> {
+        pub(crate) fn get(&self, url: &str) -> Result<String, MobileSignerError> {
             self.calls.lock().unwrap().push(url.to_string());
             let path = url
                 .strip_prefix(ESPLORA_TESTNET4)
@@ -7797,11 +7964,11 @@ mod tests {
         assert_eq!(fake.requests(), 120, "each wallet keeps its own entry");
     }
 
-    fn txo(address: &str, value: u64) -> String {
+    pub(crate) fn txo(address: &str, value: u64) -> String {
         format!(r#"{{"scriptpubkey_address":"{address}","value":{value}}}"#)
     }
 
-    fn spent(address: &str, value: u64) -> String {
+    pub(crate) fn spent(address: &str, value: u64) -> String {
         format!(
             r#"{{"is_coinbase":false,"prevout":{}}}"#,
             txo(address, value)
@@ -7820,7 +7987,7 @@ mod tests {
         tx_of(&id(digit), vin, vout, status)
     }
 
-    fn tx_of(txid: &str, vin: &[String], vout: &[String], status: &str) -> String {
+    pub(crate) fn tx_of(txid: &str, vin: &[String], vout: &[String], status: &str) -> String {
         format!(
             r#"{{"txid":"{txid}","vin":[{}],"vout":[{}],"status":{status}}}"#,
             vin.join(","),
@@ -11768,7 +11935,7 @@ mod tests {
     const PAID: [u32; 2] = [320, 120];
     /// Receive 0 and 1 and change 0 and 1 of `abandon_about` as Legacy, Nested SegWit and Taproot, which the proof
     /// block pays too, from `TYPE_VECTORS`.
-    const OTHER_TYPES_PAID: [&str; 12] = [
+    pub(crate) const OTHER_TYPES_PAID: [&str; 12] = [
         "mkpZhYtJu2r87Js3pDiWJDmPte2NRZ8bJV",
         "mzpbWabUQm1w8ijuJnAof5eiSTep27deVH",
         "mi8nhzZgGZQthq6DQHbru9crMDerUdTKva",
@@ -11782,7 +11949,7 @@ mod tests {
         "tb1p6uav7en8k7zsumsqugdmg5j6930zmzy4dg7jcddshsr0fvxlqx7q7p5els",
         "tb1pwhn9lzpaukrjwvwe365x7hcgvtcfywwsaxcq7j04jgrfcxzdq23qhzr7wt",
     ];
-    const PAID_SATS: u64 = 10_000;
+    pub(crate) const PAID_SATS: u64 = 10_000;
     /// The proof block's height on the pages that list its payments.
     const PROOF_HEIGHT: u64 = 100;
 
@@ -11888,7 +12055,7 @@ mod tests {
     });
 
     /// A transaction's status as a source lists it once `header`'s block holds it at `height`.
-    fn in_proof_block(header: &bitcoin::block::Header, height: u64) -> String {
+    pub(crate) fn in_proof_block(header: &bitcoin::block::Header, height: u64) -> String {
         format!(
             r#"{{"confirmed":true,"block_height":{height},"block_time":1790000000,"block_hash":"{}"}}"#,
             header.block_hash()
@@ -11896,7 +12063,7 @@ mod tests {
     }
 
     /// The merkle root of `txids` and the branch of the one at `pos`. An odd level repeats its last node, as in Bitcoin.
-    fn merkle(
+    pub(crate) fn merkle(
         txids: &[Txid],
         mut pos: usize,
     ) -> (bitcoin::TxMerkleNode, Vec<bitcoin::TxMerkleNode>) {
@@ -11916,7 +12083,11 @@ mod tests {
         (bitcoin::TxMerkleNode::from_byte_array(level[0]), branch)
     }
 
-    fn proof_header(root: bitcoin::TxMerkleNode, time: u32, nonce: u32) -> bitcoin::block::Header {
+    pub(crate) fn proof_header(
+        root: bitcoin::TxMerkleNode,
+        time: u32,
+        nonce: u32,
+    ) -> bitcoin::block::Header {
         bitcoin::block::Header {
             version: bitcoin::block::Version::from_consensus(0x2000_0000),
             prev_blockhash: bitcoin::BlockHash::from_byte_array([0x33; 32]),
@@ -14184,5 +14355,173 @@ mod tests {
             fake.requests() > before,
             "the post made every scan stale, so the next read syncs"
         );
+    }
+
+    // The id names each wallet's scan file. These are the bytes `Account::id` gave before the scan took an
+    // `AddressSource`, read off that build, so every file a phone keeps today is found again.
+    #[test]
+    fn the_phone_wallets_scan_id_is_the_one_its_files_are_named_by() {
+        let before = [
+            (
+                "",
+                AddressType::Legacy,
+                "723079f55c49407e1f219156f1f2fab1fe505516d1bf7fc4fe905c0ec3db2787",
+            ),
+            (
+                "",
+                AddressType::NestedSegwit,
+                "c31a615fdb407ebcecc16d1bf03e6d9ad32a6ea6e9fd03899c954c794faadb4a",
+            ),
+            (
+                "",
+                AddressType::NativeSegwit,
+                "aff0e466879aa7bab413a73f33936f95ea16dfab16151fe708f96e98486e1e94",
+            ),
+            (
+                "",
+                AddressType::Taproot,
+                "2a6b085cca247cc3359ca04a74ac41c9bb24dd4902ffadeb5d739a77f0f6f84d",
+            ),
+            (
+                "TREZOR",
+                AddressType::Legacy,
+                "b0fcc5f844bd5d08f9049f8276e95a4176e577739fc85cc174b565d4e1d4a3a2",
+            ),
+            (
+                "TREZOR",
+                AddressType::NestedSegwit,
+                "bee4e6f522bae98dcd0a85b371bfa9eb73a780b29b6ef56b95f57086a98196cc",
+            ),
+            (
+                "TREZOR",
+                AddressType::NativeSegwit,
+                "17744203d9439f9f7788ee99eb461f7fc73cd854273303ee1f9887e8ca1f70dd",
+            ),
+            (
+                "TREZOR",
+                AddressType::Taproot,
+                "68fe80e9a2b02ddcb6c416170ca2d3c3b38aa40669c47631fba9aede82fdf5f7",
+            ),
+        ];
+        for (passphrase, address_type, expected) in before {
+            let account = Account::new(
+                &abandon_about(),
+                passphrase,
+                Network::Testnet4,
+                address_type,
+            )
+            .unwrap();
+            let id: String = account.id().iter().map(|b| format!("{b:02x}")).collect();
+            assert_eq!(id, expected, "{passphrase:?} {address_type:?}");
+        }
+    }
+
+    /// The phone wallet's first addresses with no key behind them, as a wallet the book describes gives the scan.
+    struct Listed {
+        id: WalletId,
+        chains: [Vec<Address>; 2],
+    }
+
+    impl AddressSource for Listed {
+        fn address(&self, chain: Chain, index: u32) -> Result<Address, MobileSignerError> {
+            self.chains[chain as usize]
+                .get(index as usize)
+                .cloned()
+                .ok_or_else(|| MobileSignerError::InvalidPsbtJson(format!("{index} not listed")))
+        }
+
+        fn id(&self) -> WalletId {
+            self.id
+        }
+    }
+
+    struct Bare(Address);
+
+    impl Owner for Bare {
+        fn address(&self) -> &Address {
+            &self.0
+        }
+    }
+
+    // The seam the described wallets use: a source that holds no key scans, shows and plans exactly what the
+    // phone wallet of the same addresses does.
+    #[test]
+    fn a_source_with_no_key_scans_and_plans_as_the_phone_wallet_does() {
+        let account = Account::new(
+            &abandon_about(),
+            "",
+            Network::Testnet4,
+            AddressType::NativeSegwit,
+        )
+        .unwrap();
+        let listed = Listed {
+            id: account.id(),
+            chains: [Chain::External, Chain::Internal].map(|chain| {
+                (0..80)
+                    .map(|i| account.key(chain, i).unwrap().address)
+                    .collect()
+            }),
+        };
+        let mut fake = Fake::new();
+        fake.fund_coins(&addr(Chain::External, 0), &[40_000, 9_000]);
+        fake.fund(&addr(Chain::External, 3), 25_000, 'a');
+        fake.touch(&addr(Chain::Internal, 0));
+        let phone = fake.snapshot("").unwrap();
+        assert_eq!(
+            (phone.balance_sats, phone.scan),
+            (74_000, HotScan::Complete)
+        );
+
+        let source = EsploraSource(&Reads(&|url| fake.get(url)));
+        let keyless = synced_by(
+            &source,
+            &listed,
+            KeyNetwork::Test,
+            &|| fake.now(),
+            &ScanStore::default(),
+            |chain, index| Ok(Bare(listed.address(chain, index)?)),
+        )
+        .unwrap();
+        assert_eq!(
+            snapshot_of(&source, &keyless, KeyNetwork::Test).unwrap(),
+            phone
+        );
+
+        let phone = complete(
+            synced(
+                &source,
+                &abandon_about(),
+                "",
+                KeyNetwork::Test,
+                AddressType::NativeSegwit,
+                &|| fake.now(),
+                &fake.store,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let keyless = complete(keyless).unwrap();
+        let dest = Address::from_str(SOMEONE).unwrap().assume_checked();
+        type Summary = (Vec<(OutPoint, String)>, Vec<TxOut>, u64, u64);
+        fn summary<K: Owner>(plan: Plan<'_, K>) -> Result<Summary, MobileSignerError> {
+            let spent = plan
+                .selected
+                .iter()
+                .map(|(u, owner)| (OutPoint::new(u.txid, u.vout), owner.address().to_string()))
+                .collect();
+            Ok((spent, plan.outputs, plan.fee_sats, plan.dust_change_sats))
+        }
+        for amount in [
+            SendAmount::Exact(30_000),
+            SendAmount::Exact(60_000),
+            SendAmount::Exact(100_000),
+            SendAmount::All,
+        ] {
+            let by_phone = plan_from(&source, &phone, OWN_SPEND, &dest, amount, 7, summary)
+                .map_err(|e| e.to_string());
+            let by_keyless = plan_from(&source, &keyless, OWN_SPEND, &dest, amount, 7, summary)
+                .map_err(|e| e.to_string());
+            assert_eq!(by_keyless, by_phone, "{amount:?}");
+        }
     }
 }

@@ -1,5 +1,7 @@
 package com.mebit.app
 
+import android.app.Activity
+import android.content.ContextWrapper
 import android.content.pm.ApplicationInfo
 import android.os.Build
 import androidx.compose.runtime.Composable
@@ -22,3 +24,12 @@ actual fun rememberIsDebugBuild(): Boolean {
 
 /** Pure. Whether [flags], an app's `ApplicationInfo.flags`, carry the debuggable bit a debug build type sets. */
 internal fun isDebuggable(flags: Int): Boolean = flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+
+@Composable
+actual fun rememberFakeDeviceSwitch(): Boolean {
+    val context = LocalContext.current
+    return remember(context) {
+        val activity = generateSequence(context) { (it as? ContextWrapper)?.baseContext }.filterIsInstance<Activity>().firstOrNull()
+        isDebuggable(context.applicationInfo.flags) && activity?.intent?.getStringExtra("MEBIT_FAKE_DEVICE") == "1"
+    }
+}

@@ -8,8 +8,13 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use bitcoin::bip32::DerivationPath;
+use bitcoin::bip32::{DerivationPath, Xpub};
 use tokio::sync::{mpsc, oneshot};
+
+use crate::MobileSignerError;
+use crate::hot_wallet::SCAN_STORE;
+use crate::script::Described;
+use crate::spend::{self, SpendReview};
 
 mod platform;
 mod stub;
@@ -160,11 +165,16 @@ pub enum BleError {
     /// A bug, or a wallet out of step with this app. Connect again, and report it.
     #[error("{0}")]
     Protocol(String),
+    /// The device holds no key of the wallet it was asked to sign for: no key with its master
+    /// fingerprint, or another key at that key's path. Nothing showed on the device, and the link
+    /// stays usable.
+    #[error("{0}")]
+    WrongKey(String),
 }
 
 impl BleError {
     fn leaves_link_usable(&self) -> bool {
-        matches!(self, Self::Refused(_))
+        matches!(self, Self::Refused(_) | Self::WrongKey(_))
     }
 }
 
@@ -244,12 +254,25 @@ enum Request {
         signer_fingerprint: String,
         reply: oneshot::Sender<Result<String, BleError>>,
     },
+    SignWallet {
+        wallet: Box<Described>,
+        shown: SpendReview,
+        reply: oneshot::Sender<Result<SpendReview, BleError>>,
+    },
     Disconnect(oneshot::Sender<Result<(), BleError>>),
 }
 
 fn parse_derivation_path(path: &str) -> Result<DerivationPath, BleError> {
     DerivationPath::from_str(path)
         .map_err(|error| BleError::Refused(format!("invalid derivation path: {error}")))
+}
+
+/// Why a payment check refused, without the "invalid PSBT json" its error variant adds: none of them reads JSON.
+fn said(error: MobileSignerError) -> String {
+    match error {
+        MobileSignerError::InvalidPsbtJson(why) => why,
+        other => other.to_string(),
+    }
 }
 
 fn derivation_path_string(path: &DerivationPath) -> String {
@@ -278,11 +301,21 @@ impl WalletLink {
     /// Cancelling while it runs leaves nothing that closing the link cannot end: measured with a
     /// Jade, unit-tested with a fake central for a Safe 7. A Jade that fails disconnects in the
     /// background, a Safe 7 before this returns.
-    pub async fn connect(&self, codes: Arc<dyn PairingCodes>) -> Result<(), BleError> {
+    ///
+    /// `pairing` is a Safe 7 credential an earlier connect returned, so the Safe 7 asks only to
+    /// allow the connection. Unreadable bytes are dropped and the Safe 7 then pairs with a code.
+    /// Returns the credential to keep when this connect paired with a code (the first pairing, or a
+    /// kept one the Safe 7 no longer knows), else null. It is a secret: keep it in the Keychain or
+    /// Keystore. A Jade ignores `pairing` and returns null.
+    pub async fn connect(
+        &self,
+        codes: Arc<dyn PairingCodes>,
+        pairing: Option<Vec<u8>>,
+    ) -> Result<Option<Vec<u8>>, BleError> {
         platform::ble_ready()?;
         self.attach(async {
             platform::forget_seen_devices().await?;
-            backend::connect(&self.wallet, codes).await
+            backend::connect(&self.wallet, codes, pairing).await
         })
         .await
     }
@@ -336,6 +369,33 @@ impl WalletLink {
             .await
     }
 
+    /// Signs `psbt_base64`, a payment of the wallet `descriptor` whose unsigned id is
+    /// `unsigned_txid` (the payment the user was shown), with the key of that wallet this device
+    /// holds, and returns what the PSBT says after it. Before anything reaches the device, it
+    /// refuses a descriptor `wallet_describe` refuses, a PSBT `wallet_review` refuses, and a PSBT
+    /// whose id is another ("changed since shown"). `WrongKey` means the device holds no key of the
+    /// wallet, and nothing showed on it. When that key has already signed, the review comes back
+    /// without asking the device to sign. Else the device shows the payment, and its answer is
+    /// refused unless that key then signed every input. A Jade must be unlocked first. Cancelling
+    /// stops only the wait: the device finishes the request.
+    pub async fn sign_wallet_psbt(
+        &self,
+        descriptor: String,
+        psbt_base64: String,
+        unsigned_txid: String,
+    ) -> Result<SpendReview, BleError> {
+        let refused = |error| BleError::Refused(said(error));
+        let wallet = Described::parse(&descriptor).map_err(refused)?;
+        let psbt = spend::parse(&psbt_base64).map_err(refused)?;
+        let shown =
+            spend::as_shown(&wallet, &psbt, &unsigned_txid, &SCAN_STORE).map_err(refused)?;
+        self.running
+            .get()
+            .ok_or_else(closed)?
+            .sign_wallet(wallet, shown)
+            .await
+    }
+
     /// Ends the link and waits until it is down, also when a failure or another call is
     /// already ending it. A request in flight finishes first. It does nothing until `connect`
     /// has returned: cancel a `connect` that is still running instead.
@@ -348,19 +408,20 @@ impl WalletLink {
 }
 
 impl WalletLink {
+    /// Hands back the pairing credential `connecting` made, if any.
     async fn attach(
         &self,
-        connecting: impl Future<Output = Result<Running, BleError>>,
-    ) -> Result<(), BleError> {
+        connecting: impl Future<Output = Result<(Running, Option<Vec<u8>>), BleError>>,
+    ) -> Result<Option<Vec<u8>>, BleError> {
         if self.claimed.swap(true, Ordering::SeqCst) {
             return Err(BleError::Refused(
                 "this WalletLink has already connected or tried to; make a new one".into(),
             ));
         }
-        let running = connecting.await?;
+        let (running, credential) = connecting.await?;
         // One caller got past `claimed`, so nothing else has set it.
         let _ = self.running.set(running);
-        Ok(())
+        Ok(credential)
     }
 }
 
@@ -414,6 +475,22 @@ impl Running {
             .send(Request::SignPsbt {
                 psbt_base64,
                 signer_fingerprint,
+                reply,
+            })
+            .map_err(|_| closed())?;
+        answer.await.map_err(|_| closed())?
+    }
+
+    async fn sign_wallet(
+        &self,
+        wallet: Described,
+        shown: SpendReview,
+    ) -> Result<SpendReview, BleError> {
+        let (reply, answer) = oneshot::channel();
+        self.requests
+            .send(Request::SignWallet {
+                wallet: Box::new(wallet),
+                shown,
                 reply,
             })
             .map_err(|_| closed())?;
@@ -514,10 +591,83 @@ async fn answer_requests<W: Wallet>(
                     break;
                 }
             }
+            Request::SignWallet {
+                wallet: described,
+                shown,
+                reply,
+            } => {
+                if drive_call(
+                    reply,
+                    &mut link_dropped,
+                    sign_wallet(&mut wallet, &described, shown),
+                )
+                .await
+                {
+                    break;
+                }
+            }
             Request::Disconnect(reply) => return (wallet, Some(reply)),
         }
     }
     (wallet, None)
+}
+
+/// Signs `shown`, a payment of `wallet` checked before it reached the device task, with the key of `wallet` that
+/// `device` holds. `shown` comes back as it is when that key already signed, since a Jade answers a PSBT it signed
+/// with no new signature. Else the vendor's own checks run, and the answer must be the same payment with that key's
+/// signature on every input.
+async fn sign_wallet(
+    device: &mut impl Wallet,
+    wallet: &Described,
+    shown: SpendReview,
+) -> Result<SpendReview, BleError> {
+    let fingerprint = held_key(device, wallet).await?;
+    if shown.signed.contains(&fingerprint) {
+        return Ok(shown);
+    }
+    let signed = device.sign_psbt(&shown.psbt, &fingerprint).await?;
+    let out_of_step = |why: String| BleError::Protocol(format!("the device's signed PSBT: {why}"));
+    let after = spend::parse(&signed)
+        .and_then(|psbt| spend::as_shown(wallet, &psbt, &shown.unsigned_txid, &SCAN_STORE))
+        .map_err(|error| out_of_step(said(error)))?;
+    if !after.signed.contains(&fingerprint) {
+        return Err(out_of_step(format!(
+            "key {fingerprint} has not signed every input"
+        )));
+    }
+    Ok(after)
+}
+
+/// The master fingerprint of the key of `wallet` that `device` holds, once the device's account key at that key's
+/// path is that key, else `WrongKey` before anything shows on the device. The parse leaves one key per fingerprint.
+async fn held_key(device: &mut impl Wallet, wallet: &Described) -> Result<String, BleError> {
+    let keys = wallet.keys();
+    let first = device.xpub(&derivation_path_string(&keys[0].path)).await?;
+    let Some(key) = keys
+        .iter()
+        .find(|key| key.fingerprint.to_string() == first.master_fingerprint)
+    else {
+        return Err(BleError::WrongKey(format!(
+            "this device's master fingerprint {} is not one of this wallet's keys",
+            first.master_fingerprint
+        )));
+    };
+    let path = derivation_path_string(&key.path);
+    let read = if key.path == keys[0].path {
+        first
+    } else {
+        device.xpub(&path).await?
+    };
+    let held = Xpub::from_str(&read.xpub)
+        .map_err(|error| BleError::Protocol(format!("the device's account key: {error}")))?;
+    // These two decide every key derived below the account; the other xpub fields only say where it came from.
+    if (held.public_key, held.chain_code) != (key.xpub.public_key, key.xpub.chain_code) {
+        return Err(BleError::WrongKey(format!(
+            "this device's key at {path} is not the wallet's key of master fingerprint {}",
+            key.fingerprint
+        )));
+    }
+    Ok(key.fingerprint.to_string())
 }
 
 #[cfg(test)]
@@ -525,7 +675,17 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
+    use bitcoin::bip32::Xpriv;
+    use bitcoin::secp256k1::Secp256k1;
+    use bitcoin::{Network, Psbt};
+
     use super::*;
+    use crate::KeyNetwork;
+    use crate::address_type::AddressType;
+    use crate::hot_wallet::SendAmount;
+    use crate::script::tests::{abandon_master, one_key, one_of_two, soft_master, two_of_three};
+    use crate::spend::tests::{RATE, drafted_on, funded};
+    use crate::spend::wallet_finish;
 
     type Log = Arc<Mutex<Vec<&'static str>>>;
 
@@ -614,7 +774,7 @@ mod tests {
     async fn fake_where(link_goes_down: Option<oneshot::Receiver<()>>) -> Fake {
         let (wallet, answer, log) = fake_wallet(link_goes_down);
         let link = WalletLink::new(found());
-        link.attach(async { Ok(Running::spawn(wallet)) })
+        link.attach(async { Ok((Running::spawn(wallet), None)) })
             .await
             .unwrap();
         (link, answer, log)
@@ -759,12 +919,26 @@ mod tests {
         let link = WalletLink::new(found());
         assert!(matches!(link.info().await, Err(BleError::Disconnected(_))));
         assert_eq!(link.disconnect().await, Ok(()));
-        link.attach(async { Ok(Running::spawn(wallet)) })
+        link.attach(async { Ok((Running::spawn(wallet), None)) })
             .await
             .unwrap();
         let (second, _answer, _log) = fake_wallet(None);
-        let again = link.attach(async { Ok(Running::spawn(second)) }).await;
+        let again = link
+            .attach(async { Ok((Running::spawn(second), None)) })
+            .await;
         assert!(matches!(again, Err(BleError::Refused(_))));
+    }
+
+    #[tokio::test]
+    async fn connect_hands_back_the_credential_its_pairing_made_and_null_without_one() {
+        for made in [Some(vec![1u8; 85]), None] {
+            let (wallet, _answer, _log) = fake_wallet(None);
+            let link = WalletLink::new(found());
+            let handed = link
+                .attach(async { Ok((Running::spawn(wallet), made.clone())) })
+                .await;
+            assert_eq!(handed, Ok(made));
+        }
     }
 
     #[tokio::test]
@@ -775,7 +949,9 @@ mod tests {
             .await;
         assert!(matches!(refused, Err(BleError::Timeout(_))));
         let (wallet, _answer, _log) = fake_wallet(None);
-        let again = link.attach(async { Ok(Running::spawn(wallet)) }).await;
+        let again = link
+            .attach(async { Ok((Running::spawn(wallet), None)) })
+            .await;
         assert!(matches!(again, Err(BleError::Refused(_))));
         assert!(matches!(link.info().await, Err(BleError::Disconnected(_))));
     }
@@ -835,5 +1011,225 @@ mod tests {
         for _ in 0..8 {
             tokio::task::yield_now().await;
         }
+    }
+
+    /// A device holding the seed `master`, as a Jade or a Safe 7 holds one. It answers a signing request with the
+    /// PSBT signed by every key the seed holds there, or as it came when `signs` is false.
+    struct Holding {
+        master: Xpriv,
+        signs: bool,
+        log: Log,
+    }
+
+    impl Wallet for Holding {
+        async fn info(&mut self) -> Result<WalletInfo, BleError> {
+            unreachable!("signing asks no info")
+        }
+
+        async fn unlock(&mut self) -> Result<(), BleError> {
+            Ok(())
+        }
+
+        async fn xpub(&mut self, path: &str) -> Result<HwAccountKey, BleError> {
+            self.log.lock().unwrap().push("xpub");
+            let secp = Secp256k1::new();
+            let path = parse_derivation_path(path)?;
+            let account = self.master.derive_priv(&secp, &path).unwrap();
+            Ok(HwAccountKey {
+                xpub: Xpub::from_priv(&secp, &account).to_string(),
+                master_fingerprint: fingerprint(&self.master),
+                derivation_path: derivation_path_string(&path),
+            })
+        }
+
+        async fn sign_psbt(
+            &mut self,
+            psbt_base64: &str,
+            signer_fingerprint: &str,
+        ) -> Result<String, BleError> {
+            self.log.lock().unwrap().push("sign_psbt");
+            assert_eq!(signer_fingerprint, fingerprint(&self.master));
+            let mut psbt = Psbt::from_str(psbt_base64).unwrap();
+            if self.signs {
+                psbt.sign(&self.master, &Secp256k1::new())
+                    .expect("a software key signs");
+            }
+            Ok(psbt.to_string())
+        }
+
+        async fn disconnect(self) -> Result<(), BleError> {
+            Ok(())
+        }
+    }
+
+    async fn holding(master: Xpriv, signs: bool) -> (Arc<WalletLink>, Log) {
+        let log = Log::default();
+        let device = Holding {
+            master,
+            signs,
+            log: log.clone(),
+        };
+        let link = WalletLink::new(found());
+        link.attach(async { Ok((Running::spawn(device), None)) })
+            .await
+            .unwrap();
+        (link, log)
+    }
+
+    fn fingerprint(master: &Xpriv) -> String {
+        master.fingerprint(&Secp256k1::new()).to_string()
+    }
+
+    /// An unsigned payment of 30,000 sats from `descriptor`, funded as `spend`'s tests fund it.
+    fn drafted(descriptor: &str) -> SpendReview {
+        drafted_on(
+            &funded(descriptor),
+            descriptor,
+            SendAmount::Exact(30_000),
+            RATE,
+        )
+        .unwrap()
+    }
+
+    // Another wallet's PSBT, an id other than the one shown and a descriptor the app does not read are refused before
+    // the device task, though the device holds a key of the wallet.
+    #[tokio::test]
+    async fn a_payment_other_than_the_one_shown_never_reaches_the_device() {
+        let wallet = two_of_three();
+        let draft = drafted(&wallet);
+        let (link, log) = holding(soft_master(1), true).await;
+        for (descriptor, txid, why) in [
+            (
+                one_of_two(),
+                draft.unsigned_txid.clone(),
+                "not this wallet's payment",
+            ),
+            (wallet.clone(), "0".repeat(64), "changed since shown"),
+            (
+                "wpkh(nope)".into(),
+                draft.unsigned_txid.clone(),
+                "descriptor: not a descriptor",
+            ),
+        ] {
+            let refused = link
+                .sign_wallet_psbt(descriptor, draft.psbt.clone(), txid)
+                .await;
+            assert!(
+                matches!(&refused, Err(BleError::Refused(text)) if text.contains(why)),
+                "{refused:?}"
+            );
+        }
+        assert!(
+            logged(&log).is_empty(),
+            "the device was asked {:?}",
+            logged(&log)
+        );
+    }
+
+    // A device whose seed made none of the wallet's keys, and one whose fingerprint the wallet names for a key the device
+    // does not hold at that key's path, get WrongKey before any signing request, and the link stays up.
+    #[tokio::test]
+    async fn a_device_holding_no_key_of_the_wallet_is_wrong_key_before_signing() {
+        let one = fingerprint(&soft_master(1));
+        let nine = fingerprint(&soft_master(9));
+        let account_one = two_of_three().replacen(
+            &format!("[{one}/48'/1'/0'/2']"),
+            &format!("[{one}/48'/1'/1'/2']"),
+            1,
+        );
+        for (wallet, master, why) in [
+            (
+                two_of_three(),
+                soft_master(9),
+                format!("master fingerprint {nine} is not one of this wallet's keys"),
+            ),
+            (
+                account_one,
+                soft_master(1),
+                format!(
+                    "key at m/48'/1'/1'/2' is not the wallet's key of master fingerprint {one}"
+                ),
+            ),
+        ] {
+            let draft = drafted(&wallet);
+            let (link, log) = holding(master, true).await;
+            let wrong = link
+                .sign_wallet_psbt(wallet, draft.psbt, draft.unsigned_txid)
+                .await;
+            assert!(
+                matches!(&wrong, Err(BleError::WrongKey(text)) if text.contains(&why)),
+                "{wrong:?}"
+            );
+            assert_eq!(logged(&log), ["xpub"]);
+            assert!(link.account_xpub("m/48'/1'/0'/2'".into()).await.is_ok());
+        }
+    }
+
+    // Each device signs with its own key, in any order, and its review lists that key. Asked again, it makes no signing
+    // request. The payment then finishes: a 2-of-3 signed by two devices, and a one-key wallet of each address type.
+    #[tokio::test]
+    async fn each_device_signs_with_its_key_once_and_the_payment_finishes() {
+        let mut cases = vec![(two_of_three(), vec![soft_master(3), soft_master(1)])];
+        cases.extend(
+            AddressType::ALL
+                .iter()
+                .map(|&t| (one_key(t), vec![abandon_master(Network::Testnet4)])),
+        );
+        for (wallet, masters) in cases {
+            let draft = drafted(&wallet);
+            let mut psbt = draft.psbt.clone();
+            for (before, master) in masters.into_iter().enumerate() {
+                let key = fingerprint(&master);
+                let (link, log) = holding(master, true).await;
+                let read = link
+                    .sign_wallet_psbt(wallet.clone(), psbt, draft.unsigned_txid.clone())
+                    .await
+                    .unwrap();
+                assert!(
+                    read.signed.contains(&key) && read.signed.len() == before + 1,
+                    "{wallet}: {:?}",
+                    read.signed
+                );
+                assert_eq!(
+                    (&read.unsigned_txid, &read.payments),
+                    (&draft.unsigned_txid, &draft.payments)
+                );
+                let again = link
+                    .sign_wallet_psbt(
+                        wallet.clone(),
+                        read.psbt.clone(),
+                        draft.unsigned_txid.clone(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(again, read, "{wallet}");
+                assert_eq!(logged(&log), ["xpub", "sign_psbt", "xpub"], "{wallet}");
+                psbt = read.psbt;
+            }
+            let sent = wallet_finish(
+                wallet.clone(),
+                KeyNetwork::Test,
+                psbt,
+                draft.unsigned_txid.clone(),
+            );
+            assert!(sent.is_ok(), "{wallet}: {sent:?}");
+        }
+    }
+
+    // The vendor clients check what a device signed, and the answer is read again here: one without the device's
+    // signature is a device out of step with this app.
+    #[tokio::test]
+    async fn an_answer_without_the_devices_signature_is_refused() {
+        let wallet = two_of_three();
+        let draft = drafted(&wallet);
+        let (link, log) = holding(soft_master(1), false).await;
+        let refused = link
+            .sign_wallet_psbt(wallet, draft.psbt, draft.unsigned_txid)
+            .await;
+        assert!(
+            matches!(&refused, Err(BleError::Protocol(text)) if text.contains("has not signed every input")),
+            "{refused:?}"
+        );
+        assert_eq!(logged(&log), ["xpub", "sign_psbt"]);
     }
 }

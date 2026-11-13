@@ -66,7 +66,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import com.mebit.app.data.KeySourceLabel
 import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.SavedKey
@@ -206,6 +208,10 @@ fun PairMebitOtherScreen(
     }
 }
 
+/**
+ * Penpot 2.4.1 Confirm Key, one tap. With [save] it is the last step of a one-key wallet (Wallet Created comes next): the tap saves the
+ * wallet of the key a device just read, under the name typed here, and [save] answers null once it is saved, or the line that says why not.
+ */
 @Composable
 fun VerifyKeyScreen(
     store: KeyringStore,
@@ -214,9 +220,14 @@ fun VerifyKeyScreen(
     onReconnect: (KeySourceLabel) -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
+    save: (suspend (label: String) -> String?)? = null,
+    tag: String = "screen_keys/verify",
 ) {
     val pending = store.pending
     var label by remember(pending) { mutableStateOf(pending?.label.orEmpty()) }
+    val scope = rememberCoroutineScope()
+    var saving by remember { mutableStateOf(false) }
+    var saveLine by remember(pending) { mutableStateOf<String?>(null) }
     val nameFocus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     MebitScreen(
@@ -224,7 +235,7 @@ fun VerifyKeyScreen(
         title = null,
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
-        tag = "screen_keys/verify",
+        tag = tag,
     ) {
         if (pending == null) {
             Text("ไม่มีกุญแจรอยืนยัน · กลับไปเพิ่มกุญแจ", color = MaterialTheme.colorScheme.error)
@@ -312,8 +323,25 @@ fun VerifyKeyScreen(
         }
         Spacer(Modifier.height(22.dp))
         PrimaryCta(if (hardware && !pending.isMock) "ตรงกับที่อุปกรณ์แสดง" else "ตรงกับที่แหล่งกุญแจแสดง", "cta_verify_match", {
-            if (store.confirmFingerprint(pending.fingerprint, label)) onMatched() else onMismatch(pending.source)
-        })
+            when {
+                // A key the book could not save stays here, with the book's line under the buttons.
+                save == null -> if (store.confirmFingerprint(pending.fingerprint, label)) onMatched() else if (store.lastMismatch) onMismatch(pending.source)
+                // One save at a time, so a double tap cannot save two wallets.
+                !saving -> scope.launch {
+                    saving = true
+                    try {
+                        saveLine = save(label.trim().ifEmpty { pending.label })
+                    } finally {
+                        saving = false
+                    }
+                    if (saveLine == null) onMatched()
+                }
+            }
+        }, enabled = !saving)
+        saveLine?.let {
+            Spacer(Modifier.height(12.dp))
+            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("verify_save_failed"))
+        }
         TextButton(
             onClick = {
                 store.discardPending()

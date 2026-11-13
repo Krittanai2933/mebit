@@ -87,8 +87,11 @@ internal enum class WalletBoard(
     Detail(eyebrowAlpha = 0.72f, outlineAlpha = 0.20f, ring = true, keyBadge = MbDisabledFill, keyRowHeight = 48.dp, keyRowBottom = 0.dp, keyListTop = 3.dp, keyListBottom = 12.dp),
 }
 
-/** One numbered key of a policy card: its [name] over its [line], the line tagged [lineTag] for the verify recipes. */
-internal data class KeyRowText(val name: String, val line: String, val lineTag: String)
+/**
+ * One numbered key of a policy card: its [name] over its [line], the line tagged [lineTag] for the verify recipes. [badge] takes the
+ * number's place in the key's circle, as a hardware wallet's 4.1.5.1 draws its device's monogram there.
+ */
+internal data class KeyRowText(val name: String, val line: String, val lineTag: String, val badge: String? = null)
 
 /**
  * The page under 4.1 and 3.7: the page ground tagged [tag], the navy block 350 dp tall that scrolls away with the content, [board]'s ring on
@@ -252,7 +255,7 @@ internal fun PolicyCard(
                 color = MbBody,
                 fontSize = 12.sp,
                 lineHeight = 16.sp,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).testTag("key_status_line"),
             )
             Text(
                 text = if (expanded) "ซ่อน" else "รายละเอียด",
@@ -272,7 +275,8 @@ internal fun PolicyCard(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(modifier = Modifier.size(28.dp).background(board.keyBadge, CircleShape), contentAlignment = Alignment.Center) {
-                            Text("${i + 1}", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            val badge = key.badge ?: "${i + 1}"
+                            Text(badge, color = MbNavyInk, fontSize = if (badge.length > 2) 10.sp else 13.sp, fontWeight = FontWeight.SemiBold)
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {

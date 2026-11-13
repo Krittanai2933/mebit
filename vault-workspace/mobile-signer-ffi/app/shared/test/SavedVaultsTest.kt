@@ -8,8 +8,10 @@ import com.mebit.app.WriteMode
 import androidx.compose.runtime.snapshots.Snapshot
 import com.mebit.app.navigation.Boot
 import com.mebit.app.navigation.WalletGateState
+import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
+import com.mebit.ffi.signer.WalletShape
 import com.mebit.ffi.signer.generateSoftwareMultisigKey
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -97,15 +99,20 @@ class SavedVaultsTest {
 
     @Test
     fun everyCutOfAGoodTextIsDamagedNotOpened() {
-        for (cut in 1 until GOLDEN.length) {
-            val text = GOLDEN.substring(0, cut)
-            val storage = FakeVaultsStorage(text)
-            val vaults = opened(storage)
-            assertEquals(VaultsHealth.Damaged, vaults.health, "cut at $cut")
-            assertEquals(VaultBook(), vaults.current, "cut at $cut")
-            vaults.edit(added(JADE))
-            assertEquals(text, storage.text, "cut at $cut")
-            assertEquals(0, storage.writes, "cut at $cut")
+        // The two wallet numbers cut off whole leave the MV2 text of a build before them, which opens.
+        val older = setOf(GOLDEN.removeSuffix("1 0\n1 0\n"), GOLDEN_HW_36C71CF)
+        for (golden in listOf(GOLDEN, GOLDEN_HW, GOLDEN_MV1)) {
+            for (cut in 1 until golden.length) {
+                val text = golden.substring(0, cut)
+                if (text in older) continue
+                val storage = FakeVaultsStorage(text)
+                val vaults = opened(storage)
+                assertEquals(VaultsHealth.Damaged, vaults.health, "cut at $cut")
+                assertEquals(VaultBook(), vaults.current, "cut at $cut")
+                vaults.edit(added(JADE))
+                assertEquals(text, storage.text, "cut at $cut")
+                assertEquals(0, storage.writes, "cut at $cut")
+            }
         }
     }
 
@@ -113,13 +120,17 @@ class SavedVaultsTest {
     fun aTextThatEncodeNeverWritesIsDamaged() {
         val damaged = listOf(
             "leftover" to GOLDEN + "1 1\n",
-            "version zero" to GOLDEN.replaceFirst("MV1", "MV0"),
+            "version zero" to GOLDEN.replaceFirst("MV2", "MV0"),
             "not canonical" to GOLDEN.replaceFirst("8 0a1b", "08 0a1b"),
             "a count that is not canonical" to GOLDEN.replaceFirst("1 1\n", "2 01\n"),
             "a flag that is neither" to GOLDEN.replaceFirst("1 2\n1 0\n", "1 2\n1 7\n"),
             "m above n" to GOLDEN.replaceFirst("1 1\n1 1\n1 0\n13 addr-1", "1 2\n1 1\n1 0\n13 addr-2"),
             "fewer fingerprints than n" to GOLDEN.replaceFirst("1 1\n1 1\n8 abcd0123\n", "1 1\n1 0\n"),
-            "over 1 MiB" to "MV1\n" + "x".repeat(1_048_576),
+            "key ids neither none nor n" to GOLDEN_HW.replaceFirst("1 1\n14 key_1_abcd0123\n", "1 2\n14 key_1_abcd0123\n14 key_1_abcd0123\n"),
+            "a hardware fingerprint that is not 8 lowercase hex" to GOLDEN_HW.replaceFirst("8 $PUBLIC_FINGERPRINT\n", "8 ${PUBLIC_FINGERPRINT.uppercase()}\n"),
+            "an MV1 text that carries MV2 fields" to GOLDEN_HW.replaceFirst("MV2", "MV1"),
+            "one wallet number of two" to GOLDEN.removeSuffix("1 0\n"),
+            "over 1 MiB" to "MV2\n" + "x".repeat(1_048_576),
         )
         for ((case, text) in damaged) {
             val storage = FakeVaultsStorage(text)
@@ -134,10 +145,13 @@ class SavedVaultsTest {
     @Test
     fun aNewerTextIsNeverOpenedOrOverwritten() {
         val newer = listOf(
-            "version 2" to GOLDEN.replaceFirst("MV1", "MV2"),
-            "a version too long for an int" to GOLDEN.replaceFirst("MV1", "MV99999999999"),
+            "version 3" to GOLDEN.replaceFirst("MV2", "MV3"),
+            "a version too long for an int" to GOLDEN.replaceFirst("MV2", "MV99999999999"),
             "an unknown source" to GOLDEN.replaceFirst("1 2\n", "1 9\n"),
             "an unknown policy" to GOLDEN.replaceFirst("1 0\n13", "1 9\n13"),
+            "an unknown source in MV1" to GOLDEN_MV1.replaceFirst("1 2\n", "1 9\n"),
+            "an unknown device" to GOLDEN_HW.replaceFirst("1 2\n1 0\n8 $PUBLIC_FINGERPRINT", "1 9\n1 0\n8 $PUBLIC_FINGERPRINT"),
+            "an unknown address type" to GOLDEN_HW.replaceFirst("1 2\n1 0\n8 $PUBLIC_FINGERPRINT", "1 2\n1 9\n8 $PUBLIC_FINGERPRINT"),
         )
         for ((case, text) in newer) {
             val storage = FakeVaultsStorage(text)
@@ -229,7 +243,7 @@ class SavedVaultsTest {
     fun walletCreatedKeepsShowingTheWalletThisRunMadeAfterADeferredEditRenumbersIt() {
         fun numbered(n: Int) = JADE.copy(id = "key_$n", fingerprint = "aaaa000$n", xpub = "xpub-$n")
         fun create(book: SavedVaults, keys: List<SavedKey>): CreatedVault {
-            val draft = CreateWalletDraft(book, FAKE_DERIVE)
+            val draft = CreateWalletDraft(book, FAKE_DERIVE) { _, _ -> WalletShape(2u, emptyList(), "", 0uL) } // made-up keys, read as any
             keys.forEach { draft.toggle(it.id, keys) }
             return assertNotNull(draft.create(assertNotNull(draft.ready(keys))))
         }
@@ -382,6 +396,60 @@ class SavedVaultsTest {
         vaults.edit { VaultBook(listOf(JADE), listOf(VAULT)) }
         assertEquals(GOLDEN, storage.text)
         assertEquals(VaultBook(listOf(JADE), listOf(VAULT)), opened(storage).current)
+
+        vaults.edit { HW_BOOK }
+        assertEquals(GOLDEN_HW, storage.text, "a hardware wallet, a wallet's key ids and its send in progress")
+        assertEquals(HW_BOOK, opened(storage).current)
+    }
+
+    @Test
+    fun anMv1BookOpensWithTheNewFieldsEmptyAndItsNextSaveIsMv2() {
+        val storage = FakeVaultsStorage(GOLDEN_MV1)
+        val vaults = opened(storage)
+        assertEquals(VaultsHealth.Ok, vaults.health)
+        assertEquals(VaultBook(listOf(JADE), listOf(VAULT)), vaults.current, "no key ids, no send in progress, no hardware wallet")
+        assertEquals(GOLDEN_MV1, storage.text, "an open writes nothing")
+
+        vaults.edit { it.copy(hardware = listOf(PUBLIC_JADE_WALLET)) }
+        assertTrue(storage.text.startsWith("MV2\n"))
+        assertEquals(VaultBook(listOf(JADE), listOf(VAULT), listOf(PUBLIC_JADE_WALLET)), opened(storage).current)
+    }
+
+    @Test
+    fun anMv2BookSavedBeforeTheWalletNumbersOpensWithEverythingInIt() {
+        val storage = FakeVaultsStorage(GOLDEN_HW_36C71CF)
+        val vaults = opened(storage)
+        assertEquals(VaultsHealth.Ok, vaults.health, "the book 36c71cf wrote")
+        assertEquals(HW_BOOK.copy(lastVaultNumber = 0, lastHardwareNumber = 0), vaults.current, "every key and wallet, and no number given yet")
+        assertEquals(GOLDEN_HW_36C71CF, storage.text, "an open writes nothing")
+
+        val safe7 = JADE.copy(id = "key_2_11112222", label = "Safe 7", fingerprint = "11112222", xpub = "tpub-b", source = KeySourceLabel.TrezorSafe7)
+        vaults.edit(added(safe7))
+        assertEquals(listOf(JADE, safe7), opened(storage).current.keys, "a key added since is saved, not kept in memory only")
+    }
+
+    @Test
+    fun theBookNamesItsWalletsGuardsOnlyWhileItCanBeJudged() {
+        assertEquals(listOf(PUBLIC_JADE_WALLET.guardKey), opened(FakeVaultsStorage(GOLDEN_HW)).guardKeys())
+        assertEquals(emptyList(), opened(FakeVaultsStorage(GOLDEN)).guardKeys())
+        assertNull(opened(FakeVaultsStorage("not a book")).guardKeys(), "damaged")
+        assertNull(opened(FakeVaultsStorage(GOLDEN.replaceFirst("MV2", "MV3"))).guardKeys(), "newer")
+        assertNull(SavedVaults(FakeVaultsStorage(GOLDEN_HW).apply { unreadable = true }, owners = one { TEST_CHECK }).apply { sync() }.guardKeys(), "not read yet")
+    }
+
+    @Test
+    fun aHardwareWalletWhoseKeyDoesNotDeriveItsAddressDamagesTheBook() {
+        val storage = FakeVaultsStorage()
+        opened(storage).edit { it.copy(hardware = listOf(PUBLIC_JADE_WALLET.copy(address = PUBLIC_ACCOUNTS.getValue(AddressType.TAPROOT).receive0))) }
+        val written = storage.text
+        val reopened = opened(storage)
+        assertEquals(VaultsHealth.Damaged, reopened.health, "another address")
+        assertEquals(VaultBook(), reopened.current)
+        assertEquals(written, storage.text)
+
+        val refusing = SavedVaults(FakeVaultsStorage(GOLDEN_HW), owners = one { TEST_CHECK }, deriveAddress = FAKE_DERIVE, describe = { _, _ -> throw IllegalArgumentException("no") })
+        refusing.sync()
+        assertEquals(VaultsHealth.Damaged, refusing.health, "a descriptor the core refuses")
     }
 
     @Test
@@ -439,7 +507,7 @@ class SavedVaultsTest {
 
     @Test
     fun aHandOverNeverOverwritesANewerBook() {
-        val newer = GOLDEN.replaceFirst("MV1", "MV2")
+        val newer = GOLDEN.replaceFirst("MV2", "MV3")
         val storage = FakeVaultsStorage(newer)
         val vaults = SavedVaults(storage, owners = { VaultOwners(listOf(TEST_CHECK, OTHER_CHECK), everyPlaceOpened = true) }, deriveAddress = FAKE_DERIVE).apply { sync() }
         assertEquals(VaultsHealth.Newer, vaults.health)
@@ -454,7 +522,7 @@ class SavedVaultsTest {
         assertTrue(healthy.judged)
         assertEquals(true, healthy.usesKey("ABCD0123"), "a fingerprint in a vault, in any case")
         assertEquals(false, healthy.usesKey(OTHER_CHECK), "a fingerprint in no vault")
-        for ((case, storage) in listOf("damaged" to FakeVaultsStorage("not a book"), "newer" to FakeVaultsStorage(GOLDEN.replaceFirst("MV1", "MV2")))) {
+        for ((case, storage) in listOf("damaged" to FakeVaultsStorage("not a book"), "newer" to FakeVaultsStorage(GOLDEN.replaceFirst("MV2", "MV3")))) {
             assertFalse(opened(storage).judged, case)
             assertNull(opened(storage).usesKey("abcd0123"), case)
         }
@@ -485,9 +553,14 @@ class SavedVaultsTest {
 
     @Test
     fun aKeyIsNeverDeletedWhileTheBookCannotBeJudged() {
-        val storage = FakeVaultsStorage(GOLDEN).apply { unreadable = true }
-        val keyring = KeyringStore(book = opened(storage))
-        enrol(keyring, "ffff0000", tpubA)
+        val storage = FakeVaultsStorage()
+        var owner: String? = null
+        val vaults = SavedVaults(storage, owners = one { owner }, deriveAddress = FAKE_DERIVE).apply { sync() }
+        val keyring = KeyringStore(book = vaults)
+        enrol(keyring, "ffff0000", tpubA) // no wallet is saved yet, so memory is the whole book
+        storage.unreadable = true
+        owner = TEST_CHECK
+        vaults.sync()
         assertFalse(keyring.tryDelete(keyring.keys.single().id), "a delete queued now would run over the stored book")
         assertEquals(1, keyring.keys.size)
     }
@@ -534,7 +607,7 @@ class SavedVaultsTest {
     fun aRemovalOnABookThatCannotBeJudgedKeepsTheWallet() {
         val cases = listOf(
             "damaged" to FakeVaultsStorage("not a book"),
-            "written by a newer app" to FakeVaultsStorage(GOLDEN.replaceFirst("MV1", "MV2")),
+            "written by a newer app" to FakeVaultsStorage(GOLDEN.replaceFirst("MV2", "MV3")),
             "not readable this moment" to FakeVaultsStorage(GOLDEN).apply { unreadable = true },
         )
         for ((case, storage) in cases) {
@@ -743,11 +816,53 @@ private val JADE = SavedKey("key_1_abcd0123", "กุญแจบ้าน", "ab
 
 private val VAULT = CreatedVault("vault_1", "Vault 1", 1, 1, CustodyPolicy.PersonalCustody, "addr-1-tpub-a", "x\nwsh(sortedmulti(1,tpub-a))", listOf("abcd0123"), hasMockKey = true)
 
-/** The stored text of a book holding [JADE] and [VAULT] for [TEST_CHECK], written out by hand from the layout. */
-private val GOLDEN =
+/** The MV1 text of a book holding [JADE] and [VAULT] for [TEST_CHECK], as a build before the hardware wallets wrote it, written out by hand from the layout. */
+private val GOLDEN_MV1 =
     "MV1\n" +
         "8 0a1b2c3d\n" +
         "1 1\n" +
         "14 key_1_abcd0123\n9 กุญแจบ้าน\n8 abcd0123\n6 tpub-a\n14 m/48'/1'/0'/2'\n1 2\n1 0\n" +
         "1 1\n" +
         "7 vault_1\n7 Vault 1\n1 1\n1 1\n1 0\n13 addr-1-tpub-a\n28 x\nwsh(sortedmulti(1,tpub-a))\n1 1\n1 1\n8 abcd0123\n"
+
+/** The same book as this build writes it: MV2, the vault's empty key ids and send in progress, no hardware wallet, and no number given. */
+private val GOLDEN =
+    "MV2\n" +
+        "8 0a1b2c3d\n" +
+        "1 1\n" +
+        "14 key_1_abcd0123\n9 กุญแจบ้าน\n8 abcd0123\n6 tpub-a\n14 m/48'/1'/0'/2'\n1 2\n1 0\n" +
+        "1 1\n" +
+        "7 vault_1\n7 Vault 1\n1 1\n1 1\n1 0\n13 addr-1-tpub-a\n28 x\nwsh(sortedmulti(1,tpub-a))\n1 1\n1 1\n8 abcd0123\n1 0\n0 \n" +
+        "1 0\n" +
+        "1 0\n1 0\n"
+
+/** [GOLDEN]'s book with the vault's key id, a send in progress, [PUBLIC_JADE_WALLET], and higher numbers given to wallets removed since. */
+private val HW_BOOK = VaultBook(
+    listOf(JADE),
+    listOf(VAULT.copy(keyIds = listOf(JADE.id), pending = "cHNidP8B")),
+    listOf(PUBLIC_JADE_WALLET),
+    lastVaultNumber = 4,
+    lastHardwareNumber = 2,
+)
+
+private val GOLDEN_HW =
+    "MV2\n" +
+        "8 0a1b2c3d\n" +
+        "1 1\n" +
+        "14 key_1_abcd0123\n9 กุญแจบ้าน\n8 abcd0123\n6 tpub-a\n14 m/48'/1'/0'/2'\n1 2\n1 0\n" +
+        "1 1\n" +
+        "7 vault_1\n7 Vault 1\n1 1\n1 1\n1 0\n13 addr-1-tpub-a\n28 x\nwsh(sortedmulti(1,tpub-a))\n1 1\n1 1\n8 abcd0123\n1 1\n14 key_1_abcd0123\n8 cHNidP8B\n" +
+        "1 1\n" +
+        "4 hw_1\n4 Jade\n1 2\n1 0\n8 $PUBLIC_FINGERPRINT\n111 ${PUBLIC_JADE_WALLET.xpub}\n42 ${PUBLIC_JADE_WALLET.address}\n0 \n" +
+        "1 4\n1 2\n"
+
+/** [GOLDEN_HW] as 36c71cf pinned it: MV2 as every build from 9d1c581 to 36c71cf wrote it, without the two wallet numbers at the end. */
+private val GOLDEN_HW_36C71CF =
+    "MV2\n" +
+        "8 0a1b2c3d\n" +
+        "1 1\n" +
+        "14 key_1_abcd0123\n9 กุญแจบ้าน\n8 abcd0123\n6 tpub-a\n14 m/48'/1'/0'/2'\n1 2\n1 0\n" +
+        "1 1\n" +
+        "7 vault_1\n7 Vault 1\n1 1\n1 1\n1 0\n13 addr-1-tpub-a\n28 x\nwsh(sortedmulti(1,tpub-a))\n1 1\n1 1\n8 abcd0123\n1 1\n14 key_1_abcd0123\n8 cHNidP8B\n" +
+        "1 1\n" +
+        "4 hw_1\n4 Jade\n1 2\n1 0\n8 $PUBLIC_FINGERPRINT\n111 ${PUBLIC_JADE_WALLET.xpub}\n42 ${PUBLIC_JADE_WALLET.address}\n0 \n"

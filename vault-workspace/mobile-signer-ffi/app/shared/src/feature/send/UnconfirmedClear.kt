@@ -26,6 +26,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.FiatQuote
+import com.mebit.app.data.GuardExits
+import com.mebit.app.data.HomeSource
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.Replacement
 import com.mebit.app.data.Repost
@@ -49,15 +51,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * The ways out of a payment guard that nothing settles. First the retry ([retryCopy]), offered at once when the guard keeps the signed
- * bytes, which posts those bytes again behind [confirmRepost] and says how the last one ended ([repost]). Then the replacements
- * of [ReplacementControls]. Then a text link, offered
- * once the guard is old enough by the phone clock, or at once for a damaged guard file ([SingleSigWallet.unconfirmedClearOffered]),
- * that opens an inline confirm naming every txid of the guard's chain, or saying the record is damaged ([clearConfirm]), whose confirm
- * clears that guard in memory and on the phone. While a repost or a replacement runs the link waits. Nothing here, so no screen that
- * shows the guard is left showing it. A clear the phone could not finish keeps the guard and says so under the confirm. Every post
- * runs in the screen's [scope], so its result outlives the guard it settled. The copy is a default awaiting design review
- * (docs/04-open-items.md).
+ * The ways out of a payment guard that nothing settles, for a phone wallet: those of [exits], with the phone key's [ReplacementControls]
+ * after the retry.
  */
 @Composable
 internal fun UnconfirmedClearControl(
@@ -69,14 +64,47 @@ internal fun UnconfirmedClearControl(
     scope: CoroutineScope,
     confirmRepost: suspend () -> Boolean,
     confirmReplacement: suspend (Replacement) -> Boolean,
+) = UnconfirmedClearControl(wallet.exits(session), draft, repost, scope, confirmRepost) { pending ->
+    ReplacementControls(wallet, session, draft, quote, repost, scope, confirmReplacement, pending)
+}
+
+/** The phone wallet's [GuardExits], which reach the guard file through its [session]. */
+private fun SingleSigWallet.exits(session: OnboardingSession): GuardExits = object : GuardExits {
+    override val unconfirmedSend: SingleSigWallet.Unsettled? get() = this@exits.unconfirmedSend
+
+    override fun unconfirmedClearOffered(): Boolean = this@exits.unconfirmedClearOffered()
+
+    override suspend fun repost(): Repost = this@exits.repost(session)
+
+    override fun clearUnconfirmedSend(guard: SingleSigWallet.Unsettled): Boolean = this@exits.clearUnconfirmedSend(session, guard)
+}
+
+/**
+ * The ways out of a payment guard that nothing settles. First the retry ([retryCopy]), offered at once when the guard keeps the signed
+ * bytes, which posts those bytes again behind [confirmRepost] and says how the last one ended ([repost]). Then [replacements], which only
+ * a key on the phone can sign. Then a text link, offered once the guard is old enough by the phone clock, or at once for a damaged guard
+ * file ([GuardExits.unconfirmedClearOffered]), that opens an inline confirm naming every txid of the guard's chain, or saying the record
+ * is damaged ([clearConfirm]), whose confirm clears that guard in memory and on the phone. While a repost or a replacement runs the link
+ * waits. Nothing here, so no screen that shows the guard is left showing it. A clear the phone could not finish keeps the guard and says
+ * so under the confirm. Every post runs in the screen's [scope], so its result outlives the guard it settled. The copy is a default
+ * awaiting design review (docs/04-open-items.md).
+ */
+@Composable
+internal fun UnconfirmedClearControl(
+    exits: GuardExits,
+    draft: SendDraft,
+    repost: RepostAttempt,
+    scope: CoroutineScope,
+    confirmRepost: suspend () -> Boolean,
+    replacements: @Composable (SingleSigWallet.UnconfirmedSend) -> Unit = {},
 ) {
-    val pending = wallet.unconfirmedSend ?: return
-    var offered by remember(pending) { mutableStateOf(wallet.unconfirmedClearOffered()) }
+    val pending = exits.unconfirmedSend ?: return
+    var offered by remember(pending) { mutableStateOf(exits.unconfirmedClearOffered()) }
     // The clock decides only when to offer the link, and a tick keeps that offer honest while the screen stays open.
     LaunchedEffect(pending) {
         while (!offered) {
             delay(1_000)
-            offered = wallet.unconfirmedClearOffered()
+            offered = exits.unconfirmedClearOffered()
         }
     }
     if (pending is SingleSigWallet.UnconfirmedSend && pending.hex != null) {
@@ -85,7 +113,7 @@ internal fun UnconfirmedClearControl(
         PrimaryCta(
             if (repost.step == Step.Retry) copy.running else copy.label,
             "unconfirmed_repost",
-            { repost.start(scope, pending.txid, confirmRepost, draft) { wallet.repost(session) } },
+            { repost.start(scope, pending.txid, confirmRepost, draft) { exits.repost() } },
             enabled = !repost.running,
             height = 44.dp,
         )
@@ -95,7 +123,7 @@ internal fun UnconfirmedClearControl(
             Repost.Failed -> Note(copy.failed, "unconfirmed_repost_failed")
             Repost.Out, null -> Unit
         }
-        ReplacementControls(wallet, session, draft, quote, repost, scope, confirmReplacement, pending)
+        replacements(pending)
     }
     if (!offered || repost.running) return
     var confirming by remember(pending) { mutableStateOf(false) }
@@ -112,7 +140,7 @@ internal fun UnconfirmedClearControl(
         Spacer(modifier = Modifier.height(6.dp))
         Text(text.warning, color = MbNavyInk, fontSize = 14.sp, lineHeight = 20.sp)
         Spacer(modifier = Modifier.height(12.dp))
-        PrimaryCta("ยืนยันส่งใหม่", "unconfirmed_clear_confirm", { stuck = !wallet.clearUnconfirmedSend(session, pending) }, height = 44.dp)
+        PrimaryCta("ยืนยันส่งใหม่", "unconfirmed_clear_confirm", { stuck = !exits.clearUnconfirmedSend(pending) }, height = 44.dp)
         if (stuck) {
             Spacer(modifier = Modifier.height(6.dp))
             Text("ล้างสถานะการส่งครั้งก่อนไม่สำเร็จ ลองใหม่ภายหลัง", color = MbEyebrow, fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 17.sp, modifier = Modifier.testTag("unconfirmed_clear_failed"))
@@ -304,7 +332,7 @@ private fun Note(line: String, tag: String) {
  * this line says where the payment went. A cancel that is out keeps its guard until a block holds it, so the line says to wait.
  */
 @Composable
-internal fun RepostedNote(repost: RepostAttempt, wallet: SingleSigWallet) {
+internal fun RepostedNote(repost: RepostAttempt, wallet: HomeSource) {
     val waiting = (wallet.unconfirmedSend as? SingleSigWallet.UnconfirmedSend)?.takeIf { it.holdsCancel }?.txid
     val replaced = repost.replaced?.takeIf { it.outcome == Repost.Out }
     val (line, txid, tag) = when {
@@ -412,7 +440,7 @@ internal class RepostAttempt {
     }
 
     /** Asks the owner through [confirm], the check that signing asks, and only then runs [post] off the main thread for the guard [txid]. */
-    suspend fun run(txid: String, confirm: suspend () -> Boolean, post: () -> Repost) {
+    suspend fun run(txid: String, confirm: suspend () -> Boolean, post: suspend () -> Repost) {
         if (running) return
         step = Step.Retry
         try {
@@ -427,7 +455,7 @@ internal class RepostAttempt {
      * that learns it is out, because the draft may hold that payment and a second review of it would pay twice. Leaving the screen
      * cancels [scope], which can keep the post from starting but never keeps the draft of a payment that went out.
      */
-    fun start(scope: CoroutineScope, txid: String, confirm: suspend () -> Boolean, draft: SendDraft, post: () -> Repost): Job =
+    fun start(scope: CoroutineScope, txid: String, confirm: suspend () -> Boolean, draft: SendDraft, post: suspend () -> Repost): Job =
         scope.launch { run(txid, confirm) { post().also { if (it == Repost.Out) draft.reset() } } }
 
     /** [go], unless a repost runs here, because leaving the screen meanwhile would hide a payment that may still go out. */

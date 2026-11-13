@@ -99,7 +99,8 @@ internal sealed interface Every {
  */
 class Wallets internal constructor(
     private val shelf: SecureShelf,
-    private val payments: PendingPayments = PendingPayments(null),
+    /** The one-key pay-twice guard file, which the book's Jade and Trezor wallets share ([HardwareWallets]). */
+    internal val payments: PendingPayments = PendingPayments(null),
     private val lastUsed: PlainFile? = null,
     private val forgetBook: () -> Unit = {},
     private val forgetScans: () -> Unit = { hotForgetScanState() },
@@ -111,6 +112,10 @@ class Wallets internal constructor(
     private val nowSeconds: () -> Long = { Clock.System.now().epochSeconds },
     /** The several-key wallets' pay-twice guards, keyed by [vaultGuardKey], in a file apart from [payments], whose format a vault line would break. */
     internal val vaultPayments: PendingPayments = PendingPayments(null),
+    /** The guard keys of the book's Jade and Trezor wallets ([SavedVaults.guardKeys]), null while the book cannot be judged. */
+    private val bookGuardKeys: () -> List<String>? = { emptyList() },
+    /** The book's Jade and Trezor wallets, whose key and address type no phone wallet may take. */
+    private val bookHardware: () -> List<HardwareWallet> = { emptyList() },
 ) {
     private val saved = mutableMapOf<Place, SavedWallet>()
 
@@ -126,10 +131,24 @@ class Wallets internal constructor(
             place = place,
             onPhone = { fingerprint -> all.any { it.place != place && it.session.fingerprint.equals(fingerprint, ignoreCase = true) } },
             startsLocked = locked,
-            others = { if (unreadMayOpen) null else listed.filter { it.place != place }.map { it.session.fingerprint } },
+            others = { guardKeysBut(place) },
+            hardwareWith = { fingerprint, type -> bookHardware().firstOrNull { it.fingerprint.equals(fingerprint, ignoreCase = true) && it.addressType == type }?.name },
         ),
         newChain(),
     )
+
+    /**
+     * Every pay-twice guard key on this phone: each listed wallet's fingerprint, then the book's wallets' keys, so a damaged guard file
+     * that one wallet's user clears leaves a line for each of the others. Null while one could go unnamed: a place that did not open but
+     * may at the next launch, or a book that cannot be judged.
+     */
+    fun guardKeys(): List<String>? = guardKeysBut(null)
+
+    private fun guardKeysBut(place: Place?): List<String>? {
+        if (unreadMayOpen) return null
+        val book = bookGuardKeys() ?: return null
+        return listed.filter { it.place != place }.map { it.session.fingerprint } + book
+    }
 
     var all: List<OpenWallet> by mutableStateOf(listOf(empty(Place.FIRST, locked = false)))
         private set
@@ -345,6 +364,12 @@ class Wallets internal constructor(
 
     /** Every wallet's own key, in place order. */
     fun ownKeys(): List<SavedKey> = listed.mapNotNull { it.session.ownKey() }
+
+    /**
+     * The listed wallets, as [HardwareWallets.add] compares a device's key with them. Null while a place that did not open may open at the
+     * next launch, since its wallet could have the device's addresses.
+     */
+    fun phoneWallets(): List<PhoneWallet>? = if (unreadMayOpen) null else listed.map { PhoneWallet(it.session.walletName, it.session.fingerprint, it.session.addressType) }
 
     /** Called when the app returns. Each session repeats its own failed save. */
     fun flushPendingSaves() = all.forEach { it.session.flushPendingSave() }

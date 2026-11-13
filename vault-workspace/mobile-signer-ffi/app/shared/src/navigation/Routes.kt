@@ -12,6 +12,8 @@ enum class MovieRoute(
     val bar: BarTab? = null,
     /** A tab of the bar. Opening it from anywhere makes it the only entry on the Back stack ([stackAfterOpen]), so it never has a back chip. */
     val tab: Boolean = false,
+    /** A screen of one Jade or Safe 7 wallet, the one its Stop names ([Stop.hardware]). Only these carry that name on. */
+    val hardware: Boolean = false,
 ) {
     Welcome(
         "welcome",
@@ -310,6 +312,94 @@ enum class MovieRoute(
         "RECEIVE",
         "รับเข้า Wallet",
         "ที่อยู่รับของ Wallet",
+    ),
+    ChooseKey(
+        "vault/choose-key",
+        "POLICY · ขั้น 2/3",
+        "เลือกกุญแจมาประกอบ",
+        "เลือกแล้ว 1 / 1 ใบ",
+    ),
+    HardwareAddressType(
+        "vault/hw-address-type",
+        "POLICY · ขั้น 3/3",
+        "เลือกรูปแบบที่อยู่",
+        "กำหนดรูปแบบที่อยู่และเส้นทางกุญแจของกระเป๋านี้",
+    ),
+    HardwareReadKey(
+        "vault/hw-read-key",
+        "HARDWARE WALLET",
+        "เชื่อมต่ออุปกรณ์",
+        "อ่านกุญแจสาธารณะ (xpub)",
+    ),
+    HardwareConfirmKey(
+        "vault/hw-confirm-key",
+        "VERIFY KEY",
+        "ยืนยัน fingerprint",
+        "เทียบ fingerprint กับที่แสดงบนอุปกรณ์ให้ตรงกันก่อนกดยืนยัน",
+    ),
+    HardwareCreated(
+        "vault/hw-created",
+        "WALLET CREATED",
+        "พร้อมใช้งาน",
+        "เข้าใช้งานกระเป๋า",
+        hardware = true,
+    ),
+    HardwareHome(
+        "hw/home",
+        "SINGLE-SIG",
+        "กุญแจเดียว",
+        "อยู่บนอุปกรณ์",
+        BarTab.Wallets,
+        hardware = true,
+    ),
+    HardwareReceive(
+        "hw/receive",
+        "RECEIVE",
+        "รับ Bitcoin",
+        "ที่อยู่รับ",
+        hardware = true,
+    ),
+    HardwareSend(
+        "hw/send",
+        "SEND",
+        "ส่ง Bitcoin",
+        "จำนวน · ค่าธรรมเนียม",
+        hardware = true,
+    ),
+    HardwareReview(
+        "hw/review",
+        "SEND · ตรวจสอบ",
+        "ตรวจก่อนส่ง",
+        "ส่งแล้วยกเลิกไม่ได้ เทียบที่อยู่กับคนรับอีกครั้ง",
+        hardware = true,
+    ),
+    HardwareSign(
+        "hw/sign",
+        "SIGN",
+        "ตรวจสอบบนอุปกรณ์",
+        "กดยืนยันบนอุปกรณ์",
+        hardware = true,
+    ),
+    HardwareSent(
+        "hw/sent",
+        "SENT · SLIP",
+        "ส่งสำเร็จ",
+        "แชร์ใบเสร็จ",
+        hardware = true,
+    ),
+    HardwareHistory(
+        "hw/history",
+        "HISTORY",
+        "ประวัติธุรกรรม",
+        "ธุรกรรมทั้งหมดของกระเป๋านี้",
+        hardware = true,
+    ),
+    HardwareTxDetail(
+        "hw/tx",
+        "TRANSACTION",
+        "รายละเอียดธุรกรรม",
+        "สถานะ · ค่าธรรมเนียม · TXID",
+        hardware = true,
     ),
     ;
 

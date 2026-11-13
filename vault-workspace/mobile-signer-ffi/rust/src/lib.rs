@@ -14,6 +14,8 @@ pub mod price;
 mod proof;
 mod scan;
 mod scan_store;
+pub mod script;
+pub mod spend;
 
 use std::str::FromStr;
 
@@ -965,6 +967,38 @@ mod tests {
                 hot_wallet::vault_spend::uniffi_mobile_signer_ffi_checksum_func_vault_finalize_psbt(),
             ),
             (
+                "func_wallet_snapshot",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_wallet_snapshot(),
+            ),
+            (
+                "func_wallet_history",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_wallet_history(),
+            ),
+            (
+                "func_wallet_tx_detail",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_wallet_tx_detail(),
+            ),
+            (
+                "func_wallet_describe",
+                script::uniffi_mobile_signer_ffi_checksum_func_wallet_describe(),
+            ),
+            (
+                "func_wallet_draft",
+                spend::uniffi_mobile_signer_ffi_checksum_func_wallet_draft(),
+            ),
+            (
+                "func_wallet_review",
+                spend::uniffi_mobile_signer_ffi_checksum_func_wallet_review(),
+            ),
+            (
+                "func_wallet_finish",
+                spend::uniffi_mobile_signer_ffi_checksum_func_wallet_finish(),
+            ),
+            (
+                "func_wallet_sign_with_words",
+                spend::uniffi_mobile_signer_ffi_checksum_func_wallet_sign_with_words(),
+            ),
+            (
                 "func_scan_wallets",
                 ble::uniffi_mobile_signer_ffi_checksum_func_scan_wallets(),
             ),
@@ -995,6 +1029,10 @@ mod tests {
             (
                 "method_walletlink_sign_psbt",
                 ble::uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_psbt(),
+            ),
+            (
+                "method_walletlink_sign_wallet_psbt",
+                ble::uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_wallet_psbt(),
             ),
             (
                 "method_walletlink_disconnect",

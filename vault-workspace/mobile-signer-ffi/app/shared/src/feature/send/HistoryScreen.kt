@@ -9,7 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.mebit.app.data.SingleSigWallet
+import com.mebit.app.data.HomeSource
 import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.theme.MbSlate
@@ -20,10 +20,11 @@ internal const val HISTORY_EMPTY_TEXT = "ยังไม่มีธุรกร
 /** Every loaded transaction as the Home row. A tap on a row opens it on the detail screen (board 3.6.2) through [onOpenTx]. */
 @Composable
 fun S7HistoryScreen(
-    wallet: SingleSigWallet,
+    wallet: HomeSource,
     onOpenTx: (HotTx) -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
+    tag: String = "screen_send/s7",
 ) {
     val rows = if (wallet.mode == WalletMode.Live) historyRows(wallet.history) else emptyList()
     MebitScreen(
@@ -31,7 +32,7 @@ fun S7HistoryScreen(
         title = "ประวัติธุรกรรม",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
-        tag = "screen_send/s7",
+        tag = tag,
     ) {
         if (rows.isEmpty()) {
             Text(HISTORY_EMPTY_TEXT, color = MbSlate, fontSize = 13.sp, lineHeight = 17.sp, modifier = Modifier.testTag("history_empty"))

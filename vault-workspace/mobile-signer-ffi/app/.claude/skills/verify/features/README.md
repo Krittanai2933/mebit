@@ -49,6 +49,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 - [Movie Page app lock](./movie-page-app-lock.md) covers Face ID enable, failure, unlock on return, and the sign check (real iPhone).
 - [Wallet restart](./wallet-restart.md) covers the saved wallet: cold-start unlock, a payment of unknown outcome across a restart, the reinstall wipe, Forget, the App Lock read-back, and the not-saved notice.
 - [Several wallets](./several-wallets.md) covers adding a wallet apart from a key for a Vault, the wallet lists, switching, removing and the full Forget.
+- [Hardware wallets](./hardware-wallets.md) covers a one-key wallet on a Jade or a Safe 7: creating it, its card, Home, Receive, Send to the device signing on the confirmed screen, and removing it, with the debug fake device on a simulator.
 - [Movie Page keys](./movie-page-keys.md) covers AddKey, T13, T14.
 - [Movie Page vault](./movie-page-vault.md) covers policy → BSMS file → list/detail/T20.
 - [Movie Page send](./movie-page-send.md) covers S1 to S6, live on testnet4 for a real key and mocked for the demo wallet, and M*, a several-key wallet's real testnet4 send from 5.1 through its review to 5.9's slip.

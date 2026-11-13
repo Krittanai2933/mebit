@@ -33,10 +33,22 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mebit.app.BiometricResult
+import com.mebit.app.Pairings
 import com.mebit.app.Place
 import com.mebit.app.data.AppLockState
 import com.mebit.app.data.CreateWalletDraft
+import com.mebit.app.data.DeviceLink
+import com.mebit.app.data.FakeDevice
+import com.mebit.app.data.bleLink
+import com.mebit.app.data.fakeDeviceAllowed
+import com.mebit.app.data.HardwareAdd
+import com.mebit.app.data.HardwareRemoval
+import com.mebit.app.data.HardwareWallet
+import com.mebit.app.data.HardwareWallets
+import com.mebit.app.data.hardwareKeyName
 import com.mebit.app.data.KeyringStore
+import com.mebit.app.data.hardwareKind
+import com.mebit.app.data.oneKeyChoices
 import com.mebit.app.data.OwnerCheck
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.Replacement
@@ -51,6 +63,7 @@ import com.mebit.app.data.vaultGuardKey
 import com.mebit.app.data.OpenWallet
 import com.mebit.app.data.WalletRemoval
 import com.mebit.app.data.Wallets
+import com.mebit.app.data.AddRefusal
 import com.mebit.app.data.addRefusalLine
 import com.mebit.app.data.ownKey
 import com.mebit.app.data.unopenedNotice
@@ -59,6 +72,7 @@ import com.mebit.app.data.ffiImportSeedDraft
 import com.mebit.app.data.liveQuoteCache
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.feature.keys.AddKeyScreen
+import com.mebit.app.feature.keys.DeviceRead
 import com.mebit.app.feature.keys.HardwareWalletScreen
 import com.mebit.app.feature.keys.KeyringScreen
 import com.mebit.app.feature.keys.PairMebitOtherScreen
@@ -78,8 +92,14 @@ import com.mebit.app.feature.onboarding.PinSheet
 import com.mebit.app.feature.onboarding.SpendingPinScreen
 import com.mebit.app.feature.onboarding.VerifyWordsScreen
 import com.mebit.app.feature.onboarding.WelcomeScreen
+import com.mebit.app.feature.vault.CREATE_FAILED_LINE
+import com.mebit.app.feature.vault.ChooseKeyScreen
 import com.mebit.app.feature.vault.ChooseKeysScreen
+import com.mebit.app.feature.vault.HardwareCard
+import com.mebit.app.feature.vault.HardwareAddressTypeScreen
+import com.mebit.app.feature.vault.HardwareCreatedScreen
 import com.mebit.app.feature.vault.PolicyScreen
+import com.mebit.app.feature.vault.duplicateLine
 import com.mebit.app.feature.vault.SpendingCard
 import com.mebit.app.feature.vault.ReviewScreen
 import com.mebit.app.feature.vault.ScriptTypeScreen
@@ -101,6 +121,12 @@ import com.mebit.app.feature.send.S6SentScreen
 import com.mebit.app.feature.send.S7HistoryScreen
 import com.mebit.app.feature.send.S8TxDetailScreen
 import com.mebit.app.feature.send.ChooseWalletScreen
+import com.mebit.app.feature.send.HardwareHomeScreen
+import com.mebit.app.feature.send.HardwareReviewScreen
+import com.mebit.app.feature.send.HardwareSendScreen
+import com.mebit.app.feature.send.HardwareSignScreen
+import com.mebit.app.feature.send.SentSlip
+import com.mebit.app.feature.send.hardwareDeleteItem
 import com.mebit.app.feature.send.DEMO_TX
 import com.mebit.app.feature.send.VaultReceiveScreen
 import com.mebit.app.feature.send.REMOVE_FAILED_LINE
@@ -117,30 +143,41 @@ import com.mebit.app.feature.send.VaultReviewScreen
 import com.mebit.app.feature.send.VaultSendScreen
 import com.mebit.app.feature.send.VaultSentScreen
 import com.mebit.app.rememberBiometrics
+import com.mebit.app.rememberFakeDeviceSwitch
 import com.mebit.app.rememberIsDebugBuild
 import com.mebit.app.ui.components.LocalDebugLinkLift
 import com.mebit.app.ui.components.MebitBottomBar
+import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.bottomBarHeight
 import com.mebit.app.ui.components.coversScreen
 import com.mebit.app.ui.theme.MbPage
 import com.mebit.ffi.signer.HotTx
+import com.mebit.ffi.signer.FoundWallet
+import com.mebit.ffi.signer.HwAccountKey
+import com.mebit.ffi.signer.WalletKind
+import com.mebit.ffi.signer.scanWallets
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private val ImplementedRoutes = MovieRoute.entries.toSet()
 
-/** One screen on the Back stack and the wallet it belongs to. A wallet switch is a push of a Stop with another place, and Back undoes it. */
-data class Stop(val route: MovieRoute, val place: Place)
+/**
+ * One screen on the Back stack and the wallet it belongs to. A wallet switch is a push of a Stop with another place, and Back undoes it.
+ * [hardware] is the id of the Jade or Safe 7 wallet a hardware screen shows ([MovieRoute.hardware]), null on every other screen.
+ */
+data class Stop(val route: MovieRoute, val place: Place, val hardware: String? = null)
 
-/** [WalletGate] passes the wallets, the Stop a saved wallet opens at and Welcome's [startNotice]. */
+/** [WalletGate] passes the wallets, the Stop a saved wallet opens at, Welcome's [startNotice], the book and the Safe 7 [pairings]. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MebitNavHost(
+internal fun MebitNavHost(
     wallets: Wallets,
     start: Stop,
     startNotice: StartNotice? = null,
     vaults: SavedVaults = remember { SavedVaults.memoryOnly() },
+    pairings: Pairings? = null,
 ) {
     val backStack = remember { mutableStateListOf(start) }
     val current = backStack.last()
@@ -150,7 +187,15 @@ fun MebitNavHost(
     val singleSig = open.chain
     val sendDraft = open.sendDraft
     var catalogOpen by remember { mutableStateOf(false) }
-    val keyring = remember(vaults, wallets) { KeyringStore(book = vaults, ownKeys = { wallets.ownKeys() }) }
+    // A simulator has no Bluetooth: a debug build launched with the switch reaches a fake Jade and Safe 7 in its place.
+    val fakeSwitch = rememberFakeDeviceSwitch()
+    val fake = remember(fakeSwitch) { if (fakeDeviceAllowed() && fakeSwitch) FakeDevice() else null }
+    val scan: suspend (WalletKind) -> List<FoundWallet> = fake?.let { it::scan } ?: { kind -> scanWallets(kind) }
+    val openLink: (FoundWallet) -> DeviceLink = fake?.let { it::open } ?: ::bleLink
+    val keyring = remember(vaults, wallets, pairings, fake) {
+        KeyringStore(scan = scan, book = vaults, ownKeys = { wallets.ownKeys() }, pairings = pairings, openLink = openLink)
+    }
+    val hardware = remember(vaults, wallets, pairings, fake) { HardwareWallets(vaults, pairings, wallets.payments, wallets::guardKeys, openLink = openLink, scan = scan) }
     val vaultDraft = remember(vaults) { VaultDraft(vaults) }
     // One draft per wizard run: it lives while Policy is on the Back stack.
     val createDraft = remember(vaults, inCreateFlow(backStack)) { CreateWalletDraft(vaults) }
@@ -198,7 +243,25 @@ fun MebitNavHost(
 
     fun navigate(route: MovieRoute, place: Place = backStack.last().place) {
         keyFlow = keyFlowAfter(route, keyFlow)
-        land(stackAfterOpen(backStack, Stop(route, place)))
+        land(stackAfterOpen(backStack, stopFor(backStack.last(), route, place)))
+    }
+
+    // Confirm Key's tap in a one-key wallet's setup: the wallet of the key the device read, saved under the type picked, then 3.5.2 alone.
+    suspend fun saveHardwareWallet(label: String): String? {
+        val read = keyring.pending ?: return CREATE_FAILED_LINE
+        val device = createDraft.device(keyring.keys) ?: return CREATE_FAILED_LINE
+        val key = HwAccountKey(read.xpub, read.fingerprint, read.derivationPath)
+        return when (val added = hardware.add(hardwareKind(device.source), createDraft.addressType, key, wallets.phoneWallets())) {
+            is HardwareAdd.Added -> {
+                if (label != device.label) keyring.rename(device.id, label)
+                keyring.discardPending()
+                land(stackAfterHardwareCreate(backStack, added.wallet.id))
+                null
+            }
+            is HardwareAdd.Duplicate -> duplicateLine(added.name)
+            HardwareAdd.Unopened -> addRefusalLine(AddRefusal.Unopened)
+            is HardwareAdd.Unreadable, HardwareAdd.NotSaved -> CREATE_FAILED_LINE
+        }
     }
 
     fun returnToKeySource(sourceRoute: MovieRoute) {
@@ -245,8 +308,13 @@ fun MebitNavHost(
         navigate(if (w.session.addressTypeConfirmed) route(w) else MovieRoute.AddressType, place)
     }
 
+    // A hardware wallet's screen, for the wallet [id]. The phone wallet in use stays the one under it.
+    fun openHardware(id: String, route: MovieRoute) = land(stackAfterOpen(backStack, Stop(route, backStack.last().place, id)))
+
     fun openReceive(choice: WalletChoice) = when (choice) {
         is WalletChoice.Spending -> openWallet(choice.place) { if (it.session.backupConfirmed) MovieRoute.S3Receive else MovieRoute.S2ReceiveBackupGate }
+        // A device wallet has no words on this phone, so no backup gate.
+        is WalletChoice.Hardware -> openHardware(choice.wallet.id, MovieRoute.HardwareReceive)
         is WalletChoice.Vault -> {
             vaultDraft.selectVault(choice.vault.id)
             navigate(MovieRoute.VaultReceive)
@@ -263,6 +331,12 @@ fun MebitNavHost(
         is WalletChoice.Spending -> openWallet(choice.place) {
             it.sendDraft.reset() // the chosen wallet's own draft, never the one on screen
             MovieRoute.S4Send
+        }
+        is WalletChoice.Hardware -> {
+            // The chosen wallet's own form, new, and no payment of an earlier visit left drafted or signed.
+            hardware.sendDraft(choice.wallet).reset()
+            hardware.chain(choice.wallet).dropPayment()
+            openHardware(choice.wallet.id, MovieRoute.HardwareSend)
         }
         is WalletChoice.Vault -> {
             vaultDraft.selectVault(choice.vault.id)
@@ -283,6 +357,17 @@ fun MebitNavHost(
         } else {
             w.session.generateThisDevice()
             if (w.session.lastError == null && w.session.words.isNotEmpty()) navigate(MovieRoute.KeyCreated, w.place) else addLine = w.session.lastError
+        }
+    }
+
+    // 1.8.8's confirm came first. The phone's own owner sheet, as a several-key wallet's removal asks, and never the Spending PIN.
+    fun removeHardware(w: HardwareWallet) {
+        scope.launch {
+            removeLine = null
+            when (hardware.remove(w.id) { phone.authenticate(removeReason(w.name), allowPasscode = true) == BiometricResult.Success }) {
+                HardwareRemoval.Removed, HardwareRemoval.Refused -> Unit
+                HardwareRemoval.NotSaved -> removeLine = REMOVE_FAILED_LINE
+            }
         }
     }
 
@@ -309,6 +394,14 @@ fun MebitNavHost(
         navigate(MovieRoute.S8TxDetail)
     }
 
+    val openHardwareTx: (HotTx) -> Unit = { tx ->
+        openedTx = tx
+        navigate(MovieRoute.HardwareTxDetail)
+    }
+
+    // The wallet a hardware screen shows. Only the debug catalog opens one with none named, and it then shows the first.
+    val shownHardware = if (current.hardware == null) hardware.all.firstOrNull() else hardware.find(current.hardware)
+
     // Posting a guarded payment's bytes again asks the owner as signing does, so a stranger cannot push out a payment the owner gave up on.
     val confirmRepost: suspend () -> Boolean = { appLock.confirm(biometrics, session.appLockEnabled, "ยืนยันการส่งรายการเดิมอีกครั้ง") }
 
@@ -331,8 +424,8 @@ fun MebitNavHost(
         Box(Modifier.fillMaxSize().background(MbPage)) {
             val inset = if (bar != null) bottomBarHeight() else 0.dp
             Box(Modifier.fillMaxSize().padding(bottom = inset).consumeWindowInsets(PaddingValues(bottom = inset))) {
-                // Keyed on the place, so a wallet's screens never inherit another wallet's remembered state, such as its retries, its open key details and its pull.
-                key(current.place) { when (current.route) {
+                // Keyed on the wallet, so a wallet's screens never inherit another wallet's remembered state, such as its retries, its open key details and its pull.
+                key(current.place, current.hardware) { when (current.route) {
                     MovieRoute.Welcome -> WelcomeScreen(
                         onCreate = { navigate(MovieRoute.KeySource) },
                         onImport = { navigate(MovieRoute.ImportSeed) },
@@ -458,8 +551,63 @@ fun MebitNavHost(
                         draft = createDraft,
                         line = addLine,
                         onMultisig = { navigate(MovieRoute.ChooseKeys) },
-                        onSingleSig = { addWallet(import = false) },
+                        onSingleSig = { navigate(MovieRoute.ChooseKey) },
                         onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.ChooseKey -> ChooseKeyScreen(
+                        draft = createDraft,
+                        keys = oneKeyChoices(keyring.keys),
+                        line = addLine,
+                        onThisPhone = { addWallet(import = false) },
+                        onDevice = { navigate(MovieRoute.HardwareAddressType) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.HardwareAddressType -> HardwareAddressTypeScreen(
+                        draft = createDraft,
+                        device = createDraft.device(keyring.keys),
+                        onContinue = { navigate(MovieRoute.HardwareReadKey) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.HardwareReadKey -> {
+                        // Null only from the debug catalog, which opens this step with no key picked: there is nothing to read.
+                        val device = createDraft.device(keyring.keys)
+                        if (device == null) {
+                            NoWallet(current.route, onBack, openCatalog)
+                        } else {
+                            HardwareWalletScreen(
+                                store = keyring,
+                                read = DeviceRead.OneKey(device, createDraft.addressType),
+                                onEnrolled = { navigate(MovieRoute.HardwareConfirmKey) },
+                                onUnsupported = { model ->
+                                    unsupportedModel = model
+                                    navigate(MovieRoute.T13UnsupportedModel)
+                                },
+                                onBack = onBack,
+                                onOpenCatalog = openCatalog,
+                            )
+                        }
+                    }
+                    MovieRoute.HardwareConfirmKey -> VerifyKeyScreen(
+                        store = keyring,
+                        onMatched = {}, // the save lands Wallet Created itself, with the new wallet's id
+                        onMismatch = {},
+                        onReconnect = { goBack() },
+                        onBack = onBack?.let { back ->
+                            {
+                                keyring.discardPending()
+                                back()
+                            }
+                        },
+                        onOpenCatalog = openCatalog,
+                        save = { label -> saveHardwareWallet(label) },
+                        tag = "screen_vault/hw-confirm-key",
+                    )
+                    MovieRoute.HardwareCreated -> HardwareCreatedScreen(
+                        wallet = hardware.find(current.hardware),
+                        onOpenWallets = { navigate(MovieRoute.VaultList) },
                         onOpenCatalog = openCatalog,
                     )
                     MovieRoute.ChooseKeys -> ChooseKeysScreen(
@@ -499,7 +647,10 @@ fun MebitNavHost(
                     )
                     MovieRoute.VaultList -> {
                         // Keyed on the book, so a vault it loads after the list first drew, or one made since, is read on this visit.
-                        LaunchedEffect(vaultDraft.created) { wallets.refreshBalances(vaultDraft.created, first = current.place) }
+                        LaunchedEffect(vaultDraft.created) {
+                            wallets.refreshBalances(vaultDraft.created, first = current.place)
+                            hardware.refreshBalances()
+                        }
                         VaultListScreen(
                             draft = vaultDraft,
                             vaults = vaults,
@@ -530,6 +681,12 @@ fun MebitNavHost(
                             },
                             onCreate = { navigate(MovieRoute.Policy) },
                             onOpenCatalog = openCatalog,
+                            hardware = hardware.all.map { w ->
+                                val chain = hardware.chain(w)
+                                HardwareCard(w, hardwareKeyName(w, keyring.keys), chain.balanceSats, chain.balanceKnown, hardwareDeleteItem(vaults.saving))
+                            },
+                            onOpenHardware = { w -> openHardware(w.id, MovieRoute.HardwareHome) },
+                            onRemoveHardware = { removeHardware(it) },
                         )
                     }
                     MovieRoute.VaultDetail -> VaultDetailScreen(
@@ -604,8 +761,9 @@ fun MebitNavHost(
                     )
                     MovieRoute.S8TxDetail -> S8TxDetailScreen(
                         tx = openedTx,
-                        wallet = singleSig,
-                        session = session,
+                        // IO, not Default, because a back cannot stop this blocking call and a few of them on a dead network would hold Default's one thread per core.
+                        detail = { txid -> withContext(Dispatchers.IO) { singleSig.detail(session, txid) } },
+                        walletName = session.walletName,
                         quotes = quotes,
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -622,7 +780,7 @@ fun MebitNavHost(
                     )
                     MovieRoute.S3Receive -> S3ReceiveScreen(
                         wallet = singleSig,
-                        session = session,
+                        walletName = session.walletName,
                         onSend = { openSend(WalletChoice.Spending(current.place)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -738,10 +896,13 @@ fun MebitNavHost(
                     MovieRoute.ChooseWalletReceive, MovieRoute.ChooseWalletSend -> {
                         val send = current.route == MovieRoute.ChooseWalletSend
                         val quote = rememberFiatQuote(quotes)
-                        LaunchedEffect(vaultDraft.created) { wallets.refreshBalances(vaultDraft.created) }
+                        LaunchedEffect(vaultDraft.created) {
+                            wallets.refreshBalances(vaultDraft.created)
+                            hardware.refreshBalances()
+                        }
                         ChooseWalletScreen(
                             send = send,
-                            choices = walletChoices(wallets.listed.map { it.place }, vaultDraft.created),
+                            choices = walletChoices(wallets.listed.map { it.place }, vaults.current.hardware, vaultDraft.created),
                             line = { choice ->
                                 when (choice) {
                                     is WalletChoice.Spending -> {
@@ -750,6 +911,14 @@ fun MebitNavHost(
                                             w.session.walletName,
                                             homeBalanceText(w.chain.balanceSats, spendingKnown(w), loading = false),
                                             baht = if (w.chain.mode == WalletMode.Live && w.chain.balanceKnown) fiatLine(w.chain.balanceSats, quote) else null,
+                                        )
+                                    }
+                                    is WalletChoice.Hardware -> {
+                                        val chain = hardware.chain(choice.wallet)
+                                        WalletLine(
+                                            choice.wallet.name,
+                                            homeBalanceText(chain.balanceSats, chain.balanceKnown, loading = false),
+                                            baht = if (chain.mode == WalletMode.Live && chain.balanceKnown) fiatLine(chain.balanceSats, quote) else null,
                                         )
                                     }
                                     is WalletChoice.Vault -> vaultLine(choice.vault, wallets.vaultSats(choice.vault), quote)
@@ -761,6 +930,100 @@ fun MebitNavHost(
                             onOpenCatalog = openCatalog,
                         )
                     }
+                    MovieRoute.HardwareHome -> shownHardware?.let { w ->
+                        HardwareHomeScreen(
+                            wallet = hardware.chain(w),
+                            keyName = hardwareKeyName(w, keyring.keys),
+                            quotes = quotes,
+                            onReceive = { openReceive(WalletChoice.Hardware(w)) },
+                            onSend = { openSend(WalletChoice.Hardware(w)) },
+                            onHistory = { navigate(MovieRoute.HardwareHistory) },
+                            onOpenTx = openHardwareTx,
+                            onOpenCatalog = openCatalog,
+                        )
+                    } ?: NoWallet(current.route, onBack, openCatalog)
+                    MovieRoute.HardwareReceive -> shownHardware?.let { w ->
+                        S3ReceiveScreen(
+                            wallet = hardware.chain(w),
+                            walletName = w.name,
+                            onSend = { openSend(WalletChoice.Hardware(w)) },
+                            onBack = onBack,
+                            onOpenCatalog = openCatalog,
+                            tag = "screen_hw/receive",
+                        )
+                    } ?: NoWallet(current.route, onBack, openCatalog)
+                    MovieRoute.HardwareSend -> shownHardware?.let { w ->
+                        HardwareSendScreen(
+                            wallet = hardware.chain(w),
+                            draft = hardware.sendDraft(w),
+                            quotes = quotes,
+                            confirmRepost = confirmRepost,
+                            onContinue = { navigate(MovieRoute.HardwareReview) },
+                            onReceive = { openReceive(WalletChoice.Hardware(w)) },
+                            onBack = onBack,
+                            onOpenCatalog = openCatalog,
+                        )
+                    } ?: NoWallet(current.route, onBack, openCatalog)
+                    MovieRoute.HardwareReview -> shownHardware?.let { w ->
+                        HardwareReviewScreen(
+                            wallet = hardware.chain(w),
+                            draft = hardware.sendDraft(w),
+                            quotes = quotes,
+                            onSign = { navigate(MovieRoute.HardwareSign) },
+                            onBack = onBack,
+                            onOpenCatalog = openCatalog,
+                        )
+                    } ?: NoWallet(current.route, onBack, openCatalog)
+                    MovieRoute.HardwareSign -> shownHardware?.let { w ->
+                        HardwareSignScreen(
+                            wallet = hardware.chain(w),
+                            keyName = hardwareKeyName(w, keyring.keys),
+                            nearest = { hardware.nearest(w) },
+                            pairingKept = remember(w) { hardware.link.keeps(w.fingerprint) },
+                            draft = hardware.sendDraft(w),
+                            confirmRepost = confirmRepost,
+                            onSent = { land(stackAfterHardwareSent(backStack)) },
+                            onBack = onBack,
+                            onOpenCatalog = openCatalog,
+                        )
+                    } ?: NoWallet(current.route, onBack, openCatalog)
+                    MovieRoute.HardwareSent -> shownHardware?.let { w ->
+                        val chain = hardware.chain(w)
+                        val draft = hardware.sendDraft(w)
+                        SentSlip(
+                            tag = "screen_hw/sent",
+                            txid = chain.lastTxid,
+                            sentAtSeconds = chain.lastSentAtSeconds,
+                            amountSats = chain.lastAmountSats,
+                            feeSats = chain.lastFeeSats,
+                            rateSatVb = draft.rateSatVb,
+                            destination = draft.destination,
+                            walletName = w.name,
+                            quotes = quotes,
+                            onHome = { land(stackAfterSlipHome(backStack)) },
+                            onOpenCatalog = openCatalog,
+                        )
+                    } ?: NoWallet(current.route, onBack, openCatalog)
+                    MovieRoute.HardwareHistory -> shownHardware?.let { w ->
+                        S7HistoryScreen(
+                            wallet = hardware.chain(w),
+                            onOpenTx = openHardwareTx,
+                            onBack = onBack,
+                            onOpenCatalog = openCatalog,
+                            tag = "screen_hw/history",
+                        )
+                    } ?: NoWallet(current.route, onBack, openCatalog)
+                    MovieRoute.HardwareTxDetail -> shownHardware?.let { w ->
+                        S8TxDetailScreen(
+                            tx = openedTx,
+                            detail = { txid -> hardware.chain(w).detail(txid) },
+                            walletName = w.name,
+                            quotes = quotes,
+                            onBack = onBack,
+                            onOpenCatalog = openCatalog,
+                            tag = "screen_hw/tx",
+                        )
+                    } ?: NoWallet(current.route, onBack, openCatalog)
                     MovieRoute.VaultReceive -> VaultReceiveScreen(
                         vault = vaultDraft.selectedVault(),
                         onSend = { startVaultSend(vaultDraft.selectedVault()) },
@@ -839,3 +1102,8 @@ fun MebitNavHost(
 
     biometrics.asking?.let { PinSheet(it, session.pin) }
 }
+
+/** A hardware wallet's screen with no wallet to show: only the debug catalog opens one so, before any is saved or once it is removed. */
+@Composable
+private fun NoWallet(route: MovieRoute, onBack: (() -> Unit)?, onOpenCatalog: () -> Unit) =
+    MebitScreen(eyebrow = route.eyebrow, title = route.titleTh, onBack = onBack, onOpenCatalog = onOpenCatalog, tag = "screen_" + route.path) {}

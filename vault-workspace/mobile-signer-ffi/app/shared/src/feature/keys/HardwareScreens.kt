@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -19,8 +20,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -39,7 +41,12 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -48,9 +55,13 @@ import com.mebit.app.data.EnrollResult
 import com.mebit.app.data.HardwareScan
 import com.mebit.app.data.KeySourceLabel
 import com.mebit.app.data.KeyringStore
+import com.mebit.app.data.SavedKey
 import com.mebit.app.data.ScanProblem
+import com.mebit.app.data.hardwareKind
 import com.mebit.app.data.hardwareMonogram
 import com.mebit.app.data.hardwareSource
+import com.mebit.app.data.oneKeyPath
+import com.mebit.app.feature.onboarding.AddressTypeRows
 import com.mebit.app.rememberBluetoothSettingsOpener
 import com.mebit.app.ui.components.IssueBanner
 import com.mebit.app.ui.components.MebitScreen
@@ -64,7 +75,10 @@ import com.mebit.app.ui.theme.MbIconWash
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbSlate
+import com.mebit.app.ui.theme.MbSuccess
+import com.mebit.app.ui.theme.MbWarmTint
 import com.mebit.app.ui.theme.MbWhite
+import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.FoundWallet
 import com.mebit.ffi.signer.WalletKind
 import kotlinx.coroutines.Job
@@ -80,10 +94,65 @@ private val BannerInk = Color(0xFF1E1E1E)
 /** The model the debug catalog's "unsupported" button reports, as Penpot 6.1 draws it. */
 private const val DEMO_UNSUPPORTED_MODEL = "Trezor Safe 5"
 
+/** What [HardwareWalletScreen] reads: Add Key's multisig key (2.3.1), or the account key of a one-key wallet of [OneKey.type] (2.3.3 to 2.3.6). */
+sealed interface DeviceRead {
+    data object AddKey : DeviceRead
+
+    /** The key of [key]'s device at [type]'s account path, for a one-key wallet. Only that device's kind is looked for, and only that key is taken. */
+    data class OneKey(val key: SavedKey, val type: AddressType) : DeviceRead {
+        val kind: WalletKind get() = hardwareKind(key.source)
+    }
+}
+
+/** What the card shows above a Safe 7's row: the radar, 2.3.5's remembered pairing, or 2.3.4's or 2.3.6's code field. */
+internal enum class Safe7Card { Radar, Remembered, FirstPairing, Forgot }
+
+/**
+ * Pure. The card of a Safe 7 the screen is about to reach or is reaching. [kept] is a pairing this phone keeps for its key, [asked] that it
+ * asked for its code in the connect running now. The code field shows only while it asks: on a first pairing (2.3.4), or when it forgot
+ * this phone (2.3.6). A kept pairing it has not asked about is 2.3.5.
+ */
+internal fun safe7Card(kept: Boolean, asked: Boolean): Safe7Card = when {
+    asked && kept -> Safe7Card.Forgot
+    asked -> Safe7Card.FirstPairing
+    kept -> Safe7Card.Remembered
+    else -> Safe7Card.Radar
+}
+
+/** Pure. The sub line of a Safe 7's row while it connects, as 2.3.4 to 2.3.6 draw it. */
+internal fun safe7RowLine(card: Safe7Card): String = when (card) {
+    Safe7Card.Remembered -> "จับคู่ไว้แล้ว · กำลังเชื่อม"
+    Safe7Card.Forgot -> "ต้องจับคู่ใหม่"
+    Safe7Card.Radar, Safe7Card.FirstPairing -> "กำลังจับคู่ครั้งแรก"
+}
+
+/** Pure. The line at the top of the card, over the radar or the code field. 2.3.5's card has none. */
+internal fun readInstruction(read: DeviceRead, bluetoothOff: Boolean, card: Safe7Card?): String = when {
+    bluetoothOff -> "เปิด Bluetooth บนมือถือ เพื่อให้มองเห็น Jade หรือ Trezor Safe 7"
+    read is DeviceRead.OneKey && read.kind == WalletKind.JADE -> "เปิด Jade แล้ววางไว้ใกล้มือถือ จากนั้นใส่ PIN บน Jade (มือถือต้องต่ออินเทอร์เน็ต)"
+    read is DeviceRead.OneKey || card == Safe7Card.FirstPairing || card == Safe7Card.Forgot -> "เปิด Trezor Safe 7 ไปที่ Pair new device แล้ววางไว้ใกล้มือถือ"
+    else -> "เปิด Jade หรือ Trezor Safe 7 แล้ววางไว้ใกล้มือถือ"
+}
+
+private val DefaultSteps = listOf("ค้นหาอุปกรณ์ผ่าน Bluetooth", "ยืนยันรหัสจับคู่บนหน้าจออุปกรณ์", "อ่านกุญแจสาธารณะ (xpub)")
+
+/** Pure. The three steps under the card: 2.3.3's for a one-key wallet's Jade, with the type and the path it reads, 2.3.5's for a remembered Safe 7. */
+internal fun readSteps(read: DeviceRead, card: Safe7Card?): List<String> = when {
+    read is DeviceRead.OneKey && read.kind == WalletKind.JADE -> listOf(
+        "ค้นหาอุปกรณ์ผ่าน Bluetooth",
+        "ใส่ PIN บน Jade",
+        "อ่านกุญแจ ${AddressTypeRows.first { it.type == read.type }.label} (${oneKeyPath(read.type)})",
+    )
+    card == Safe7Card.Remembered -> listOf("ค้นหาอุปกรณ์ผ่าน Bluetooth", "กด Allow บนหน้าจอ Trezor", "อ่านกุญแจสาธารณะ (xpub)")
+    else -> DefaultSteps
+}
+
 /**
  * Penpot 2.3.1 Hardware Wallet, with 2.3.2 (Bluetooth off) as a state of it: a live scan list with one row and one
  * connect button per wallet found. [onUnsupported] gets the model's name, or null when the wallet does not say.
- * The demo block under the board is for an emulator or simulator, which has no Bluetooth.
+ * The demo block under the board is for an emulator or simulator, which has no Bluetooth, and only Add Key ([DeviceRead.AddKey]) has it.
+ * For a one-key wallet ([DeviceRead.OneKey]) it is 2.3.3 to 2.3.6: only that kind is looked for, and a Safe 7's card says whether this
+ * phone remembers its pairing ([safe7Card]). A Safe 7's code field shows only once it asks, and a connect to it can be cancelled.
  */
 @Composable
 fun HardwareWalletScreen(
@@ -92,21 +161,28 @@ fun HardwareWalletScreen(
     onUnsupported: (model: String?) -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
+    read: DeviceRead = DeviceRead.AddKey,
 ) {
     val scope = rememberCoroutineScope()
     val openBluetoothSettings = rememberBluetoothSettingsOpener()
     var scanJob by remember { mutableStateOf<Job?>(null) }
+    var connectJob by remember { mutableStateOf<Job?>(null) }
     var connecting by remember { mutableStateOf<FoundWallet?>(null) }
-    val rescan: () -> Unit = { if (scanJob?.isActive != true) scanJob = scope.launch { store.scanHardware() } }
+    val oneKey = read as? DeviceRead.OneKey
+    val kinds = oneKey?.let { listOf(it.kind) } ?: listOf(WalletKind.JADE, WalletKind.TREZOR_SAFE7)
+    // Read once: a pairing is kept or dropped only by a connect, which then says so itself (KeyringStore.pairingKept).
+    val keptAtOpen = remember(oneKey) { oneKey?.kind == WalletKind.TREZOR_SAFE7 && store.keepsPairing(oneKey.key.fingerprint) }
+    val rescan: () -> Unit = { if (scanJob?.isActive != true) scanJob = scope.launch { store.scanHardware(kinds) } }
     LaunchedEffect(Unit) { rescan() }
     val connect: (FoundWallet) -> Unit = connect@{ wallet ->
         if (connecting != null) return@connect
         connecting = wallet
-        scope.launch {
+        connectJob = scope.launch {
             try {
                 // Connecting ends a scan that is still looking, so the two never run at once.
                 scanJob?.cancelAndJoin()
-                when (store.enrollHardware(wallet)) {
+                val result = if (oneKey == null) store.enrollHardware(wallet) else store.enrollHardware(wallet, oneKeyPath(oneKey.type), expect = oneKey.key)
+                when (result) {
                     EnrollResult.Enrolled -> onEnrolled()
                     EnrollResult.UnsupportedModel -> onUnsupported(null)
                     EnrollResult.Failed -> Unit
@@ -123,25 +199,32 @@ fun HardwareWalletScreen(
         HardwareScan.Idle -> emptyList()
         is HardwareScan.Scanning -> scan.found
         is HardwareScan.Done -> scan.found
-    }
+    }.filter { it.kind in kinds }
     val problem = (scan as? HardwareScan.Done)?.problem
     val searching = scan !is HardwareScan.Done
     val bluetoothOff = problem == ScanProblem.BluetoothOff
     // A scan that found nothing and failed cannot say Bluetooth is on, or that the room is empty.
     val unavailable = bluetoothOff || problem is ScanProblem.PermissionDenied || (problem is ScanProblem.Failed && found.isEmpty())
     val demoDisabled = store.hardwareBusy
+    val safe7Connecting = connecting?.kind == WalletKind.TREZOR_SAFE7
+    val card = when {
+        oneKey?.kind == WalletKind.TREZOR_SAFE7 -> safe7Card(kept = if (safe7Connecting) store.pairingKept else keptAtOpen, asked = safe7Connecting && store.pairingAsked)
+        safe7Connecting -> safe7Card(kept = store.pairingKept, asked = store.pairingAsked)
+        else -> null
+    }
 
     MebitScreen(
         eyebrow = "HARDWARE WALLET",
         title = "เชื่อมต่ออุปกรณ์",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
-        tag = "screen_keys/hardware",
+        tag = if (oneKey == null) "screen_keys/hardware" else "screen_vault/hw-read-key",
     ) {
         // MebitScreen starts content 54 dp under the title's top and the board starts the pill 60 dp under it; measured on a simulator, 4 dp here lines them up.
         Spacer(Modifier.height(4.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             when {
+                safe7Connecting -> StatusPill("Bluetooth เปิดอยู่ · พบ Trezor", "hw_busy", warn = false)
                 busy -> StatusPill("กำลังเชื่อมต่อ…", "hw_busy", warn = false)
                 bluetoothOff -> StatusPill("Bluetooth ปิดอยู่ · เปิดเพื่อค้นหา", "hw_status", warn = true)
                 unavailable -> StatusPill("Bluetooth · ค้นหาไม่ได้", "hw_status", warn = true)
@@ -159,14 +242,14 @@ fun HardwareWalletScreen(
             }
         }
         Spacer(Modifier.height(24.dp))
-        ScanCard(
-            instruction = if (bluetoothOff) {
-                "เปิด Bluetooth บนมือถือ เพื่อให้มองเห็น Jade หรือ Trezor Safe 7"
-            } else {
-                "เปิด Jade หรือ Trezor Safe 7 แล้ววางไว้ใกล้มือถือ"
-            },
-            radarCore = if (unavailable) RadarOff else MbBtcOrange,
-        ) {
+        ScanCard {
+            CardTop(
+                card = card ?: Safe7Card.Radar,
+                instruction = readInstruction(read, bluetoothOff, card),
+                radarCore = if (unavailable) RadarOff else MbBtcOrange,
+                code = store.pairingCode,
+                onCode = { store.pairingCode = it },
+            )
             DeviceList {
                 when {
                     bluetoothOff -> DeviceRow(
@@ -179,14 +262,19 @@ fun HardwareWalletScreen(
                         onAction = openBluetoothSettings,
                     )
                     found.isNotEmpty() -> found.forEach { wallet ->
+                        val reaching = connecting == wallet && wallet.kind == WalletKind.TREZOR_SAFE7
                         DeviceRow(
                             monogram = hardwareMonogram(hardwareSource(wallet.kind)),
                             title = wallet.name,
-                            sub = "พบใกล้ ๆ",
-                            action = "เชื่อม",
-                            actionTag = if (wallet.kind == WalletKind.JADE) "cta_hw_jade" else "cta_hw_trezor",
-                            enabled = !busy,
-                            onAction = { connect(wallet) },
+                            sub = if (reaching && card != null) safe7RowLine(card) else "พบใกล้ ๆ",
+                            action = if (reaching) "ยกเลิก" else "เชื่อม",
+                            actionTag = when {
+                                reaching -> "cta_hw_cancel"
+                                wallet.kind == WalletKind.JADE -> "cta_hw_jade"
+                                else -> "cta_hw_trezor"
+                            },
+                            enabled = reaching || !busy,
+                            onAction = { if (reaching) connectJob?.cancel() else connect(wallet) },
                         )
                     }
                     searching || unavailable -> Unit
@@ -200,20 +288,9 @@ fun HardwareWalletScreen(
                     )
                 }
             }
-            if (connecting?.kind == WalletKind.TREZOR_SAFE7) {
-                Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = store.pairingCode,
-                    onValueChange = { store.pairingCode = it },
-                    modifier = Modifier.fillMaxWidth().testTag("hw_pairing_code"),
-                    label = { Text("รหัส 6 หลักบน Trezor") },
-                    singleLine = true,
-                )
-                Text("พิมพ์รหัสที่อุปกรณ์แสดงเมื่อขอจับคู่", color = MbBody, fontSize = 11.5.sp)
-            }
         }
         Spacer(Modifier.height(18.dp))
-        StepsCard()
+        StepsCard(readSteps(read, card))
         when (problem) {
             ScanProblem.BluetoothOff -> {
                 Spacer(Modifier.height(17.dp))
@@ -238,6 +315,7 @@ fun HardwareWalletScreen(
             Spacer(Modifier.height(12.dp))
             Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("error"))
         }
+        if (oneKey != null) return@MebitScreen
         // The board leaves the rest of the first viewport empty; simulator controls remain below it in the scroll.
         Spacer(Modifier.height(240.dp))
         Text("โหมดจำลอง · สำหรับ emulator / simulator ไม่ได้เชื่อมต่ออุปกรณ์", color = MbBody, fontSize = 11.5.sp)
@@ -282,14 +360,18 @@ fun T13UnsupportedModelScreen(
         Spacer(Modifier.height(4.dp))
         StatusPill(name, "t13_model", warn = false)
         Spacer(Modifier.height(24.dp))
-        ScanCard(
-            instruction = if (model != null) {
-                "พบ $model — mebit รองรับเฉพาะ Trezor Safe 7 ผ่าน Bluetooth"
-            } else {
-                "พบอุปกรณ์ที่ไม่รองรับ — mebit รองรับเฉพาะ Jade และ Trezor Safe 7 ผ่าน Bluetooth"
-            },
-            radarCore = MbBtcOrange,
-        ) {
+        ScanCard {
+            CardTop(
+                card = Safe7Card.Radar,
+                instruction = if (model != null) {
+                    "พบ $model — mebit รองรับเฉพาะ Trezor Safe 7 ผ่าน Bluetooth"
+                } else {
+                    "พบอุปกรณ์ที่ไม่รองรับ — mebit รองรับเฉพาะ Jade และ Trezor Safe 7 ผ่าน Bluetooth"
+                },
+                radarCore = MbBtcOrange,
+                code = "",
+                onCode = {},
+            )
             DeviceList {
                 DeviceRow(
                     monogram = if (model?.startsWith("Trezor") == true) hardwareMonogram(KeySourceLabel.TrezorSafe7) else "?",
@@ -303,7 +385,7 @@ fun T13UnsupportedModelScreen(
             }
         }
         Spacer(Modifier.height(18.dp))
-        StepsCard()
+        StepsCard(DefaultSteps)
         Spacer(Modifier.height(19.dp))
         Box(
             Modifier.fillMaxWidth().height(54.dp).clip(CircleShape).background(MbWhite).border(1.5.dp, MbNavy, CircleShape)
@@ -335,21 +417,105 @@ private fun StatusPill(text: String, tag: String, warn: Boolean) {
     }
 }
 
-/** The card both boards share: the instruction, the radar, and whatever [content] lists under it. */
+/** The card every board of the hardware screen shares: [CardTop], then the rows. */
 @Composable
-private fun ScanCard(instruction: String, radarCore: Color, content: @Composable ColumnScope.() -> Unit) {
+private fun ScanCard(content: @Composable ColumnScope.() -> Unit) {
     val shape = RoundedCornerShape(24.dp)
     Column(
         Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape)
             .padding(start = 18.dp, top = 17.dp, end = 18.dp, bottom = 18.dp),
-    ) {
-        // The board gives the instruction a slot that holds two lines, so the radar stays put for one.
-        Box(Modifier.fillMaxWidth().height(55.dp)) {
-            Text(instruction, color = MbBody, fontSize = 12.5.sp, fontWeight = FontWeight.Light, lineHeight = 17.sp, maxLines = 2, modifier = Modifier.testTag("hw_instruction"))
+        content = content,
+    )
+}
+
+/**
+ * The card above the rows, as tall on every board so the rows never move: the instruction and the radar (2.3.1, 2.3.3), 2.3.5's check
+ * and its two lines, or 2.3.4's and 2.3.6's code field under the instruction, which 2.3.6 heads in orange.
+ */
+@Composable
+private fun CardTop(card: Safe7Card, instruction: String, radarCore: Color, code: String, onCode: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth().height(191.dp)) {
+        if (card != Safe7Card.Remembered) {
+            // The board gives the instruction a slot that holds two lines, so what is under it stays put for one.
+            Box(Modifier.fillMaxWidth().height(55.dp)) {
+                Text(instruction, color = MbBody, fontSize = 12.5.sp, fontWeight = FontWeight.Light, lineHeight = 17.sp, maxLines = 2, modifier = Modifier.testTag("hw_instruction"))
+            }
         }
-        Radar(radarCore)
-        Spacer(Modifier.height(12.dp))
-        content()
+        when (card) {
+            Safe7Card.Radar -> Radar(radarCore)
+            Safe7Card.Remembered -> Column(Modifier.fillMaxWidth().testTag("hw_pairing_kept"), horizontalAlignment = Alignment.CenterHorizontally) {
+                Spacer(Modifier.height(31.dp))
+                Box(Modifier.size(46.dp).background(MbSuccess, CircleShape), contentAlignment = Alignment.Center) {
+                    Tick(Modifier.size(15.dp, 11.dp))
+                }
+                Spacer(Modifier.height(8.dp))
+                Text("จำการจับคู่กับ Trezor นี้ไว้แล้ว", color = MbNavyInk, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, lineHeight = 17.sp, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(6.dp))
+                Text("กด Allow บน Trezor เพื่อเชื่อมต่อ ไม่ต้องใส่รหัส", color = MbSlate, fontSize = 12.5.sp, lineHeight = 17.sp, textAlign = TextAlign.Center)
+            }
+            Safe7Card.FirstPairing, Safe7Card.Forgot -> PairingCodeBlock(forgot = card == Safe7Card.Forgot, code = code, onCode = onCode)
+        }
+    }
+}
+
+/** 2.3.4's code field under its bold line, or 2.3.6's under its orange one when the Safe 7 forgot this phone, and the line under the field. */
+@Composable
+internal fun PairingCodeBlock(forgot: Boolean, code: String, onCode: (String) -> Unit) {
+    Text(
+        if (forgot) "Trezor ลืมการจับคู่กับเครื่องนี้แล้ว" else "ใส่รหัส 6 หลักที่แสดงบน Trezor",
+        color = if (forgot) MbEyebrow else MbNavyInk,
+        fontSize = 12.5.sp,
+        fontWeight = FontWeight.Bold,
+        lineHeight = 17.sp,
+        modifier = Modifier.testTag(if (forgot) "hw_pairing_forgot" else "hw_pairing_first"),
+    )
+    Spacer(Modifier.height(10.dp))
+    CodeField(code, onCode)
+    Spacer(Modifier.height(6.dp))
+    Text(
+        if (forgot) {
+            "เช่น หลังล้างเครื่อง ใส่รหัส 6 หลักใหม่ที่แสดงบน Trezor แล้ว mebit จะจำการจับคู่ใหม่ไว้แทน"
+        } else {
+            "จับคู่ครั้งแรกเท่านั้น ครั้งต่อไป mebit จำการจับคู่ไว้ให้ กด Allow บน Trezor อย่างเดียว"
+        },
+        color = MbSlate,
+        fontSize = 12.5.sp,
+        lineHeight = 17.sp,
+        maxLines = 2,
+    )
+}
+
+/** 2.3.4's warm field for the six digits the Safe 7 shows, its dashes until the first digit. Takes digits only, six at most. */
+@Composable
+private fun CodeField(code: String, onCode: (String) -> Unit) {
+    val shape = RoundedCornerShape(14.dp)
+    val style = TextStyle(color = MbNavyInk, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, letterSpacing = 6.sp, textAlign = TextAlign.Center)
+    BasicTextField(
+        value = code,
+        onValueChange = { typed -> onCode(typed.filter(Char::isDigit).take(6)) },
+        singleLine = true,
+        textStyle = style,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+        modifier = Modifier.fillMaxWidth().height(44.dp).clip(shape).background(MbWarmTint).border(1.5.dp, MbBtcOrange, shape).semantics { contentDescription = "รหัส 6 หลัก" }.testTag("hw_pairing_code"),
+        decorationBox = { inner ->
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                if (code.isEmpty()) Text("_  _  _  _  _  _", style = style.copy(letterSpacing = 0.sp))
+                inner()
+            }
+        },
+    )
+}
+
+/** A white check drawn corner to corner of its box: down to the low point a third in, then up to the far corner. */
+@Composable
+private fun Tick(modifier: Modifier) {
+    Canvas(modifier) {
+        val tick = Path().apply {
+            moveTo(0f, size.height * 0.5f)
+            lineTo(size.width * 0.35f, size.height)
+            lineTo(size.width, 0f)
+        }
+        drawPath(tick, MbWhite, style = Stroke(width = 2.4.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
     }
 }
 
@@ -437,14 +603,14 @@ private fun DeviceRow(
 
 /** The three connection steps. The board marks the first as the current one on every state. */
 @Composable
-private fun StepsCard() {
+private fun StepsCard(steps: List<String>) {
     val shape = RoundedCornerShape(20.dp)
     Column(
         Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape)
-            .padding(start = 18.dp, top = 13.dp, end = 18.dp, bottom = 18.dp),
+            .padding(start = 18.dp, top = 13.dp, end = 18.dp, bottom = 18.dp).testTag("hw_steps"),
         verticalArrangement = Arrangement.spacedBy(7.dp),
     ) {
-        listOf("ค้นหาอุปกรณ์ผ่าน Bluetooth", "ยืนยันรหัสจับคู่บนหน้าจออุปกรณ์", "อ่านกุญแจสาธารณะ (xpub)").forEachIndexed { index, step ->
+        steps.forEachIndexed { index, step ->
             val current = index == 0
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(

@@ -1084,6 +1084,24 @@ internal typealias UniffiVTableCallbackInterfacePairingCodesUniffiByValue = Unif
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -1231,13 +1249,37 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_vault_typical_vsize() != 28052.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
+        if (uniffi_mobile_signer_ffi_checksum_func_wallet_describe() != 64410.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_wallet_draft() != 27636.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_wallet_finish() != 27411.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_wallet_history() != 18833.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_wallet_review() != 29652.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_wallet_sign_with_words() != 43590.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_wallet_snapshot() != 45697.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_wallet_tx_detail() != 21555.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
         if (uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code() != 55814.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_method_walletlink_account_xpub() != 61385.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_method_walletlink_connect() != 15741.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_method_walletlink_connect() != 64114.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_method_walletlink_disconnect() != 59990.toShort()) {
@@ -1247,6 +1289,9 @@ internal object IntegrityCheckingUniffiLib : Library {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_psbt() != 56822.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_wallet_psbt() != 9390.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_method_walletlink_unlock() != 26656.toShort()) {
@@ -1367,6 +1412,30 @@ internal object IntegrityCheckingUniffiLib : Library {
     external fun uniffi_mobile_signer_ffi_checksum_func_vault_typical_vsize(
     ): Short
     @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_describe(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_draft(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_finish(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_history(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_review(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_sign_with_words(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_snapshot(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_tx_detail(
+    ): Short
+    @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(
     ): Short
     @JvmStatic
@@ -1383,6 +1452,9 @@ internal object IntegrityCheckingUniffiLib : Library {
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_psbt(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_wallet_psbt(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_method_walletlink_unlock(
@@ -1452,6 +1524,7 @@ internal object UniffiLib : Library {
     external fun uniffi_mobile_signer_ffi_fn_method_walletlink_connect(
         `ptr`: Pointer?,
         `codes`: Pointer?,
+        `pairing`: RustBufferByValue,
     ): Long
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_method_walletlink_disconnect(
@@ -1466,6 +1539,13 @@ internal object UniffiLib : Library {
         `ptr`: Pointer?,
         `psbtBase64`: RustBufferByValue,
         `signerFingerprint`: RustBufferByValue,
+    ): Long
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_method_walletlink_sign_wallet_psbt(
+        `ptr`: Pointer?,
+        `descriptor`: RustBufferByValue,
+        `psbtBase64`: RustBufferByValue,
+        `unsignedTxid`: RustBufferByValue,
     ): Long
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_method_walletlink_unlock(
@@ -1718,6 +1798,65 @@ internal object UniffiLib : Library {
         `threshold`: Byte,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Long
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_wallet_describe(
+        `descriptor`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_wallet_draft(
+        `descriptor`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        `destination`: RustBufferByValue,
+        `amountSats`: RustBufferByValue,
+        `feeRateSatVb`: Long,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_wallet_finish(
+        `descriptor`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        `psbt`: RustBufferByValue,
+        `unsignedTxid`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_wallet_history(
+        `descriptor`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_wallet_review(
+        `descriptor`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        `psbt`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_wallet_sign_with_words(
+        `descriptor`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        `psbt`: RustBufferByValue,
+        `expectedTxid`: RustBufferByValue,
+        `mnemonicWords`: RustBufferByValue,
+        `passphrase`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_wallet_snapshot(
+        `descriptor`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_wallet_tx_detail(
+        `descriptor`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        `txid`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
     @JvmStatic
     external fun ffi_mobile_signer_ffi_rustbuffer_alloc(
         `size`: Long,
@@ -2282,6 +2421,22 @@ public object FfiConverterString: FfiConverter<String, RustBufferByValue> {
 }
 
 
+public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
+    override fun read(buf: ByteBuffer): ByteArray {
+        val len = buf.getInt()
+        val byteArr = buf.get(len)
+        return byteArr
+    }
+    override fun allocationSize(value: ByteArray): ULong {
+        return 4UL + value.size.toULong()
+    }
+    override fun write(value: ByteArray, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        buf.put(value)
+    }
+}
+
+
 
 /**
  * Asks the user for the six digits a Trezor Safe 7 shows while pairing (not its PIN).
@@ -2644,23 +2799,29 @@ public actual open class WalletLink: Disposable, WalletLinkInterface {
      * Cancelling while it runs leaves nothing that closing the link cannot end: measured with a
      * Jade, unit-tested with a fake central for a Safe 7. A Jade that fails disconnects in the
      * background, a Safe 7 before this returns.
+     *
+     * `pairing` is a Safe 7 credential an earlier connect returned, so the Safe 7 asks only to
+     * allow the connection. Unreadable bytes are dropped and the Safe 7 then pairs with a code.
+     * Returns the credential to keep when this connect paired with a code (the first pairing, or a
+     * kept one the Safe 7 no longer knows), else null. It is a secret: keep it in the Keychain or
+     * Keystore. A Jade ignores `pairing` and returns null.
      */
     @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
-    public actual override suspend fun `connect`(`codes`: PairingCodes) {
+    public actual override suspend fun `connect`(`codes`: PairingCodes, `pairing`: kotlin.ByteArray?): kotlin.ByteArray? {
         return uniffiRustCallAsync(
             callWithPointer { thisPtr ->
                 UniffiLib.uniffi_mobile_signer_ffi_fn_method_walletlink_connect(
                     thisPtr,
                     FfiConverterTypePairingCodes.lower(`codes`),
+                    FfiConverterOptionalByteArray.lower(`pairing`),
                 )
             },
-            { future, callback, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_poll_void(future, callback, continuation) },
-            { future, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_complete_void(future, continuation) },
-            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_free_void(future) },
-            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_cancel_void(future) },
+            { future, callback, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+            { future, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_complete_rust_buffer(future, continuation) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_free_rust_buffer(future) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_cancel_rust_buffer(future) },
             // lift function
-            { Unit },
-            
+            { FfiConverterOptionalByteArray.lift(it) },
             // Error FFI converter
             BleExceptionErrorHandler,
         )
@@ -2739,6 +2900,39 @@ public actual open class WalletLink: Disposable, WalletLinkInterface {
             { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_cancel_rust_buffer(future) },
             // lift function
             { FfiConverterString.lift(it) },
+            // Error FFI converter
+            BleExceptionErrorHandler,
+        )
+    }
+
+    /**
+     * Signs `psbt_base64`, a payment of the wallet `descriptor` whose unsigned id is
+     * `unsigned_txid` (the payment the user was shown), with the key of that wallet this device
+     * holds, and returns what the PSBT says after it. Before anything reaches the device, it
+     * refuses a descriptor `wallet_describe` refuses, a PSBT `wallet_review` refuses, and a PSBT
+     * whose id is another ("changed since shown"). `WrongKey` means the device holds no key of the
+     * wallet, and nothing showed on it. When that key has already signed, the review comes back
+     * without asking the device to sign. Else the device shows the payment, and its answer is
+     * refused unless that key then signed every input. A Jade must be unlocked first. Cancelling
+     * stops only the wait: the device finishes the request.
+     */
+    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
+    public actual override suspend fun `signWalletPsbt`(`descriptor`: kotlin.String, `psbtBase64`: kotlin.String, `unsignedTxid`: kotlin.String): SpendReview {
+        return uniffiRustCallAsync(
+            callWithPointer { thisPtr ->
+                UniffiLib.uniffi_mobile_signer_ffi_fn_method_walletlink_sign_wallet_psbt(
+                    thisPtr,
+                    FfiConverterString.lower(`descriptor`),
+                    FfiConverterString.lower(`psbtBase64`),
+                    FfiConverterString.lower(`unsignedTxid`),
+                )
+            },
+            { future, callback, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+            { future, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_complete_rust_buffer(future, continuation) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_free_rust_buffer(future) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_cancel_rust_buffer(future) },
+            // lift function
+            { FfiConverterTypeSpendReview.lift(it) },
             // Error FFI converter
             BleExceptionErrorHandler,
         )
@@ -3144,6 +3338,65 @@ public object FfiConverterTypeSoftwareAccountKey: FfiConverterRustBuffer<Softwar
 
 
 
+public object FfiConverterTypeSpendOutput: FfiConverterRustBuffer<SpendOutput> {
+    override fun read(buf: ByteBuffer): SpendOutput {
+        return SpendOutput(
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SpendOutput): ULong = (
+            FfiConverterString.allocationSize(value.`address`) +
+            FfiConverterULong.allocationSize(value.`sats`)
+    )
+
+    override fun write(value: SpendOutput, buf: ByteBuffer) {
+        FfiConverterString.write(value.`address`, buf)
+        FfiConverterULong.write(value.`sats`, buf)
+    }
+}
+
+
+
+
+public object FfiConverterTypeSpendReview: FfiConverterRustBuffer<SpendReview> {
+    override fun read(buf: ByteBuffer): SpendReview {
+        return SpendReview(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterSequenceTypeSpendOutput.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterUByte.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SpendReview): ULong = (
+            FfiConverterString.allocationSize(value.`psbt`) +
+            FfiConverterString.allocationSize(value.`unsignedTxid`) +
+            FfiConverterSequenceTypeSpendOutput.allocationSize(value.`payments`) +
+            FfiConverterULong.allocationSize(value.`changeSats`) +
+            FfiConverterULong.allocationSize(value.`feeSats`) +
+            FfiConverterSequenceString.allocationSize(value.`signed_`) +
+            FfiConverterUByte.allocationSize(value.`needed`)
+    )
+
+    override fun write(value: SpendReview, buf: ByteBuffer) {
+        FfiConverterString.write(value.`psbt`, buf)
+        FfiConverterString.write(value.`unsignedTxid`, buf)
+        FfiConverterSequenceTypeSpendOutput.write(value.`payments`, buf)
+        FfiConverterULong.write(value.`changeSats`, buf)
+        FfiConverterULong.write(value.`feeSats`, buf)
+        FfiConverterSequenceString.write(value.`signed_`, buf)
+        FfiConverterUByte.write(value.`needed`, buf)
+    }
+}
+
+
+
+
 public object FfiConverterTypeVaultPsbt: FfiConverterRustBuffer<VaultPsbt> {
     override fun read(buf: ByteBuffer): VaultPsbt {
         return VaultPsbt(
@@ -3256,6 +3509,59 @@ public object FfiConverterTypeWalletInfo: FfiConverterRustBuffer<WalletInfo> {
 
 
 
+public object FfiConverterTypeWalletKey: FfiConverterRustBuffer<WalletKey> {
+    override fun read(buf: ByteBuffer): WalletKey {
+        return WalletKey(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: WalletKey): ULong = (
+            FfiConverterString.allocationSize(value.`fingerprint`) +
+            FfiConverterString.allocationSize(value.`path`) +
+            FfiConverterString.allocationSize(value.`xpub`)
+    )
+
+    override fun write(value: WalletKey, buf: ByteBuffer) {
+        FfiConverterString.write(value.`fingerprint`, buf)
+        FfiConverterString.write(value.`path`, buf)
+        FfiConverterString.write(value.`xpub`, buf)
+    }
+}
+
+
+
+
+public object FfiConverterTypeWalletShape: FfiConverterRustBuffer<WalletShape> {
+    override fun read(buf: ByteBuffer): WalletShape {
+        return WalletShape(
+            FfiConverterUByte.read(buf),
+            FfiConverterSequenceTypeWalletKey.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: WalletShape): ULong = (
+            FfiConverterUByte.allocationSize(value.`needed`) +
+            FfiConverterSequenceTypeWalletKey.allocationSize(value.`keys`) +
+            FfiConverterString.allocationSize(value.`firstAddress`) +
+            FfiConverterULong.allocationSize(value.`typicalVsize`)
+    )
+
+    override fun write(value: WalletShape, buf: ByteBuffer) {
+        FfiConverterUByte.write(value.`needed`, buf)
+        FfiConverterSequenceTypeWalletKey.write(value.`keys`, buf)
+        FfiConverterString.write(value.`firstAddress`, buf)
+        FfiConverterULong.write(value.`typicalVsize`, buf)
+    }
+}
+
+
+
+
 
 public object FfiConverterTypeAddressType: FfiConverterRustBuffer<AddressType> {
     override fun read(buf: ByteBuffer): AddressType = try {
@@ -3294,6 +3600,7 @@ public object FfiConverterTypeBleError : FfiConverterRustBuffer<BleException> {
             11 -> BleException.Disconnected(FfiConverterString.read(buf))
             12 -> BleException.Link(FfiConverterString.read(buf))
             13 -> BleException.Protocol(FfiConverterString.read(buf))
+            14 -> BleException.WrongKey(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
@@ -3354,6 +3661,10 @@ public object FfiConverterTypeBleError : FfiConverterRustBuffer<BleException> {
             }
             is BleException.Protocol -> {
                 buf.putInt(13)
+                Unit
+            }
+            is BleException.WrongKey -> {
+                buf.putInt(14)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -3717,6 +4028,35 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
 
 
 
+public object FfiConverterOptionalByteArray: FfiConverterRustBuffer<kotlin.ByteArray?> {
+    override fun read(buf: ByteBuffer): kotlin.ByteArray? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterByteArray.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.ByteArray?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterByteArray.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.ByteArray?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterByteArray.write(value, buf)
+        }
+    }
+}
+
+
+
+
 public object FfiConverterOptionalTypeHotTxDetail: FfiConverterRustBuffer<HotTxDetail?> {
     override fun read(buf: ByteBuffer): HotTxDetail? {
         if (buf.get().toInt() == 0) {
@@ -3864,6 +4204,56 @@ public object FfiConverterSequenceTypeHotTxo: FfiConverterRustBuffer<List<HotTxo
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeHotTxo.write(it, buf)
+        }
+    }
+}
+
+
+
+
+public object FfiConverterSequenceTypeSpendOutput: FfiConverterRustBuffer<List<SpendOutput>> {
+    override fun read(buf: ByteBuffer): List<SpendOutput> {
+        val len = buf.getInt()
+        return List<SpendOutput>(len) {
+            FfiConverterTypeSpendOutput.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<SpendOutput>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.sumOf { FfiConverterTypeSpendOutput.allocationSize(it) }
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<SpendOutput>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeSpendOutput.write(it, buf)
+        }
+    }
+}
+
+
+
+
+public object FfiConverterSequenceTypeWalletKey: FfiConverterRustBuffer<List<WalletKey>> {
+    override fun read(buf: ByteBuffer): List<WalletKey> {
+        val len = buf.getInt()
+        return List<WalletKey>(len) {
+            FfiConverterTypeWalletKey.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<WalletKey>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.sumOf { FfiConverterTypeWalletKey.allocationSize(it) }
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<WalletKey>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeWalletKey.write(it, buf)
         }
     }
 }
@@ -4553,6 +4943,140 @@ public actual fun `vaultTypicalVsize`(`xpubs`: List<kotlin.String>, `threshold`:
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_vault_typical_vsize(
             FfiConverterSequenceString.lower(`xpubs`),
             FfiConverterUByte.lower(`threshold`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The keys, how many must sign, receive address 0 and the typical payment size of the wallet `descriptor`
+ * describes. Asks nothing of the network.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `walletDescribe`(`descriptor`: kotlin.String, `network`: KeyNetwork): WalletShape {
+    return FfiConverterTypeWalletShape.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_describe(
+            FfiConverterString.lower(`descriptor`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * Scans the wallet `descriptor` describes, plans a payment of `amount_sats`, or of the whole balance when it
+ * is null, to `destination` at `fee_rate_sat_vb` as `hot_quote_send` plans one, and returns the unsigned PSBT
+ * with what it pays. Signs nothing and posts nothing.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `walletDraft`(`descriptor`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong?, `feeRateSatVb`: kotlin.ULong): SpendReview {
+    return FfiConverterTypeSpendReview.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_draft(
+            FfiConverterString.lower(`descriptor`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterString.lower(`destination`),
+            FfiConverterOptionalULong.lower(`amountSats`),
+            FfiConverterULong.lower(`feeRateSatVb`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The signed transaction for `hot_broadcast`, once `psbt` still pays what `unsigned_txid` named and at least
+ * the needed number of distinct keys of the wallet `descriptor` describes have signed every input. Its
+ * `amount_sats` is what every output but this wallet's change pays.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `walletFinish`(`descriptor`: kotlin.String, `network`: KeyNetwork, `psbt`: kotlin.String, `unsignedTxid`: kotlin.String): PreparedSend {
+    return FfiConverterTypePreparedSend.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_finish(
+            FfiConverterString.lower(`descriptor`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterString.lower(`psbt`),
+            FfiConverterString.lower(`unsignedTxid`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * What `hot_wallet_history` answers, for the wallet `descriptor` describes, whose keys are not on this phone.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `walletHistory`(`descriptor`: kotlin.String, `network`: KeyNetwork): List<HotTx> {
+    return FfiConverterSequenceTypeHotTx.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_history(
+            FfiConverterString.lower(`descriptor`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * What `psbt` pays and which keys of the wallet `descriptor` describes have signed it, once it is a payment
+ * of that wallet. Its change must sit where this phone's scan of the wallet looks, at most 20 indices past the
+ * last change proven used, or below 20 while none is. Asks nothing of the network.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `walletReview`(`descriptor`: kotlin.String, `network`: KeyNetwork, `psbt`: kotlin.String): SpendReview {
+    return FfiConverterTypeSpendReview.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_review(
+            FfiConverterString.lower(`descriptor`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterString.lower(`psbt`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * Signs `psbt`, a payment of the wallet `descriptor` describes that the user was shown as `expected_txid`, with the
+ * key of that wallet the phrase `mnemonic_words` and `passphrase` make, as a device signs one
+ * (`WalletLink::sign_wallet_psbt`): refused before any signature when it is not that payment or the phrase makes no
+ * key of the wallet, back as it is when that key already signed, and refused unless that key then signed every
+ * input. A key of several kept on this phone signs through it, and so does a debug build's stand-in for a device.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `walletSignWithWords`(`descriptor`: kotlin.String, `network`: KeyNetwork, `psbt`: kotlin.String, `expectedTxid`: kotlin.String, `mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String): SpendReview {
+    return FfiConverterTypeSpendReview.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_sign_with_words(
+            FfiConverterString.lower(`descriptor`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterString.lower(`psbt`),
+            FfiConverterString.lower(`expectedTxid`),
+            FfiConverterSequenceString.lower(`mnemonicWords`),
+            FfiConverterString.lower(`passphrase`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * What `hot_wallet_snapshot` answers, for the wallet `descriptor` describes, whose keys are not on this phone.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `walletSnapshot`(`descriptor`: kotlin.String, `network`: KeyNetwork): HotWalletSnapshot {
+    return FfiConverterTypeHotWalletSnapshot.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_snapshot(
+            FfiConverterString.lower(`descriptor`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * One transaction of the wallet `descriptor` describes in full, or None when the explorer does not know `txid`.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `walletTxDetail`(`descriptor`: kotlin.String, `network`: KeyNetwork, `txid`: kotlin.String): HotTxDetail? {
+    return FfiConverterOptionalTypeHotTxDetail.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_tx_detail(
+            FfiConverterString.lower(`descriptor`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            FfiConverterString.lower(`txid`),
             uniffiRustCallStatus,
         )
     })

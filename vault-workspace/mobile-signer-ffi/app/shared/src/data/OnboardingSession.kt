@@ -8,6 +8,7 @@ import com.mebit.app.Place
 import com.mebit.app.StoreVersion
 import com.mebit.app.Why
 import com.mebit.app.WriteMode
+import com.mebit.app.feature.vault.duplicateLine
 import com.mebit.app.walletName
 import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
@@ -31,7 +32,8 @@ enum class SaveState { NotSaved, Staged, Saved }
  * [place] is this wallet's place on the phone, read only for its name, because [wallet] is already bound to that place.
  * [onPhone] says whether another wallet on the phone holds a fingerprint. [startsLocked] is App Lock as the phone has it when this
  * wallet is added, which its first save carries and [clear] returns to. [others] gives the other wallets' fingerprints, for the clear
- * of a damaged guard file, null while a wallet this run could not read may be on the phone.
+ * of a damaged guard file, null while a wallet this run could not read may be on the phone. [hardwareWith] names the Jade or Trezor
+ * wallet with a fingerprint in an address type, whose addresses a phone wallet of that key and type would share, or gives null.
  */
 class OnboardingSession(
     private val wallet: SavedWallet? = null,
@@ -45,6 +47,7 @@ class OnboardingSession(
     private val onPhone: (String) -> Boolean = { false },
     private val startsLocked: Boolean = false,
     private val others: () -> List<String>? = { emptyList() },
+    private val hardwareWith: (fingerprint: String, type: AddressType) -> String? = { _, _ -> null },
 ) {
     val walletName: String get() = place.walletName
 
@@ -196,17 +199,20 @@ class OnboardingSession(
      * Penpot 1.5.1: a tap on an address type row, in first setup only, saved at once as the user's tentative pick, not confirmed, through
      * the single write point: a Replace of the copy on the phone, so a restart keeps it, or with the rest of the record when
      * [acceptStagedKey] writes a staged import. The same type again writes nothing, and so does a type the core does not take on
-     * [network] ([hotAddressTypeEnabled], on mainnet only Native SegWit), so no path saves one. [SavedWallet] saves only TEST today, so
-     * a MAIN session meets that rule in tests alone. A failed Replace leaves the earlier copy on the phone, which [proveSavedCopy]
-     * catches at App Lock.
+     * [network] ([hotAddressTypeEnabled], on mainnet only Native SegWit) or one a hardware wallet of this key has ([takenBy]), so no path
+     * saves one. [SavedWallet] saves only TEST today, so a MAIN session meets that rule in tests alone. A failed Replace leaves the
+     * earlier copy on the phone, which [proveSavedCopy] catches at App Lock.
      */
     fun chooseAddressType(type: AddressType) {
         if (!inFirstSetup || words.isEmpty() || held == Held.Stale || type == addressType) return
-        if (!hotAddressTypeEnabled(type, network)) return
+        if (!hotAddressTypeEnabled(type, network) || takenBy(type) != null) return
         addressType = type
         addressTypeConfirmed = false
         persist()
     }
+
+    /** The name of the Jade or Trezor wallet whose addresses this key has in [type], so this wallet may not take that type, or null. */
+    fun takenBy(type: AddressType): String? = fingerprint.takeIf { it.isNotBlank() }?.let { hardwareWith(it, type) }
 
     /**
      * The user left the Address Type step forward, by its button or the fingerprint sheet after it, so [addressType] is final: saved
@@ -240,6 +246,11 @@ class OnboardingSession(
         // Before applyKey, so a refused duplicate leaves this session exactly as it was. A staged import is checked here too, with its passphrase's fingerprint.
         if (onPhone(key.masterFingerprint)) {
             lastError = ON_PHONE
+            return
+        }
+        // An import starts at the preselected Native SegWit (applyKey), where a hardware wallet of this key would share every address.
+        hardwareWith(key.masterFingerprint, AddressType.NATIVE_SEGWIT)?.let {
+            lastError = duplicateLine(it)
             return
         }
         applyKey(key, passphrase, network)

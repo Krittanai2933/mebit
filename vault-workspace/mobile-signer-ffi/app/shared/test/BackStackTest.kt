@@ -147,4 +147,71 @@ class BackStackTest {
         val review = wizard + stops(p2, MovieRoute.ScriptType, MovieRoute.Review)
         assertEquals(listOf(Stop(MovieRoute.VaultCreated, p2)), stackAfterCreate(review))
     }
+
+    /** Opens each of [routes] in turn from [start] the way NavGraph's navigate does, and returns every stack on the way. */
+    private fun walk(start: List<Stop>, vararg routes: MovieRoute): List<List<Stop>> =
+        routes.toList().runningFold(start) { stack, route -> stackAfterOpen(stack, stopFor(stack.last(), route)) }
+
+    private val oneKeySteps = arrayOf(MovieRoute.Policy, MovieRoute.ChooseKey, MovieRoute.HardwareAddressType, MovieRoute.HardwareReadKey, MovieRoute.HardwareConfirmKey)
+
+    @Test
+    fun eachOneKeySetupStepGoesOnTopAndBackReturnsToTheStepBefore() {
+        val stacks = walk(stops(p1, MovieRoute.VaultList), *oneKeySteps)
+        for (i in 1 until stacks.size) {
+            assertEquals(stacks[i - 1], stacks[i].dropLast(1), "Back from ${stacks[i].last().route.name}")
+            assertTrue(inCreateFlow(stacks[i]), "the wizard's draft, and so the pick and the type, lives on ${stacks[i].last().route.name}")
+            assertEquals(null, stacks[i].last().hardware, "no setup step names a wallet yet")
+        }
+    }
+
+    @Test
+    fun aSavedOneKeyWalletIsAloneOnTheStackNamingItsWallet() {
+        val confirm = walk(stops(p1, MovieRoute.VaultList), *oneKeySteps).last()
+        val created = stackAfterHardwareCreate(confirm, "hw_2")
+        assertEquals(listOf(Stop(MovieRoute.HardwareCreated, p1, "hw_2")), created)
+        assertFalse(inCreateFlow(created), "nothing on the stack can reach Confirm Key and save the key again")
+        assertEquals(listOf(Stop(MovieRoute.VaultList, p1)), walk(created, MovieRoute.VaultList).last(), "เข้าใช้งานกระเป๋า opens the list alone")
+    }
+
+    @Test
+    fun aHardwareWalletsScreensKeepItsNameAndBackWalksThemHome() {
+        val home = stackAfterOpen(stops(p1, MovieRoute.VaultList), Stop(MovieRoute.HardwareHome, p1, "hw_1"))
+        val stacks = walk(home, MovieRoute.HardwareHistory, MovieRoute.HardwareTxDetail)
+        assertEquals(listOf("hw_1", "hw_1", "hw_1"), stacks.map { it.last().hardware })
+        assertEquals(home, stacks.last().dropLast(2), "Back twice from the detail is Home")
+        val other = stackAfterOpen(stacks.last(), Stop(MovieRoute.HardwareReceive, p1, "hw_2"))
+        assertEquals(stacks.last(), other.dropLast(1), "a switch to another hardware wallet is a push, and Back undoes it")
+        assertEquals(listOf(Stop(MovieRoute.VaultList, p1)), walk(other, MovieRoute.VaultList).last(), "the bar's กระเป๋า drops every hardware screen")
+    }
+
+    @Test
+    fun aHardwarePaymentGoesOnTopStepByStepAndItsSlipTakesThePlaceOfItsScreens() {
+        val home = stackAfterOpen(stops(p1, MovieRoute.VaultList), Stop(MovieRoute.HardwareHome, p1, "hw_1"))
+        val stacks = walk(home, MovieRoute.HardwareSend, MovieRoute.HardwareReview, MovieRoute.HardwareSign)
+        for (i in 1 until stacks.size) {
+            assertEquals(stacks[i - 1], stacks[i].dropLast(1), "Back from ${stacks[i].last().route.name}")
+            assertEquals("hw_1", stacks[i].last().hardware)
+        }
+        val sent = stackAfterHardwareSent(stacks.last())
+        assertEquals(home + Stop(MovieRoute.HardwareSent, p1, "hw_1"), sent, "Back from the slip is Home, never a screen that could sign again")
+        assertEquals(home, stackAfterSlipHome(sent), "the slip's way home is Back to the Home under it")
+
+        val chooser = stops(p1, MovieRoute.VaultList, MovieRoute.ChooseWalletSend)
+        val fromChooser = stackAfterOpen(chooser, Stop(MovieRoute.HardwareSend, p1, "hw_1"))
+        val sentFromChooser = stackAfterHardwareSent(walk(fromChooser, MovieRoute.HardwareReview, MovieRoute.HardwareSign).last())
+        assertEquals(chooser + Stop(MovieRoute.HardwareSent, p1, "hw_1"), sentFromChooser)
+        assertEquals(sentFromChooser + Stop(MovieRoute.HardwareHome, p1, "hw_1"), stackAfterSlipHome(sentFromChooser), "with no Home under it the slip opens one")
+        val signAlone = listOf(Stop(MovieRoute.HardwareSign, p1, "hw_1"))
+        assertEquals(listOf(Stop(MovieRoute.VaultList, p1), Stop(MovieRoute.HardwareSent, p1, "hw_1")), stackAfterHardwareSent(signAlone), "the catalog's Sign alone")
+    }
+
+    @Test
+    fun aHardwareScreenStaysOnItsWalletAndNoOtherScreenCarriesOne() {
+        val created = Stop(MovieRoute.HardwareCreated, p1, "hw_2")
+        for (route in MovieRoute.entries) {
+            assertEquals(if (route.hardware) "hw_2" else null, stopFor(created, route).hardware, route.name)
+            assertEquals(null, stopFor(Stop(MovieRoute.VaultList, p1), route).hardware, "${route.name} from a phone screen")
+        }
+        assertEquals(p2, stopFor(created, MovieRoute.KeyCreated, p2).place, "a place given wins")
+    }
 }

@@ -4,9 +4,11 @@ import com.mebit.app.Place
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.CustodyPolicy
 import com.mebit.app.data.FakeVaultsStorage
+import com.mebit.app.data.PUBLIC_JADE_WALLET
 import com.mebit.app.data.SavedVaults
 import com.mebit.app.data.VaultOwners
 import com.mebit.app.ui.components.DeleteItem
+import com.mebit.ffi.signer.WalletKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -77,7 +79,7 @@ class WalletListTest {
     fun theTotalIsADashWhileTheBookOfSeveralKeyWalletsCannotBeRead() {
         val owner = VaultOwners(listOf("aaaa0000"), everyPlaceOpened = true)
         val books = mapOf(
-            "a newer app's book" to SavedVaults(FakeVaultsStorage("MV2\n"), { owner }, { _, _ -> "" }).apply { sync() },
+            "a newer app's book" to SavedVaults(FakeVaultsStorage("MV3\n"), { owner }, { _, _ -> "" }).apply { sync() },
             "a damaged book" to SavedVaults(FakeVaultsStorage("not a book"), { owner }, { _, _ -> "" }).apply { sync() },
             "a book not read yet" to SavedVaults(FakeVaultsStorage(""), { owner }, { _, _ -> "" }),
         )
@@ -101,5 +103,23 @@ class WalletListTest {
     fun onlyAWalletThatIsNotBackedUpCarriesTheTag() {
         assertEquals("ยังไม่ได้สำรอง", card(0, backedUp = false).backupTag)
         assertNull(card(0, backedUp = true).backupTag)
+    }
+
+    private fun jade(sats: Long, known: Boolean = true) = HardwareCard(PUBLIC_JADE_WALLET, "Jade ของฉัน", sats, known, DeleteItem.Offered)
+
+    // Penpot 1.8.1: 0.0312 on the phone wallet and 0.0150 on กระเป๋า Jade read 0.0462 in all.
+    @Test
+    fun theTotalAddsTheHardwareWalletsAsOneKeyWallets() {
+        assertEquals("0.0462 BTC", walletsTotal(listOf(card(3_120_000)), vaults = emptyList(), walletUnopened = false, hardware = listOf(jade(1_500_000))))
+        assertEquals("0.0150 BTC", walletsTotal(emptyList(), vaults = emptyList(), walletUnopened = false, hardware = listOf(jade(1_500_000))), "a phone with only a Jade wallet")
+        assertEquals("—", walletsTotal(listOf(card(3_120_000)), vaults = emptyList(), walletUnopened = false, hardware = listOf(jade(0, known = false))), "a Jade not read yet")
+        assertEquals("0.8882 BTC", walletsTotal(listOf(card(3_120_000)), vaults = listOf(84_200_000), walletUnopened = false, hardware = listOf(jade(1_500_000))), "beside a several-key wallet, which 1.8.0 adds in")
+    }
+
+    @Test
+    fun aHardwareWalletsRemovalSaysTheDeviceKeepsTheKey() {
+        assertEquals("กระเป๋าจะถูกลบออกจากเครื่องนี้ · Jade ยังเก็บกุญแจนี้ไว้", com.mebit.app.feature.send.removeHardwareBody(WalletKind.JADE))
+        assertEquals("กระเป๋าจะถูกลบออกจากเครื่องนี้ · Trezor ยังเก็บกุญแจนี้ไว้", com.mebit.app.feature.send.removeHardwareBody(WalletKind.TREZOR_SAFE7))
+        assertEquals("ลบกระเป๋า Jade ออกจากเครื่องนี้ไหม", com.mebit.app.feature.send.removeSheetTitle("กระเป๋า Jade"), "1.8.8's title")
     }
 }

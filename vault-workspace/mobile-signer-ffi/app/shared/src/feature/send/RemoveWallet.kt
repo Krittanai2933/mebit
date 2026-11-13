@@ -24,6 +24,7 @@ import com.mebit.app.ui.components.SecondaryCta
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbWhite
+import com.mebit.ffi.signer.WalletKind
 
 /**
  * Pure. Penpot 2.1.A1 to A3's item for a key. A wallet's own key ([ownWalletName]) goes with its wallet, so its line points there
@@ -42,7 +43,7 @@ internal fun keyDeleteItem(ownWalletName: String?, usingWallets: List<String>?):
  */
 internal fun walletDeleteItem(listedWallets: Int, saved: Boolean, usesKey: Boolean?, vaultName: String?): DeleteItem = when {
     listedWallets < 2 -> DeleteItem.Blocked("ลบไม่ได้ · ต้องมีกระเป๋าอย่างน้อย 1 ใบในเครื่อง")
-    !saved -> DeleteItem.Blocked("ลบไม่ได้ · กระเป๋านี้ยังไม่ได้บันทึกในเครื่อง")
+    !saved -> DeleteItem.Blocked(WALLET_NOT_SAVED_LINE)
     usesKey == null -> DeleteItem.Blocked(BOOK_UNREADABLE_LINE)
     usesKey -> DeleteItem.Blocked(inUseLine(vaultName ?: "Wallet"))
     else -> DeleteItem.Offered
@@ -54,6 +55,18 @@ internal fun vaultDeleteItem(saving: BookSaving): DeleteItem = when (saving) {
     BookSaving.Unjudged -> DeleteItem.Blocked(BOOK_UNREADABLE_LINE)
     BookSaving.Ready -> DeleteItem.Offered
 }
+
+/**
+ * Pure. A Jade or Safe 7 one-key wallet's item, on the same rule as a several-key wallet's, since both live in the book: offered while it
+ * is saved and can be judged. Its key stays on the device, so no backup and no count of the phone's wallets holds it back.
+ */
+internal fun hardwareDeleteItem(saving: BookSaving): DeleteItem = when (saving) {
+    BookSaving.MemoryOnly -> DeleteItem.Blocked(WALLET_NOT_SAVED_LINE)
+    BookSaving.Unjudged -> DeleteItem.Blocked(BOOK_UNREADABLE_LINE)
+    BookSaving.Ready -> DeleteItem.Offered
+}
+
+private const val WALLET_NOT_SAVED_LINE = "ลบไม่ได้ · กระเป๋านี้ยังไม่ได้บันทึกในเครื่อง"
 
 private const val BOOK_UNREADABLE_LINE = "ลบไม่ได้ในตอนนี้ · อ่านรายการ Wallet ไม่ได้"
 
@@ -116,6 +129,26 @@ internal fun RemoveWalletSheet(name: String, backedUp: Boolean, onConfirm: () ->
             if (backedUp) "" else "\nกระเป๋านี้ยังไม่ได้สำรอง 24 คำ ถ้าลบตอนนี้จะกู้คืนไม่ได้",
         onCancel = onCancel,
     ) {
+        PrimaryCta("ลบออกจากเครื่องนี้", "cta_remove_confirm", onConfirm)
+        Spacer(modifier = Modifier.height(10.dp))
+        SecondaryCta("ยกเลิก", "cta_remove_cancel", onCancel)
+    }
+}
+
+/**
+ * Pure. A Jade or Safe 7 one-key wallet's confirm line, which no board draws: 1.8.8's words that the wallet leaves this phone, then
+ * 2.1.9's that the device still keeps the key, since the device and not 24 words on this phone brings the wallet back.
+ */
+internal fun removeHardwareBody(kind: WalletKind): String =
+    "กระเป๋าจะถูกลบออกจากเครื่องนี้ · " + when (kind) {
+        WalletKind.JADE -> "Jade ยังเก็บกุญแจนี้ไว้"
+        WalletKind.TREZOR_SAFE7 -> "Trezor ยังเก็บกุญแจนี้ไว้"
+    }
+
+/** Penpot 1.8.8's confirm for a Jade or Safe 7 one-key wallet, in the phone wallet's sheet. The owner check comes after its confirm. */
+@Composable
+internal fun RemoveHardwareSheet(name: String, kind: WalletKind, onConfirm: () -> Unit, onCancel: () -> Unit) {
+    ConfirmSheet(tag = "dialog_remove_wallet", title = removeSheetTitle(name), body = removeHardwareBody(kind), onCancel = onCancel) {
         PrimaryCta("ลบออกจากเครื่องนี้", "cta_remove_confirm", onConfirm)
         Spacer(modifier = Modifier.height(10.dp))
         SecondaryCta("ยกเลิก", "cta_remove_cancel", onCancel)

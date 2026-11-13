@@ -74,7 +74,33 @@ pub(crate) struct ScanStore {
 #[derive(Default)]
 struct Wallets {
     dir: Option<PathBuf>,
-    open: HashMap<WalletId, Arc<Mutex<Entry>>>,
+    open: HashMap<WalletId, Open>,
+}
+
+struct Open {
+    entry: Arc<Mutex<Entry>>,
+    /// `ScanStore::change_proof`, outside `entry`, whose lock a sync holds across the network.
+    change_proof: Option<u32>,
+}
+
+impl Wallets {
+    fn wallet(&mut self, id: &WalletId) -> &Open {
+        let dir = &self.dir;
+        self.open.entry(*id).or_insert_with(|| {
+            let scan = dir
+                .as_ref()
+                .and_then(|dir| fs::read_to_string(dir.join(file_name(id))).ok())
+                .and_then(|text| decode(id, &text))
+                .unwrap_or_default();
+            Open {
+                change_proof: change_proof(&scan),
+                entry: Arc::new(Mutex::new(Entry {
+                    scan,
+                    ..Entry::default()
+                })),
+            }
+        })
+    }
 }
 
 impl ScanStore {
@@ -89,22 +115,13 @@ impl ScanStore {
 
     /// The wallet `id`, from memory, else from its file, else as a wallet never scanned.
     pub(crate) fn wallet(&self, id: &WalletId) -> Arc<Mutex<Entry>> {
-        let mut wallets = self.wallets();
-        let dir = wallets.dir.clone();
-        wallets
-            .open
-            .entry(*id)
-            .or_insert_with(|| {
-                let scan = dir
-                    .and_then(|dir| fs::read_to_string(dir.join(file_name(id))).ok())
-                    .and_then(|text| decode(id, &text))
-                    .unwrap_or_default();
-                Arc::new(Mutex::new(Entry {
-                    scan,
-                    ..Entry::default()
-                }))
-            })
-            .clone()
+        self.wallets().wallet(id).entry.clone()
+    }
+
+    /// The change index the scan of `id` holds as proven used, a file's index included, as its file was read or a sync
+    /// last saved it. It never waits for a sync in progress.
+    pub(crate) fn change_proof(&self, id: &WalletId) -> Option<u32> {
+        self.wallets().wallet(id).change_proof
     }
 
     pub(crate) fn epoch(&self) -> u64 {
@@ -117,16 +134,21 @@ impl ScanStore {
         self.epoch.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// Writes `scan` to the file of `id`, when a folder is set and `entry` is still the wallet open, so a sync
-    /// that ends after `forget` leaves no file behind. A failed write leaves the last file, which is only older.
+    /// Writes `scan` to the file of `id` when a folder is set, and keeps its change proof for `change_proof`, both
+    /// only while `entry` is still the wallet open, so a sync that ends after `forget` leaves nothing behind. A
+    /// failed write leaves the last file, which is only older.
     pub(crate) fn save(&self, id: &WalletId, entry: &Arc<Mutex<Entry>>, scan: &WalletScan) {
-        let wallets = self.wallets();
-        let (Some(dir), Some(open)) = (&wallets.dir, wallets.open.get(id)) else {
+        let mut wallets = self.wallets();
+        let Some(open) = wallets.open.get_mut(id) else {
             return;
         };
-        if !Arc::ptr_eq(open, entry) {
+        if !Arc::ptr_eq(&open.entry, entry) {
             return;
         }
+        open.change_proof = change_proof(scan);
+        let Some(dir) = &wallets.dir else {
+            return;
+        };
         // A temp file renamed into place, so a crash mid-write leaves the old file or the new one, never half.
         let path = dir.join(file_name(id));
         let temp = path.with_extension("json.tmp");
@@ -150,6 +172,10 @@ impl ScanStore {
             }
         }
     }
+}
+
+fn change_proof(scan: &WalletScan) -> Option<u32> {
+    scan.chains[1].proof.map(|proof| proof.index())
 }
 
 fn file_name(id: &WalletId) -> String {

@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.QrCode
 import com.mebit.app.data.CreatedVault
+import com.mebit.app.data.HomeSource
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SingleSigWallet
@@ -163,14 +164,15 @@ fun S2ReceiveBackupGateScreen(
  */
 @Composable
 fun S3ReceiveScreen(
-    wallet: SingleSigWallet,
-    session: OnboardingSession,
+    wallet: HomeSource,
+    walletName: String,
     onSend: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
+    tag: String = "screen_send/s3",
 ) = ReceiveLayout(
-    eyebrow = "RECEIVE · ${session.walletName}",
-    tag = "screen_send/s3",
+    eyebrow = "RECEIVE · $walletName",
+    tag = tag,
     address = wallet.receiveAddress,
     addressIsReal = wallet.addressIsReal,
     freshNote = wallet.mode == WalletMode.Live,

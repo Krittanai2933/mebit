@@ -20,3 +20,11 @@ expect fun getPlatform(): Platform
  */
 @Composable
 expect fun rememberIsDebugBuild(): Boolean
+
+/**
+ * True only in a debug build launched with the fake device's switch: MEBIT_FAKE_DEVICE=1 in the app's environment on iOS
+ * (SIMCTL_CHILD_MEBIT_FAKE_DEVICE=1 for xcrun simctl launch), or the launch intent's string extra MEBIT_FAKE_DEVICE set to 1 on Android.
+ * The nav host then reaches a Jade or a Safe 7 through [com.mebit.app.data.FakeDevice] in place of Bluetooth.
+ */
+@Composable
+expect fun rememberFakeDeviceSwitch(): Boolean

@@ -53,7 +53,9 @@ import com.mebit.app.data.AmountUnit
 import com.mebit.app.data.FeeTile
 import com.mebit.app.data.LiveFeeTiers
 import com.mebit.app.data.OnboardingSession
+import com.mebit.app.data.DescribedWallet
 import com.mebit.app.data.FiatQuote
+import com.mebit.app.data.HomeSource
 import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.Replacement
 import com.mebit.app.data.SendDraft
@@ -107,16 +109,88 @@ fun S4SendScreen(
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
-    val quote = rememberFiatQuote(quotes)
-    val entry = remember(draft) { AmountEntry(draft) }
     val scope = rememberCoroutineScope()
     val repost = remember { RepostAttempt() }
     // A replacement held for its card is signed and nothing more, so leaving the screen lets it go.
     DisposableEffect(wallet) {
         onDispose { wallet.dropHeldReplacement() }
     }
+    SendForm(
+        wallet = wallet,
+        walletName = session.walletName,
+        draft = draft,
+        quotes = quotes,
+        tiers = { withContext(Dispatchers.Default) { wallet.feeTiers() } },
+        repost = repost,
+        onContinue = onContinue,
+        onReceive = onReceive,
+        onBack = onBack,
+        onOpenCatalog = onOpenCatalog,
+        tag = "screen_send/s4",
+        unconfirmed = { quote -> UnconfirmedClearControl(wallet, session, draft, quote, repost, scope, confirmRepost, confirmReplacement) },
+        reposted = { RepostedNote(repost, wallet) },
+    )
+}
+
+/**
+ * Penpot 4.4 Send of a Jade or Safe 7 one-key wallet, "Send 4.3 as the phone wallet's": the same form over [wallet]. A payment that may be
+ * out shows the same panel with the phone wallet's retry of its kept bytes behind [confirmRepost] and its clear, and no fee bump or
+ * cancel, which would have the device sign a new transaction.
+ */
+@Composable
+fun HardwareSendScreen(
+    wallet: DescribedWallet,
+    draft: SendDraft,
+    quotes: QuoteCache,
+    confirmRepost: suspend () -> Boolean,
+    onContinue: () -> Unit,
+    onReceive: () -> Unit,
+    onBack: (() -> Unit)?,
+    onOpenCatalog: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val repost = remember { RepostAttempt() }
+    SendForm(
+        wallet = wallet,
+        walletName = wallet.wallet.name,
+        draft = draft,
+        quotes = quotes,
+        tiers = { wallet.feeTiers() },
+        repost = repost,
+        onContinue = onContinue,
+        onReceive = onReceive,
+        onBack = onBack,
+        onOpenCatalog = onOpenCatalog,
+        tag = "screen_hw/send",
+        unconfirmed = { UnconfirmedClearControl(wallet, draft, repost, scope, confirmRepost) },
+        reposted = { RepostedNote(repost, wallet) },
+    )
+}
+
+/**
+ * The Send form of a one-key wallet, whichever signs its payments. [tiers] fetches the fee rates once per open, [repost] holds Back and รับ
+ * while a repost runs, and [unconfirmed] and [reposted] are what the wallet offers for a payment that may be out.
+ */
+@Composable
+private fun SendForm(
+    wallet: HomeSource,
+    walletName: String,
+    draft: SendDraft,
+    quotes: QuoteCache,
+    tiers: suspend () -> LiveFeeTiers,
+    repost: RepostAttempt,
+    onContinue: () -> Unit,
+    onReceive: () -> Unit,
+    onBack: (() -> Unit)?,
+    onOpenCatalog: () -> Unit,
+    tag: String,
+    unconfirmed: @Composable (FiatQuote?) -> Unit,
+    reposted: @Composable () -> Unit,
+) {
+    val quote = rememberFiatQuote(quotes)
+    val entry = remember(draft) { AmountEntry(draft) }
     // Once per open of this screen. Rust answers from memory for five minutes, so a second open costs no network call.
-    LaunchedEffect(draft) { entry.applyTiers(withContext(Dispatchers.Default) { wallet.feeTiers() }, wallet.spendableSats) }
+    LaunchedEffect(draft) { entry.applyTiers(tiers(), wallet.spendableSats) }
     val addressOk = if (draft.destination.isEmpty()) null else isValidAddress(draft.destination, KeyNetwork.TEST)
     // The spendable balance, not the whole one: a receive still in the mempool cannot pay, and send all pays the spendable figure less the fee.
     val issue = sendIssue(addressOk, draft.amountSats, draft.feeSats, wallet.spendableSats, wallet.balanceKnown, wallet.unconfirmedSend != null)
@@ -136,12 +210,12 @@ fun S4SendScreen(
     }
     KeyboardDismissBox {
         MebitScreen(
-            eyebrow = "SEND · ${session.walletName}",
+            eyebrow = "SEND · $walletName",
             title = null,
             // Back and รับ wait while a repost or a replacement runs, as Review's back does. The back chip stays so the header does not shift.
             onBack = onBack?.let(repost::unlessRunning),
             onOpenCatalog = onOpenCatalog,
-            tag = "screen_send/s4",
+            tag = tag,
             bottom = {
                 Spacer(modifier = Modifier.height(12.dp))
                 PrimaryCta("ตรวจสอบ", "cta_s4_review", onContinue, enabled = addressOk == true && draft.amountSats > 0 && issue == null)
@@ -164,7 +238,7 @@ fun S4SendScreen(
                 SendIssue.PaymentUnconfirmed -> {
                     Spacer(modifier = Modifier.height(20.dp))
                     IssuePanel("PAYMENT UNCONFIRMED", "การส่งครั้งก่อนยังยืนยันไม่ได้ รอสักครู่ แล้วเปิดหน้าแรกเพื่อตรวจยอดก่อนส่งอีกครั้ง")
-                    UnconfirmedClearControl(wallet, session, draft, quote, repost, scope, confirmRepost, confirmReplacement)
+                    unconfirmed(quote)
                 }
                 is SendIssue.Insufficient -> {
                     Spacer(modifier = Modifier.height(20.dp))
@@ -173,7 +247,7 @@ fun S4SendScreen(
                 null -> Unit
             }
             // Outside the panel, which leaves with the guard the repost settled.
-            RepostedNote(repost, wallet)
+            reposted()
         }
     }
 }

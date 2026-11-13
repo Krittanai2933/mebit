@@ -12,12 +12,29 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.mebit.app.VaultsStorage
+import com.mebit.ffi.signer.AddressType
+import com.mebit.ffi.signer.KeyNetwork
+import com.mebit.ffi.signer.WalletKind
+import com.mebit.ffi.signer.WalletShape
 import com.mebit.ffi.signer.computeVaultAddressMultisig
+import com.mebit.ffi.signer.walletDescribe
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
 
 /** Everything the phone remembers besides the wallet record, one value so one write can never store half of it. Holds no recovery words and no private key. */
-data class VaultBook(val keys: List<SavedKey> = emptyList(), val vaults: List<CreatedVault> = emptyList())
+data class VaultBook(
+    val keys: List<SavedKey> = emptyList(),
+    val vaults: List<CreatedVault> = emptyList(),
+    /** The one-key Jade and Safe 7 wallets, in the order they were made. */
+    val hardware: List<HardwareWallet> = emptyList(),
+    /** The highest n a "vault_<n>" id was given, kept after that wallet is removed so no number is given twice. 0 for none, and in an MV1 book. */
+    val lastVaultNumber: Int = 0,
+    /** The same for "hw_<n>". */
+    val lastHardwareNumber: Int = 0,
+)
+
+/** The number of a new wallet: one past [last] and past every number [ids] carry after [prefix], so a removed wallet's number never comes back. */
+internal fun nextNumber(last: Int, ids: List<String>, prefix: String): Int = maxOf(last, ids.mapNotNull { it.removePrefix(prefix).toIntOrNull() }.maxOrNull() ?: 0) + 1
 
 /** Why the saved book is not simply in use. Each value is a notice on two screens and nothing else, so it can never stop the app reaching the wallet. */
 enum class VaultsHealth {
@@ -56,6 +73,7 @@ class SavedVaults internal constructor(
     private val storage: VaultsStorage?,
     private val owners: () -> VaultOwners?,
     private val deriveAddress: (List<String>, UByte) -> String = { x, m -> computeVaultAddressMultisig(x, m) },
+    private val describe: (String, KeyNetwork) -> WalletShape = { d, n -> walletDescribe(d, n) },
 ) {
     /** The one copy of the state. Screens read it through [KeyringStore.keys] and [VaultDraft.created]. */
     var current: VaultBook by mutableStateOf(VaultBook())
@@ -148,6 +166,9 @@ class SavedVaults internal constructor(
 
     /** Whether a vault uses the key [fingerprint]. Null while the book cannot be [judged]. */
     fun usesKey(fingerprint: String): Boolean? = synchronized(vaultsLock) { if (judgedNow()) current.vaultsUsing(fingerprint).isNotEmpty() else null }
+
+    /** The pay-twice guard keys of the book's wallets. Null while the book cannot be [judged], since a wallet it holds could then go unnamed. */
+    fun guardKeys(): List<String>? = synchronized(vaultsLock) { if (judgedNow()) current.hardware.map { it.guardKey } else null }
 
     /** Whether a several-key wallet's removal can run now. Only a saved wallet saves the book, and only a phone that saved one has the owner check the removal asks for. */
     val saving: BookSaving
@@ -271,6 +292,12 @@ class SavedVaults internal constructor(
         } catch (e: Exception) {
             false
         }
+    } && book.hardware.all { h ->
+        try {
+            describe(h.descriptor, KeyNetwork.TEST).firstAddress == h.address
+        } catch (e: Exception) {
+            false
+        }
     }
 
     companion object {
@@ -284,6 +311,10 @@ private val vaultsLock = SynchronizedObject()
 
 /** The vaults in this book that use the key [fingerprint], matched without case. The one rule behind deleting a key and removing a wallet. */
 internal fun VaultBook.vaultsUsing(fingerprint: String): List<CreatedVault> = vaults.filter { v -> v.keyFingerprints.any { it.equals(fingerprint, ignoreCase = true) } }
+
+/** Whether a saved key or a hardware wallet of this book has the master fingerprint [fingerprint], matched without case. A vault's keys are saved keys. */
+internal fun VaultBook.usesFingerprint(fingerprint: String): Boolean =
+    keys.any { it.fingerprint.equals(fingerprint, ignoreCase = true) } || hardware.any { it.fingerprint.equals(fingerprint, ignoreCase = true) }
 
 /** The wallet's own key as the keyring shows it, null for a session with no key. Never saved, so [SavedKey.verified] is always the session's backupConfirmed now. */
 internal fun OnboardingSession.ownKey(): SavedKey? = fingerprint.takeIf { it.isNotBlank() }?.let { fp ->
@@ -302,11 +333,24 @@ internal fun OnboardingSession.ownKey(): SavedKey? = fingerprint.takeIf { it.isN
 internal fun xpubsIn(bsms: String): List<String> =
     bsms.lines().getOrNull(1)?.substringAfter("sortedmulti(")?.substringBeforeLast("))")?.split(",")?.drop(1)?.map { it.substringAfterLast(']') }.orEmpty()
 
-/** "MV1", then every value as "<length in UTF-16 units> <text>\n", so labels, Thai and BSMS newlines need no escaping. `verified` is not written, because a key is here only after Verify Key. */
+/**
+ * "MV2", then every value as "<length in UTF-16 units> <text>\n", so labels, Thai and BSMS newlines need no escaping, ending with the
+ * two highest wallet numbers given, which an MV2 text from before f38e8f4 lacks. `verified` is not written, because a key is here only
+ * after Verify Key. MV1, the format before the hardware wallets, reads with the new fields empty.
+ */
 private object VaultBookCodec {
     private const val MAX_BYTES = 1_048_576
     private val SOURCE_CODE = mapOf(KeySourceLabel.ThisDevice to 0, KeySourceLabel.MebitOther to 1, KeySourceLabel.Jade to 2, KeySourceLabel.TrezorSafe7 to 3)
     private val POLICY_CODE = mapOf(CustodyPolicy.PersonalCustody to 0)
+
+    /** A device's code is its key source's. */
+    private val KIND_CODE = mapOf(WalletKind.JADE to 2, WalletKind.TREZOR_SAFE7 to 3)
+
+    /** The wallet record's address type codes. */
+    private val TYPE_CODE = mapOf(AddressType.NATIVE_SEGWIT to 0, AddressType.LEGACY to 1, AddressType.NESTED_SEGWIT to 2, AddressType.TAPROOT to 3)
+
+    /** A hardware wallet's fingerprint names its pairing and its descriptor, so it is checked here, where the text enters. */
+    private val FINGERPRINT = Regex("[0-9a-f]{8}")
 
     sealed interface Decoded {
         class Ok(val owner: String, val book: VaultBook) : Decoded
@@ -318,7 +362,7 @@ private object VaultBookCodec {
 
     /** The text for ([owner], [book]), or null when [decode] would not read exactly these values back. Null is never written. */
     fun encodeChecked(owner: String, book: VaultBook): String? {
-        val text = StringBuilder("MV1\n")
+        val text = StringBuilder("MV2\n")
         text.field(owner)
         text.field(book.keys.size)
         for (key in book.keys) {
@@ -342,7 +386,23 @@ private object VaultBookCodec {
             text.field(if (vault.hasMockKey) 1 else 0)
             text.field(vault.keyFingerprints.size)
             vault.keyFingerprints.forEach { text.field(it) }
+            text.field(vault.keyIds.size)
+            vault.keyIds.forEach { text.field(it) }
+            text.field(vault.pending)
         }
+        text.field(book.hardware.size)
+        for (wallet in book.hardware) {
+            text.field(wallet.id)
+            text.field(wallet.name)
+            text.field(KIND_CODE[wallet.kind] ?: return null)
+            text.field(TYPE_CODE[wallet.addressType] ?: return null)
+            text.field(wallet.fingerprint)
+            text.field(wallet.xpub)
+            text.field(wallet.address)
+            text.field(wallet.pending)
+        }
+        text.field(book.lastVaultNumber)
+        text.field(book.lastHardwareNumber)
         val encoded = text.toString()
         try {
             encoded.encodeToByteArray(throwOnInvalidSequence = true) // a lone surrogate in a label would not read back
@@ -353,14 +413,15 @@ private object VaultBookCodec {
         return encoded.takeIf { back.owner == owner && back.book == book }
     }
 
-    /** Never throws. A version above 1 or a code v1 never writes is Newer, because the rest is not then judged by v1 rules. Anything else encode never writes is Damaged. */
+    /** Never throws. A version above 2 or a code v2 never writes is Newer, because the rest is not then judged by v2 rules. Anything else encode never writes is Damaged. */
     fun decode(text: String): Decoded {
         if (text.encodeToByteArray().size > MAX_BYTES || !text.startsWith("MV")) return Decoded.Damaged
         val headerEnd = text.indexOf('\n')
         if (headerEnd < 0) return Decoded.Damaged
         val version = text.substring(2, headerEnd)
         if (version.isEmpty() || version.startsWith("0") || version.any { it !in '0'..'9' }) return Decoded.Damaged
-        if (version != "1") return Decoded.Newer
+        if (version != "1" && version != "2") return Decoded.Newer
+        val v2 = version == "2"
         val fields = Fields(text, headerEnd + 1)
         val owner = fields.text() ?: return Decoded.Damaged
         val keys = buildList {
@@ -389,11 +450,32 @@ private object VaultBookCodec {
                 val hasMockKey = fields.flag() ?: return Decoded.Damaged
                 val count = fields.number() ?: return Decoded.Damaged
                 val fingerprints = buildList { repeat(count) { add(fields.text() ?: return Decoded.Damaged) } }
-                if (m !in 1..n || count != n) return Decoded.Damaged
-                add(CreatedVault(id, name, m, n, policy, address, bsms, fingerprints, hasMockKey))
+                val keyIds = if (v2) buildList { repeat(fields.number() ?: return Decoded.Damaged) { add(fields.text() ?: return Decoded.Damaged) } } else emptyList()
+                val pending = if (v2) fields.text() ?: return Decoded.Damaged else ""
+                if (m !in 1..n || count != n || (keyIds.isNotEmpty() && keyIds.size != n)) return Decoded.Damaged
+                add(CreatedVault(id, name, m, n, policy, address, bsms, fingerprints, hasMockKey, keyIds, pending))
             }
         }
-        return if (fields.atEnd()) Decoded.Ok(owner, VaultBook(keys, vaults)) else Decoded.Damaged
+        val hardware = if (!v2) emptyList() else buildList {
+            repeat(fields.number() ?: return Decoded.Damaged) {
+                val id = fields.text() ?: return Decoded.Damaged
+                val name = fields.text() ?: return Decoded.Damaged
+                val kindCode = fields.number() ?: return Decoded.Damaged
+                val kind = KIND_CODE.entries.firstOrNull { it.value == kindCode }?.key ?: return Decoded.Newer
+                val typeCode = fields.number() ?: return Decoded.Damaged
+                val type = TYPE_CODE.entries.firstOrNull { it.value == typeCode }?.key ?: return Decoded.Newer
+                val fingerprint = fields.text()?.takeIf(FINGERPRINT::matches) ?: return Decoded.Damaged
+                val xpub = fields.text() ?: return Decoded.Damaged
+                val address = fields.text() ?: return Decoded.Damaged
+                val pending = fields.text() ?: return Decoded.Damaged
+                add(HardwareWallet(id, name, kind, type, fingerprint, xpub, address, pending))
+            }
+        }
+        // An MV2 text from before f38e8f4 ends here. It reads as no number given, and a new id is still one past every saved id.
+        val numbered = v2 && !fields.atEnd()
+        val lastVault = if (numbered) fields.number() ?: return Decoded.Damaged else 0
+        val lastHardware = if (numbered) fields.number() ?: return Decoded.Damaged else 0
+        return if (fields.atEnd()) Decoded.Ok(owner, VaultBook(keys, vaults, hardware, lastVault, lastHardware)) else Decoded.Damaged
     }
 
     private fun StringBuilder.field(value: Any) {

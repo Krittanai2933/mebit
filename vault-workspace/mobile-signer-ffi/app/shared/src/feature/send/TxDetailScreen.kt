@@ -49,9 +49,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.QuoteCache
-import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.TxDetailLoad
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.rememberIsDebugBuild
@@ -74,10 +72,7 @@ import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.KeyNetwork
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.painterResource
 
 /** How far the navy band runs on behind the top of the status card, which straddles its edge as on the board. */
@@ -92,18 +87,18 @@ private val STATUS_OVERLAP = 44.dp
 @Composable
 fun S8TxDetailScreen(
     tx: HotTx,
-    wallet: SingleSigWallet,
-    session: OnboardingSession,
+    detail: suspend (txid: String) -> TxDetailLoad.Done,
+    walletName: String,
     quotes: QuoteCache,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
+    tag: String = "screen_send/s8",
 ) {
     var retries by remember(tx.txid) { mutableIntStateOf(0) }
     var load by remember(tx.txid) { mutableStateOf<TxDetailLoad>(TxDetailLoad.Loading) }
     LaunchedEffect(tx.txid, retries) {
         load = TxDetailLoad.Loading
-        // IO, not Default, because a back cannot stop this blocking call and a few of them on a dead network would hold Default's one thread per core.
-        load = withContext(Dispatchers.IO) { wallet.detail(session, tx.txid) }
+        load = detail(tx.txid)
     }
     val view = txDetailView(tx, load, rememberFiatQuote(quotes), KeyNetwork.TEST)
     val debugBuild = rememberIsDebugBuild()
@@ -121,7 +116,7 @@ fun S8TxDetailScreen(
         copied = tag
     }
     var technical by remember { mutableStateOf(false) }
-    Box(modifier = Modifier.fillMaxSize().background(MbPage).testTag("screen_send/s8")) {
+    Box(modifier = Modifier.fillMaxSize().background(MbPage).testTag(tag)) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -130,7 +125,7 @@ fun S8TxDetailScreen(
                 .padding(horizontal = 20.dp)
                 .padding(top = 12.dp, bottom = 16.dp),
         ) {
-            Header(view, session.walletName, onBack)
+            Header(view, walletName, onBack)
             StatusCard(view.status)
             view.note?.let { note ->
                 Spacer(modifier = Modifier.height(14.dp))
