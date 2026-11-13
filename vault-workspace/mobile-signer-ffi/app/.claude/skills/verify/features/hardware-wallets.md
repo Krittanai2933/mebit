@@ -56,7 +56,7 @@ Steps, each a shot:
 
 - The rows of Choose Key carry the Keyring's key ids (`pick_<key id>`); read them from `idb ui describe-all` on the Keyring or Choose Key.
 - Taps below y 800 on a simulator are lost: scroll first. The debug link floats over the bottom centre, so tap a wide button at its left end.
-- Back or ยกเลิกการเซ็น while a device request is still out leaves the sign screen at once, but the send stays claimed until the device answers: 5.2 then shows `id:m2_busy` (รอให้การเซ็นที่ค้างอยู่จบก่อน) and holds its buttons.
+- Back or ยกเลิกการเซ็น while a device request is still out leaves the sign screen at once, but the send stays claimed until the device answers: 5.2 then shows `id:m2_busy` (รอให้การเซ็นที่ค้างอยู่จบก่อน · ยกเลิกบนอุปกรณ์ได้) and holds its buttons; a cancel on the device frees it at once.
 - The fake signs only for the public phrase. A wallet made from any other key is refused on Sign with Fingerprint ไม่ตรง.
 - On Android the switch is the launch intent's extra: `adb shell am start -n com.mebit.app/.MainActivity --es MEBIT_FAKE_DEVICE 1`.
 - The fake's pairing lives in memory, so a relaunch makes it a Safe 7 that forgot this phone (2.3.6), while the phone still keeps the pairing in the Keychain.

@@ -82,7 +82,7 @@ class HardwareSignTest {
             "5.3.2.4",
         )
         assertEquals("Trezor ยังไม่พร้อม", deviceFailureText(DeviceFailure.NotReady, "Trezor").title, "the line names the device that is not ready")
-        assertEquals("ปลดล็อก Trezor ด้วย PIN บนตัวเครื่อง และให้มือถือต่ออินเทอร์เน็ต แล้วลองใหม่", deviceFailureText(DeviceFailure.NotReady, "Trezor").subtitle)
+        assertEquals("ปลดล็อก Trezor บนตัวเครื่อง แล้วลองใหม่", deviceFailureText(DeviceFailure.NotReady, "Trezor").subtitle, "only a Jade's PIN needs the internet")
         assertEquals(
             listOf("mebit ไม่นับลายเซ็นนี้", "ลายเซ็นที่อุปกรณ์ส่งกลับมาไม่ตรงกับรายการที่คุณเห็น mebit จึงไม่นับ", "ไม่นับ", "ไม่มีลายเซ็นถูกบันทึก · ลองเซ็นอีกครั้ง"),
             row(DeviceFailure.BadAnswer),

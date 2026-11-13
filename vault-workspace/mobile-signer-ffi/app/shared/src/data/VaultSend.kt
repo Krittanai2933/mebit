@@ -484,14 +484,15 @@ internal const val KEY_NOT_HERE = "ไม่พบกุญแจนี้ใน
 // The lines of the signing failures, as the approved boards 5.3.2.2 to 5.3.x.6 write them.
 
 /** A prepare, a broadcast or a signature tried while a signature holds the send, and 5.2's line while a device still holds it after the user left its screen. */
-internal const val BUSY = "รอให้การเซ็นที่ค้างอยู่จบก่อน"
+internal const val BUSY = "รอให้การเซ็นที่ค้างอยู่จบก่อน · ยกเลิกบนอุปกรณ์ได้"
 
 /** More than one device of the kind in range, so the app cannot tell which one holds the key. */
 internal const val SEVERAL_DEVICES_LINE = "เจออุปกรณ์ชนิดเดียวกันมากกว่าหนึ่งเครื่อง ปิดเครื่องที่ไม่ใช้ แล้วลองใหม่"
 internal const val SEVERAL_DEVICES_NOTE = "ยังไม่มีอะไรถูกส่งไปที่อุปกรณ์ · เงินยังไม่ถูกส่ง"
 
-/** The device refused before it showed anything: a locked device, a wrong PIN, no internet for a Jade's PIN, or a busy device. [word] names it. */
-internal fun notReadyLine(word: String): String = "ปลดล็อก $word ด้วย PIN บนตัวเครื่อง และให้มือถือต่ออินเทอร์เน็ต แล้วลองใหม่"
+/** The device refused before it showed anything: a locked device, a wrong PIN, no internet for a Jade's PIN, or a busy device. [word] names it; only a Jade's PIN needs the internet. */
+internal fun notReadyLine(word: String): String =
+    if (word == "Jade") "ปลดล็อก Jade ด้วย PIN บนตัวเครื่อง และให้มือถือต่ออินเทอร์เน็ต แล้วลองใหม่" else "ปลดล็อก $word บนตัวเครื่อง แล้วลองใหม่"
 internal const val NOT_READY_NOTE = "ไม่มีลายเซ็นถูกบันทึก · เงินยังไม่ถูกส่ง"
 
 /** The device answered, and mebit refused the answer: not the device's refusal. */
