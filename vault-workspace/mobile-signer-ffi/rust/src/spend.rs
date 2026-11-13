@@ -16,11 +16,13 @@ use bitcoin::sighash::{EcdsaSighashType, Prevouts, SighashCache, TapSighashType}
 use bitcoin::transaction::{Version, predict_weight};
 use bitcoin::{Address, Network, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
 use miniscript::psbt::PsbtExt;
+use vault_core::keys::generate_seed;
 
 use crate::chain::{ChainSource, EsploraSource, check_network};
 use crate::hot_wallet::{
-    AddressSource, Chain, Plan, PreparedSend, SCAN_STORE, SendAmount, Signed, check_node_rate,
-    checked, complete, mnemonic_from, plan_from, prepared, proven_parents, testnet4,
+    AddressSource, Chain, MAX_FEE_RATE, MAX_STANDARD_VSIZE, MIN_FEE_RATE, Plan, PreparedSend,
+    SCAN_STORE, SendAmount, Signed, check_node_rate, checked, complete, dust_floor, mnemonic_from,
+    plan_from, prepared, proven_parents, testnet4, vsize,
 };
 use crate::scan::GAP;
 use crate::scan_store::ScanStore;
@@ -133,6 +135,18 @@ pub fn wallet_sign_with_words(
         .map(Shown::into_review)
 }
 
+/// A phrase's master key, erased when dropped, so no exit of `signed_with_words` leaves it in memory.
+struct Held(Xpriv);
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        self.0.private_key.non_secure_erase();
+    }
+}
+
+/// `signed_with` the master key of the phrase `words` and `passphrase`, its seed wiped once the key is made.
+/// shortcut: the child keys `Psbt::sign` derives stay inside rust-bitcoin, and the caller's words are not wiped, as before
+/// the merge; sign with child keys derived and erased here if a review asks for full erasure.
 pub(crate) fn signed_with_words(
     wallet: &Described,
     shown: Shown,
@@ -140,20 +154,36 @@ pub(crate) fn signed_with_words(
     passphrase: &str,
     store: &ScanStore,
 ) -> Result<Shown, MobileSignerError> {
+    let seed = generate_seed(&mnemonic_from(words)?, passphrase);
+    let master = Held(
+        Xpriv::new_master(Network::Testnet4, &*seed)
+            .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?,
+    );
+    drop(seed);
+    signed_with(wallet, shown, &master.0, store)
+}
+
+/// `shown` with the signature of the key of `wallet` that `master` holds, as a device signs one: refused when `master`
+/// holds none, back as it is when that key already signed, and refused unless that key then signed every input.
+/// `shown` was read before any key was looked at.
+fn signed_with(
+    wallet: &Described,
+    shown: Shown,
+    master: &Xpriv,
+    store: &ScanStore,
+) -> Result<Shown, MobileSignerError> {
     let secp = Secp256k1::new();
-    let master = Xpriv::new_master(
-        Network::Testnet4,
-        &mnemonic_from(words)?.to_seed(passphrase),
-    )
-    .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?;
     let fingerprint = master.fingerprint(&secp);
     // As a device's key is checked: the fingerprint, and the account key at the wallet key's own path.
     let held = wallet.keys().iter().any(|key| {
         key.fingerprint == fingerprint
-            && master.derive_priv(&secp, &key.path).is_ok_and(|account| {
-                let xpub = Xpub::from_priv(&secp, &account);
-                (xpub.public_key, xpub.chain_code) == (key.xpub.public_key, key.xpub.chain_code)
-            })
+            && master
+                .derive_priv(&secp, &key.path)
+                .is_ok_and(|mut account| {
+                    let xpub = Xpub::from_priv(&secp, &account);
+                    account.private_key.non_secure_erase();
+                    (xpub.public_key, xpub.chain_code) == (key.xpub.public_key, key.xpub.chain_code)
+                })
     });
     if !held {
         return Err(MobileSignerError::InvalidPsbtJson(format!(
@@ -165,7 +195,7 @@ pub(crate) fn signed_with_words(
         return Ok(shown);
     }
     let Shown { mut psbt, review } = shown;
-    psbt.sign(&master, &secp).map_err(|(_, errors)| {
+    psbt.sign(master, &secp).map_err(|(_, errors)| {
         MobileSignerError::InvalidPsbtJson(format!(
             "signatures: the phrase's key did not sign: {errors:?}"
         ))
@@ -265,6 +295,62 @@ fn drafted(
     Ok(psbt)
 }
 
+/// The vault engine's ten rules, as the checks in `review`, `signers` and `as_shown` that keep them. A label for tests
+/// only: a test turns one rule off at a time to prove the attack table needs it. No refusal names one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rule {
+    /// The maps match the transaction; version 2, lock time 0; an input and an output; the global fields exactly the
+    /// wallet's account keys; each input unsigned, signalling RBF, spending no coin twice and not finalized.
+    Shape,
+    /// Each input carries the transaction it spends, which hashes to its outpoint.
+    Parent,
+    /// Each input spends the wallet's own script at the place its key origins name.
+    Coin,
+    /// Each input is exactly what a draft writes for its coin, signatures aside.
+    Fields,
+    /// Each output with no key origins pays an address, and at least one pays someone other than this wallet.
+    Outputs,
+    /// An output with key origins is this wallet's change on chain 1 as a draft writes it, inside the scan's reach,
+    /// and the only one.
+    Change,
+    /// Each output pays at least its script's dust floor.
+    Dust,
+    /// The outputs pay no more than the inputs hold, and the fee is 1 to 10,000 sat/vB of the size a draft prices,
+    /// which is at most 100,000 vB.
+    Fee,
+    /// Each signature is SIGHASH_ALL (Taproot: the default) by a wallet key's child for its input, and verifies.
+    Signature,
+    /// The unsigned id is the one the user was shown.
+    Txid,
+}
+
+#[cfg(test)]
+impl Rule {
+    const ALL: [Rule; 10] = [
+        Rule::Shape,
+        Rule::Parent,
+        Rule::Coin,
+        Rule::Fields,
+        Rule::Outputs,
+        Rule::Change,
+        Rule::Dust,
+        Rule::Fee,
+        Rule::Signature,
+        Rule::Txid,
+    ];
+}
+
+/// Whether the checks of `rule` run: always, but in a test that turns them off.
+#[cfg(not(test))]
+fn on(_: Rule) -> bool {
+    true
+}
+
+#[cfg(test)]
+fn on(rule: Rule) -> bool {
+    tests::SKIP.with(|skip| skip.get() != Some(rule))
+}
+
 /// Refuses a PSBT that is not a payment of `wallet` exactly as a draft writes one, signatures aside, or that
 /// carries any signature but a valid one by a wallet key, else reads it. Ownership is derived from the descriptor
 /// again, never read from the PSBT: each input spends the script of the wallet's own key at the chain and index its
@@ -277,16 +363,29 @@ fn review(
     store: &ScanStore,
 ) -> Result<SpendReview, MobileSignerError> {
     let tx = &psbt.unsigned_tx;
-    if tx.version != Version::TWO || tx.lock_time != LockTime::ZERO {
+    // A decoded PSBT has a map per input and output. One built in memory may not, and the zips below would skip the rest.
+    if on(Rule::Shape)
+        && (psbt.inputs.len() != tx.input.len() || psbt.outputs.len() != tx.output.len())
+    {
+        return Err(not_ours(format!(
+            "its maps do not match its transaction: {} inputs and {} outputs for {} and {} maps",
+            tx.input.len(),
+            tx.output.len(),
+            psbt.inputs.len(),
+            psbt.outputs.len()
+        )));
+    }
+    if on(Rule::Shape) && (tx.version != Version::TWO || tx.lock_time != LockTime::ZERO) {
         return Err(not_ours("it is not version 2 with lock time 0".into()));
     }
-    if tx.input.is_empty() || tx.output.is_empty() {
+    if on(Rule::Shape) && (tx.input.is_empty() || tx.output.is_empty()) {
         return Err(not_ours("it has no input or no output".into()));
     }
-    if psbt.version != 0
-        || !psbt.proprietary.is_empty()
-        || !psbt.unknown.is_empty()
-        || psbt.xpub != wallet.global_xpubs()
+    if on(Rule::Shape)
+        && (psbt.version != 0
+            || !psbt.proprietary.is_empty()
+            || !psbt.unknown.is_empty()
+            || psbt.xpub != wallet.global_xpubs())
     {
         return Err(not_ours(
             "its global fields are not exactly this wallet's account keys".into(),
@@ -296,22 +395,27 @@ fn review(
     let mut spent = HashSet::new();
     for (i, (txin, input)) in tx.input.iter().zip(&psbt.inputs).enumerate() {
         let why = |what: &str| not_ours(format!("input {i} {what}"));
-        if txin.sequence != Sequence::ENABLE_RBF_NO_LOCKTIME
-            || !txin.script_sig.is_empty()
-            || !txin.witness.is_empty()
+        if on(Rule::Shape)
+            && (txin.sequence != Sequence::ENABLE_RBF_NO_LOCKTIME
+                || !txin.script_sig.is_empty()
+                || !txin.witness.is_empty())
         {
             return Err(why("is not an unsigned input that signals RBF"));
         }
-        if !spent.insert(txin.previous_output) {
+        if !spent.insert(txin.previous_output) && on(Rule::Shape) {
             return Err(why("spends a coin an earlier input spends"));
         }
-        if input.final_script_sig.is_some() || input.final_script_witness.is_some() {
+        if on(Rule::Shape)
+            && (input.final_script_sig.is_some() || input.final_script_witness.is_some())
+        {
             return Err(why("is already finalized"));
         }
         let parent = input
             .non_witness_utxo
             .as_ref()
-            .filter(|parent| parent.compute_txid() == txin.previous_output.txid)
+            .filter(|parent| {
+                !on(Rule::Parent) || parent.compute_txid() == txin.previous_output.txid
+            })
             .ok_or_else(|| why("does not carry the transaction whose coin it spends"))?;
         let vout = txin.previous_output.vout;
         let prevout = parent
@@ -325,14 +429,14 @@ fn review(
         let (chain, index) = wallet
             .claim(origins)
             .ok_or_else(|| why("names no key of this wallet at a receive or change index"))?;
-        if wallet.at(chain, index)?.script_pubkey() != prevout.script_pubkey {
+        if on(Rule::Coin) && wallet.at(chain, index)?.script_pubkey() != prevout.script_pubkey {
             return Err(why("spends a coin the wallet's keys do not lock there"));
         }
         let expected = wallet.input(parent, vout, chain, index)?;
         let mut unsigned = input.clone();
         unsigned.partial_sigs.clear();
         unsigned.tap_key_sig = None;
-        if unsigned != expected {
+        if on(Rule::Fields) && unsigned != expected {
             return Err(why(if unsigned.sighash_type != expected.sighash_type {
                 "asks for another sighash than ALL"
             } else if unsigned.witness_utxo != expected.witness_utxo {
@@ -352,13 +456,27 @@ fn review(
     let mut change_sats = None;
     for (o, (txout, output)) in tx.output.iter().zip(&psbt.outputs).enumerate() {
         let why = |what: &str| not_ours(format!("output {o} {what}"));
+        let (sats, floor) = (txout.value.to_sat(), dust_floor(&txout.script_pubkey));
+        if on(Rule::Dust) && sats < floor {
+            return Err(why(&format!(
+                "pays {sats} sats, under its {floor} sat dust floor"
+            )));
+        }
         if *output == psbt::Output::default() {
-            let address = Address::from_script(&txout.script_pubkey, Network::Testnet4)
-                .map_err(|_| why("pays a script with no address"))?;
+            let Ok(address) = Address::from_script(&txout.script_pubkey, Network::Testnet4) else {
+                if on(Rule::Outputs) {
+                    return Err(why("pays a script with no address"));
+                }
+                continue;
+            };
             payments.push(SpendOutput {
                 address: address.to_string(),
                 sats: txout.value.to_sat(),
             });
+            continue;
+        }
+        if !on(Rule::Change) {
+            change_sats = Some(sats);
             continue;
         }
         let origins = output
@@ -389,6 +507,10 @@ fn review(
         }
     }
 
+    if on(Rule::Outputs) && payments.is_empty() {
+        return Err(not_ours("it pays no one but this wallet".into()));
+    }
+
     let paid_in = prevouts
         .iter()
         .try_fold(0u64, |sum, o| sum.checked_add(o.value.to_sat()));
@@ -398,8 +520,23 @@ fn review(
         .try_fold(0u64, |sum, o| sum.checked_add(o.value.to_sat()));
     let fee_sats = match (paid_in, paid_out) {
         (Some(paid_in), Some(paid_out)) if paid_in >= paid_out => paid_in - paid_out,
-        _ => return Err(not_ours("its outputs pay more than its inputs hold".into())),
+        _ if on(Rule::Fee) => {
+            return Err(not_ours("its outputs pay more than its inputs hold".into()));
+        }
+        // Reached only while a test turns `Rule::Fee` off.
+        _ => 0,
     };
+    // The size a draft prices: every input at its most, so a device's shorter signature only raises the real rate.
+    let scripts: Vec<usize> = tx.output.iter().map(|o| o.script_pubkey.len()).collect();
+    let priced = vsize(&vec![wallet.spend_weight(); tx.input.len()], &scripts);
+    if on(Rule::Fee)
+        && (priced > MAX_STANDARD_VSIZE
+            || !(MIN_FEE_RATE * priced..=MAX_FEE_RATE * priced).contains(&fee_sats))
+    {
+        return Err(not_ours(format!(
+            "its fee {fee_sats} for {priced} vB is outside {MIN_FEE_RATE} to {MAX_FEE_RATE} sat/vB, or the size passes {MAX_STANDARD_VSIZE} vB"
+        )));
+    }
     let signed = signers(wallet, psbt, &prevouts)?;
     Ok(SpendReview {
         psbt: psbt.to_string(),
@@ -443,7 +580,7 @@ fn signers(
             ) else {
                 return Err(why("on an input with no Taproot key"));
             };
-            if sig.sighash_type != TapSighashType::Default {
+            if on(Rule::Signature) && sig.sighash_type != TapSighashType::Default {
                 return Err(why("that is not the default sighash"));
             }
             let sighash = cache
@@ -454,12 +591,14 @@ fn signers(
                 )
                 .map_err(|e| why(&e.to_string()))?;
             let (output_key, _) = internal.tap_tweak(&secp, None);
-            secp.verify_schnorr(
-                &sig.signature,
-                &Message::from(sighash),
-                &output_key.to_x_only_public_key(),
-            )
-            .map_err(|_| why("that does not verify"))?;
+            if on(Rule::Signature) {
+                secp.verify_schnorr(
+                    &sig.signature,
+                    &Message::from(sighash),
+                    &output_key.to_x_only_public_key(),
+                )
+                .map_err(|_| why("that does not verify"))?;
+            }
             here.insert(*fingerprint);
         }
         if !input.partial_sigs.is_empty() {
@@ -472,13 +611,18 @@ fn signers(
                     .get(&key.inner)
                     .filter(|_| key.compressed);
                 let Some((fingerprint, _)) = origin else {
+                    if !on(Rule::Signature) {
+                        continue;
+                    }
                     return Err(why("by a key outside this wallet"));
                 };
-                if sig.sighash_type != EcdsaSighashType::All {
+                if on(Rule::Signature) && sig.sighash_type != EcdsaSighashType::All {
                     return Err(why("that is not SIGHASH_ALL"));
                 }
-                secp.verify_ecdsa(&sighash, &sig.signature, &key.inner)
-                    .map_err(|_| why("that does not verify"))?;
+                if on(Rule::Signature) {
+                    secp.verify_ecdsa(&sighash, &sig.signature, &key.inner)
+                        .map_err(|_| why("that does not verify"))?;
+                }
                 here.insert(*fingerprint);
             }
         }
@@ -523,7 +667,7 @@ pub(crate) fn as_shown(
     store: &ScanStore,
 ) -> Result<Shown, MobileSignerError> {
     let read = review(wallet, &psbt, store)?;
-    if read.unsigned_txid != unsigned_txid {
+    if on(Rule::Txid) && read.unsigned_txid != unsigned_txid {
         return Err(MobileSignerError::InvalidPsbtJson(format!(
             "changed since shown: this payment is {}, not {unsigned_txid}",
             read.unsigned_txid
@@ -589,14 +733,20 @@ pub(crate) fn finished(wallet: &Described, shown: &Shown) -> Result<Signed, Mobi
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::cell::Cell;
     use std::collections::{BTreeMap, HashSet};
-    use std::sync::{Mutex, mpsc};
+    use std::sync::{Mutex, OnceLock, mpsc};
     use std::time::{Duration, Instant};
 
     use bitcoin::bip32::{ChildNumber, DerivationPath, KeySource, Xpriv, Xpub};
-    use bitcoin::script::Instruction;
+    use bitcoin::hashes::{Hash, sha256};
+    use bitcoin::opcodes::all::OP_CHECKMULTISIG;
+    use bitcoin::psbt::raw::{Key, ProprietaryKey};
+    use bitcoin::script::{Builder, Instruction};
     use bitcoin::secp256k1::{self, SecretKey};
-    use bitcoin::{Amount, PublicKey, Script};
+    use bitcoin::{Amount, PublicKey, Script, Txid};
+    use miniscript::Descriptor;
+    use miniscript::descriptor::DefiniteDescriptorKey;
     use miniscript::psbt::PsbtOutputExt;
     use vault_core::hw::psbt_check::validate_signing_policy;
 
@@ -612,6 +762,11 @@ pub(crate) mod tests {
     };
 
     pub(crate) const RATE: u64 = 3;
+
+    thread_local! {
+        /// The one rule a mutation run turns off, on this test's thread only.
+        pub(super) static SKIP: Cell<Option<Rule>> = const { Cell::new(None) };
+    }
 
     fn fingerprint(master: &Xpriv) -> Fingerprint {
         master.fingerprint(&Secp256k1::new())
@@ -1250,6 +1405,11 @@ pub(crate) mod tests {
                         assert_eq!(sent.tx.compute_txid().to_string(), draft.unsigned_txid);
                         assert!(sent.tx.vsize() as u64 <= sized_for);
                         assert!(sent.fee_sats >= RATE * sent.tx.vsize() as u64);
+                        // `spends` takes exactly m signatures, so with every key signed this shows the finish took m.
+                        for (i, input) in psbt.inputs.iter().enumerate() {
+                            let prevout = input.witness_utxo.as_ref().unwrap();
+                            assert!(spends(&sent.tx, i, prevout), "{subset:b} input {i}");
+                        }
                     }
                     Err(e) => {
                         assert!(masters.len() < wallet.needed(), "{subset:b}: {e}");
@@ -1894,5 +2054,899 @@ pub(crate) mod tests {
                 .contains("output 1 is change at index 21, past 20"),
             "{past}"
         );
+    }
+
+    /// BIP-173's testnet P2WPKH vector, an address of no wallet here.
+    const ELSEWHERE: &str = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
+
+    fn script_of(address: &str) -> ScriptBuf {
+        Address::from_str(address)
+            .unwrap()
+            .assume_checked()
+            .script_pubkey()
+    }
+
+    fn sats(amount: &mut Amount, by: i64) {
+        *amount = Amount::from_sat(amount.to_sat().checked_add_signed(by).unwrap());
+    }
+
+    /// A key of no wallet here.
+    fn stranger() -> SecretKey {
+        SecretKey::from_slice(&[0x55; 32]).unwrap()
+    }
+
+    /// The child key the soft master of seed `key` signs input `at` with, at the place its key origin there names.
+    fn child(psbt: &Psbt, at: usize, key: u8) -> SecretKey {
+        let master = soft_master(key);
+        let (_, path) = psbt.inputs[at]
+            .bip32_derivation
+            .values()
+            .find(|(of, _)| *of == fingerprint(&master))
+            .unwrap();
+        master
+            .derive_priv(&Secp256k1::new(), path)
+            .unwrap()
+            .private_key
+    }
+
+    /// Input `at`'s P2WSH digest under `sighash`, by the witness script and value its map carries.
+    fn digest(psbt: &Psbt, at: usize, sighash: EcdsaSighashType) -> Message {
+        let input = &psbt.inputs[at];
+        let hash = SighashCache::new(&psbt.unsigned_tx)
+            .p2wsh_signature_hash(
+                at,
+                input.witness_script.as_ref().unwrap(),
+                input.witness_utxo.as_ref().unwrap().value,
+                sighash,
+            )
+            .unwrap();
+        Message::from_digest(hash.to_byte_array())
+    }
+
+    /// `secret`'s signature of `message`, labelled `sighash`, under its compressed public key.
+    fn partial(
+        secret: &SecretKey,
+        message: &Message,
+        sighash: EcdsaSighashType,
+    ) -> (PublicKey, bitcoin::ecdsa::Signature) {
+        let secp = Secp256k1::new();
+        let signature = bitcoin::ecdsa::Signature {
+            signature: secp.sign_ecdsa(message, secret),
+            sighash_type: sighash,
+        };
+        (PublicKey::new(secret.public_key(&secp)), signature)
+    }
+
+    /// Input 0 spends output 0 of a new parent that pays `script` what its coin held, its outpoint, parent and witness
+    /// UTXO agreeing, so the script is all that differs.
+    fn repaid(psbt: &mut Psbt, script: ScriptBuf) {
+        let value = psbt.inputs[0].witness_utxo.as_ref().unwrap().value;
+        let parent = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::new(Txid::from_byte_array([9; 32]), 0),
+                ..TxIn::default()
+            }],
+            output: vec![TxOut {
+                value,
+                script_pubkey: script,
+            }],
+        };
+        psbt.unsigned_tx.input[0].previous_output = OutPoint::new(parent.compute_txid(), 0);
+        psbt.inputs[0].witness_utxo = Some(parent.output[0].clone());
+        psbt.inputs[0].non_witness_utxo = Some(parent);
+    }
+
+    /// Every key origin of input 0 with its step `back` from the end, 1 the index and 2 the chain, made `index`.
+    fn origins_at(psbt: &mut Psbt, back: usize, index: u32) {
+        for (_, path) in psbt.inputs[0].bip32_derivation.values_mut() {
+            let mut steps: Vec<ChildNumber> = path.as_ref().to_vec();
+            let at = steps.len() - back;
+            steps[at] = ChildNumber::Normal { index };
+            *path = steps.into();
+        }
+    }
+
+    /// Output 1 pays `to`, with the key origins and witness script a device would read it by.
+    fn change_to(psbt: &mut Psbt, to: &Descriptor<DefiniteDescriptorKey>) {
+        psbt.unsigned_tx.output[1].script_pubkey = to.script_pubkey();
+        psbt.outputs[1] = psbt::Output::default();
+        psbt.outputs[1]
+            .update_with_descriptor_unchecked(to)
+            .unwrap();
+    }
+
+    /// CHECKMULTISIG as consensus runs it on input `i` of `tx`, which spends `prevout`: the last witness element is a script
+    /// whose P2WSH is the coin's, the first element is empty, and the signatures between, as many as the script's m, verify
+    /// in witness order against the script's keys in order over the BIP-143 digest. Shares no code with signing.
+    fn spends(tx: &Transaction, i: usize, prevout: &TxOut) -> bool {
+        let witness: Vec<&[u8]> = tx.input[i].witness.iter().collect();
+        let Some((script, rest)) = witness.split_last() else {
+            return false;
+        };
+        let script = ScriptBuf::from_bytes(script.to_vec());
+        if ScriptBuf::new_p2wsh(&script.wscript_hash()) != prevout.script_pubkey {
+            return false;
+        }
+        let Some((empty, signatures)) = rest.split_first() else {
+            return false;
+        };
+        let pushes: Vec<Instruction> = script.instructions().map(Result::unwrap).collect();
+        let m = match pushes[0] {
+            Instruction::Op(op) => (op.to_u8() - 0x50) as usize,
+            Instruction::PushBytes(bytes) => bytes.as_bytes()[0] as usize,
+        };
+        let keys: Vec<secp256k1::PublicKey> = pushes
+            .iter()
+            .filter_map(|push| match push {
+                Instruction::PushBytes(bytes) if bytes.len() == 33 => {
+                    secp256k1::PublicKey::from_slice(bytes.as_bytes()).ok()
+                }
+                _ => None,
+            })
+            .collect();
+        let digest = SighashCache::new(tx)
+            .p2wsh_signature_hash(i, &script, prevout.value, EcdsaSighashType::All)
+            .unwrap();
+        let message = Message::from_digest(digest.to_byte_array());
+        let secp = Secp256k1::verification_only();
+        let mut unused = keys.iter();
+        empty.is_empty()
+            && signatures.len() == m
+            && signatures.iter().all(|signature| {
+                let Some((&0x01, der)) = signature.split_last() else {
+                    return false;
+                };
+                let Ok(signature) = secp256k1::ecdsa::Signature::from_der(der) else {
+                    return false;
+                };
+                unused.any(|key| secp.verify_ecdsa(&message, &signature, key).is_ok())
+            })
+    }
+
+    /// The payment every attack row edits, the vault engine's attack table's: on a 2-of-3 whose receive 0 holds 50,000,000
+    /// and change 0 40,000,000, the draft of 60,000,000 to `SOMEONE` at `RATE` spends both, with change at change 1. Its
+    /// sync proved change 0, so this phone's scan reaches change 20. The other drafts give the ids record-only rows show.
+    struct Paid {
+        wallet: Described,
+        fake: Fake,
+        draft: SpendReview,
+        other_destination: SpendReview,
+        other_amount: SpendReview,
+        other_rate: SpendReview,
+    }
+
+    fn paid() -> Paid {
+        let descriptor = two_of_three();
+        let mut fake = Fake::new();
+        let (receive, change) = (
+            at(&descriptor, Chain::External, 0),
+            at(&descriptor, Chain::Internal, 0),
+        );
+        fund_multi(&mut fake, &receive, 50_000_000, '1');
+        fund_multi(&mut fake, &change, 40_000_000, '3');
+        let draft_to = |to: &str, amount: u64, rate: u64| {
+            draft(
+                &EsploraSource(&WithMulti(&fake)),
+                &descriptor,
+                KeyNetwork::Test,
+                to,
+                SendAmount::Exact(amount),
+                rate,
+                &|| fake.now(),
+                &fake.store,
+            )
+            .unwrap()
+        };
+        Paid {
+            wallet: Described::parse(&descriptor).unwrap(),
+            draft: draft_to(SOMEONE, 60_000_000, RATE),
+            other_destination: draft_to(ELSEWHERE, 60_000_000, RATE),
+            other_amount: draft_to(SOMEONE, 60_000_001, RATE),
+            other_rate: draft_to(SOMEONE, 60_000_000, RATE + 1),
+            fake,
+        }
+    }
+
+    enum Expect {
+        /// `review` refuses with `not this wallet's payment: ` and this text, at a check of this rule, and sign and finish
+        /// refuse the same.
+        Refused(&'static str, Rule),
+        /// `review` reads another payment of this wallet, and sign and finish refuse it as `changed since shown:`.
+        Txid,
+        /// Review, signing by keys 1 and 2 and finish all pass, and consensus takes every input of the finished bytes.
+        Control,
+    }
+
+    struct Case {
+        /// The row of the attack table in the engine merge's design: the vault engine's 1 to 49, and the rows added.
+        row: &'static str,
+        expect: Expect,
+        /// What the row does to the unsigned draft.
+        edit: fn(&Paid, &mut Psbt),
+        /// The id the user was shown, when it is not the draft's.
+        shown: Option<fn(&Paid) -> String>,
+    }
+
+    impl Case {
+        fn refused(
+            row: &'static str,
+            why: &'static str,
+            rule: Rule,
+            edit: fn(&Paid, &mut Psbt),
+        ) -> Self {
+            let expect = Expect::Refused(why, rule);
+            Case {
+                row,
+                expect,
+                edit,
+                shown: None,
+            }
+        }
+
+        fn txid(row: &'static str, edit: fn(&Paid, &mut Psbt)) -> Self {
+            let expect = Expect::Txid;
+            Case {
+                row,
+                expect,
+                edit,
+                shown: None,
+            }
+        }
+
+        /// A row of the vault engine's that edited only its record: the draft as it is, shown under another payment's id.
+        fn shown(row: &'static str, shown: fn(&Paid) -> String) -> Self {
+            let expect = Expect::Txid;
+            Case {
+                row,
+                expect,
+                edit: |_, _| {},
+                shown: Some(shown),
+            }
+        }
+
+        fn control(row: &'static str) -> Self {
+            let expect = Expect::Control;
+            Case {
+                row,
+                expect,
+                edit: |_, _| {},
+                shown: None,
+            }
+        }
+
+        fn rule(&self) -> Option<Rule> {
+            match self.expect {
+                Expect::Refused(_, rule) => Some(rule),
+                Expect::Txid => Some(Rule::Txid),
+                Expect::Control => None,
+            }
+        }
+    }
+
+    /// One row per way a payment can differ from the one shown, each an edit of the unsigned draft of `paid()` that keeps
+    /// every other part the draft's, so a refusal for another reason is a miss: the vault engine's 49 cases
+    /// (vault_spend.rs `cases`), then 28b, 43b, 46b, 46c, A1, A3, T1 and NA.
+    fn cases() -> Vec<Case> {
+        use EcdsaSighashType::{All, AllPlusAnyoneCanPay, Single};
+        let a_sighash_not_all = "input 0 asks for another sighash than ALL";
+        let foreign_coin = "input 0 spends a coin the wallet's keys do not lock there";
+        let other_fields = "input 0 carries fields this wallet does not write";
+        let other_keys = "input 0 names keys other than exactly this wallet's";
+        let other_utxo = "input 0 carries a witness UTXO that is not its parent's output";
+        let no_parent = "input 0 does not carry the transaction whose coin it spends";
+        let other_globals = "its global fields are not exactly this wallet's account keys";
+        let outside_key = "input 0 has a signature by a key outside this wallet";
+        let fee_band = "vB is outside 1 to 10000 sat/vB, or the size passes 100000 vB";
+        let not_v2 = "it is not version 2 with lock time 0";
+        let receive_as_change =
+            "output 1 carries key origins but is not this wallet's change on chain 1";
+        let another_change = "output 1 claims to be this wallet's change but pays another script";
+        vec![
+            Case::refused("1", a_sighash_not_all, Rule::Fields, |_, p| {
+                p.inputs[0].sighash_type = Some(EcdsaSighashType::None.into())
+            }),
+            Case::refused("2", a_sighash_not_all, Rule::Fields, |_, p| {
+                p.inputs[0].sighash_type = Some(AllPlusAnyoneCanPay.into())
+            }),
+            Case::refused(
+                "3",
+                "input 0 has a signature that is not SIGHASH_ALL",
+                Rule::Signature,
+                |_, p| {
+                    let (key, signature) = partial(&child(p, 0, 1), &digest(p, 0, Single), Single);
+                    p.inputs[0].partial_sigs.insert(key, signature);
+                },
+            ),
+            Case::refused("4", no_parent, Rule::Parent, |_, p| {
+                p.inputs[0].non_witness_utxo.as_mut().unwrap().lock_time =
+                    LockTime::from_consensus(1)
+            }),
+            Case::refused("5", other_utxo, Rule::Fields, |_, p| {
+                sats(&mut p.inputs[0].witness_utxo.as_mut().unwrap().value, 1)
+            }),
+            Case::refused("6", not_v2, Rule::Shape, |_, p| {
+                p.unsigned_tx.version = Version::ONE
+            }),
+            Case::refused("7", not_v2, Rule::Shape, |_, p| {
+                p.unsigned_tx.lock_time = LockTime::from_consensus(1)
+            }),
+            Case::refused(
+                "8",
+                "input 0 is not an unsigned input that signals RBF",
+                Rule::Shape,
+                |_, p| p.unsigned_tx.input[0].sequence = Sequence::MAX,
+            ),
+            Case::refused(
+                "9",
+                "input 2 spends a coin an earlier input spends",
+                Rule::Shape,
+                |_, p| {
+                    p.unsigned_tx.input.push(p.unsigned_tx.input[0].clone());
+                    p.inputs.push(p.inputs[0].clone());
+                },
+            ),
+            Case::refused("10", "input 0 is already finalized", Rule::Shape, |_, p| {
+                p.inputs[0].final_script_witness = Some(Witness::from_slice(&[[1u8]]))
+            }),
+            Case::refused("11", other_fields, Rule::Fields, |_, p| {
+                p.inputs[0].redeem_script = Some(ScriptBuf::new())
+            }),
+            Case::refused("12", no_parent, Rule::Parent, |_, p| {
+                p.inputs[0].non_witness_utxo = None
+            }),
+            Case::refused("13", foreign_coin, Rule::Coin, |_, p| {
+                repaid(p, script_of(SOMEONE))
+            }),
+            Case::refused("14", foreign_coin, Rule::Coin, |_, p| {
+                let weaker = p.inputs[0]
+                    .bip32_derivation
+                    .keys()
+                    .fold(Builder::new().push_int(1), |script, key| {
+                        script.push_key(&PublicKey::new(*key))
+                    })
+                    .push_int(3)
+                    .push_opcode(OP_CHECKMULTISIG)
+                    .into_script();
+                repaid(p, ScriptBuf::new_p2wsh(&weaker.wscript_hash()));
+                p.inputs[0].witness_script = Some(weaker);
+            }),
+            Case::refused("15", foreign_coin, Rule::Coin, |_, p| origins_at(p, 1, 4)),
+            Case::refused("16", foreign_coin, Rule::Coin, |_, p| origins_at(p, 2, 1)),
+            Case::refused("17", other_keys, Rule::Fields, |_, p| {
+                let key = *p.inputs[0].bip32_derivation.keys().last().unwrap();
+                p.inputs[0].bip32_derivation.remove(&key);
+            }),
+            Case::refused("18", other_keys, Rule::Fields, |_, p| {
+                let path = DerivationPath::from(vec![ChildNumber::Normal { index: 0 }; 2]);
+                let key = stranger().public_key(&Secp256k1::new());
+                p.inputs[0]
+                    .bip32_derivation
+                    .insert(key, (Fingerprint::default(), path));
+            }),
+            Case::refused("19", other_fields, Rule::Fields, |_, p| {
+                p.inputs[0].witness_script = None
+            }),
+            Case::refused(
+                "20",
+                "input 0 names no key of this wallet at a receive or change index",
+                Rule::Coin,
+                |_, p| p.inputs[0].bip32_derivation.clear(),
+            ),
+            Case::txid("21", |_, p| {
+                p.unsigned_tx.output[0].script_pubkey = script_of(ELSEWHERE)
+            }),
+            Case::txid("22", |_, p| {
+                sats(&mut p.unsigned_tx.output[0].value, 1);
+                sats(&mut p.unsigned_tx.output[1].value, -1);
+            }),
+            Case::txid("23", |_, p| {
+                sats(&mut p.unsigned_tx.output[0].value, -1);
+                sats(&mut p.unsigned_tx.output[1].value, 1);
+            }),
+            Case::txid("24", |_, p| {
+                sats(&mut p.unsigned_tx.output[1].value, -1_000);
+                p.unsigned_tx.output.push(TxOut {
+                    value: Amount::from_sat(1_000),
+                    script_pubkey: script_of(SOMEONE),
+                });
+                p.outputs.push(psbt::Output::default());
+            }),
+            Case::refused("25", receive_as_change, Rule::Change, |paid, p| {
+                change_to(p, &paid.wallet.at(Chain::External, 5).unwrap())
+            }),
+            Case::refused("26", another_change, Rule::Change, |_, p| {
+                let shares_two_keys = Described::parse(&multisig(2, &[1, 2, 9])).unwrap();
+                change_to(p, &shares_two_keys.at(Chain::Internal, 1).unwrap());
+            }),
+            Case::txid("27", |_, p| {
+                p.unsigned_tx.output[1].script_pubkey = script_of(SOMEONE);
+                p.outputs[1] = psbt::Output::default();
+            }),
+            Case::refused(
+                "28",
+                "output 1 is change at index 21, past 20, the last change index a scan of this wallet looks at",
+                Rule::Change,
+                |paid, p| change_to(p, &paid.wallet.at(Chain::Internal, 21).unwrap()),
+            ),
+            Case::refused("29", another_change, Rule::Change, |_, p| {
+                p.outputs[1].witness_script = None
+            }),
+            Case::shown("30", |paid| paid.other_destination.unsigned_txid.clone()),
+            Case::shown("31", |paid| paid.other_amount.unsigned_txid.clone()),
+            Case::refused(
+                "32",
+                "output 1 pays 329 sats, under its 330 sat dust floor",
+                Rule::Dust,
+                |_, p| p.unsigned_tx.output[1].value = Amount::from_sat(329),
+            ),
+            Case::refused(
+                "33",
+                "output 0 pays 293 sats, under its 294 sat dust floor",
+                Rule::Dust,
+                |_, p| {
+                    let moved = p.unsigned_tx.output[0].value - Amount::from_sat(293);
+                    p.unsigned_tx.output[0].value = Amount::from_sat(293);
+                    p.unsigned_tx.output[1].value += moved;
+                },
+            ),
+            Case::shown("34", |paid| paid.other_rate.unsigned_txid.clone()),
+            Case::txid("35", |_, p| {
+                sats(&mut p.unsigned_tx.output[1].value, -1_000)
+            }),
+            Case::refused("36", fee_band, Rule::Fee, |_, p| {
+                p.unsigned_tx.output.pop();
+                p.outputs.pop();
+            }),
+            Case::refused("37", fee_band, Rule::Fee, |paid, p| {
+                let priced = vsize(&[paid.wallet.spend_weight(); 2], &[22, 34]);
+                let fee_one_under = paid.draft.fee_sats - priced + 1;
+                sats(&mut p.unsigned_tx.output[1].value, fee_one_under as i64);
+            }),
+            Case::refused(
+                "38",
+                "its outputs pay more than its inputs hold",
+                Rule::Fee,
+                |_, p| sats(&mut p.unsigned_tx.output[1].value, 1_000_000_000),
+            ),
+            Case::shown("39", |_| "00".repeat(32)),
+            Case::refused("40", outside_key, Rule::Signature, |_, p| {
+                let (key, signature) = partial(&stranger(), &digest(p, 0, All), All);
+                p.inputs[0].partial_sigs.insert(key, signature);
+            }),
+            Case::refused(
+                "41",
+                "input 0 has a signature that does not verify",
+                Rule::Signature,
+                |_, p| {
+                    let (key, signature) = partial(&child(p, 0, 1), &digest(p, 1, All), All);
+                    p.inputs[0].partial_sigs.insert(key, signature);
+                },
+            ),
+            Case::refused("42", outside_key, Rule::Signature, |_, p| {
+                let (mut key, signature) = partial(&child(p, 0, 1), &digest(p, 0, All), All);
+                key.compressed = false;
+                p.inputs[0].partial_sigs.insert(key, signature);
+            }),
+            Case::control("43"),
+            Case::refused("44", other_fields, Rule::Fields, |_, p| {
+                let key = ProprietaryKey {
+                    prefix: b"mebit".to_vec(),
+                    subtype: 0,
+                    key: vec![],
+                };
+                p.inputs[0].proprietary.insert(key, vec![1]);
+            }),
+            Case::refused("45", other_globals, Rule::Shape, |_, p| {
+                let key = Key {
+                    type_value: 0xf0,
+                    key: vec![],
+                };
+                p.unknown.insert(key, vec![1]);
+            }),
+            Case::refused("46", other_globals, Rule::Shape, |paid, p| {
+                let origin = (Fingerprint::default(), DerivationPath::master());
+                p.xpub.insert(paid.wallet.keys()[0].xpub, origin);
+            }),
+            Case::refused(
+                "47",
+                "output 0 carries key origins but is not this wallet's change on chain 1",
+                Rule::Change,
+                |_, p| p.outputs[0].witness_script = Some(ScriptBuf::new()),
+            ),
+            Case::refused("48", other_fields, Rule::Fields, |_, p| {
+                let preimage = b"x".to_vec();
+                let hash = sha256::Hash::hash(&preimage);
+                p.inputs[0].sha256_preimages.insert(hash, preimage);
+            }),
+            Case::refused("49", other_utxo, Rule::Fields, |_, p| {
+                p.inputs[0].witness_utxo = None
+            }),
+            Case::txid("28b", |paid, p| {
+                change_to(p, &paid.wallet.at(Chain::Internal, 5).unwrap())
+            }),
+            Case::refused("43b", a_sighash_not_all, Rule::Fields, |_, p| {
+                p.inputs[0].sighash_type = None
+            }),
+            Case::refused("46b", other_globals, Rule::Shape, |_, p| p.xpub.clear()),
+            Case::control("46c"),
+            Case::refused(
+                "A1",
+                "its maps do not match its transaction: 2 inputs and 2 outputs for 1 and 2 maps",
+                Rule::Shape,
+                |_, p| {
+                    p.inputs.pop();
+                },
+            ),
+            Case::refused(
+                "A3",
+                "it pays no one but this wallet",
+                Rule::Outputs,
+                |_, p| {
+                    p.unsigned_tx.output.remove(0);
+                    p.outputs.remove(0);
+                },
+            ),
+            Case::refused("T1", other_fields, Rule::Fields, |_, p| {
+                let key = stranger().public_key(&Secp256k1::new());
+                p.inputs[0].tap_internal_key = Some(key.x_only_public_key().0);
+            }),
+            Case::refused(
+                "NA",
+                "output 0 pays a script with no address",
+                Rule::Outputs,
+                |_, p| p.unsigned_tx.output[0].script_pubkey = ScriptBuf::new_op_return([7u8; 8]),
+            ),
+        ]
+    }
+
+    /// What a call answered: its refusal in its own words, or "accepted".
+    fn said<T>(answer: &Result<T, MobileSignerError>) -> String {
+        match answer {
+            Ok(_) => "accepted".into(),
+            Err(MobileSignerError::InvalidPsbtJson(why)) => why.clone(),
+            Err(other) => other.to_string(),
+        }
+    }
+
+    /// Each of `cases` whose review, sign or finish answered other than it expects, with any rule `SKIP` names off, as the
+    /// row, its rule and what happened. Sign is `signed_with` key 1's soft master, as `wallet_sign_with_words` signs once it
+    /// made the master key. vault-core's own check is an oracle: a PSBT `validate_signing_policy` refuses, review refuses.
+    fn misses(paid: &Paid, cases: Vec<Case>) -> Vec<(&'static str, Option<Rule>, String)> {
+        let (wallet, store) = (&paid.wallet, &paid.fake.store);
+        let draft = parse(&paid.draft.psbt).unwrap();
+        let mut found = Vec::new();
+        for case in cases {
+            let mut psbt = draft.clone();
+            (case.edit)(paid, &mut psbt);
+            let shown_txid = case
+                .shown
+                .map_or_else(|| paid.draft.unsigned_txid.clone(), |shown| shown(paid));
+            let reviewed = review(wallet, &psbt, store);
+            let shown = as_shown(wallet, psbt.clone(), &shown_txid, store);
+            let finish = match &shown {
+                Ok(read) => said(&finished(wallet, read)),
+                Err(_) => said(&shown),
+            };
+            let signed = shown.and_then(|read| signed_with(wallet, read, &soft_master(1), store));
+            let mut miss = |what: String| found.push((case.row, case.rule(), what));
+            match case.expect {
+                Expect::Refused(why, _) => {
+                    for (call, answer) in [
+                        ("review", said(&reviewed)),
+                        ("sign", said(&signed)),
+                        ("finish", finish.clone()),
+                    ] {
+                        if !(answer.starts_with("not this wallet's payment: ")
+                            && answer.contains(why))
+                        {
+                            miss(format!("{call} answered {answer:?}, not {why:?}"));
+                        }
+                    }
+                }
+                Expect::Txid => {
+                    if reviewed.is_err() {
+                        miss(format!("review answered {:?}", said(&reviewed)));
+                    }
+                    for (call, answer) in [("sign", said(&signed)), ("finish", finish.clone())] {
+                        if !answer.starts_with("changed since shown: ") {
+                            miss(format!("{call} answered {answer:?}"));
+                        }
+                    }
+                }
+                Expect::Control => {
+                    let sent = signed
+                        .and_then(|shown| signed_with(wallet, shown, &soft_master(2), store))
+                        .and_then(|shown| finished(wallet, &shown));
+                    match &sent {
+                        Ok(sent) => {
+                            for (i, input) in psbt.inputs.iter().enumerate() {
+                                if !spends(&sent.tx, i, input.witness_utxo.as_ref().unwrap()) {
+                                    miss(format!("consensus refuses input {i}"));
+                                }
+                            }
+                        }
+                        Err(_) => miss(format!("keys 1 and 2 signed, and {:?}", said(&sent))),
+                    }
+                }
+            }
+            if validate_signing_policy(&psbt).is_err() && reviewed.is_ok() {
+                miss("vault-core refuses it and review reads it".into());
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn every_way_a_payment_can_differ_from_the_one_shown_is_refused() {
+        let paid = paid();
+        let unsigned = parse(&paid.draft.psbt).unwrap();
+        let places: Vec<Option<(Chain, u32)>> = unsigned
+            .inputs
+            .iter()
+            .map(|input| paid.wallet.claim(input.bip32_derivation.values()))
+            .collect();
+        assert_eq!(
+            places,
+            [Some((Chain::External, 0)), Some((Chain::Internal, 0))],
+            "input 0 spends receive 0 and input 1 change 0"
+        );
+        assert_eq!(
+            paid.wallet
+                .claim(unsigned.outputs[1].bip32_derivation.values()),
+            Some((Chain::Internal, 1)),
+            "the change is change 1"
+        );
+        assert_eq!(change_reach(&paid.wallet, &paid.fake.store), 21);
+        let misses = misses(&paid, cases());
+        let listed: Vec<String> = misses
+            .iter()
+            .map(|(row, _, what)| format!("row {row}: {what}"))
+            .collect();
+        assert!(misses.is_empty(), "{}", listed.join("\n"));
+        let cases = cases();
+        let count =
+            |kind: fn(&Expect) -> bool| cases.iter().filter(|case| kind(&case.expect)).count();
+        assert_eq!(
+            (
+                count(|e| matches!(e, Expect::Refused(..))),
+                count(|e| matches!(e, Expect::Txid)),
+                count(|e| matches!(e, Expect::Control))
+            ),
+            (44, 11, 2)
+        );
+    }
+
+    // Each rule is needed: with any one of them off, a row of that rule answers otherwise. A rule no row needs would pass.
+    #[test]
+    fn skipping_any_one_rule_turns_the_table_red() {
+        let paid = paid();
+        let mut unseen = Vec::new();
+        for rule in Rule::ALL {
+            let own: Vec<Case> = cases()
+                .into_iter()
+                .filter(|case| case.rule() == Some(rule))
+                .collect();
+            let rows = own.len();
+            SKIP.set(Some(rule));
+            let misses = misses(&paid, own);
+            SKIP.set(None);
+            let first = misses
+                .first()
+                .map(|(row, _, what)| format!("row {row}: {what}"));
+            println!(
+                "{rule:?}\t{rows} rows\t{} misses\t{}",
+                misses.len(),
+                first.unwrap_or_default()
+            );
+            if misses.is_empty() {
+                unseen.push(rule);
+            }
+        }
+        assert!(
+            unseen.is_empty(),
+            "with {unseen:?} off, no row of its own answers otherwise"
+        );
+    }
+
+    // A key counts as a signer only once it signed every input: key 1's signature on one input of two is no signature of
+    // the payment, so with key 2's the payment still lacks its second signer.
+    #[test]
+    fn a_key_that_signed_one_input_of_two_is_not_a_signer() {
+        let paid = paid();
+        let mut psbt = parse(&paid.draft.psbt).unwrap();
+        let all = EcdsaSighashType::All;
+        let (key, signature) = partial(&child(&psbt, 0, 1), &digest(&psbt, 0, all), all);
+        psbt.inputs[0].partial_sigs.insert(key, signature);
+        let psbt = signed_by(&psbt.to_string(), &[soft_master(2)]);
+        let shown = as_shown(
+            &paid.wallet,
+            psbt,
+            &paid.draft.unsigned_txid,
+            &paid.fake.store,
+        )
+        .unwrap();
+        assert_eq!(
+            shown.review().signed,
+            [fingerprint(&soft_master(2)).to_string()]
+        );
+        let short = finished(&paid.wallet, &shown).err().unwrap().to_string();
+        assert!(
+            short.contains("signatures: 1 of the 2 keys needed signed every input"),
+            "{short}"
+        );
+    }
+
+    /// BIP-39's public test phrases, the only phrases a test here may hold.
+    fn phrase(i: usize) -> Vec<String> {
+        let words = match i {
+            0 => "abandon ".repeat(11) + "about",
+            1 => "abandon ".repeat(23) + "art",
+            2 => {
+                "legal winner thank year wave sausage worth useful legal winner thank yellow".into()
+            }
+            3 => "zoo ".repeat(11) + "wrong",
+            _ => "zoo ".repeat(23) + "vote",
+        };
+        words.split(' ').map(str::to_string).collect()
+    }
+
+    /// Phrase `i`'s key as this phone makes a key of several (`restore_software_multisig_key`, m/48'/1'/0'/2'), as a
+    /// descriptor key. Made once, because a phrase costs 2,048 rounds of PBKDF2.
+    fn phone_key(i: usize) -> &'static str {
+        static KEYS: OnceLock<Vec<String>> = OnceLock::new();
+        &KEYS.get_or_init(|| {
+            (0..5)
+                .map(|i| {
+                    let key = crate::restore_software_multisig_key(
+                        phrase(i),
+                        String::new(),
+                        KeyNetwork::Test,
+                        0,
+                    )
+                    .unwrap();
+                    let path = key.derivation_path.strip_prefix("m/").unwrap();
+                    format!("[{}/{path}]{}", key.master_fingerprint, key.xpub)
+                })
+                .collect()
+        })[i]
+    }
+
+    /// `wallet`'s unsigned payment of the 1,000,000 sats one parent pays its receive 0: 600,000 to `SOMEONE` and 399,000
+    /// change to change 0, every field as `drafted` writes it.
+    fn payment_of(wallet: &Described) -> Psbt {
+        let parent = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::new(Txid::from_byte_array([7; 32]), 0),
+                ..TxIn::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(1_000_000),
+                script_pubkey: wallet.at(Chain::External, 0).unwrap().script_pubkey(),
+            }],
+        };
+        let tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::new(parent.compute_txid(), 0),
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                witness: Witness::new(),
+            }],
+            output: vec![
+                TxOut {
+                    value: Amount::from_sat(600_000),
+                    script_pubkey: script_of(SOMEONE),
+                },
+                TxOut {
+                    value: Amount::from_sat(399_000),
+                    script_pubkey: wallet.at(Chain::Internal, 0).unwrap().script_pubkey(),
+                },
+            ],
+        };
+        let mut psbt = Psbt::from_unsigned_tx(tx).unwrap();
+        psbt.inputs[0] = wallet.input(&parent, 0, Chain::External, 0).unwrap();
+        psbt.outputs[1] = wallet.change(0).unwrap();
+        psbt.xpub = wallet.global_xpubs();
+        psbt
+    }
+
+    // A key of several kept on this phone signs through `wallet_sign_with_words` with its own phrase, each key once, and
+    // the payment finishes into bytes CHECKMULTISIG takes. A phrase of no key of the wallet signs nothing.
+    #[test]
+    fn the_phrase_of_each_key_of_a_several_key_wallet_signs_a_payment_consensus_takes() {
+        let fp = |i: usize| phone_key(i)[1..9].to_string();
+        for (m, among, signing) in [
+            (2, &[0, 2, 3][..], &[0, 3][..]),
+            (3, &[0, 1, 2, 3, 4][..], &[1, 3, 4][..]),
+        ] {
+            let keys: Vec<&str> = among.iter().map(|&i| phone_key(i)).collect();
+            let descriptor = format!("wsh(sortedmulti({m},{}))", keys.join(","));
+            let unsigned = payment_of(&Described::parse(&descriptor).unwrap());
+            let txid = unsigned.unsigned_tx.compute_txid().to_string();
+            let sign = |psbt: &str, words: Vec<String>, passphrase: &str| {
+                wallet_sign_with_words(
+                    descriptor.clone(),
+                    KeyNetwork::Test,
+                    psbt.into(),
+                    txid.clone(),
+                    words,
+                    passphrase.into(),
+                )
+            };
+            let mut read = sign(&unsigned.to_string(), phrase(signing[0]), "").unwrap();
+            for &i in &signing[1..] {
+                read = sign(&read.psbt, phrase(i), "").unwrap();
+            }
+            let who: Vec<String> = signing.iter().map(|&i| fp(i)).collect();
+            assert_eq!(read.signed, who, "{m}-of-{}", among.len());
+            let again = sign(&read.psbt, phrase(signing[0]), "").unwrap();
+            assert_eq!(again, read, "a key that signed signs nothing more");
+            if m == 2 {
+                for (words, passphrase) in [(phrase(4), ""), (phrase(0), "TREZOR")] {
+                    let refused = sign(&read.psbt, words, passphrase).unwrap_err().to_string();
+                    assert!(refused.contains("not a key of this wallet: "), "{refused}");
+                }
+            }
+            let ready = wallet_finish(
+                descriptor.clone(),
+                KeyNetwork::Test,
+                read.psbt,
+                txid.clone(),
+            )
+            .unwrap();
+            assert_eq!(ready.txid, txid);
+            let tx: Transaction = bitcoin::consensus::encode::deserialize_hex(&ready.hex).unwrap();
+            let prevout = unsigned.inputs[0].witness_utxo.as_ref().unwrap();
+            assert!(spends(&tx, 0, prevout), "{m}-of-{}", among.len());
+        }
+    }
+
+    // The size a payment is priced at is the size of its finished bytes, for every m-of-n a described wallet takes.
+    #[test]
+    fn the_size_priced_for_every_m_of_n_up_to_15_is_the_size_of_its_finished_bytes() {
+        let fifteen = Described::parse(&multisig(1, &(1..=15).collect::<Vec<u8>>())).unwrap();
+        let keys: Vec<String> = fifteen
+            .keys()
+            .iter()
+            .map(|key| format!("[{}/{}]{}", key.fingerprint, key.path, key.xpub))
+            .collect();
+        for n in 1..=15 {
+            for m in 1..=n {
+                let listed = keys[..n].join(",");
+                let wallet = Described::parse(&format!("wsh(sortedmulti({m},{listed}))")).unwrap();
+                let receive = wallet
+                    .at(Chain::External, 0)
+                    .unwrap()
+                    .derived_descriptor(&Secp256k1::verification_only());
+                let mut witness = vec![Vec::new()];
+                witness.extend(std::iter::repeat_n(vec![0x30; 72], m));
+                witness.push(receive.explicit_script().unwrap().to_bytes());
+                let tx = Transaction {
+                    version: Version::TWO,
+                    lock_time: LockTime::ZERO,
+                    input: vec![TxIn {
+                        witness: Witness::from_slice(&witness),
+                        ..TxIn::default()
+                    }],
+                    output: vec![
+                        TxOut {
+                            value: Amount::ZERO,
+                            script_pubkey: receive.script_pubkey(),
+                        };
+                        2
+                    ],
+                };
+                assert_eq!(
+                    tx.vsize() as u64,
+                    vsize(&[wallet.spend_weight()], &[34, 34]),
+                    "{m}-of-{n}"
+                );
+            }
+        }
     }
 }

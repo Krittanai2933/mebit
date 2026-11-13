@@ -1912,11 +1912,11 @@ fn broadcast_via(
 /// Bitcoin Core's default dust floor for an output paying `script`: P2WPKH 294, P2WSH and P2TR 330, P2SH
 /// 540, P2PKH 546. Both testnet4 hosts refuse a transaction with a fee and any output below it, and take
 /// one at it.
-fn dust_floor(script: &Script) -> u64 {
+pub(crate) fn dust_floor(script: &Script) -> u64 {
     script.minimal_non_dust().to_sat()
 }
 
-const MIN_FEE_RATE: u64 = 1;
+pub(crate) const MIN_FEE_RATE: u64 = 1;
 /// Bitcoin Core's default `maxfeerate` for `sendrawtransaction`, 0.1 BTC/kvB. Esplora's `POST /tx`
 /// sends the hex alone, so both testnet4 hosts refuse a fee above this rate times the virtual size.
 pub(crate) const MAX_FEE_RATE: u64 = 10_000;
@@ -2018,7 +2018,7 @@ fn settle(
 
 /// Bitcoin Core's MAX_STANDARD_TX_WEIGHT, 400,000 WU: the network refuses a larger transaction as
 /// non-standard.
-const MAX_STANDARD_VSIZE: u64 = 100_000;
+pub(crate) const MAX_STANDARD_VSIZE: u64 = 100_000;
 
 /// The coins a payment of `amount` to a `dest`-byte script at `rate` spends, as a count from the
 /// front of `coins`, and how its leftover settles with change to `change`. `coins` are each a value
