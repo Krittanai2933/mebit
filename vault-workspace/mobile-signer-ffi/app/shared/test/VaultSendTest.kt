@@ -610,6 +610,21 @@ class VaultSendTest {
     }
 
     @Test
+    fun aJadeAndASafe7OfOnePhraseEachSignTheWalletTheyWerePickedFor() {
+        val jade = SavedKey("key_4_aaaa0000", "Jade", "aaaa0000", "tpubA", "m/48'/1'/0'/2'", KeySourceLabel.Jade, verified = true)
+        val safe7 = SavedKey("key_5_aaaa0000", "Safe 7", "aaaa0000", "tpubA", "m/48'/1'/0'/2'", KeySourceLabel.TrezorSafe7, verified = true)
+        val keyring = listOf(jade, safe7)
+        fun picked(id: String) = vault.copy(keyIds = listOf(id, "key_bbbb0000", "key_cccc0000"))
+        assertEquals(WalletKind.TREZOR_SAFE7, assertIs<KeySigner.Device>(keySigners(picked(safe7.id), emptyList(), keyring)[0]).kind, "the Safe 7 picked at creation, though the Jade is listed first")
+        assertEquals("Safe 7", com.mebit.app.feature.vault.vaultKeyRows(picked(safe7.id), keyring)[0].name, "5.2 and the keys page name the picked device")
+        assertEquals(WalletKind.JADE, assertIs<KeySigner.Device>(keySigners(picked(jade.id), emptyList(), keyring)[0]).kind)
+        assertEquals(WalletKind.JADE, assertIs<KeySigner.Device>(keySigners(vault, emptyList(), keyring)[0]).kind, "a wallet saved before MV2 has no ids and takes the first entry holding the key")
+        assertEquals(WalletKind.JADE, assertIs<KeySigner.Device>(keySigners(picked("key_gone"), emptyList(), keyring)[0]).kind, "a picked key since deleted falls back to the key itself")
+        val other = SavedKey("key_6_aaaa0000", "Other", "aaaa0000", "tpubOtherAccount", "m/48'/1'/1'/2'", KeySourceLabel.TrezorSafe7, verified = true)
+        assertEquals(WalletKind.JADE, assertIs<KeySigner.Device>(keySigners(picked(other.id), emptyList(), keyring + other)[0]).kind, "an id whose key is not this wallet's never decides")
+    }
+
+    @Test
     fun aDeviceSignatureCountsTowardMAsAPhoneKeysDoesAndOnlyBroadcastFinishes(): Unit = runBlocking {
         val rust = Rust()
         val device = rust.device(1)

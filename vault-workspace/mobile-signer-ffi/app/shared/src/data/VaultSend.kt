@@ -466,7 +466,7 @@ internal fun keySigners(vault: CreatedVault, listed: List<OnboardingSession>, ke
         val xpub = xpubs.getOrNull(i)
         val phone = listed.firstOrNull { xpub != null && it.xpub == xpub && it.fingerprint.equals(fingerprint, ignoreCase = true) }
         if (phone != null) return@mapIndexed KeySigner.Phone(i, phone.words, phone.passphrase)
-        val key = keyring.find { it.xpub == xpub && it.fingerprint.equals(fingerprint, ignoreCase = true) }
+        val key = vaultKey(vault, i, xpub, keyring)
         when {
             key?.isMock == true -> KeySigner.Elsewhere(i, STAND_IN_KEY)
             key?.source == KeySourceLabel.Jade -> KeySigner.Device(i, WalletKind.JADE)
@@ -475,6 +475,18 @@ internal fun keySigners(vault: CreatedVault, listed: List<OnboardingSession>, ke
             else -> KeySigner.Elsewhere(i, KEY_NOT_HERE)
         }
     }
+}
+
+/**
+ * The [keyring] entry of vault key [i]: the key picked at creation ([CreatedVault.keyIds]) while it still holds that xpub and fingerprint, so a
+ * Jade and a Safe 7 restored from one phrase each keep the wallets they were picked for; else the first entry holding the pair, for a wallet
+ * saved before MV2 or a picked key since deleted.
+ */
+internal fun vaultKey(vault: CreatedVault, i: Int, xpub: String?, keyring: List<SavedKey>): SavedKey? {
+    val fingerprint = vault.keyFingerprints.getOrNull(i) ?: return null
+    if (xpub == null) return null
+    fun SavedKey.holdsIt() = this.xpub == xpub && this.fingerprint.equals(fingerprint, ignoreCase = true)
+    return vault.keyIds.getOrNull(i)?.let { id -> keyring.find { it.id == id && it.holdsIt() } } ?: keyring.find { it.holdsIt() }
 }
 
 internal const val KEY_ON_ANOTHER_PHONE = "กุญแจนี้อยู่บนมือถืออีกเครื่อง"

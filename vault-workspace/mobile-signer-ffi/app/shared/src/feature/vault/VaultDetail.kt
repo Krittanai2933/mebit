@@ -26,6 +26,7 @@ import com.mebit.app.data.Wallets
 import com.mebit.app.data.fingerprintGroups
 import com.mebit.app.data.keyLine
 import com.mebit.app.data.rememberFiatQuote
+import com.mebit.app.data.vaultKey
 import com.mebit.app.data.xpubsIn
 import com.mebit.app.feature.send.GoldLine
 import com.mebit.app.feature.send.HISTORY_EMPTY_TEXT
@@ -140,7 +141,7 @@ internal const val UNKNOWN_KEY_SOURCE = "ไม่ทราบที่มา"
 internal fun vaultKeyRows(vault: CreatedVault, keyring: List<SavedKey>): List<KeyRowText> {
     val xpubs = xpubsIn(vault.bsms)
     return vault.keyFingerprints.mapIndexed { i, fingerprint ->
-        val key = xpubs.getOrNull(i)?.let { xpub -> keyring.find { it.xpub == xpub && it.fingerprint.equals(fingerprint, ignoreCase = true) } }
+        val key = vaultKey(vault, i, xpubs.getOrNull(i), keyring)
         KeyRowText(
             name = key?.label ?: "กุญแจ ${i + 1}",
             line = key?.let(::keyLine) ?: "$UNKNOWN_KEY_SOURCE · ${fingerprintGroups(fingerprint)}",
