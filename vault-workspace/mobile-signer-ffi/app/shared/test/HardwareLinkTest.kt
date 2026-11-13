@@ -4,6 +4,7 @@ import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.BleException
 import com.mebit.ffi.signer.FoundWallet
 import com.mebit.ffi.signer.PairingCodes
+import com.mebit.ffi.signer.SignSteps
 import com.mebit.ffi.signer.WalletKind
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
@@ -24,6 +25,11 @@ internal val SAFE7 = FoundWallet(WalletKind.TREZOR_SAFE7, "ble-safe7", "Safe 7")
 internal val JADE_FOUND = FoundWallet(WalletKind.JADE, "ble-jade", "Jade 1a2b3c")
 internal val NO_CODES = object : PairingCodes {
     override suspend fun pairingCode(): String? = null
+}
+internal val NO_STEPS = object : SignSteps {
+    override suspend fun registering() {}
+
+    override suspend fun showing() {}
 }
 
 private const val PATH_84 = "m/84'/1'/0'"

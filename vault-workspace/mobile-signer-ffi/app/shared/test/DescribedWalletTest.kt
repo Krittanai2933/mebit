@@ -100,7 +100,7 @@ class DescribedWalletTest {
         assertEquals(review("unsigned"), assertIs<DevicePayment.Drafted>(chain.payment).review)
         assertTrue(rig.device.calls.isEmpty(), "Review asks nothing of the device")
 
-        assertTrue(chain.sign(JADE_FOUND, NO_CODES))
+        assertTrue(chain.sign(JADE_FOUND, NO_CODES, NO_STEPS))
         assertEquals(listOf("connect", "unlock", "accountXpub m/84'/1'/0'", "signWalletPsbt $DRAFT_TXID", "disconnect", "close"), rig.device.calls)
         assertEquals(PreparedSend(SIGNED_TXID, SIGNED_HEX, 500uL, 10_000uL), assertIs<DevicePayment.Signed>(chain.payment).prepared)
 
@@ -123,7 +123,7 @@ class DescribedWalletTest {
         rig.device.fingerprint = "11112222"
         rig.chain.refresh()
         assertTrue(rig.chain.draft("tb1qdestination", null, 2))
-        assertFailsWith<BleException.WrongKey> { rig.chain.sign(JADE_FOUND, NO_CODES) }
+        assertFailsWith<BleException.WrongKey> { rig.chain.sign(JADE_FOUND, NO_CODES, NO_STEPS) }
         assertTrue(rig.device.calls.none { it.startsWith("signWalletPsbt") })
         assertIs<DevicePayment.Drafted>(rig.chain.payment)
         assertTrue(rig.calls.none { it.startsWith("finish") })
@@ -156,7 +156,7 @@ class DescribedWalletTest {
         val chain = rig.chain
         chain.refresh()
         assertTrue(chain.draft("tb1qdestination", 10_000, 2))
-        assertTrue(chain.sign(JADE_FOUND, NO_CODES))
+        assertTrue(chain.sign(JADE_FOUND, NO_CODES, NO_STEPS))
         rig.post = { throw MobileSignerException.BroadcastUnknown("answer lost") }
         assertFalse(chain.post())
         assertEquals(SEND_UNKNOWN, chain.lastError)
@@ -180,7 +180,7 @@ class DescribedWalletTest {
         val rig = Rig()
         rig.chain.refresh()
         assertTrue(rig.chain.draft("tb1qdestination", 10_000, 2))
-        assertTrue(rig.chain.sign(JADE_FOUND, NO_CODES))
+        assertTrue(rig.chain.sign(JADE_FOUND, NO_CODES, NO_STEPS))
         rig.post = { throw MobileSignerException.InvalidPsbtJson("esplora post: 400 bad-txns-inputs-missingorspent") }
         assertFalse(rig.chain.post())
         assertEquals(sendErrorThai("invalid PSBT json: esplora post: 400 bad-txns-inputs-missingorspent"), rig.chain.lastError)
@@ -194,7 +194,7 @@ class DescribedWalletTest {
         val exits: GuardExits = rig.chain
         rig.post = { throw MobileSignerException.BroadcastUnknown(SIGNED_TXID) }
         rig.chain.refresh()
-        assertTrue(rig.chain.draft("tb1qdestination", 10_000, 2) && rig.chain.sign(JADE_FOUND, NO_CODES))
+        assertTrue(rig.chain.draft("tb1qdestination", 10_000, 2) && rig.chain.sign(JADE_FOUND, NO_CODES, NO_STEPS))
         assertFalse(rig.chain.post(), "offline, the post ends unknown")
         val guard = assertIs<UnconfirmedSend>(exits.unconfirmedSend)
         assertEquals(SIGNED_HEX, guard.hex, "the guard keeps the signed bytes, so the retry is offered at once")
@@ -210,7 +210,7 @@ class DescribedWalletTest {
         assertTrue(rig.chain.draft("tb1qdestination", 10_000, 2), "a new payment can start")
 
         rig.post = { throw MobileSignerException.BroadcastUnknown(SIGNED_TXID) }
-        assertTrue(rig.chain.sign(JADE_FOUND, NO_CODES))
+        assertTrue(rig.chain.sign(JADE_FOUND, NO_CODES, NO_STEPS))
         assertFalse(rig.chain.post(), "a payment that never left the phone")
         val stuck = assertIs<UnconfirmedSend>(exits.unconfirmedSend)
         assertFalse(exits.unconfirmedClearOffered(), "no clear while it may still land")
@@ -243,7 +243,7 @@ class DescribedWalletTest {
         rig.chain.refresh()
         assertTrue(rig.chain.draft("tb1qdestination", 10_000, 2))
         rig.chain.dropPayment()
-        assertFalse(rig.chain.sign(JADE_FOUND, NO_CODES))
+        assertFalse(rig.chain.sign(JADE_FOUND, NO_CODES, NO_STEPS))
         assertTrue(rig.device.calls.isEmpty(), "nothing reached the device")
         assertFalse(rig.chain.post())
         assertTrue(rig.calls.none { it.startsWith("post") })

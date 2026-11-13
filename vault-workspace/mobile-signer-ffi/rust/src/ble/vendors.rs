@@ -8,7 +8,7 @@ use bitcoin::bip32::{DerivationPath, Fingerprint};
 use jade_ble::{JadeBle, JadeBleError};
 use trezor_ble::{ConnectOptions, ErrorKind, TrezorBle, TrezorBleError};
 use vault_core::error::VaultCoreError;
-use vault_core::hw::jade::{self as jade, JadeError};
+use vault_core::hw::jade::{self as jade, JadeError, Registered, WalletRegistration};
 use vault_core::hw::trezor::{PairingCredential, XpubOptions};
 
 use super::{
@@ -159,6 +159,18 @@ impl Wallet for JadeBle {
     async fn disconnect(self) -> Result<(), BleError> {
         Ok(JadeBle::disconnect(self).await?)
     }
+
+    fn registers(&self) -> bool {
+        true
+    }
+
+    async fn registration(&mut self, wallet: &WalletRegistration) -> Result<Registered, BleError> {
+        Ok(JadeBle::registration(self, wallet).await?)
+    }
+
+    async fn register(&mut self, wallet: &WalletRegistration) -> Result<(), BleError> {
+        Ok(JadeBle::register(self, wallet).await?)
+    }
 }
 
 impl Wallet for TrezorBle {
@@ -267,11 +279,11 @@ fn jade_category(error: &JadeError) -> fn(String) -> BleError {
         | E::UnsupportedSigningPolicy
         | E::InvalidAddressRequest(_)
         | E::SignerMismatch
-        | E::RegistrationConflict
+        | E::RegistrationRequired => BleError::Refused,
+        E::WalletNameTaken
+        | E::RegistrationFailed { .. }
         | E::RegistrationMismatch
-        | E::RegistrationRequired
-        | E::WalletNameTaken
-        | E::RegistrationFailed { .. } => BleError::Refused,
+        | E::RegistrationConflict => BleError::RegistrationRefused,
         E::Protocol(_)
         | E::OutOfOrder
         | E::NoSignatures
@@ -452,6 +464,28 @@ mod tests {
             |error: JadeError| BleError::from(JadeBleError::from(VaultCoreError::from(error)));
         assert!(matches!(jade(JadeError::Locked), BleError::Refused(_)));
         assert!(matches!(jade(JadeError::OutOfOrder), BleError::Protocol(_)));
+        // A decline is the user's, at whichever step: the screen knows which. A wallet the Jade
+        // cannot hold is its own refusal, with the Jade's words kept.
+        assert!(matches!(
+            jade(JadeError::UserCancelled),
+            BleError::Refused(text) if text.contains("declined on the device")
+        ));
+        for cannot in [
+            JadeError::WalletNameTaken,
+            JadeError::RegistrationMismatch,
+            JadeError::RegistrationFailed {
+                code: -32603,
+                message: "No room left".into(),
+            },
+        ] {
+            let said = cannot.to_string();
+            let refused = jade(cannot);
+            assert!(
+                matches!(&refused, BleError::RegistrationRefused(text) if text.contains(&said))
+                    && refused.leaves_link_usable(),
+                "{refused:?}"
+            );
+        }
         assert!(matches!(
             BleError::from(JadeBleError::NotFound { seen: 0 }),
             BleError::NotFound(text) if text.contains("Bluetooth permission")

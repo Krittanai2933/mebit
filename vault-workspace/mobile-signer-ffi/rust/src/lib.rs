@@ -1011,10 +1011,6 @@ mod tests {
                 ble::uniffi_mobile_signer_ffi_checksum_method_walletlink_account_xpub(),
             ),
             (
-                "method_walletlink_sign_psbt",
-                ble::uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_psbt(),
-            ),
-            (
                 "method_walletlink_sign_wallet_psbt",
                 ble::uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_wallet_psbt(),
             ),
@@ -1025,6 +1021,18 @@ mod tests {
             (
                 "method_pairingcodes_pairing_code",
                 ble::uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(),
+            ),
+            (
+                "method_signsteps_registering",
+                ble::uniffi_mobile_signer_ffi_checksum_method_signsteps_registering(),
+            ),
+            (
+                "method_signsteps_showing",
+                ble::uniffi_mobile_signer_ffi_checksum_method_signsteps_showing(),
+            ),
+            (
+                "func_jade_wallet_registration",
+                ble::uniffi_mobile_signer_ffi_checksum_func_jade_wallet_registration(),
             ),
             (
                 "func_fetch_btc_thb",

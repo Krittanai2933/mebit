@@ -18,6 +18,7 @@ import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.PairingCodes
 import com.mebit.ffi.signer.PreparedSend
+import com.mebit.ffi.signer.SignSteps
 import com.mebit.ffi.signer.SpendReview
 import com.mebit.ffi.signer.WalletBalance
 import com.mebit.ffi.signer.WalletShape
@@ -270,15 +271,15 @@ class DescribedWallet internal constructor(
      * anything shows on it, signWalletPsbt shows the payment the draft named by its unsigned txid, and wallet_finish, given that same
      * txid, makes the bytes [post] sends. True once [payment] is [DevicePayment.Signed]. False, with nothing asked of the device, when
      * no payment is drafted, and false when [dropPayment] ran meanwhile. Throws the link's BleException and the core's refusal, and the
-     * payment stays drafted. [onShown] runs once the device holds this wallet's key and is about to show the payment, for Sign 4.5.3.
+     * payment stays drafted. [steps] hears showing from Rust, off the main thread, just before the device shows the payment, for Sign
+     * 4.5.3. A one-key wallet registers nothing.
      */
-    suspend fun sign(found: FoundWallet, codes: PairingCodes, onShown: () -> Unit = {}): Boolean {
+    suspend fun sign(found: FoundWallet, codes: PairingCodes, steps: SignSteps): Boolean {
         val drafted = payment as? DevicePayment.Drafted ?: return false
         val epoch = paymentEpoch
         val review = drafted.review
         val signed = link.use(found, wallet.path, expect = wallet.fingerprint, codes) {
-            onShown()
-            it.link.signWalletPsbt(wallet.descriptor, review.psbt, review.unsignedTxid)
+            it.link.signWalletPsbt(wallet.descriptor, review.psbt, review.unsignedTxid, steps)
         }
         val prepared = withContext(io) { core.finish(wallet.descriptor, KeyNetwork.TEST, signed.psbt, review.unsignedTxid) }
         if (epoch != paymentEpoch) return false

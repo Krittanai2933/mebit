@@ -1159,6 +1159,8 @@ internal val UniffiForeignFutureStructVoidUniffiByValue.`callStatus`: UniffiRust
 
 internal typealias UniffiForeignFutureCompleteVoid = mobile_signer_ffi.cinterop.UniffiForeignFutureCompleteVoid
 internal typealias UniffiCallbackInterfacePairingCodesMethod0 = mobile_signer_ffi.cinterop.UniffiCallbackInterfacePairingCodesMethod0
+internal typealias UniffiCallbackInterfaceSignStepsMethod0 = mobile_signer_ffi.cinterop.UniffiCallbackInterfaceSignStepsMethod0
+internal typealias UniffiCallbackInterfaceSignStepsMethod1 = mobile_signer_ffi.cinterop.UniffiCallbackInterfaceSignStepsMethod1
 internal typealias UniffiVTableCallbackInterfacePairingCodes = CPointer<mobile_signer_ffi.cinterop.UniffiVTableCallbackInterfacePairingCodes>
 
 internal var UniffiVTableCallbackInterfacePairingCodes.`pairingCode`: UniffiCallbackInterfacePairingCodesMethod0?
@@ -1200,6 +1202,68 @@ internal val UniffiVTableCallbackInterfacePairingCodesUniffiByValue.`pairingCode
 
 internal val UniffiVTableCallbackInterfacePairingCodesUniffiByValue.`uniffiFree`: UniffiCallbackInterfaceFree?
     get() = useContents { `uniffiFree` }
+
+internal typealias UniffiVTableCallbackInterfaceSignSteps = CPointer<mobile_signer_ffi.cinterop.UniffiVTableCallbackInterfaceSignSteps>
+
+internal var UniffiVTableCallbackInterfaceSignSteps.`registering`: UniffiCallbackInterfaceSignStepsMethod0?
+    get() = pointed.`registering`
+    set(value) {
+        pointed.`registering` = value
+    }
+
+internal var UniffiVTableCallbackInterfaceSignSteps.`showing`: UniffiCallbackInterfaceSignStepsMethod1?
+    get() = pointed.`showing`
+    set(value) {
+        pointed.`showing` = value
+    }
+
+internal var UniffiVTableCallbackInterfaceSignSteps.`uniffiFree`: UniffiCallbackInterfaceFree?
+    get() = pointed.`uniffiFree`
+    set(value) {
+        pointed.`uniffiFree` = value
+    }
+
+
+internal fun UniffiVTableCallbackInterfaceSignSteps.uniffiSetValue(other: UniffiVTableCallbackInterfaceSignSteps) {
+    `registering` = other.`registering`
+    `showing` = other.`showing`
+    `uniffiFree` = other.`uniffiFree`
+}
+internal fun UniffiVTableCallbackInterfaceSignSteps.uniffiSetValue(other: UniffiVTableCallbackInterfaceSignStepsUniffiByValue) {
+    `registering` = other.`registering`
+    `showing` = other.`showing`
+    `uniffiFree` = other.`uniffiFree`
+}
+
+internal typealias UniffiVTableCallbackInterfaceSignStepsUniffiByValue = CValue<mobile_signer_ffi.cinterop.UniffiVTableCallbackInterfaceSignSteps>
+internal fun UniffiVTableCallbackInterfaceSignStepsUniffiByValue(
+    `registering`: UniffiCallbackInterfaceSignStepsMethod0?,
+    `showing`: UniffiCallbackInterfaceSignStepsMethod1?,
+    `uniffiFree`: UniffiCallbackInterfaceFree?,
+): UniffiVTableCallbackInterfaceSignStepsUniffiByValue {
+    return cValue<mobile_signer_ffi.cinterop.UniffiVTableCallbackInterfaceSignSteps> {
+        this.`registering` = `registering`
+        this.`showing` = `showing`
+        this.`uniffiFree` = `uniffiFree`
+    }
+}
+
+
+internal val UniffiVTableCallbackInterfaceSignStepsUniffiByValue.`registering`: UniffiCallbackInterfaceSignStepsMethod0?
+    get() = useContents { `registering` }
+
+internal val UniffiVTableCallbackInterfaceSignStepsUniffiByValue.`showing`: UniffiCallbackInterfaceSignStepsMethod1?
+    get() = useContents { `showing` }
+
+internal val UniffiVTableCallbackInterfaceSignStepsUniffiByValue.`uniffiFree`: UniffiCallbackInterfaceFree?
+    get() = useContents { `uniffiFree` }
+
+
+
+
+
+
+
 
 
 
@@ -1361,6 +1425,7 @@ internal val UniffiVTableCallbackInterfacePairingCodesUniffiByValue.`uniffiFree`
 internal object UniffiLib {
     init {
             uniffiCallbackInterfacePairingCodes.register(this)
+            uniffiCallbackInterfaceSignSteps.register(this)
     }
     // The Cleaner for the whole library
     internal val CLEANER: UniffiCleaner by lazy {
@@ -1389,6 +1454,35 @@ internal object UniffiLib {
     fun uniffi_mobile_signer_ffi_fn_method_pairingcodes_pairing_code(
         `ptr`: Pointer?,
     ): Long = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_method_pairingcodes_pairing_code(
+        `ptr`,
+    )
+    fun uniffi_mobile_signer_ffi_fn_clone_signsteps(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Pointer? = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_clone_signsteps(
+        `ptr`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_free_signsteps(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_free_signsteps(
+        `ptr`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_init_callback_vtable_signsteps(
+        `vtable`: UniffiVTableCallbackInterfaceSignSteps,
+    ): Unit = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_init_callback_vtable_signsteps(
+        `vtable`,
+    )
+    fun uniffi_mobile_signer_ffi_fn_method_signsteps_registering(
+        `ptr`: Pointer?,
+    ): Long = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_method_signsteps_registering(
+        `ptr`,
+    )
+    fun uniffi_mobile_signer_ffi_fn_method_signsteps_showing(
+        `ptr`: Pointer?,
+    ): Long = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_method_signsteps_showing(
         `ptr`,
     )
     fun uniffi_mobile_signer_ffi_fn_clone_walletlink(
@@ -1438,25 +1532,18 @@ internal object UniffiLib {
     ): Long = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_method_walletlink_info(
         `ptr`,
     )
-    fun uniffi_mobile_signer_ffi_fn_method_walletlink_sign_psbt(
-        `ptr`: Pointer?,
-        `psbtBase64`: RustBufferByValue,
-        `signerFingerprint`: RustBufferByValue,
-    ): Long = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_method_walletlink_sign_psbt(
-        `ptr`,
-        `psbtBase64`,
-        `signerFingerprint`,
-    )
     fun uniffi_mobile_signer_ffi_fn_method_walletlink_sign_wallet_psbt(
         `ptr`: Pointer?,
         `descriptor`: RustBufferByValue,
         `psbtBase64`: RustBufferByValue,
         `unsignedTxid`: RustBufferByValue,
+        `steps`: Pointer?,
     ): Long = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_method_walletlink_sign_wallet_psbt(
         `ptr`,
         `descriptor`,
         `psbtBase64`,
         `unsignedTxid`,
+        `steps`,
     )
     fun uniffi_mobile_signer_ffi_fn_method_walletlink_unlock(
         `ptr`: Pointer?,
@@ -1735,6 +1822,15 @@ internal object UniffiLib {
         uniffiCallStatus: UniffiRustCallStatus,
     ): Byte = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_is_valid_address(
         `address`,
+        `network`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_func_jade_wallet_registration(
+        `descriptor`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_jade_wallet_registration(
+        `descriptor`,
         `network`,
         uniffiCallStatus,
     )
@@ -2316,6 +2412,9 @@ internal object UniffiLib {
     fun uniffi_mobile_signer_ffi_checksum_func_is_valid_address(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_is_valid_address(
     )
+    fun uniffi_mobile_signer_ffi_checksum_func_jade_wallet_registration(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_jade_wallet_registration(
+    )
     fun uniffi_mobile_signer_ffi_checksum_func_live_wallet_links(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_live_wallet_links(
     )
@@ -2358,6 +2457,12 @@ internal object UniffiLib {
     fun uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(
     )
+    fun uniffi_mobile_signer_ffi_checksum_method_signsteps_registering(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_method_signsteps_registering(
+    )
+    fun uniffi_mobile_signer_ffi_checksum_method_signsteps_showing(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_method_signsteps_showing(
+    )
     fun uniffi_mobile_signer_ffi_checksum_method_walletlink_account_xpub(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_method_walletlink_account_xpub(
     )
@@ -2369,9 +2474,6 @@ internal object UniffiLib {
     )
     fun uniffi_mobile_signer_ffi_checksum_method_walletlink_info(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_method_walletlink_info(
-    )
-    fun uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_psbt(
-    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_psbt(
     )
     fun uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_wallet_psbt(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_wallet_psbt(
@@ -2908,6 +3010,299 @@ internal object uniffiCallbackInterfacePairingCodes {
 
 
 /**
+ * Hears where a device signature is as the device reaches each step, so the screen draws what
+ * the device shows. Never throw: an exception cannot be mapped.
+ */
+public actual open class SignStepsImpl: Disposable, SignSteps {
+
+    public constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiPointerDestroyer(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    public actual constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiPointerDestroyer(null))
+    }
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed: kotlinx.atomicfu.AtomicBoolean = kotlinx.atomicfu.atomic(false)
+    private val callCounter: kotlinx.atomicfu.AtomicLong = kotlinx.atomicfu.atomic(1L)
+
+    private val lock = kotlinx.atomicfu.locks.ReentrantLock()
+
+    private fun <T> synchronized(block: () -> T): T {
+        lock.lock()
+        try {
+            return block()
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    actual override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    actual override fun close() {
+        synchronized { this.destroy() }
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.value
+            if (c == 0L) {
+                throw IllegalStateException("${this::class::simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this::class::simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiPointerDestroyer(private val pointer: Pointer?) : Disposable {
+        override fun destroy() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.uniffi_mobile_signer_ffi_fn_free_signsteps(ptr, status)
+                }
+            }
+        }
+    }
+
+    public fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall { status ->
+            UniffiLib.uniffi_mobile_signer_ffi_fn_clone_signsteps(pointer!!, status)
+        }!!
+    }
+
+    
+    /**
+     * A Jade is about to ask the user to register the several-key wallet: its first signature of
+     * the wallet, or the first since it lost the record. At most once per signing request, and
+     * always before `showing`.
+     */
+    public actual override suspend fun `registering`() {
+        return uniffiRustCallAsync(
+            callWithPointer { thisPtr ->
+                UniffiLib.uniffi_mobile_signer_ffi_fn_method_signsteps_registering(
+                    thisPtr,
+                )
+            },
+            { future, callback, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_poll_void(future, callback, continuation) },
+            { future, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_complete_void(future, continuation) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_free_void(future) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_cancel_void(future) },
+            // lift function
+            { Unit },
+            
+            // Error FFI converter
+            UniffiNullRustCallStatusErrorHandler,
+        )
+    }
+
+    /**
+     * The device is about to show the payment. Once per signing request that reaches the device,
+     * and never for a key whose signature the payment already carries.
+     */
+    public actual override suspend fun `showing`() {
+        return uniffiRustCallAsync(
+            callWithPointer { thisPtr ->
+                UniffiLib.uniffi_mobile_signer_ffi_fn_method_signsteps_showing(
+                    thisPtr,
+                )
+            },
+            { future, callback, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_poll_void(future, callback, continuation) },
+            { future, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_complete_void(future, continuation) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_free_void(future) },
+            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_cancel_void(future) },
+            // lift function
+            { Unit },
+            
+            // Error FFI converter
+            UniffiNullRustCallStatusErrorHandler,
+        )
+    }
+
+
+    
+    
+    public actual companion object
+    
+}
+
+
+
+
+
+public object FfiConverterTypeSignSteps: FfiConverter<SignSteps, Pointer> {
+    internal val handleMap = UniffiHandleMap<SignSteps>()
+
+    override fun lower(value: SignSteps): Pointer {
+        return handleMap.insert(value).toPointer()
+    }
+
+    override fun lift(value: Pointer): SignSteps {
+        return SignStepsImpl(value)
+    }
+
+    override fun read(buf: ByteBuffer): SignSteps {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(buf.getLong().toPointer())
+    }
+
+    override fun allocationSize(value: SignSteps): ULong = 8UL
+
+    override fun write(value: SignSteps, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(lower(value).toLong())
+    }
+}
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceSignSteps {
+    internal fun `registering`(
+        `uniffiHandle`: Long,
+        `uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,
+        `uniffiCallbackData`: Long,
+        `uniffiOutReturn`: UniffiForeignFuture,
+    ) {
+        val uniffiObj = FfiConverterTypeSignSteps.handleMap.get(uniffiHandle)
+        val makeCall = suspend { ->
+            uniffiObj.`registering`(
+            )
+        }
+        val uniffiHandleSuccess = { _: Unit ->
+            val uniffiResult = cValue<mobile_signer_ffi.cinterop.UniffiForeignFutureStructVoid> {
+                UniffiRustCallStatusHelper.allocValue().write(this.callStatus.rawPtr)
+            }
+            uniffiFutureCallback.invoke(uniffiCallbackData, uniffiResult)
+        }
+        val uniffiHandleError = { callStatus: UniffiRustCallStatusByValue ->
+            val uniffiResult = cValue<mobile_signer_ffi.cinterop.UniffiForeignFutureStructVoid> {
+                callStatus.write(this.callStatus.rawPtr)
+            }
+            uniffiFutureCallback.invoke(uniffiCallbackData, uniffiResult)
+        }
+
+        uniffiOutReturn.uniffiSetValue(
+            uniffiTraitInterfaceCallAsync(
+                makeCall,
+                uniffiHandleSuccess,
+                uniffiHandleError
+            )
+        )
+    }
+    
+    internal fun `showing`(
+        `uniffiHandle`: Long,
+        `uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,
+        `uniffiCallbackData`: Long,
+        `uniffiOutReturn`: UniffiForeignFuture,
+    ) {
+        val uniffiObj = FfiConverterTypeSignSteps.handleMap.get(uniffiHandle)
+        val makeCall = suspend { ->
+            uniffiObj.`showing`(
+            )
+        }
+        val uniffiHandleSuccess = { _: Unit ->
+            val uniffiResult = cValue<mobile_signer_ffi.cinterop.UniffiForeignFutureStructVoid> {
+                UniffiRustCallStatusHelper.allocValue().write(this.callStatus.rawPtr)
+            }
+            uniffiFutureCallback.invoke(uniffiCallbackData, uniffiResult)
+        }
+        val uniffiHandleError = { callStatus: UniffiRustCallStatusByValue ->
+            val uniffiResult = cValue<mobile_signer_ffi.cinterop.UniffiForeignFutureStructVoid> {
+                callStatus.write(this.callStatus.rawPtr)
+            }
+            uniffiFutureCallback.invoke(uniffiCallbackData, uniffiResult)
+        }
+
+        uniffiOutReturn.uniffiSetValue(
+            uniffiTraitInterfaceCallAsync(
+                makeCall,
+                uniffiHandleSuccess,
+                uniffiHandleError
+            )
+        )
+    }
+    
+    internal fun uniffiFree(handle: Long) {
+        FfiConverterTypeSignSteps.handleMap.remove(handle)
+    }
+
+    internal val vtable = nativeHeap.alloc<mobile_signer_ffi.cinterop.UniffiVTableCallbackInterfaceSignSteps> {
+        @Suppress("UNCHECKED_CAST")
+        this.`registering` = staticCFunction {
+            `uniffiHandle`: Long,
+            `uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,
+            `uniffiCallbackData`: Long,
+            `uniffiOutReturn`: UniffiForeignFuture,
+            ->
+            uniffiCallbackInterfaceSignSteps.`registering`(
+                `uniffiHandle`,
+                `uniffiFutureCallback`,
+                `uniffiCallbackData`,
+                `uniffiOutReturn`,
+            )
+        } as mobile_signer_ffi.cinterop.UniffiCallbackInterfaceSignStepsMethod0
+        @Suppress("UNCHECKED_CAST")
+        this.`showing` = staticCFunction {
+            `uniffiHandle`: Long,
+            `uniffiFutureCallback`: UniffiForeignFutureCompleteVoid,
+            `uniffiCallbackData`: Long,
+            `uniffiOutReturn`: UniffiForeignFuture,
+            ->
+            uniffiCallbackInterfaceSignSteps.`showing`(
+                `uniffiHandle`,
+                `uniffiFutureCallback`,
+                `uniffiCallbackData`,
+                `uniffiOutReturn`,
+            )
+        } as mobile_signer_ffi.cinterop.UniffiCallbackInterfaceSignStepsMethod1
+        this.uniffiFree = staticCFunction { handle: Long ->
+            uniffiCallbackInterfaceSignSteps.uniffiFree(handle)
+        }
+    }.ptr
+
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_mobile_signer_ffi_fn_init_callback_vtable_signsteps(vtable)
+    }
+}
+
+
+
+/**
  * A link to one wallet that `scan_wallets` found. Make it, call `connect`, close it when done.
  *
  * A task owns the device and this object sends it requests, so a cancelled call never leaves
@@ -3133,48 +3528,22 @@ public actual open class WalletLink: Disposable, WalletLinkInterface {
     }
 
     /**
-     * Has the hardware wallet sign `psbt_base64` for `signer_fingerprint`.
-     *
-     * `psbt_base64` is a BIP-174 PSBT. `signer_fingerprint` is 8 lowercase hex
-     * characters (the vault key's master fingerprint). Jade must be unlocked
-     * first. Returns the signed PSBT as base64. Callers must run spend policy
-     * before this (vault-core policy against real PSBTs is still Term-2 work;
-     * the app checks destination and amount at the UI boundary today).
-     */
-    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
-    public actual override suspend fun `signPsbt`(`psbtBase64`: kotlin.String, `signerFingerprint`: kotlin.String): kotlin.String {
-        return uniffiRustCallAsync(
-            callWithPointer { thisPtr ->
-                UniffiLib.uniffi_mobile_signer_ffi_fn_method_walletlink_sign_psbt(
-                    thisPtr,
-                    FfiConverterString.lower(`psbtBase64`),
-                    FfiConverterString.lower(`signerFingerprint`),
-                )
-            },
-            { future, callback, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
-            { future, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_complete_rust_buffer(future, continuation) },
-            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_free_rust_buffer(future) },
-            { future -> UniffiLib.ffi_mobile_signer_ffi_rust_future_cancel_rust_buffer(future) },
-            // lift function
-            { FfiConverterString.lift(it) },
-            // Error FFI converter
-            BleExceptionErrorHandler,
-        )
-    }
-
-    /**
      * Signs `psbt_base64`, a payment of the wallet `descriptor` whose unsigned id is
      * `unsigned_txid` (the payment the user was shown), with the key of that wallet this device
      * holds, and returns what the PSBT says after it. Before anything reaches the device, it
      * refuses a descriptor `wallet_describe` refuses, a PSBT `wallet_review` refuses, and a PSBT
      * whose id is another ("changed since shown"). `WrongKey` means the device holds no key of the
      * wallet, and nothing showed on it. When that key has already signed, the review comes back
-     * without asking the device to sign. Else the device shows the payment, and its answer is
-     * refused unless that key then signed every input. A Jade must be unlocked first. Cancelling
-     * stops only the wait: the device finishes the request.
+     * without asking the device to sign, and `steps` hears nothing. Else a Jade must hold a
+     * several-key wallet before it signs for it: the Jade is read, and one that does not hold the
+     * wallet is asked to register it after `steps.registering()` (`Refused` when the user
+     * declines, `RegistrationRefused` when it cannot). Then `steps.showing()`, the device shows
+     * the payment, and its answer is refused (`Protocol`) unless that key then signed every input.
+     * A Jade must be unlocked first. Cancelling stops only the wait: the device finishes the
+     * request.
      */
     @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
-    public actual override suspend fun `signWalletPsbt`(`descriptor`: kotlin.String, `psbtBase64`: kotlin.String, `unsignedTxid`: kotlin.String): SpendReview {
+    public actual override suspend fun `signWalletPsbt`(`descriptor`: kotlin.String, `psbtBase64`: kotlin.String, `unsignedTxid`: kotlin.String, `steps`: SignSteps): SpendReview {
         return uniffiRustCallAsync(
             callWithPointer { thisPtr ->
                 UniffiLib.uniffi_mobile_signer_ffi_fn_method_walletlink_sign_wallet_psbt(
@@ -3182,6 +3551,7 @@ public actual open class WalletLink: Disposable, WalletLinkInterface {
                     FfiConverterString.lower(`descriptor`),
                     FfiConverterString.lower(`psbtBase64`),
                     FfiConverterString.lower(`unsignedTxid`),
+                    FfiConverterTypeSignSteps.lower(`steps`),
                 )
             },
             { future, callback, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
@@ -3505,6 +3875,31 @@ public object FfiConverterTypeHwAccountKey: FfiConverterRustBuffer<HwAccountKey>
 
 
 
+public object FfiConverterTypeJadeRegistration: FfiConverterRustBuffer<JadeRegistration> {
+    override fun read(buf: ByteBuffer): JadeRegistration {
+        return JadeRegistration(
+            FfiConverterString.read(buf),
+            FfiConverterUByte.read(buf),
+            FfiConverterSequenceString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: JadeRegistration): ULong = (
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterUByte.allocationSize(value.`threshold`) +
+            FfiConverterSequenceString.allocationSize(value.`signers`)
+    )
+
+    override fun write(value: JadeRegistration, buf: ByteBuffer) {
+        FfiConverterString.write(value.`name`, buf)
+        FfiConverterUByte.write(value.`threshold`, buf)
+        FfiConverterSequenceString.write(value.`signers`, buf)
+    }
+}
+
+
+
+
 public object FfiConverterTypePreparedSend: FfiConverterRustBuffer<PreparedSend> {
     override fun read(buf: ByteBuffer): PreparedSend {
         return PreparedSend(
@@ -3793,6 +4188,7 @@ public object FfiConverterTypeBleError : FfiConverterRustBuffer<BleException> {
             12 -> BleException.Link(FfiConverterString.read(buf))
             13 -> BleException.Protocol(FfiConverterString.read(buf))
             14 -> BleException.WrongKey(FfiConverterString.read(buf))
+            15 -> BleException.RegistrationRefused(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
@@ -3857,6 +4253,10 @@ public object FfiConverterTypeBleError : FfiConverterRustBuffer<BleException> {
             }
             is BleException.WrongKey -> {
                 buf.putInt(14)
+                Unit
+            }
+            is BleException.RegistrationRefused -> {
+                buf.putInt(15)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -4271,6 +4671,35 @@ public object FfiConverterOptionalTypeHotTxDetail: FfiConverterRustBuffer<HotTxD
         } else {
             buf.put(1)
             FfiConverterTypeHotTxDetail.write(value, buf)
+        }
+    }
+}
+
+
+
+
+public object FfiConverterOptionalTypeJadeRegistration: FfiConverterRustBuffer<JadeRegistration?> {
+    override fun read(buf: ByteBuffer): JadeRegistration? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeJadeRegistration.read(buf)
+    }
+
+    override fun allocationSize(value: JadeRegistration?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeJadeRegistration.allocationSize(value)
+        }
+    }
+
+    override fun write(value: JadeRegistration?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeJadeRegistration.write(value, buf)
         }
     }
 }
@@ -4903,6 +5332,23 @@ public actual fun `isValidAddress`(`address`: kotlin.String, `network`: KeyNetwo
     return FfiConverterBoolean.lift(uniffiRustCall { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_is_valid_address(
             FfiConverterString.lower(`address`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * What a Jade registers for the wallet `descriptor` before it signs for it, null for a one-key
+ * wallet, which a Jade signs as it is. Pure: no device, no network. Refuses mainnet, a
+ * descriptor `wallet_describe` refuses, and a several-key wallet a Jade cannot register (more
+ * than seven signers). Signing builds the same registration from the same descriptor.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `jadeWalletRegistration`(`descriptor`: kotlin.String, `network`: KeyNetwork): JadeRegistration? {
+    return FfiConverterOptionalTypeJadeRegistration.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_jade_wallet_registration(
+            FfiConverterString.lower(`descriptor`),
             FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,
         )

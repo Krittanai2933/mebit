@@ -6,6 +6,7 @@ import com.mebit.ffi.signer.FoundWallet
 import com.mebit.ffi.signer.HwAccountKey
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.PairingCodes
+import com.mebit.ffi.signer.SignSteps
 import com.mebit.ffi.signer.SpendReview
 import com.mebit.ffi.signer.WalletInfo
 import com.mebit.ffi.signer.WalletKind
@@ -93,13 +94,12 @@ internal class FakeDevice {
             return HwAccountKey(xpub, PUBLIC_FINGERPRINT, derivationPath)
         }
 
-        override suspend fun signWalletPsbt(descriptor: String, psbtBase64: String, unsignedTxid: String): SpendReview {
+        override suspend fun signWalletPsbt(descriptor: String, psbtBase64: String, unsignedTxid: String, steps: SignSteps): SpendReview {
+            steps.showing()
             // As long as a person takes to read the payment on a device, so a check sees 4.5.3 before 4.5.5.
             delay(3_000)
             return withContext(Dispatchers.Default) { walletSignWithWords(descriptor, KeyNetwork.TEST, psbtBase64, unsignedTxid, PUBLIC_WORDS_12, "") }
         }
-
-        override suspend fun signPsbt(psbtBase64: String, signerFingerprint: String): String = throw BleException.Refused("not a call of the fake device")
 
         override suspend fun info(): WalletInfo = throw BleException.Refused("not a call of the fake device")
 

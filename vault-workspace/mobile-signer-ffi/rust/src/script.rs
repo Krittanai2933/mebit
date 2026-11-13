@@ -180,6 +180,12 @@ impl Described {
         &self.keys
     }
 
+    /// The receive chain's descriptor, every key with its origin and the receive branch: what a Jade registration is
+    /// built from.
+    pub(crate) fn receive(&self) -> &Descriptor<DescriptorPublicKey> {
+        &self.chains[0]
+    }
+
     /// The input that spends output `vout` of `parent`, the wallet's coin at `chain`/`index`, as a draft writes it
     /// before any signature, in the shape the harness proved on both devices: the parent on every input, its
     /// output as the witness UTXO on all but Legacy, SIGHASH_ALL (Taproot: the default sighash), and what the

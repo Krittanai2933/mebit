@@ -8,13 +8,17 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
+use bitcoin::Network;
 use bitcoin::bip32::{DerivationPath, Xpub};
+use miniscript::Descriptor;
 use tokio::sync::{mpsc, oneshot};
+use vault_core::hw::jade::{JadeError, Registered, WalletRegistration};
 
-use crate::MobileSignerError;
+use crate::chain::check_network;
 use crate::hot_wallet::SCAN_STORE;
 use crate::script::Described;
 use crate::spend::{self, Shown, SpendReview};
+use crate::{KeyNetwork, MobileSignerError};
 
 mod platform;
 mod stub;
@@ -170,11 +174,20 @@ pub enum BleError {
     /// stays usable.
     #[error("{0}")]
     WrongKey(String),
+    /// A Jade cannot register the several-key wallet it was asked to sign for, so it signs nothing:
+    /// another wallet holds the wallet's name, its list of wallets is full, what it read back is
+    /// another wallet, or the wallet has more signers than a Jade registers (seven). Nothing showed
+    /// the payment, and the link stays usable. The user declining the registration is `Refused`.
+    #[error("{0}")]
+    RegistrationRefused(String),
 }
 
 impl BleError {
     fn leaves_link_usable(&self) -> bool {
-        matches!(self, Self::Refused(_) | Self::WrongKey(_))
+        matches!(
+            self,
+            Self::Refused(_) | Self::WrongKey(_) | Self::RegistrationRefused(_)
+        )
     }
 }
 
@@ -190,6 +203,67 @@ fn closed() -> BleError {
 #[async_trait::async_trait]
 pub trait PairingCodes: Send + Sync {
     async fn pairing_code(&self) -> Option<String>;
+}
+
+/// Hears where a device signature is as the device reaches each step, so the screen draws what
+/// the device shows. Never throw: an exception cannot be mapped.
+#[uniffi::export(with_foreign)]
+#[async_trait::async_trait]
+pub trait SignSteps: Send + Sync {
+    /// A Jade is about to ask the user to register the several-key wallet: its first signature of
+    /// the wallet, or the first since it lost the record. At most once per signing request, and
+    /// always before `showing`.
+    async fn registering(&self);
+
+    /// The device is about to show the payment. Once per signing request that reaches the device,
+    /// and never for a key whose signature the payment already carries.
+    async fn showing(&self);
+}
+
+/// What a Jade registers for a several-key wallet before it signs for it, as its registration
+/// screen shows it.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct JadeRegistration {
+    /// At most 15 characters, `mebit{m}of{n}-` and hex: the name the Jade shows and lists.
+    pub name: String,
+    /// m.
+    pub threshold: u8,
+    /// Master fingerprints, 8 lowercase hex each, in the order the Jade lists the signers.
+    pub signers: Vec<String>,
+}
+
+/// What a Jade registers for the wallet `descriptor` before it signs for it, null for a one-key
+/// wallet, which a Jade signs as it is. Pure: no device, no network. Refuses mainnet, a
+/// descriptor `wallet_describe` refuses, and a several-key wallet a Jade cannot register (more
+/// than seven signers). Signing builds the same registration from the same descriptor.
+#[uniffi::export]
+pub fn jade_wallet_registration(
+    descriptor: String,
+    network: KeyNetwork,
+) -> Result<Option<JadeRegistration>, MobileSignerError> {
+    check_network(network)?;
+    let wallet = Described::parse(&descriptor)?;
+    let registration = jade_registration(&wallet).map_err(|error| {
+        MobileSignerError::InvalidPsbtJson(format!("Jade registration: {error}"))
+    })?;
+    Ok(registration.map(|registration| JadeRegistration {
+        name: registration.name().to_owned(),
+        threshold: registration.threshold() as u8,
+        signers: registration
+            .signers()
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+    }))
+}
+
+/// What a Jade registers for `wallet`: none for a one-key wallet, which a Jade signs as it is.
+fn jade_registration(wallet: &Described) -> Result<Option<WalletRegistration>, JadeError> {
+    match wallet.receive() {
+        // Testnet4 only: `Described` reads tpubs alone.
+        Descriptor::Wsh(_) => WalletRegistration::of(wallet.receive(), Network::Testnet4).map(Some),
+        _ => Ok(None),
+    }
 }
 
 /// Scans for a few seconds and lists the wallets of `kind` in range.
@@ -249,14 +323,10 @@ enum Request {
         path: String,
         reply: oneshot::Sender<Result<HwAccountKey, BleError>>,
     },
-    SignPsbt {
-        psbt_base64: String,
-        signer_fingerprint: String,
-        reply: oneshot::Sender<Result<String, BleError>>,
-    },
     SignWallet {
         wallet: Box<Described>,
         shown: Box<Shown>,
+        steps: Arc<dyn SignSteps>,
         reply: oneshot::Sender<Result<Shown, BleError>>,
     },
     Disconnect(oneshot::Sender<Result<(), BleError>>),
@@ -350,39 +420,25 @@ impl WalletLink {
             .await
     }
 
-    /// Has the hardware wallet sign `psbt_base64` for `signer_fingerprint`.
-    ///
-    /// `psbt_base64` is a BIP-174 PSBT. `signer_fingerprint` is 8 lowercase hex
-    /// characters (the vault key's master fingerprint). Jade must be unlocked
-    /// first. Returns the signed PSBT as base64. Callers must run spend policy
-    /// before this (vault-core policy against real PSBTs is still Term-2 work;
-    /// the app checks destination and amount at the UI boundary today).
-    pub async fn sign_psbt(
-        &self,
-        psbt_base64: String,
-        signer_fingerprint: String,
-    ) -> Result<String, BleError> {
-        self.running
-            .get()
-            .ok_or_else(closed)?
-            .sign_psbt(psbt_base64, signer_fingerprint)
-            .await
-    }
-
     /// Signs `psbt_base64`, a payment of the wallet `descriptor` whose unsigned id is
     /// `unsigned_txid` (the payment the user was shown), with the key of that wallet this device
     /// holds, and returns what the PSBT says after it. Before anything reaches the device, it
     /// refuses a descriptor `wallet_describe` refuses, a PSBT `wallet_review` refuses, and a PSBT
     /// whose id is another ("changed since shown"). `WrongKey` means the device holds no key of the
     /// wallet, and nothing showed on it. When that key has already signed, the review comes back
-    /// without asking the device to sign. Else the device shows the payment, and its answer is
-    /// refused unless that key then signed every input. A Jade must be unlocked first. Cancelling
-    /// stops only the wait: the device finishes the request.
+    /// without asking the device to sign, and `steps` hears nothing. Else a Jade must hold a
+    /// several-key wallet before it signs for it: the Jade is read, and one that does not hold the
+    /// wallet is asked to register it after `steps.registering()` (`Refused` when the user
+    /// declines, `RegistrationRefused` when it cannot). Then `steps.showing()`, the device shows
+    /// the payment, and its answer is refused (`Protocol`) unless that key then signed every input.
+    /// A Jade must be unlocked first. Cancelling stops only the wait: the device finishes the
+    /// request.
     pub async fn sign_wallet_psbt(
         &self,
         descriptor: String,
         psbt_base64: String,
         unsigned_txid: String,
+        steps: Arc<dyn SignSteps>,
     ) -> Result<SpendReview, BleError> {
         let refused = |error| BleError::Refused(said(error));
         let wallet = Described::parse(&descriptor).map_err(refused)?;
@@ -391,7 +447,7 @@ impl WalletLink {
         self.running
             .get()
             .ok_or_else(closed)?
-            .sign_wallet(wallet, shown)
+            .sign_wallet(wallet, shown, steps)
             .await
             .map(Shown::into_review)
     }
@@ -465,28 +521,18 @@ impl Running {
         answer.await.map_err(|_| closed())?
     }
 
-    async fn sign_psbt(
+    async fn sign_wallet(
         &self,
-        psbt_base64: String,
-        signer_fingerprint: String,
-    ) -> Result<String, BleError> {
-        let (reply, answer) = oneshot::channel();
-        self.requests
-            .send(Request::SignPsbt {
-                psbt_base64,
-                signer_fingerprint,
-                reply,
-            })
-            .map_err(|_| closed())?;
-        answer.await.map_err(|_| closed())?
-    }
-
-    async fn sign_wallet(&self, wallet: Described, shown: Shown) -> Result<Shown, BleError> {
+        wallet: Described,
+        shown: Shown,
+        steps: Arc<dyn SignSteps>,
+    ) -> Result<Shown, BleError> {
         let (reply, answer) = oneshot::channel();
         self.requests
             .send(Request::SignWallet {
                 wallet: Box::new(wallet),
                 shown: Box::new(shown),
+                steps,
                 reply,
             })
             .map_err(|_| closed())?;
@@ -513,6 +559,35 @@ trait Wallet: Send + 'static {
         signer_fingerprint: &str,
     ) -> impl Future<Output = Result<String, BleError>> + Send;
     fn disconnect(self) -> impl Future<Output = Result<(), BleError>> + Send;
+
+    /// Whether the device must hold a several-key wallet before it signs for it, as a Jade must.
+    /// A Safe 7 keeps no list: it checks each input's multisig against the PSBT's global xpubs as
+    /// it signs.
+    fn registers(&self) -> bool {
+        false
+    }
+
+    /// What the device holds under `wallet`'s name, asking nothing of the user. Only for a device
+    /// that `registers`.
+    fn registration(
+        &mut self,
+        _wallet: &WalletRegistration,
+    ) -> impl Future<Output = Result<Registered, BleError>> + Send {
+        async { Err(keeps_no_list()) }
+    }
+
+    /// Registers `wallet` once the user confirms it on the device, then reads it back. Only for a
+    /// device that `registers`, once `registration` found the name empty.
+    fn register(
+        &mut self,
+        _wallet: &WalletRegistration,
+    ) -> impl Future<Output = Result<(), BleError>> + Send {
+        async { Err(keeps_no_list()) }
+    }
+}
+
+fn keeps_no_list() -> BleError {
+    BleError::Protocol("this device keeps no list of wallets".into())
 }
 
 async fn serve(
@@ -572,30 +647,16 @@ async fn answer_requests<W: Wallet>(
                     break;
                 }
             }
-            Request::SignPsbt {
-                psbt_base64,
-                signer_fingerprint,
-                reply,
-            } => {
-                if drive_call(
-                    reply,
-                    &mut link_dropped,
-                    wallet.sign_psbt(&psbt_base64, &signer_fingerprint),
-                )
-                .await
-                {
-                    break;
-                }
-            }
             Request::SignWallet {
                 wallet: described,
                 shown,
+                steps,
                 reply,
             } => {
                 if drive_call(
                     reply,
                     &mut link_dropped,
-                    sign_wallet(&mut wallet, &described, *shown),
+                    sign_wallet(&mut wallet, &described, *shown, &*steps),
                 )
                 .await
                 {
@@ -609,18 +670,25 @@ async fn answer_requests<W: Wallet>(
 }
 
 /// Signs `shown`, a payment of `wallet` checked before it reached the device task, with the key of `wallet` that
-/// `device` holds. `shown` comes back as it is when that key already signed, since a Jade answers a PSBT it signed
-/// with no new signature. Else the vendor's own checks run, and the answer must be the same payment with that key's
-/// signature on every input.
+/// `device` holds. The order is the contract:
+/// 1. `held_key`: `WrongKey` before anything shows on the device.
+/// 2. That key already signed: `shown` comes back as it is, since a Jade answers a PSBT it signed with no new
+///    signature, and `steps` hears nothing.
+/// 3. `ensure_registered`: a Jade holds a several-key wallet before it signs for it.
+/// 4. `steps.showing()`, then the vendor's own checks and the device's sign.
+/// 5. The answer must be the same payment with that key's signature on every input.
 async fn sign_wallet(
     device: &mut impl Wallet,
     wallet: &Described,
     shown: Shown,
+    steps: &dyn SignSteps,
 ) -> Result<Shown, BleError> {
     let fingerprint = held_key(device, wallet).await?;
     if shown.review().signed.contains(&fingerprint) {
         return Ok(shown);
     }
+    ensure_registered(device, wallet, steps).await?;
+    steps.showing().await;
     let signed = device.sign_psbt(&shown.review().psbt, &fingerprint).await?;
     let out_of_step = |why: String| BleError::Protocol(format!("the device's signed PSBT: {why}"));
     let after = spend::parse(&signed)
@@ -632,6 +700,31 @@ async fn sign_wallet(
         )));
     }
     Ok(after)
+}
+
+/// Makes sure a device that keeps a list of several-key wallets, a Jade, holds `wallet` before it signs for it. It
+/// reads the list, asking nothing of the user, and registers the wallet after `steps.registering()` when the name is
+/// empty. A wallet the Jade cannot register is `RegistrationRefused` before anything shows. Nothing is kept here, so
+/// every signature reads the Jade as it is now: one wiped since, or one whose registration outlasted this side's
+/// wait, is read again rather than assumed either way.
+async fn ensure_registered(
+    device: &mut impl Wallet,
+    wallet: &Described,
+    steps: &dyn SignSteps,
+) -> Result<(), BleError> {
+    if !device.registers() {
+        return Ok(());
+    }
+    let Some(registration) = jade_registration(wallet)
+        .map_err(|error| BleError::RegistrationRefused(error.to_string()))?
+    else {
+        return Ok(());
+    };
+    if device.registration(&registration).await? == Registered::Absent {
+        steps.registering().await;
+        device.register(&registration).await?;
+    }
+    Ok(())
 }
 
 /// The master fingerprint of the key of `wallet` that `device` holds, once the device's account key at that key's
@@ -668,18 +761,20 @@ async fn held_key(device: &mut impl Wallet, wallet: &Described) -> Result<String
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Mutex;
     use std::time::Duration;
 
-    use bitcoin::bip32::Xpriv;
+    use bitcoin::Psbt;
+    use bitcoin::bip32::{Fingerprint, Xpriv};
     use bitcoin::secp256k1::Secp256k1;
-    use bitcoin::{Network, Psbt};
 
     use super::*;
-    use crate::KeyNetwork;
     use crate::address_type::AddressType;
     use crate::hot_wallet::SendAmount;
-    use crate::script::tests::{abandon_master, one_key, one_of_two, soft_master, two_of_three};
+    use crate::script::tests::{
+        abandon_master, multisig, one_key, one_of_two, soft_master, two_of_three,
+    };
     use crate::spend::tests::{RATE, drafted_on, funded};
     use crate::spend::wallet_finish;
 
@@ -1010,11 +1105,46 @@ mod tests {
     }
 
     /// A device holding the seed `master`, as a Jade or a Safe 7 holds one. It answers a signing request with the
-    /// PSBT signed by every key the seed holds there, or as it came when `signs` is false.
+    /// PSBT signed by every key the seed holds there, or as it came when `signs` is false. With `registry` it is a
+    /// Jade, which keeps a list of several-key wallets across links; without, a Safe 7, which keeps none.
     struct Holding {
         master: Xpriv,
         signs: bool,
         log: Log,
+        registry: Option<Registry>,
+    }
+
+    /// A Jade's list of several-key wallets: m and the signers held under each name, and what the next register
+    /// answers in place of the user's confirm, with whether the Jade keeps the wallet all the same, as a real Jade
+    /// kept one the user confirmed after the host's wait ran out.
+    #[derive(Default)]
+    struct List {
+        held: HashMap<String, (usize, Vec<Fingerprint>)>,
+        answer: Option<(BleError, bool)>,
+    }
+
+    type Registry = Arc<Mutex<List>>;
+
+    fn held(wallet: &WalletRegistration) -> (usize, Vec<Fingerprint>) {
+        (wallet.threshold(), wallet.signers().to_vec())
+    }
+
+    /// Logs each step into the device's log, so one log shows the order of both.
+    struct Steps(Log);
+
+    #[async_trait::async_trait]
+    impl SignSteps for Steps {
+        async fn registering(&self) {
+            self.0.lock().unwrap().push("registering");
+        }
+
+        async fn showing(&self) {
+            self.0.lock().unwrap().push("showing");
+        }
+    }
+
+    fn steps(log: &Log) -> Arc<dyn SignSteps> {
+        Arc::new(Steps(log.clone()))
     }
 
     impl Wallet for Holding {
@@ -1056,14 +1186,60 @@ mod tests {
         async fn disconnect(self) -> Result<(), BleError> {
             Ok(())
         }
+
+        fn registers(&self) -> bool {
+            self.registry.is_some()
+        }
+
+        async fn registration(
+            &mut self,
+            wallet: &WalletRegistration,
+        ) -> Result<Registered, BleError> {
+            self.log.lock().unwrap().push("registration");
+            let list = self.registry.as_ref().unwrap().lock().unwrap();
+            match list.held.get(wallet.name()) {
+                None => Ok(Registered::Absent),
+                Some(same) if *same == held(wallet) => Ok(Registered::Same),
+                Some(_) => Err(BleError::RegistrationRefused(
+                    "a different wallet is already registered under this name on the Jade".into(),
+                )),
+            }
+        }
+
+        async fn register(&mut self, wallet: &WalletRegistration) -> Result<(), BleError> {
+            self.log.lock().unwrap().push("register");
+            let mut list = self.registry.as_ref().unwrap().lock().unwrap();
+            let (outcome, keeps) = match list.answer.take() {
+                Some((error, keeps)) => (Err(error), keeps),
+                None => (Ok(()), true),
+            };
+            if keeps {
+                list.held.insert(wallet.name().to_owned(), held(wallet));
+            }
+            outcome
+        }
     }
 
     async fn holding(master: Xpriv, signs: bool) -> (Arc<WalletLink>, Log) {
+        device(master, signs, None).await
+    }
+
+    /// A new link to the Jade whose list is `registry`.
+    async fn jade(master: Xpriv, registry: &Registry) -> (Arc<WalletLink>, Log) {
+        device(master, true, Some(registry.clone())).await
+    }
+
+    async fn device(
+        master: Xpriv,
+        signs: bool,
+        registry: Option<Registry>,
+    ) -> (Arc<WalletLink>, Log) {
         let log = Log::default();
         let device = Holding {
             master,
             signs,
             log: log.clone(),
+            registry,
         };
         let link = WalletLink::new(found());
         link.attach(async { Ok((Running::spawn(device), None)) })
@@ -1087,13 +1263,35 @@ mod tests {
         .unwrap()
     }
 
+    /// `link` signs `psbt`, a payment of `wallet` shown as `txid`, telling its steps to `log`.
+    async fn sign(
+        link: &WalletLink,
+        wallet: &str,
+        psbt: &str,
+        txid: &str,
+        log: &Log,
+    ) -> Result<SpendReview, BleError> {
+        link.sign_wallet_psbt(wallet.into(), psbt.into(), txid.into(), steps(log))
+            .await
+    }
+
+    const SIGNS: &[&str] = &["xpub", "showing", "sign_psbt"];
+    const REGISTERS: &[&str] = &[
+        "xpub",
+        "registration",
+        "registering",
+        "register",
+        "showing",
+        "sign_psbt",
+    ];
+
     // Another wallet's PSBT, an id other than the one shown and a descriptor the app does not read are refused before
-    // the device task, though the device holds a key of the wallet.
+    // the device task, though the device holds a key of the wallet, and the screen hears no step.
     #[tokio::test]
     async fn a_payment_other_than_the_one_shown_never_reaches_the_device() {
         let wallet = two_of_three();
         let draft = drafted(&wallet);
-        let (link, log) = holding(soft_master(1), true).await;
+        let (link, log) = jade(soft_master(1), &Registry::default()).await;
         for (descriptor, txid, why) in [
             (
                 one_of_two(),
@@ -1107,9 +1305,7 @@ mod tests {
                 "descriptor: not a descriptor",
             ),
         ] {
-            let refused = link
-                .sign_wallet_psbt(descriptor, draft.psbt.clone(), txid)
-                .await;
+            let refused = sign(&link, &descriptor, &draft.psbt, &txid, &log).await;
             assert!(
                 matches!(&refused, Err(BleError::Refused(text)) if text.contains(why)),
                 "{refused:?}"
@@ -1123,7 +1319,8 @@ mod tests {
     }
 
     // A device whose seed made none of the wallet's keys, and one whose fingerprint the wallet names for a key the device
-    // does not hold at that key's path, get WrongKey before any signing request, and the link stays up.
+    // does not hold at that key's path, get WrongKey before any signing request and before a Jade's list is read, and the
+    // link stays up.
     #[tokio::test]
     async fn a_device_holding_no_key_of_the_wallet_is_wrong_key_before_signing() {
         let one = fingerprint(&soft_master(1));
@@ -1148,37 +1345,45 @@ mod tests {
             ),
         ] {
             let draft = drafted(&wallet);
-            let (link, log) = holding(master, true).await;
-            let wrong = link
-                .sign_wallet_psbt(wallet, draft.psbt, draft.unsigned_txid)
-                .await;
+            let registry = Registry::default();
+            let (link, log) = jade(master, &registry).await;
+            let wrong = sign(&link, &wallet, &draft.psbt, &draft.unsigned_txid, &log).await;
             assert!(
                 matches!(&wrong, Err(BleError::WrongKey(text)) if text.contains(&why)),
                 "{wrong:?}"
             );
             assert_eq!(logged(&log), ["xpub"]);
+            assert!(registry.lock().unwrap().held.is_empty());
             assert!(link.account_xpub("m/48'/1'/0'/2'".into()).await.is_ok());
         }
     }
 
-    // Each device signs with its own key, in any order, and its review lists that key. Asked again, it makes no signing
-    // request. The payment then finishes: a 2-of-3 signed by two devices, and a one-key wallet of each address type.
+    // Each device signs with its own key, in any order, and its review lists that key. A Jade registers the 2-of-3 before
+    // it signs, a Safe 7 never registers, and neither does a Jade for a one-key wallet. Asked again, a device makes no
+    // signing request and the screen hears no step. The payment then finishes: a 2-of-3 signed by a Jade and a Safe 7,
+    // and a one-key wallet of each address type signed by a Jade.
     #[tokio::test]
     async fn each_device_signs_with_its_key_once_and_the_payment_finishes() {
-        let mut cases = vec![(two_of_three(), vec![soft_master(3), soft_master(1)])];
-        cases.extend(
-            AddressType::ALL
-                .iter()
-                .map(|&t| (one_key(t), vec![abandon_master(Network::Testnet4)])),
-        );
-        for (wallet, masters) in cases {
+        let mut cases = vec![(
+            two_of_three(),
+            vec![
+                (soft_master(3), true, REGISTERS),
+                (soft_master(1), false, SIGNS),
+            ],
+        )];
+        cases.extend(AddressType::ALL.iter().map(|&t| {
+            (
+                one_key(t),
+                vec![(abandon_master(Network::Testnet4), true, SIGNS)],
+            )
+        }));
+        for (wallet, devices) in cases {
             let draft = drafted(&wallet);
             let mut psbt = draft.psbt.clone();
-            for (before, master) in masters.into_iter().enumerate() {
+            for (before, (master, is_jade, asked)) in devices.into_iter().enumerate() {
                 let key = fingerprint(&master);
-                let (link, log) = holding(master, true).await;
-                let read = link
-                    .sign_wallet_psbt(wallet.clone(), psbt, draft.unsigned_txid.clone())
+                let (link, log) = device(master, true, is_jade.then(Registry::default)).await;
+                let read = sign(&link, &wallet, &psbt, &draft.unsigned_txid, &log)
                     .await
                     .unwrap();
                 assert!(
@@ -1190,16 +1395,11 @@ mod tests {
                     (&read.unsigned_txid, &read.payments),
                     (&draft.unsigned_txid, &draft.payments)
                 );
-                let again = link
-                    .sign_wallet_psbt(
-                        wallet.clone(),
-                        read.psbt.clone(),
-                        draft.unsigned_txid.clone(),
-                    )
+                let again = sign(&link, &wallet, &read.psbt, &draft.unsigned_txid, &log)
                     .await
                     .unwrap();
                 assert_eq!(again, read, "{wallet}");
-                assert_eq!(logged(&log), ["xpub", "sign_psbt", "xpub"], "{wallet}");
+                assert_eq!(logged(&log), [asked, &["xpub"]].concat(), "{wallet}");
                 psbt = read.psbt;
             }
             let sent = wallet_finish(
@@ -1212,6 +1412,193 @@ mod tests {
         }
     }
 
+    // A Jade registers a several-key wallet, the screen hearing so first, before its first signature of it, under the
+    // name the export gives. Its next signature of the wallet reads the list again and registers nothing.
+    #[tokio::test]
+    async fn a_jade_registers_a_several_key_wallet_before_its_first_signature_and_only_then() {
+        let wallet = two_of_three();
+        let draft = drafted(&wallet);
+        let registry = Registry::default();
+        for asked in [REGISTERS, &["xpub", "registration", "showing", "sign_psbt"]] {
+            let (link, log) = jade(soft_master(1), &registry).await;
+            let read = sign(&link, &wallet, &draft.psbt, &draft.unsigned_txid, &log)
+                .await
+                .unwrap();
+            assert!(read.signed.contains(&fingerprint(&soft_master(1))));
+            assert_eq!(logged(&log), asked);
+        }
+        let named = jade_wallet_registration(wallet, KeyNetwork::Test)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            registry.lock().unwrap().held.keys().collect::<Vec<_>>(),
+            [&named.name]
+        );
+    }
+
+    // A key whose signature the payment already carries reaches no step, and the Jade is asked nothing past its key:
+    // not even its list, though it holds no registration of the wallet.
+    #[tokio::test]
+    async fn a_key_that_already_signed_reaches_no_registration_and_no_step() {
+        let wallet = two_of_three();
+        let draft = drafted(&wallet);
+        let (safe7, quiet) = holding(soft_master(1), true).await;
+        let signed = sign(&safe7, &wallet, &draft.psbt, &draft.unsigned_txid, &quiet)
+            .await
+            .unwrap();
+        let registry = Registry::default();
+        let (link, log) = jade(soft_master(1), &registry).await;
+        let again = sign(&link, &wallet, &signed.psbt, &draft.unsigned_txid, &log).await;
+        assert_eq!(again, Ok(signed));
+        assert_eq!(logged(&log), ["xpub"]);
+        assert!(registry.lock().unwrap().held.is_empty());
+    }
+
+    // A registration the user declines on the Jade is Refused after the screen heard registering and before it hears
+    // showing: nothing is signed and nothing registered, and the link stays up for a second try, which asks again.
+    #[tokio::test]
+    async fn a_declined_registration_signs_nothing() {
+        let wallet = two_of_three();
+        let draft = drafted(&wallet);
+        let registry = Registry::default();
+        let declined = BleError::Refused("Jade: declined on the device".into());
+        registry.lock().unwrap().answer = Some((declined.clone(), false));
+        let (link, log) = jade(soft_master(1), &registry).await;
+        let refused = sign(&link, &wallet, &draft.psbt, &draft.unsigned_txid, &log).await;
+        assert_eq!(refused, Err(declined));
+        assert_eq!(logged(&log), REGISTERS[..4]);
+        assert!(registry.lock().unwrap().held.is_empty());
+        let retried = sign(&link, &wallet, &draft.psbt, &draft.unsigned_txid, &log).await;
+        assert!(retried.is_ok(), "{retried:?}");
+        assert_eq!(logged(&log)[4..], *REGISTERS);
+    }
+
+    // A name that holds another wallet is never written over, and a Jade that will not register the wallet, as one whose
+    // list is full, signs nothing: each is RegistrationRefused before the payment shows, and the link stays up.
+    #[tokio::test]
+    async fn a_jade_that_cannot_register_the_wallet_signs_nothing() {
+        let wallet = two_of_three();
+        let draft = drafted(&wallet);
+        let name = jade_wallet_registration(wallet.clone(), KeyNetwork::Test)
+            .unwrap()
+            .unwrap()
+            .name;
+        let another = (2, vec![Fingerprint::from_str("09090909").unwrap()]);
+        let taken = Registry::default();
+        taken
+            .lock()
+            .unwrap()
+            .held
+            .insert(name.clone(), another.clone());
+        let full = Registry::default();
+        full.lock().unwrap().answer = Some((
+            BleError::RegistrationRefused(
+                "the Jade did not register the wallet: device error -32603: No room left".into(),
+            ),
+            false,
+        ));
+        for (registry, asked) in [(&taken, &REGISTERS[..2]), (&full, &REGISTERS[..4])] {
+            let (link, log) = jade(soft_master(1), registry).await;
+            let refused = sign(&link, &wallet, &draft.psbt, &draft.unsigned_txid, &log).await;
+            assert!(
+                matches!(refused, Err(BleError::RegistrationRefused(_))),
+                "{refused:?}"
+            );
+            assert_eq!(logged(&log), asked);
+            assert!(link.account_xpub("m/48'/1'/0'/2'".into()).await.is_ok());
+        }
+        assert_eq!(taken.lock().unwrap().held, HashMap::from([(name, another)]));
+        assert!(full.lock().unwrap().held.is_empty());
+    }
+
+    // The Jade's own screen outlives this side's wait: a real Jade kept a registration the user confirmed after the host
+    // timed out. So a timeout while registering assumes nothing either way, and the next signature reads the list again:
+    // it signs at once when the Jade kept the wallet, and registers again when it did not.
+    #[tokio::test]
+    async fn a_registration_whose_wait_ran_out_is_read_again_on_the_next_signature() {
+        let wallet = two_of_three();
+        let draft = drafted(&wallet);
+        for (kept, next) in [
+            (true, &["xpub", "registration", "showing", "sign_psbt"][..]),
+            (false, REGISTERS),
+        ] {
+            let registry = Registry::default();
+            let timeout = BleError::Timeout("timed out waiting for the Jade".into());
+            registry.lock().unwrap().answer = Some((timeout.clone(), kept));
+            let (link, log) = jade(soft_master(1), &registry).await;
+            let ran_out = sign(&link, &wallet, &draft.psbt, &draft.unsigned_txid, &log).await;
+            assert_eq!(ran_out, Err(timeout), "kept: {kept}");
+            assert_eq!(logged(&log), REGISTERS[..4]);
+            let (again, log) = jade(soft_master(1), &registry).await;
+            let read = sign(&again, &wallet, &draft.psbt, &draft.unsigned_txid, &log).await;
+            assert!(read.is_ok(), "kept: {kept}: {read:?}");
+            assert_eq!(logged(&log), next, "kept: {kept}");
+        }
+    }
+
+    // A Safe 7 keeps no list, so it is asked nothing about one, even for a wallet of more signers than a Jade registers.
+    // A Jade refuses that wallet before it is asked anything, and registers one of seven.
+    #[tokio::test]
+    async fn a_safe_7_never_registers_and_a_jade_refuses_more_signers_than_it_registers() {
+        let eight = Described::parse(&multisig(2, &[1, 2, 3, 4, 5, 6, 7, 8])).unwrap();
+        let seven = Described::parse(&multisig(2, &[1, 2, 3, 4, 5, 6, 7])).unwrap();
+        let log = Log::default();
+        let told = Steps(log.clone());
+        let made = |registry| Holding {
+            master: soft_master(1),
+            signs: true,
+            log: log.clone(),
+            registry,
+        };
+        let mut safe7 = made(None);
+        assert_eq!(ensure_registered(&mut safe7, &eight, &told).await, Ok(()));
+        let mut jade = made(Some(Registry::default()));
+        let refused = ensure_registered(&mut jade, &eight, &told).await;
+        assert!(
+            matches!(&refused, Err(BleError::RegistrationRefused(text)) if text.contains("seven")),
+            "{refused:?}"
+        );
+        assert!(logged(&log).is_empty(), "{:?}", logged(&log));
+        assert_eq!(ensure_registered(&mut jade, &seven, &told).await, Ok(()));
+        assert_eq!(logged(&log), ["registration", "registering", "register"]);
+    }
+
+    // The export names what a Jade registers: nothing for a one-key wallet, and for a 2-of-3 its name, m and signers in
+    // the Jade's order, by fingerprint. Mainnet and a wallet of eight signers are refused.
+    #[test]
+    fn the_registration_export_names_what_a_jade_registers() {
+        for &t in AddressType::ALL.iter() {
+            assert!(
+                matches!(
+                    jade_wallet_registration(one_key(t), KeyNetwork::Test),
+                    Ok(None)
+                ),
+                "{t:?}"
+            );
+        }
+        let wallet = two_of_three();
+        let named = jade_wallet_registration(wallet.clone(), KeyNetwork::Test)
+            .unwrap()
+            .unwrap();
+        assert!(
+            named.name.starts_with("mebit2of3-") && named.name.len() == 15,
+            "{}",
+            named.name
+        );
+        assert_eq!(named.threshold, 2);
+        let mut signers = [1, 2, 3].map(|i| fingerprint(&soft_master(i))).to_vec();
+        signers.sort();
+        assert_eq!(named.signers, signers);
+        assert!(matches!(
+            jade_wallet_registration(wallet, KeyNetwork::Main),
+            Err(MobileSignerError::InvalidPsbtJson(text)) if text.contains("mainnet")
+        ));
+        assert!(matches!(
+            jade_wallet_registration(multisig(2, &[1, 2, 3, 4, 5, 6, 7, 8]), KeyNetwork::Test),
+            Err(MobileSignerError::InvalidPsbtJson(text)) if text.contains("seven")
+        ));
+    }
+
     // The vendor clients check what a device signed, and the answer is read again here: one without the device's
     // signature is a device out of step with this app.
     #[tokio::test]
@@ -1219,13 +1606,11 @@ mod tests {
         let wallet = two_of_three();
         let draft = drafted(&wallet);
         let (link, log) = holding(soft_master(1), false).await;
-        let refused = link
-            .sign_wallet_psbt(wallet, draft.psbt, draft.unsigned_txid)
-            .await;
+        let refused = sign(&link, &wallet, &draft.psbt, &draft.unsigned_txid, &log).await;
         assert!(
             matches!(&refused, Err(BleError::Protocol(text)) if text.contains("has not signed every input")),
             "{refused:?}"
         );
-        assert_eq!(logged(&log), ["xpub", "sign_psbt"]);
+        assert_eq!(logged(&log), SIGNS);
     }
 }

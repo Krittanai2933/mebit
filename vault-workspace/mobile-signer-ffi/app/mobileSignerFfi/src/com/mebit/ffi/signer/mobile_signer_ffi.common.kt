@@ -159,6 +159,69 @@ public expect open class PairingCodesImpl: Disposable, PairingCodes {
 
 
 /**
+ * Hears where a device signature is as the device reaches each step, so the screen draws what
+ * the device shows. Never throw: an exception cannot be mapped.
+ */
+public interface SignSteps {
+    
+    /**
+     * A Jade is about to ask the user to register the several-key wallet: its first signature of
+     * the wallet, or the first since it lost the record. At most once per signing request, and
+     * always before `showing`.
+     */
+    public suspend fun `registering`()
+    
+    /**
+     * The device is about to show the payment. Once per signing request that reaches the device,
+     * and never for a key whose signature the payment already carries.
+     */
+    public suspend fun `showing`()
+    
+    public companion object
+}
+
+
+/**
+ * Hears where a device signature is as the device reaches each step, so the screen draws what
+ * the device shows. Never throw: an exception cannot be mapped.
+ */
+public expect open class SignStepsImpl: Disposable, SignSteps {
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("ConvertSecondaryConstructorToPrimary")
+    public constructor(noPointer: NoPointer)
+
+    
+
+    override fun destroy()
+    override fun close()
+
+    
+    /**
+     * A Jade is about to ask the user to register the several-key wallet: its first signature of
+     * the wallet, or the first since it lost the record. At most once per signing request, and
+     * always before `showing`.
+     */
+    public override suspend fun `registering`()
+    
+    /**
+     * The device is about to show the payment. Once per signing request that reaches the device,
+     * and never for a key whose signature the payment already carries.
+     */
+    public override suspend fun `showing`()
+    
+
+    
+    public companion object
+}
+
+
+
+
+/**
  * A link to one wallet that `scan_wallets` found. Make it, call `connect`, close it when done.
  *
  * A task owns the device and this object sends it requests, so a cancelled call never leaves
@@ -215,30 +278,22 @@ public interface WalletLinkInterface {
     public suspend fun `info`(): WalletInfo
     
     /**
-     * Has the hardware wallet sign `psbt_base64` for `signer_fingerprint`.
-     *
-     * `psbt_base64` is a BIP-174 PSBT. `signer_fingerprint` is 8 lowercase hex
-     * characters (the vault key's master fingerprint). Jade must be unlocked
-     * first. Returns the signed PSBT as base64. Callers must run spend policy
-     * before this (vault-core policy against real PSBTs is still Term-2 work;
-     * the app checks destination and amount at the UI boundary today).
-     */
-    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
-    public suspend fun `signPsbt`(`psbtBase64`: kotlin.String, `signerFingerprint`: kotlin.String): kotlin.String
-    
-    /**
      * Signs `psbt_base64`, a payment of the wallet `descriptor` whose unsigned id is
      * `unsigned_txid` (the payment the user was shown), with the key of that wallet this device
      * holds, and returns what the PSBT says after it. Before anything reaches the device, it
      * refuses a descriptor `wallet_describe` refuses, a PSBT `wallet_review` refuses, and a PSBT
      * whose id is another ("changed since shown"). `WrongKey` means the device holds no key of the
      * wallet, and nothing showed on it. When that key has already signed, the review comes back
-     * without asking the device to sign. Else the device shows the payment, and its answer is
-     * refused unless that key then signed every input. A Jade must be unlocked first. Cancelling
-     * stops only the wait: the device finishes the request.
+     * without asking the device to sign, and `steps` hears nothing. Else a Jade must hold a
+     * several-key wallet before it signs for it: the Jade is read, and one that does not hold the
+     * wallet is asked to register it after `steps.registering()` (`Refused` when the user
+     * declines, `RegistrationRefused` when it cannot). Then `steps.showing()`, the device shows
+     * the payment, and its answer is refused (`Protocol`) unless that key then signed every input.
+     * A Jade must be unlocked first. Cancelling stops only the wait: the device finishes the
+     * request.
      */
     @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
-    public suspend fun `signWalletPsbt`(`descriptor`: kotlin.String, `psbtBase64`: kotlin.String, `unsignedTxid`: kotlin.String): SpendReview
+    public suspend fun `signWalletPsbt`(`descriptor`: kotlin.String, `psbtBase64`: kotlin.String, `unsignedTxid`: kotlin.String, `steps`: SignSteps): SpendReview
     
     /**
      * Unlocks the wallet for this connection.
@@ -333,30 +388,22 @@ public expect open class WalletLink: Disposable, WalletLinkInterface {
     public override suspend fun `info`(): WalletInfo
     
     /**
-     * Has the hardware wallet sign `psbt_base64` for `signer_fingerprint`.
-     *
-     * `psbt_base64` is a BIP-174 PSBT. `signer_fingerprint` is 8 lowercase hex
-     * characters (the vault key's master fingerprint). Jade must be unlocked
-     * first. Returns the signed PSBT as base64. Callers must run spend policy
-     * before this (vault-core policy against real PSBTs is still Term-2 work;
-     * the app checks destination and amount at the UI boundary today).
-     */
-    @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
-    public override suspend fun `signPsbt`(`psbtBase64`: kotlin.String, `signerFingerprint`: kotlin.String): kotlin.String
-    
-    /**
      * Signs `psbt_base64`, a payment of the wallet `descriptor` whose unsigned id is
      * `unsigned_txid` (the payment the user was shown), with the key of that wallet this device
      * holds, and returns what the PSBT says after it. Before anything reaches the device, it
      * refuses a descriptor `wallet_describe` refuses, a PSBT `wallet_review` refuses, and a PSBT
      * whose id is another ("changed since shown"). `WrongKey` means the device holds no key of the
      * wallet, and nothing showed on it. When that key has already signed, the review comes back
-     * without asking the device to sign. Else the device shows the payment, and its answer is
-     * refused unless that key then signed every input. A Jade must be unlocked first. Cancelling
-     * stops only the wait: the device finishes the request.
+     * without asking the device to sign, and `steps` hears nothing. Else a Jade must hold a
+     * several-key wallet before it signs for it: the Jade is read, and one that does not hold the
+     * wallet is asked to register it after `steps.registering()` (`Refused` when the user
+     * declines, `RegistrationRefused` when it cannot). Then `steps.showing()`, the device shows
+     * the payment, and its answer is refused (`Protocol`) unless that key then signed every input.
+     * A Jade must be unlocked first. Cancelling stops only the wait: the device finishes the
+     * request.
      */
     @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
-    public override suspend fun `signWalletPsbt`(`descriptor`: kotlin.String, `psbtBase64`: kotlin.String, `unsignedTxid`: kotlin.String): SpendReview
+    public override suspend fun `signWalletPsbt`(`descriptor`: kotlin.String, `psbtBase64`: kotlin.String, `unsignedTxid`: kotlin.String, `steps`: SignSteps): SpendReview
     
     /**
      * Unlocks the wallet for this connection.
@@ -560,6 +607,30 @@ public data class HwAccountKey (
      * The path the key was derived on, such as `m/48'/1'/0'/2'`.
      */
     var `derivationPath`: kotlin.String
+) {
+    public companion object
+}
+
+
+
+/**
+ * What a Jade registers for a several-key wallet before it signs for it, as its registration
+ * screen shows it.
+ */
+
+public data class JadeRegistration (
+    /**
+     * At most 15 characters, `mebit{m}of{n}-` and hex: the name the Jade shows and lists.
+     */
+    var `name`: kotlin.String, 
+    /**
+     * m.
+     */
+    var `threshold`: kotlin.UByte, 
+    /**
+     * Master fingerprints, 8 lowercase hex each, in the order the Jade lists the signers.
+     */
+    var `signers`: List<kotlin.String>
 ) {
     public companion object
 }
@@ -930,6 +1001,14 @@ public sealed class BleException(message: String): kotlin.Exception(message) {
      */
     public class WrongKey(message: String) : BleException(message)
     
+    /**
+     * A Jade cannot register the several-key wallet it was asked to sign for, so it signs nothing:
+     * another wallet holds the wallet's name, its list of wallets is full, what it read back is
+     * another wallet, or the wallet has more signers than a Jade registers (seven). Nothing showed
+     * the payment, and the link stays usable. The user declining the registration is `Refused`.
+     */
+    public class RegistrationRefused(message: String) : BleException(message)
+    
 }
 
 
@@ -1231,6 +1310,8 @@ public enum class WalletKind {
 
 
 
+
+
 /**
  * The words that turn `first_words` into a valid mnemonic, in list order. For 23
  * words that is 8: the last word carries 3 entropy bits and 8 checksum bits.
@@ -1477,6 +1558,15 @@ public expect fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `pas
  * True when `address` parses and belongs to `network`: the same test `hot_prepare_send_at_rate` applies to its destination.
  */
 public expect fun `isValidAddress`(`address`: kotlin.String, `network`: KeyNetwork): kotlin.Boolean
+
+/**
+ * What a Jade registers for the wallet `descriptor` before it signs for it, null for a one-key
+ * wallet, which a Jade signs as it is. Pure: no device, no network. Refuses mainnet, a
+ * descriptor `wallet_describe` refuses, and a several-key wallet a Jade cannot register (more
+ * than seven signers). Signing builds the same registration from the same descriptor.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `jadeWalletRegistration`(`descriptor`: kotlin.String, `network`: KeyNetwork): JadeRegistration?
 
 /**
  * How many `WalletLink` objects exist in this process. For tests, not a stable API: a link

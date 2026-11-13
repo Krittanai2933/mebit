@@ -69,6 +69,7 @@ import com.mebit.app.ui.theme.MbWhite
 import com.mebit.ffi.signer.BleException
 import com.mebit.ffi.signer.FoundWallet
 import com.mebit.ffi.signer.MobileSignerException
+import com.mebit.ffi.signer.SignSteps
 import com.mebit.ffi.signer.SpendReview
 import com.mebit.ffi.signer.WalletKind
 import kotlinx.coroutines.CancellationException
@@ -249,6 +250,16 @@ fun HardwareSignScreen(
     val codes = remember {
         FieldPairingCodes(jade = hw.kind == WalletKind.JADE, read = { code }, consume = { code = "" }, onAsked = { asked = true })
     }
+    val steps = remember {
+        object : SignSteps {
+            override suspend fun registering() {}
+
+            override suspend fun showing() {
+                asked = false
+                stage = SignStage.OnDevice
+            }
+        }
+    }
     val start: () -> Unit = {
         job?.cancel()
         stage = SignStage.Connecting
@@ -256,10 +267,7 @@ fun HardwareSignScreen(
         asked = false
         job = scope.launch {
             stage = try {
-                val signed = wallet.sign(nearest(), codes, onShown = {
-                    asked = false
-                    stage = SignStage.OnDevice
-                })
+                val signed = wallet.sign(nearest(), codes, steps)
                 if (signed) SignStage.Signed else SignStage.Failed(DeviceFailure.Lost, shown = false)
             } catch (e: CancellationException) {
                 throw e
