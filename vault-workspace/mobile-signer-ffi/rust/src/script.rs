@@ -406,7 +406,7 @@ const VAULT_ID_TAG: &[u8] = b"mebit/wallet-id/wsh-sortedmulti/v1";
 /// - Only what makes addresses goes in, so a key re-encoded with another depth or parent fingerprint is the same wallet.
 /// - The network byte keeps a future mainnet build from sharing a testnet vault's file over the same key material.
 /// - `threshold` goes in, because 2-of-3 and 3-of-3 over the same keys pay different scripts.
-pub(crate) fn vault_id(keys: &[Xpub], threshold: u8) -> WalletId {
+fn vault_id(keys: &[Xpub], threshold: u8) -> WalletId {
     let mut records: Vec<[u8; 65]> = keys
         .iter()
         .map(|key| {

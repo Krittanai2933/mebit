@@ -939,34 +939,6 @@ mod tests {
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_is_valid_address(),
             ),
             (
-                "func_vault_snapshot",
-                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_snapshot(),
-            ),
-            (
-                "func_vault_history",
-                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_history(),
-            ),
-            (
-                "func_vault_typical_vsize",
-                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_typical_vsize(),
-            ),
-            (
-                "func_vault_spendable",
-                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_spendable(),
-            ),
-            (
-                "func_vault_prepare_send",
-                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_prepare_send(),
-            ),
-            (
-                "func_vault_sign_psbt",
-                hot_wallet::vault_spend::uniffi_mobile_signer_ffi_checksum_func_vault_sign_psbt(),
-            ),
-            (
-                "func_vault_finalize_psbt",
-                hot_wallet::vault_spend::uniffi_mobile_signer_ffi_checksum_func_vault_finalize_psbt(),
-            ),
-            (
                 "func_wallet_snapshot",
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_wallet_snapshot(),
             ),

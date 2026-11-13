@@ -955,7 +955,7 @@ pub(crate) mod tests {
         Ok(xpub)
     }
 
-    /// `Multisig::resolve` with `signer`'s key at a vault path: m and the account xpubs, sorted.
+    /// vault-core's Safe 7 `Multisig::resolve` with `signer`'s key at a vault path: m and the account xpubs, sorted.
     fn safe7_multi(
         script: &Script,
         origins: &BTreeMap<secp256k1::PublicKey, KeySource>,
@@ -1775,6 +1775,9 @@ pub(crate) mod tests {
         ] {
             let refused = drafted_on(&fake, &descriptor, amount, rate).unwrap_err();
             assert!(refused.to_string().contains(why), "{refused}");
+            if !why.starts_with("insufficient") {
+                assert_eq!(fake.requests(), 0, "{why}: refused before any request");
+            }
         }
         let all = drafted_on(&fake, &descriptor, SendAmount::All, RATE).unwrap();
         assert_eq!((all.payments.len(), all.change_sats), (1, 0));
@@ -2326,8 +2329,8 @@ pub(crate) mod tests {
     }
 
     /// One row per way a payment can differ from the one shown, each an edit of the unsigned draft of `paid()` that keeps
-    /// every other part the draft's, so a refusal for another reason is a miss: the vault engine's 49 cases
-    /// (vault_spend.rs `cases`), then 28b, 43b, 46b, 46c, A1, A3, T1 and NA.
+    /// every other part the draft's, so a refusal for another reason is a miss: the 49 cases of the vault engine the
+    /// engine merge deleted, then 28b, 43b, 46b, 46c, A1, A3, T1 and NA.
     fn cases() -> Vec<Case> {
         use EcdsaSighashType::{All, AllPlusAnyoneCanPay, Single};
         let a_sighash_not_all = "input 0 asks for another sighash than ALL";
@@ -2855,14 +2858,17 @@ pub(crate) mod tests {
         psbt
     }
 
-    // A key of several kept on this phone signs through `wallet_sign_with_words` with its own phrase, each key once, and
-    // the payment finishes into bytes CHECKMULTISIG takes. A phrase of no key of the wallet signs nothing.
+    // A key of several kept on this phone signs through `wallet_sign_with_words` with its own phrase, each key once and
+    // in either order, and the payment finishes into bytes CHECKMULTISIG takes, every key needed or not. A phrase of no
+    // key of the wallet signs nothing.
     #[test]
     fn the_phrase_of_each_key_of_a_several_key_wallet_signs_a_payment_consensus_takes() {
         let fp = |i: usize| phone_key(i)[1..9].to_string();
         for (m, among, signing) in [
             (2, &[0, 2, 3][..], &[0, 3][..]),
             (3, &[0, 1, 2, 3, 4][..], &[1, 3, 4][..]),
+            (1, &[0][..], &[0][..]),
+            (3, &[0, 1, 2][..], &[0, 1, 2][..]),
         ] {
             let keys: Vec<&str> = among.iter().map(|&i| phone_key(i)).collect();
             let descriptor = format!("wsh(sortedmulti({m},{}))", keys.join(","));
@@ -2891,6 +2897,9 @@ pub(crate) mod tests {
                     let refused = sign(&read.psbt, words, passphrase).unwrap_err().to_string();
                     assert!(refused.contains("not a key of this wallet: "), "{refused}");
                 }
+                let first = sign(&unsigned.to_string(), phrase(signing[1]), "").unwrap();
+                let reversed = sign(&first.psbt, phrase(signing[0]), "").unwrap();
+                assert_eq!(reversed, read, "keys signing in either order make one PSBT");
             }
             let ready = wallet_finish(
                 descriptor.clone(),
@@ -2903,7 +2912,43 @@ pub(crate) mod tests {
             let tx: Transaction = bitcoin::consensus::encode::deserialize_hex(&ready.hex).unwrap();
             let prevout = unsigned.inputs[0].witness_utxo.as_ref().unwrap();
             assert!(spends(&tx, 0, prevout), "{m}-of-{}", among.len());
+            if m == 2 {
+                let mut swapped = tx.clone();
+                let mut elements: Vec<Vec<u8>> = swapped.input[0]
+                    .witness
+                    .iter()
+                    .map(<[u8]>::to_vec)
+                    .collect();
+                elements.swap(1, 2);
+                swapped.input[0].witness = Witness::from_slice(&elements);
+                assert!(
+                    !spends(&swapped, 0, prevout),
+                    "CHECKMULTISIG takes the signatures in its keys' order only"
+                );
+            }
         }
+    }
+
+    // A key is its public key and its chain code: the phrase of a wallet key's public key listed under another chain code
+    // holds no key of that wallet, so it signs nothing.
+    #[test]
+    fn the_wallets_public_key_under_another_chain_code_is_another_key() {
+        let (origin, listed) = phone_key(0).split_once(']').unwrap();
+        let mut key = Xpub::from_str(listed).unwrap();
+        key.chain_code = bitcoin::bip32::ChainCode::from([9; 32]);
+        let descriptor = format!("wsh(sortedmulti(1,{origin}]{key},{}))", phone_key(2));
+        let unsigned = payment_of(&Described::parse(&descriptor).unwrap());
+        let refused = wallet_sign_with_words(
+            descriptor,
+            KeyNetwork::Test,
+            unsigned.to_string(),
+            unsigned.unsigned_tx.compute_txid().to_string(),
+            phrase(0),
+            String::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(refused.contains("not a key of this wallet: "), "{refused}");
     }
 
     // The size a payment is priced at is the size of its finished bytes, for every m-of-n a described wallet takes.

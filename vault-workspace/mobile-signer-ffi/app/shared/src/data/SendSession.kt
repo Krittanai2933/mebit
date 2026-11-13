@@ -592,12 +592,6 @@ fun sendErrorThai(message: String?): String {
         m.startsWith("signatures:") && " keys needed " in m -> "ลายเซ็นยังไม่ครบ"
         // wallet_sign_with_words: the key did not end up signing every input. wallet_finish: the signatures do not finalize.
         m.startsWith("signatures:") -> NOT_SIGNED
-        // vault_sign_psbt and vault_finalize_psbt: the PSBT broke a rule of their check, so nothing was signed or finished.
-        m.startsWith("vault psbt:") -> "ธุรกรรมไม่ตรงกับที่ตรวจไว้ จึงไม่เซ็น"
-        // vault_sign_psbt: the words are not the key of the row tapped.
-        m.startsWith("vault key:") -> "กุญแจนี้ไม่ใช่กุญแจของ Wallet นี้"
-        // vault_finalize_psbt: fewer keys signed than the wallet needs.
-        m.startsWith("vault signatures:") -> "ลายเซ็นยังไม่ครบ"
         m.startsWith("esplora scan:") -> ABNORMAL_HISTORY
         m.startsWith("esplora utxo:") || m.startsWith("esplora balance:") -> "ข้อมูลจาก explorer ไม่ตรงกัน ลองใหม่ภายหลัง"
         m == "amount plus fee does not fit u64" -> "จำนวนผิดปกติ"

@@ -460,9 +460,6 @@ class VaultSendTest {
         assertFalse(send.broadcast())
         assertEquals("ส่งไม่สำเร็จ ลองใหม่ภายหลัง", send.lastError, "the line the vault engine's weight refusal showed")
         assertTrue(rust.posts.isEmpty())
-        assertEquals("ธุรกรรมไม่ตรงกับที่ตรวจไว้ จึงไม่เซ็น", sendErrorThai("invalid PSBT json: vault psbt: fee: inputs less outputs is Some(1001), not the 1000 sats confirmed"))
-        assertEquals("กุญแจนี้ไม่ใช่กุญแจของ Wallet นี้", sendErrorThai("invalid PSBT json: vault key: the words are not key 0 of the wallet"))
-        assertEquals("ลายเซ็นยังไม่ครบ", sendErrorThai("invalid PSBT json: vault signatures: 1 of 2"))
     }
 
     @Test
