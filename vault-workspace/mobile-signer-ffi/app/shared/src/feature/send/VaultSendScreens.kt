@@ -56,6 +56,7 @@ import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.data.keyMonogram
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.data.sendIssue
+import com.mebit.app.data.vaultKey
 import com.mebit.app.data.xpubsIn
 import com.mebit.app.feature.vault.deviceWord
 import com.mebit.app.feature.vault.vaultKeyRows
@@ -400,7 +401,7 @@ private fun KeyRows(send: VaultSend, signers: List<KeySigner>, keyring: List<Sav
     Column(modifier = Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(horizontal = 14.dp)) {
         signers.forEachIndexed { i, signer ->
             if (i > 0) Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(1.dp).background(MbBorder))
-            val source = keyring.find { it.xpub == xpubs.getOrNull(signer.index) && it.fingerprint.equals(vault.keyFingerprints.getOrNull(signer.index), ignoreCase = true) }?.source
+            val source = vaultKey(vault, signer.index, xpubs.getOrNull(signer.index), keyring)?.source
             val signed = vault.keyFingerprints.getOrNull(signer.index)?.uppercase() in send.signedFingerprints
             val needed = !signed && send.needsKey(signer.index)
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp).testTag("m2_key_${signer.index}"), verticalAlignment = Alignment.CenterVertically) {
