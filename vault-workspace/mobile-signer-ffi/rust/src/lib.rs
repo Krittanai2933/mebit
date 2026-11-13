@@ -979,6 +979,10 @@ mod tests {
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_wallet_tx_detail(),
             ),
             (
+                "func_wallet_balance",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_wallet_balance(),
+            ),
+            (
                 "func_wallet_describe",
                 script::uniffi_mobile_signer_ffi_checksum_func_wallet_describe(),
             ),

@@ -798,6 +798,25 @@ public data class VaultSpendable (
 
 
 /**
+ * A wallet's balance as one sync of both its chains found it, for the wallet list and a several-key wallet's detail. Not
+ * `HotWalletSnapshot`: no spendable figure, which needs a coin list, and no receive address, since a several-key wallet's
+ * Receive screen shows the address 0 its book holds.
+ */
+
+public data class WalletBalance (
+    /**
+     * Confirmed plus mempool over every address of both chains the scan counts. Before `scan` is `Complete`, only what
+     * the scan has found so far, which no screen may show as the balance.
+     */
+    var `balanceSats`: kotlin.ULong, 
+    var `scan`: HotScan
+) {
+    public companion object
+}
+
+
+
+/**
  * Who answered on a connected link.
  */
 
@@ -1648,6 +1667,16 @@ public expect fun `vaultSpendable`(`xpubs`: List<kotlin.String>, `threshold`: ko
  */
 @Throws(MobileSignerException::class)
 public expect fun `vaultTypicalVsize`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte): kotlin.ULong
+
+/**
+ * The confirmed + mempool balance of the wallet `descriptor` describes, by the sync a read of it within ten seconds
+ * shares, with how far the scan got. It reads no coin list, so a list that shows balances pays for none, and a coin list
+ * a host fails or limits never blanks a balance. Testnet4 only. About 40 Esplora calls for a wallet nobody paid and a
+ * routine sync's few after that, so call it off the main thread. No screen may show `balance_sats` unless `scan` is
+ * `Complete`.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `walletBalance`(`descriptor`: kotlin.String, `network`: KeyNetwork): WalletBalance
 
 /**
  * The keys, how many must sign, receive address 0 and the typical payment size of the wallet `descriptor`

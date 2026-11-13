@@ -257,6 +257,8 @@ RustBuffer uniffi_mobile_signer_ffi_fn_func_vault_spendable(RustBuffer xpubs, in
 );
 int64_t uniffi_mobile_signer_ffi_fn_func_vault_typical_vsize(RustBuffer xpubs, int8_t threshold, UniffiRustCallStatus *_Nonnull out_status
 );
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_balance(RustBuffer descriptor, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
+);
 RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_describe(RustBuffer descriptor, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_draft(RustBuffer descriptor, RustBuffer network, RustBuffer destination, RustBuffer amountSats, int64_t feeRateSatVb, UniffiRustCallStatus *_Nonnull out_status
@@ -491,6 +493,9 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_vault_spendable(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_func_vault_typical_vsize(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_balance(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_describe(void

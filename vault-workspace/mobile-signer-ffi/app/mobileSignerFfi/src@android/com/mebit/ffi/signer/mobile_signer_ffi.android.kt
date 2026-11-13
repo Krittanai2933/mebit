@@ -1102,6 +1102,8 @@ internal typealias UniffiVTableCallbackInterfacePairingCodesUniffiByValue = Unif
 
 
 
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -1247,6 +1249,9 @@ internal object IntegrityCheckingUniffiLib : Library {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_vault_typical_vsize() != 28052.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_wallet_balance() != 53648.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_wallet_describe() != 64410.toShort()) {
@@ -1410,6 +1415,9 @@ internal object IntegrityCheckingUniffiLib : Library {
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_vault_typical_vsize(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_balance(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_wallet_describe(
@@ -1798,6 +1806,12 @@ internal object UniffiLib : Library {
         `threshold`: Byte,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Long
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_wallet_balance(
+        `descriptor`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_func_wallet_describe(
         `descriptor`: RustBufferByValue,
@@ -3484,6 +3498,28 @@ public object FfiConverterTypeVaultSpendable: FfiConverterRustBuffer<VaultSpenda
 
 
 
+public object FfiConverterTypeWalletBalance: FfiConverterRustBuffer<WalletBalance> {
+    override fun read(buf: ByteBuffer): WalletBalance {
+        return WalletBalance(
+            FfiConverterULong.read(buf),
+            FfiConverterTypeHotScan.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: WalletBalance): ULong = (
+            FfiConverterULong.allocationSize(value.`balanceSats`) +
+            FfiConverterTypeHotScan.allocationSize(value.`scan`)
+    )
+
+    override fun write(value: WalletBalance, buf: ByteBuffer) {
+        FfiConverterULong.write(value.`balanceSats`, buf)
+        FfiConverterTypeHotScan.write(value.`scan`, buf)
+    }
+}
+
+
+
+
 public object FfiConverterTypeWalletInfo: FfiConverterRustBuffer<WalletInfo> {
     override fun read(buf: ByteBuffer): WalletInfo {
         return WalletInfo(
@@ -4943,6 +4979,24 @@ public actual fun `vaultTypicalVsize`(`xpubs`: List<kotlin.String>, `threshold`:
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_vault_typical_vsize(
             FfiConverterSequenceString.lower(`xpubs`),
             FfiConverterUByte.lower(`threshold`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The confirmed + mempool balance of the wallet `descriptor` describes, by the sync a read of it within ten seconds
+ * shares, with how far the scan got. It reads no coin list, so a list that shows balances pays for none, and a coin list
+ * a host fails or limits never blanks a balance. Testnet4 only. About 40 Esplora calls for a wallet nobody paid and a
+ * routine sync's few after that, so call it off the main thread. No screen may show `balance_sats` unless `scan` is
+ * `Complete`.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `walletBalance`(`descriptor`: kotlin.String, `network`: KeyNetwork): WalletBalance {
+    return FfiConverterTypeWalletBalance.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_balance(
+            FfiConverterString.lower(`descriptor`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,
         )
     })

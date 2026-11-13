@@ -854,6 +854,54 @@ pub(crate) fn described_snapshot(
     )
 }
 
+/// A wallet's balance as one sync of both its chains found it, for the wallet list and a several-key wallet's detail. Not
+/// `HotWalletSnapshot`: no spendable figure, which needs a coin list, and no receive address, since a several-key wallet's
+/// Receive screen shows the address 0 its book holds.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct WalletBalance {
+    /// Confirmed plus mempool over every address of both chains the scan counts. Before `scan` is `Complete`, only what
+    /// the scan has found so far, which no screen may show as the balance.
+    pub balance_sats: u64,
+    pub scan: HotScan,
+}
+
+/// The confirmed + mempool balance of the wallet `descriptor` describes, by the sync a read of it within ten seconds
+/// shares, with how far the scan got. It reads no coin list, so a list that shows balances pays for none, and a coin list
+/// a host fails or limits never blanks a balance. Testnet4 only. About 40 Esplora calls for a wallet nobody paid and a
+/// routine sync's few after that, so call it off the main thread. No screen may show `balance_sats` unless `scan` is
+/// `Complete`.
+#[uniffi::export]
+pub fn wallet_balance(
+    descriptor: String,
+    network: KeyNetwork,
+) -> Result<WalletBalance, MobileSignerError> {
+    described_balance(
+        &EsploraSource(&testnet4()),
+        &descriptor,
+        network,
+        &SystemTime::now,
+        &SCAN_STORE,
+    )
+}
+
+/// `wallet_balance` on `source`, `clock` and `store`, so tests run it on `Fake`: `vault_snapshot_from` with the wallet read
+/// from its descriptor, refused before the store or any host hears of it.
+fn described_balance(
+    source: &dyn ChainSource,
+    descriptor: &str,
+    network: KeyNetwork,
+    clock: &dyn Fn() -> SystemTime,
+    store: &ScanStore,
+) -> Result<WalletBalance, MobileSignerError> {
+    check_network(network)?;
+    let wallet = Described::parse(descriptor)?;
+    let synced = sync_scan(source, &wallet, Anchor::Testnet4, clock, store)?;
+    Ok(WalletBalance {
+        balance_sats: held(&synced.scan.chains, &synced.balances)?,
+        scan: HotScan::from(&synced.status),
+    })
+}
+
 /// Keeps each wallet's scan in `dir`, app storage that no backup copies, so the first sync after a restart
 /// asks only what can have changed. Call it once at app start. Without it scans live in memory only.
 #[uniffi::export]
@@ -14464,6 +14512,60 @@ pub(crate) mod tests {
             by_vault.iter().map(|tx| tx.net_sats).collect::<Vec<_>>(),
             [-31_000, PAID_SATS as i64, PAID_SATS as i64],
             "the payment once, as the amount and the fee, then what paid each address"
+        );
+    }
+
+    // A balance is the scan's sum, so the wallet list asks no coin list, which a snapshot of the same wallet does ask. Until
+    // the vault engine goes, it is also the balance `vault_snapshot` reads of the same keys on the same host.
+    #[test]
+    fn wallet_balance_is_the_scans_sum_and_asks_no_coin_list() {
+        use crate::script::tests::{WithMulti, at, fund_multi, two_of_three};
+        let descriptor = two_of_three();
+        let mut fake = Fake::new();
+        fund_multi(&mut fake, &at(&descriptor, Chain::External, 0), 50_000, '1');
+        fund_multi(&mut fake, &at(&descriptor, Chain::Internal, 0), 9_000, '3');
+        let source = EsploraSource(&WithMulti(&fake));
+        let coin_lists = || {
+            let calls = fake.calls.lock().unwrap();
+            calls.iter().filter(|url| url.ends_with("/utxo")).count()
+        };
+        let balance = described_balance(
+            &source,
+            &descriptor,
+            KeyNetwork::Test,
+            &|| fake.now(),
+            &ScanStore::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            balance,
+            WalletBalance {
+                balance_sats: 59_000,
+                scan: HotScan::Complete
+            }
+        );
+        assert_eq!(coin_lists(), 0, "the balance asks no coin list");
+        described_snapshot(
+            &source,
+            &descriptor,
+            KeyNetwork::Test,
+            &|| fake.now(),
+            &ScanStore::default(),
+        )
+        .unwrap();
+        assert!(coin_lists() > 0, "a snapshot asks the coin lists");
+        // Gate until the vault engine goes.
+        let vault = vault_snapshot_from(
+            &source,
+            &xpubs_of(&descriptor),
+            2,
+            &|| fake.now(),
+            &ScanStore::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            (balance.balance_sats, balance.scan),
+            (vault.balance_sats, vault.scan)
         );
     }
 
