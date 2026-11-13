@@ -560,7 +560,7 @@ const val UNCONFIRMED_CLEAR_OFFER_SECONDS = 120L
 fun offersUnconfirmedClear(sinceSeconds: Long, nowSeconds: Long): Boolean = (nowSeconds - sinceSeconds).let { it >= UNCONFIRMED_CLEAR_OFFER_SECONDS || it < 0 }
 
 /**
- * The Thai line for an error a hot_* call threw, matched on the Rust message's prefix or shape, so no English reaches a screen.
+ * The Thai line for an error a hot_* or wallet_* call threw, matched on the Rust message's prefix or shape, so no English reaches a screen.
  * Each row names the Rust text it answers. `esplora post:` is the node's refusal with its reason, not a network failure.
  */
 fun sendErrorThai(message: String?): String {
@@ -583,6 +583,15 @@ fun sendErrorThai(message: String?): String {
         m.startsWith("replace: not this wallet's payment:") -> "รายการเดิมไม่ใช่รายการที่กระเป๋านี้แทนที่ได้"
         m.startsWith("replace: rate ") || m.startsWith("replace: fee ") -> "รายการใหม่ต้องใช้ค่าธรรมเนียมเกิน 10,000 sat/vB ซึ่งเครือข่ายไม่รับ"
         m.startsWith("replace: what is left") && floor != null -> "ยอดที่เหลือหลังหักค่าธรรมเนียมใหม่ต่ำกว่า $floor sat ซึ่งเครือข่ายไม่รับ"
+        // wallet_draft, wallet_sign_with_words and wallet_finish, for every wallet the book describes: the PSBT is not a payment of
+        // this wallet, or not the one the user was shown, so nothing was signed or finished.
+        m.startsWith("not this wallet's payment:") || m.startsWith("changed since shown:") -> PAYMENT_CHANGED
+        // wallet_sign_with_words: the words make no key of this wallet.
+        m.startsWith("not a key of this wallet:") -> "กุญแจนี้ไม่ใช่กุญแจของ Wallet นี้"
+        // wallet_finish: fewer keys signed every input than the wallet needs.
+        m.startsWith("signatures:") && " keys needed " in m -> "ลายเซ็นยังไม่ครบ"
+        // wallet_sign_with_words: the key did not end up signing every input. wallet_finish: the signatures do not finalize.
+        m.startsWith("signatures:") -> NOT_SIGNED
         // vault_sign_psbt and vault_finalize_psbt: the PSBT broke a rule of their check, so nothing was signed or finished.
         m.startsWith("vault psbt:") -> "ธุรกรรมไม่ตรงกับที่ตรวจไว้ จึงไม่เซ็น"
         // vault_sign_psbt: the words are not the key of the row tapped.
@@ -629,6 +638,12 @@ internal const val SEND_UNKNOWN = "ยังไม่ทราบว่ากา
 
 /** [SingleSigWallet.post] when the guard file could not take the payment's guard ([Claim.NotSaved]), so nothing was posted. Review shows it too. */
 internal const val GUARD_NOT_SAVED = "บันทึกสถานะการส่งไม่ได้ จึงยังไม่ส่ง ลองใหม่ภายหลัง"
+
+/** [sendErrorThai] for a PSBT that is not the payment the user was shown, and [VaultSend.broadcast] for a finish of another txid. Nothing was signed or posted. */
+internal const val PAYMENT_CHANGED = "ธุรกรรมไม่ตรงกับที่ตรวจไว้ จึงไม่เซ็น"
+
+/** [VaultSend.sign] when Rust's answer is not the payment held or lacks the row's key, and [sendErrorThai] for a key that did not sign every input. */
+internal const val NOT_SIGNED = "เซ็นไม่สำเร็จ ลองใหม่อีกครั้ง"
 
 /** [sendErrorThai] for a failed read of the wallet: its generic fallback would say a send failed when only a fetch did. */
 fun readErrorThai(message: String?): String =
@@ -826,7 +841,7 @@ fun sendIssue(addressOk: Boolean?, amountSats: Long, feeSats: Long, balanceSats:
 
 /**
  * One payment, priced at [typicalVsize], the size every estimate prices it at, from the core that signs it: a one-key wallet's
- * [hotTypicalVsize], Native SegWit's 141 vB, or a several-key wallet's [com.mebit.ffi.signer.vaultTypicalVsize].
+ * [hotTypicalVsize], Native SegWit's 141 vB, or a several-key wallet's [com.mebit.ffi.signer.WalletShape.typicalVsize].
  */
 class SendDraft(val typicalVsize: Long) {
     /** One payment from a one-key wallet of [addressType]. */

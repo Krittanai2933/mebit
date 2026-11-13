@@ -22,7 +22,7 @@ import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.HotWalletSnapshot
 import com.mebit.ffi.signer.HwAccountKey
 import com.mebit.ffi.signer.SoftwareAccountKey
-import com.mebit.ffi.signer.VaultSnapshot
+import com.mebit.ffi.signer.WalletBalance
 import com.mebit.ffi.signer.WalletKind
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -53,13 +53,13 @@ private fun check(words: List<String>, passphrase: String = ""): String =
 
 private val SENT_AT = 1_792_740_720L
 
-/** The keys vault [n]'s BSMS names, in order. */
-private fun vaultKeys(n: Int): List<String> = listOf("tpub$n-a", "tpub$n-b", "tpub$n-c")
+/** Vault [n]'s descriptor, its BSMS line 2: a 2-of-3 over three keys of its own. */
+private fun vaultLine(n: Int): String = "wsh(sortedmulti(2,${listOf("a", "b", "c").joinToString(",") { "[0000000$n/48'/1'/0'/2']tpub$n-$it" }}))"
 
-/** Vault [n] of the book, a 2-of-3 whose BSMS descriptor line names [vaultKeys] of [n]. */
+/** Vault [n] of the book, a 2-of-3 whose BSMS descriptor line is [vaultLine] of [n]. */
 private fun vault(n: Int, address: String = "tb1qvault$n") = CreatedVault(
     "vault_$n", "Wallet $n", 2, 3, CustodyPolicy.PersonalCustody, address,
-    "BSMS 1.0\nwsh(sortedmulti(2,${vaultKeys(n).joinToString(",") { "[0000000$n/48'/1'/0'/2']$it" }}))\n/0/*,/1/*\n$address",
+    "BSMS 1.0\n${vaultLine(n)}\n/0/*,/1/*\n$address",
     List(3) { "0000000$n" },
 )
 
@@ -87,8 +87,8 @@ private class ShelfPhone {
     val binds = mutableListOf<String>()
     var scanResult = HotScan.COMPLETE
 
-    /** Each vault read the core was asked for, as its keys and m. */
-    val vaultReads = mutableListOf<Pair<List<String>, UByte>>()
+    /** Each vault balance the core was asked for, as the descriptor it named the vault by. */
+    val vaultReads = mutableListOf<String>()
     var vaultScan = HotScan.COMPLETE
     var vaultSatsOnChain = 84_200_000uL
     var vaultFails = false
@@ -99,8 +99,8 @@ private class ShelfPhone {
     /** Runs each time [Wallets] reads its own clock, which a vault read does after the network answers and before it writes the figure. */
     var onWalletsNow: () -> Unit = {}
 
-    /** Each vault history the core was asked for, as its keys and m. */
-    val historyReads = mutableListOf<Pair<List<String>, UByte>>()
+    /** Each vault history the core was asked for, as the descriptor it named the vault by. */
+    val historyReads = mutableListOf<String>()
     var vaultTxsOnChain = listOf(HotTx("tx1", 84_200_000, 3u, 1_790_000_000uL))
     var historyFails = false
 
@@ -144,18 +144,20 @@ private class ShelfPhone {
                 nowSeconds = { nowSeconds },
             )
         },
-        vaultSnapshotOf = { xpubs, m ->
-            vaultReads += xpubs to m
-            duringVaultRead()
-            if (vaultFails) error("network error: down")
-            VaultSnapshot(vaultSatsOnChain, vaultScan)
-        },
-        vaultHistoryOf = { xpubs, m ->
-            historyReads += xpubs to m
-            duringHistoryRead()
-            if (historyFails) error("esplora history: tx 0: unreadable")
-            vaultTxsOnChain
-        },
+        vaultCore = DescribedCore(
+            balance = { descriptor, _ ->
+                vaultReads += descriptor
+                duringVaultRead()
+                if (vaultFails) error("network error: down")
+                WalletBalance(vaultSatsOnChain, vaultScan)
+            },
+            history = { descriptor, _ ->
+                historyReads += descriptor
+                duringHistoryRead()
+                if (historyFails) error("esplora history: tx 0: unreadable")
+                vaultTxsOnChain
+            },
+        ),
         nowSeconds = {
             onWalletsNow()
             nowSeconds
@@ -1067,7 +1069,7 @@ class WalletsTest {
         wallets.refreshBalances(listOf(vault(1), vault(2)))
         assertEquals(listOf(check(words(1)), check(words(2))), phone.binds)
         assertEquals(listOf(2, 2), bindsBeforeEachVault, "both one-key wallets are read before the first vault")
-        assertEquals(listOf(vaultKeys(1) to 2.toUByte(), vaultKeys(2) to 2.toUByte()), phone.vaultReads, "each vault once, in book order, with its own keys and m")
+        assertEquals(listOf(vaultLine(1), vaultLine(2)), phone.vaultReads, "each vault once, in book order, by its own descriptor")
         assertEquals(84_200_000L, wallets.vaultSats(vault(1)))
     }
 
@@ -1108,13 +1110,13 @@ class WalletsTest {
         val wallets = phone.launch()
         phone.vaultScan = HotScan.CONTINUING
         wallets.refreshBalances(listOf(vault(1), vault(2)))
-        assertEquals(listOf(vaultKeys(1) to 2.toUByte()), phone.vaultReads, "a host that limits one vault would limit the next")
+        assertEquals(listOf(vaultLine(1)), phone.vaultReads, "a host that limits one vault would limit the next")
         assertNull(wallets.vaultSats(vault(1)), "part of a vault never reads as all of it")
 
         phone.vaultScan = HotScan.UNVERIFIED
         phone.nowSeconds += 61
         wallets.refreshBalances(listOf(vault(1), vault(2)))
-        assertEquals(listOf(1, 1, 2).map { vaultKeys(it) to 2.toUByte() }, phone.vaultReads, "a host that lied ends no pass")
+        assertEquals(listOf(1, 1, 2).map(::vaultLine), phone.vaultReads, "a host that lied ends no pass")
         assertNull(wallets.vaultSats(vault(1)))
         assertNull(wallets.vaultSats(vault(2)), "a figure a host lied about is a dash")
     }
@@ -1205,7 +1207,7 @@ class WalletsTest {
         phone.vaultScan = HotScan.COMPLETE
         phone.nowSeconds += 61
         wallets.readVaultDetail(vault(1))
-        assertEquals(listOf(vaultKeys(1) to 2.toUByte()), phone.historyReads, "its own keys and m")
+        assertEquals(listOf(vaultLine(1)), phone.historyReads, "by its own descriptor")
         assertEquals(phone.vaultTxsOnChain, wallets.vaultTxs(vault(1)))
         assertEquals(84_200_000L, wallets.vaultSats(vault(1)))
     }

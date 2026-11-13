@@ -2,7 +2,10 @@ package com.mebit.app.data
 
 import com.mebit.ffi.signer.HotSendResult
 import com.mebit.ffi.signer.PreparedSend
-import com.mebit.ffi.signer.VaultPsbt
+import com.mebit.ffi.signer.SpendOutput
+import com.mebit.ffi.signer.SpendReview
+import com.mebit.ffi.signer.WalletKey
+import com.mebit.ffi.signer.WalletShape
 import kotlinx.coroutines.runBlocking
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.Test
@@ -46,7 +49,7 @@ class OrganizeVaultSendSpec {
         (1..MAX_VAULT_KEYS).flatMap { n -> (1..n).map { m -> DEVICE_KEYS.take(n) to m } } + (listOf("IPHONE", "IPHONE", "JADE") to 2)
 
     private fun alphabet(n: Int): List<Step> =
-        listOf(Step.Prepare) + (0 until n).map { Step.Sign(it) } + listOf(Step.SignRefused, Step.LieOtherTxid, Step.LieOutOfRange, Step.Broadcast)
+        listOf(Step.Prepare) + (0 until n).map { Step.Sign(it) } + listOf(Step.SignRefused, Step.LieOtherTxid, Step.LieForeignFingerprint, Step.Broadcast)
 
     /** Visits every sequence over [steps] up to [MAX_SEQUENCE] from [prefix], replaying each on a fresh [World], and counts them. */
     private suspend fun walk(keys: List<String>, m: Int, steps: List<Step>, prefix: MutableList<Step>, violations: MutableList<Violation>): Int {
@@ -79,57 +82,63 @@ class OrganizeVaultSendSpec {
         private var prepared = 0
         private var modelTxid: String? = null
         private val modelSigned = mutableSetOf<Int>()
-        private var answer: (VaultPsbt, Int) -> VaultPsbt = { held, _ -> held }
+        private var answer: (SpendReview, Int) -> SpendReview = { held, _ -> held }
         private var signCalls = 0
         private var last = false
         val found = mutableListOf<String>()
 
         private fun distinct(): Int = modelSigned.map { keys[it] }.toSet().size
 
-        private fun signedBy(held: VaultPsbt, key: Int) {
-            if (held.txid == modelTxid) modelSigned += key
+        private fun signedBy(held: SpendReview, key: Int) {
+            if (held.unsignedTxid == modelTxid) modelSigned += key
         }
 
         private fun note(what: String) {
             if (last) found += what
         }
 
+        private val vault = CreatedVault(
+            id = "vault",
+            name = "Vault",
+            m = m,
+            n = keys.size,
+            policy = CustodyPolicy.PersonalCustody,
+            address = "tb1qvault${keys.size}of$m",
+            bsms = "",
+            keyFingerprints = keys,
+        )
+
         val send = VaultSend(
-            vault = CreatedVault(
-                id = "vault",
-                name = "Vault",
-                m = m,
-                n = keys.size,
-                policy = CustodyPolicy.PersonalCustody,
-                address = "tb1qvault${keys.size}of$m",
-                bsms = "",
-                keyFingerprints = keys,
-            ),
+            vault = vault,
             guards = PendingPayments(FakePlainFile()),
             nowSeconds = { 0L },
             worker = EmptyCoroutineContext,
-            typicalVsize = { _, _ -> 201uL },
-            prepareSend = { _, _, _, _, _ ->
-                prepared++
-                modelTxid = prepared.toString(16).padStart(64, '0')
-                modelSigned.clear()
-                record(modelTxid!!, emptyList())
-            },
-            signPsbt = { _, _, held, keyIndex, _, _ ->
-                signCalls++
-                if (distinct() >= m) note("sign at ${distinct()} distinct fingerprints of $m reached Rust")
-                if (keys[keyIndex.toInt()] in modelSigned.map { keys[it] }) note("sign of key $keyIndex, whose fingerprint already counts, reached Rust")
-                answer(held, keyIndex.toInt())
-            },
-            finalizePsbt = { _, _, held ->
-                if (held.txid != modelTxid) note("finalize of ${held.txid.take(8)}, not the payment prepared last")
-                if (distinct() < m) note("finalize at ${distinct()} distinct fingerprints of $m")
-                PreparedSend(held.txid, "", 0uL, 0uL)
-            },
-            postHex = { _, _, txid ->
-                if (distinct() < m) note("post at ${distinct()} distinct fingerprints of $m")
-                HotSendResult(txid)
-            },
+            core = DescribedCore(
+                describe = { _, _ -> WalletShape(m.toUByte(), keys.map { WalletKey(it.lowercase(), "m/48'/1'/0'/2'", "") }, vault.address, 201uL) },
+                draft = { _, _, to, _, _ ->
+                    prepared++
+                    modelTxid = prepared.toString(16).padStart(64, '0')
+                    modelSigned.clear()
+                    record(modelTxid!!, emptyList(), to)
+                },
+                signWithWords = { _, _, psbt, _, words, _ ->
+                    signCalls++
+                    val key = words.single().removePrefix("key").toInt()
+                    if (distinct() >= m) note("sign at ${distinct()} distinct fingerprints of $m reached Rust")
+                    if (keys[key] in modelSigned.map { keys[it] }) note("sign of key $key, whose fingerprint already counts, reached Rust")
+                    answer(held(psbt), key)
+                },
+                finish = { _, _, psbt, _ ->
+                    val held = held(psbt)
+                    if (held.unsignedTxid != modelTxid) note("finish of ${held.unsignedTxid.take(8)}, not the payment prepared last")
+                    if (distinct() < m) note("finish at ${distinct()} distinct fingerprints of $m")
+                    PreparedSend(held.unsignedTxid, "", 0uL, 0uL)
+                },
+                postHex = { _, _, txid ->
+                    if (distinct() < m) note("post at ${distinct()} distinct fingerprints of $m")
+                    HotSendResult(txid)
+                },
+            ),
         )
 
         suspend fun run(step: Step, last: Boolean) {
@@ -137,7 +146,7 @@ class OrganizeVaultSendSpec {
             when (step) {
                 Step.Prepare -> send.prepare()
                 is Step.Sign -> {
-                    answer = { held, key -> signedBy(held, key); held.copy(signedKeys = (held.signedKeys + key.toUInt()).distinct().sorted()) }
+                    answer = { held, key -> signedBy(held, key); held.with(listOf(keys[key])) }
                     send.sign(phone(step.key)) { true }
                 }
                 Step.SignRefused -> {
@@ -146,13 +155,13 @@ class OrganizeVaultSendSpec {
                     if (signCalls != before) note("a refused owner check reached Rust")
                 }
                 Step.LieOtherTxid -> {
-                    answer = { held, key -> held.copy(txid = LIE_TXID, signedKeys = (held.signedKeys + key.toUInt()).distinct().sorted()) }
+                    answer = { held, key -> held.with(listOf(keys[key]), txid = LIE_TXID) }
                     send.sign(phone(0)) { true }
                 }
-                Step.LieOutOfRange -> {
+                Step.LieForeignFingerprint -> {
                     answer = { held, key ->
                         signedBy(held, key)
-                        held.copy(signedKeys = (held.signedKeys + key.toUInt() + keys.size.toUInt()).distinct().sorted())
+                        held.with(listOf(keys[key], FOREIGN_FINGERPRINT))
                     }
                     send.sign(phone(0)) { true }
                 }
@@ -165,10 +174,21 @@ class OrganizeVaultSendSpec {
             if (send.readyToBroadcast() && distinct() < m) note("readyToBroadcast() at ${distinct()} distinct fingerprints of $m")
         }
 
-        private fun phone(key: Int) = KeySigner.Phone(key, emptyList(), "")
+        /** Key [key]'s row. Its words name the key, so the fake knows which key signs, as Rust knows the key the words make. */
+        private fun phone(key: Int) = KeySigner.Phone(key, listOf("key$key"), "")
 
-        private fun record(txid: String, signed: List<UInt>) =
-            VaultPsbt("", txid, "", 0uL, 0uL, 0uL, 0u, 0uL, signed)
+        /** Rust's review of a payment to [to] that [signed] signed, each fingerprint lowercase as Rust names it. Its PSBT text carries all of it. */
+        private fun record(txid: String, signed: List<String>, to: String) =
+            SpendReview("$txid;$to;${signed.joinToString(",")}", txid, listOf(SpendOutput(to, 1_000uL)), 0uL, 0uL, signed, m.toUByte())
+
+        /** The review of the PSBT text [VaultSend] passed, so every answer builds on the payment it holds, as wallet_sign_with_words does. */
+        private fun held(psbt: String): SpendReview {
+            val (txid, to, signed) = psbt.split(";")
+            return record(txid, signed.split(",").filter { it.isNotEmpty() }, to)
+        }
+
+        private fun SpendReview.with(fingerprints: List<String>, txid: String = unsignedTxid) =
+            record(txid, (signed_ + fingerprints.map { it.lowercase() }).distinct(), payments.single().address)
     }
 
     private class Violation(val keys: List<String>, val m: Int, val steps: List<String>, val what: String) {
@@ -193,8 +213,8 @@ class OrganizeVaultSendSpec {
         /** 5.2's เซ็น on key 0's row, Rust answering key 0 on a payment of another txid. */
         data object LieOtherTxid : Step("LieOtherTxid")
 
-        /** 5.2's เซ็น on key 0's row, Rust answering key 0 and a position past the wallet's keys. */
-        data object LieOutOfRange : Step("LieOutOfRange")
+        /** 5.2's เซ็น on key 0's row, Rust answering key 0 and a fingerprint that is no key of the wallet. */
+        data object LieForeignFingerprint : Step("LieForeignFingerprint")
 
         /** The review's ส่งธุรกรรม: [VaultSend.broadcast]. */
         data object Broadcast : Step("Broadcast")
@@ -205,5 +225,6 @@ class OrganizeVaultSendSpec {
         const val MAX_SEQUENCE = 5
         val DEVICE_KEYS = listOf("IPHONE", "JADE", "TREZOR")
         val LIE_TXID = "f".repeat(64)
+        const val FOREIGN_FINGERPRINT = "5eed0000"
     }
 }

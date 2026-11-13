@@ -45,6 +45,7 @@ import com.mebit.app.data.SavedKey
 import com.mebit.app.data.SendIssue
 import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
 import com.mebit.app.data.VaultBusy
+import com.mebit.app.data.VaultPayment
 import com.mebit.app.data.VaultSend
 import com.mebit.app.data.VaultSendState
 import com.mebit.app.data.acceptsScan
@@ -76,7 +77,6 @@ import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.ffi.signer.KeyNetwork
-import com.mebit.ffi.signer.VaultPsbt
 import com.mebit.ffi.signer.isValidAddress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -354,7 +354,7 @@ fun CollectSignaturesScreen(
 
 /** 5.2's navy card: "ส่ง", the amount in BTC with its baht beside it when there is a price, and "ถึง" the address's ends. */
 @Composable
-private fun PaymentCard(payment: VaultPsbt, quote: com.mebit.app.data.FiatQuote?) {
+private fun PaymentCard(payment: VaultPayment, quote: com.mebit.app.data.FiatQuote?) {
     val amount = payment.amountSats.toLong()
     Column(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(MbNavy).padding(horizontal = 20.dp, vertical = 16.dp).testTag("m2_summary"),
@@ -381,13 +381,12 @@ private fun KeyRows(send: VaultSend, signers: List<KeySigner>, keyring: List<Sav
     val texts = vaultKeyRows(vault, keyring)
     val xpubs = xpubsIn(vault.bsms)
     val phone = remember { getPlatform().phoneMonogram }
-    val signedKeys = send.payment?.signedKeys.orEmpty()
     val shape = RoundedCornerShape(20.dp)
     Column(modifier = Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(horizontal = 14.dp)) {
         signers.forEachIndexed { i, signer ->
             if (i > 0) Box(modifier = Modifier.fillMaxWidth().padding(start = 52.dp).height(1.dp).background(MbBorder))
             val source = keyring.find { it.xpub == xpubs.getOrNull(signer.index) && it.fingerprint.equals(vault.keyFingerprints.getOrNull(signer.index), ignoreCase = true) }?.source
-            val signed = signer.index.toUInt() in signedKeys
+            val signed = vault.keyFingerprints.getOrNull(signer.index)?.uppercase() in send.signedFingerprints
             val needed = !signed && send.needsKey(signer.index)
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp).testTag("m2_key_${signer.index}"), verticalAlignment = Alignment.CenterVertically) {
                 Box(modifier = Modifier.size(38.dp).clip(RoundedCornerShape(12.dp)).background(MbIconWash), contentAlignment = Alignment.Center) {
@@ -447,7 +446,7 @@ private fun SignButton(signer: KeySigner, signed: Boolean, signing: Boolean, idl
 
 /** 5.2's grey card: the destination's ends, the change back to the wallet when there is any, and the fee in sats and baht. */
 @Composable
-private fun Checklist(payment: VaultPsbt, quote: com.mebit.app.data.FiatQuote?) {
+private fun Checklist(payment: VaultPayment, quote: com.mebit.app.data.FiatQuote?) {
     val shape = RoundedCornerShape(16.dp)
     Column(modifier = Modifier.fillMaxWidth().clip(shape).background(MbChip).padding(horizontal = 16.dp, vertical = 10.dp)) {
         CheckRow("ปลายทาง", shorten(payment.destination, "…"), "m2_check_destination")
@@ -551,12 +550,12 @@ fun VaultSentScreen(send: VaultSend?, quotes: QuoteCache, onHome: () -> Unit, on
     SystemBack(onHome)
     SentSlip(
         tag = "screen_send/m9",
-        txid = sent.psbt.txid,
+        txid = sent.payment.txid,
         sentAtSeconds = sent.atSeconds,
-        amountSats = sent.psbt.amountSats.toLong(),
-        feeSats = sent.psbt.feeSats.toLong(),
+        amountSats = sent.payment.amountSats.toLong(),
+        feeSats = sent.payment.feeSats.toLong(),
         rateSatVb = send.draft.rateSatVb,
-        destination = sent.psbt.destination,
+        destination = sent.payment.destination,
         walletName = send.vault.name,
         quotes = quotes,
         onHome = onHome,

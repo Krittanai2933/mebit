@@ -333,6 +333,9 @@ internal fun OnboardingSession.ownKey(): SavedKey? = fingerprint.takeIf { it.isN
 internal fun xpubsIn(bsms: String): List<String> =
     bsms.lines().getOrNull(1)?.substringAfter("sortedmulti(")?.substringBeforeLast("))")?.split(",")?.drop(1)?.map { it.substringAfterLast(']') }.orEmpty()
 
+/** Line 2 of [bsms], the descriptor every wallet_* call names a several-key wallet by. "" when there is none, which Rust refuses. */
+internal fun descriptorIn(bsms: String): String = bsms.lines().getOrNull(1)?.trim().orEmpty()
+
 /**
  * "MV2", then every value as "<length in UTF-16 units> <text>\n", so labels, Thai and BSMS newlines need no escaping, ending with the
  * two highest wallet numbers given, which an MV2 text from before f38e8f4 lacks. `verified` is not written, because a key is here only

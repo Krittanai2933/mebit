@@ -3,7 +3,7 @@ package com.mebit.app.data
 import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
 import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotTx
-import com.mebit.ffi.signer.VaultSnapshot
+import com.mebit.ffi.signer.WalletBalance
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -25,12 +25,14 @@ class WalletsVaultSendTest {
 
     private val wallets: Wallets = Wallets(
         FakeShelf(),
-        vaultSnapshotOf = { _, _ ->
-            reads++
-            duringRead()
-            VaultSnapshot(84_200_000uL, HotScan.COMPLETE)
-        },
-        vaultHistoryOf = { _, _ -> listed },
+        vaultCore = DescribedCore(
+            balance = { _, _ ->
+                reads++
+                duringRead()
+                WalletBalance(84_200_000uL, HotScan.COMPLETE)
+            },
+            history = { _, _ -> listed },
+        ),
         nowSeconds = { 1_000L },
         vaultPayments = guards,
     )

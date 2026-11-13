@@ -19,11 +19,16 @@ import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.PairingCodes
 import com.mebit.ffi.signer.PreparedSend
 import com.mebit.ffi.signer.SpendReview
+import com.mebit.ffi.signer.WalletBalance
+import com.mebit.ffi.signer.WalletShape
 import com.mebit.ffi.signer.hotBroadcast
 import com.mebit.ffi.signer.hotFeeTiers
+import com.mebit.ffi.signer.walletBalance
+import com.mebit.ffi.signer.walletDescribe
 import com.mebit.ffi.signer.walletDraft
 import com.mebit.ffi.signer.walletFinish
 import com.mebit.ffi.signer.walletHistory
+import com.mebit.ffi.signer.walletSignWithWords
 import com.mebit.ffi.signer.walletSnapshot
 import com.mebit.ffi.signer.walletTxDetail
 import kotlinx.coroutines.CancellationException
@@ -63,7 +68,11 @@ interface HomeSource {
     fun boundWithin(seconds: Long): Boolean
 }
 
-/** The wallet_* calls, the fee tiers and the post. Tests pass fakes, so they need no native library and no network. */
+/**
+ * The wallet_* calls, the fee tiers and the post, for every wallet the book describes by a descriptor: a Jade or Safe 7 one-key
+ * wallet ([DescribedWallet], [HardwareWallets]) and a several-key wallet ([VaultSend], [Wallets]' reads of one). Tests pass fakes,
+ * so they need no native library and no network.
+ */
 internal class DescribedCore(
     val snapshot: (String, KeyNetwork) -> HotWalletSnapshot = { d, n -> walletSnapshot(d, n) },
     val history: (String, KeyNetwork) -> List<HotTx> = { d, n -> walletHistory(d, n) },
@@ -72,6 +81,12 @@ internal class DescribedCore(
     val finish: (String, KeyNetwork, String, String) -> PreparedSend = { d, n, psbt, txid -> walletFinish(d, n, psbt, txid) },
     val feeTiers: (KeyNetwork) -> FeeTiers = { hotFeeTiers(it) },
     val postHex: (KeyNetwork, String, String) -> HotSendResult = { n, hex, txid -> hotBroadcast(n, hex, txid) },
+    val describe: (String, KeyNetwork) -> WalletShape = { d, n -> walletDescribe(d, n) },
+    /** A balance from the scan alone, with no coin list: the wallet list's figure and a several-key wallet's detail. */
+    val balance: (String, KeyNetwork) -> WalletBalance = { d, n -> walletBalance(d, n) },
+    /** (descriptor, network, psbt, the unsigned txid the user was shown, words, passphrase). */
+    val signWithWords: (String, KeyNetwork, String, String, List<String>, String) -> SpendReview =
+        { d, n, psbt, txid, words, passphrase -> walletSignWithWords(d, n, psbt, txid, words, passphrase) },
 )
 
 /** A payment of a [DescribedWallet], from Review to the post. */

@@ -16,12 +16,10 @@ import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
-import com.mebit.ffi.signer.VaultSnapshot
+import com.mebit.ffi.signer.WalletBalance
 import com.mebit.ffi.signer.generateSoftwareMultisigKey
 import com.mebit.ffi.signer.hotForgetScanState
 import com.mebit.ffi.signer.restoreSoftwareMultisigKey
-import com.mebit.ffi.signer.vaultHistory
-import com.mebit.ffi.signer.vaultSnapshot
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
 import kotlinx.coroutines.Dispatchers
@@ -107,8 +105,8 @@ class Wallets internal constructor(
     private val newKey: (String, KeyNetwork, UInt) -> SoftwareAccountKey = { p, n, a -> generateSoftwareMultisigKey(p, n, a) },
     private val restoreKey: (List<String>, String, KeyNetwork, UInt) -> SoftwareAccountKey = { w, p, n, a -> restoreSoftwareMultisigKey(w, p, n, a) },
     private val newChain: () -> SingleSigWallet = { SingleSigWallet() },
-    private val vaultSnapshotOf: (xpubs: List<String>, m: UByte) -> VaultSnapshot = { x, m -> vaultSnapshot(x, m) },
-    private val vaultHistoryOf: (xpubs: List<String>, m: UByte) -> List<HotTx> = { x, m -> vaultHistory(x, m) },
+    /** The several-key wallets' balance and history reads, each named by its BSMS line 2. */
+    private val vaultCore: DescribedCore = DescribedCore(),
     private val nowSeconds: () -> Long = { Clock.System.now().epochSeconds },
     /** The several-key wallets' pay-twice guards, keyed by [vaultGuardKey], in a file apart from [payments], whose format a vault line would break. */
     internal val vaultPayments: PendingPayments = PendingPayments(null),
@@ -380,7 +378,7 @@ class Wallets internal constructor(
      * failure when they were asked and did not come, else the list. Only [readVault] writes one, so it is null beside any balance that is not
      * COMPLETE.
      */
-    private class VaultRead(val snapshot: VaultSnapshot?, val atSeconds: Long, val history: Result<List<HotTx>>? = null) {
+    private class VaultRead(val snapshot: WalletBalance?, val atSeconds: Long, val history: Result<List<HotTx>>? = null) {
         /**
          * Whether this read, while fresh, spares a pass another read. Any read spares a list. A detail is spared by one that asked the history,
          * failed or not, so a failure costs a minute as a failed balance does, and by one whose balance did not complete, which no history can follow.
@@ -455,17 +453,16 @@ class Wallets internal constructor(
         val last = vaultReads[vault.address]
         if (last != null && nowSeconds() - last.atSeconds in 0..BALANCE_FRESH_SECONDS && last.answers(withHistory)) return@synchronized null
         val generation = vaultGeneration
-        val keys = xpubsIn(vault.bsms)
-        val m = vault.m.toUByte()
+        val descriptor = descriptorIn(vault.bsms)
         // A mainnet vault, a malformed BSMS and a lost host all leave the figure unknown, never guessed.
         val snapshot = try {
-            vaultSnapshotOf(keys, m)
+            vaultCore.balance(descriptor, KeyNetwork.TEST)
         } catch (_: Exception) {
             null
         }
         val history = if (withHistory && snapshot?.scan == HotScan.COMPLETE) {
             try {
-                Result.success(vaultHistoryOf(keys, m))
+                Result.success(vaultCore.history(descriptor, KeyNetwork.TEST))
             } catch (e: Exception) {
                 Result.failure(e)
             }

@@ -5,23 +5,32 @@ import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
 import com.mebit.ffi.signer.FeeTiers
 import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotSendResult
+import com.mebit.ffi.signer.HotWalletSnapshot
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.MobileSignerException
 import com.mebit.ffi.signer.PreparedSend
 import com.mebit.ffi.signer.SoftwareAccountKey
-import com.mebit.ffi.signer.VaultPsbt
-import com.mebit.ffi.signer.VaultSpendable
+import com.mebit.ffi.signer.SpendOutput
+import com.mebit.ffi.signer.SpendReview
+import com.mebit.ffi.signer.WalletKey
+import com.mebit.ffi.signer.WalletShape
 import kotlinx.coroutines.runBlocking
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /** A several-key wallet's send on fake Rust calls: what each step asks Rust, what it keeps, and the pay-twice guard around the post. */
 class VaultSendTest {
+    /** The descriptor the wallet's BSMS holds on its line 2, which every Rust call must name the wallet by. */
+    private val line2 = "wsh(sortedmulti(2,[aaaa0000/48'/1'/0'/2']tpubA,[bbbb0000/48'/1'/0'/2']tpubB,[cccc0000/48'/1'/0'/2']tpubC))"
+
     private val vault = CreatedVault(
         id = "vault_1",
         name = "Wallet 1",
@@ -29,7 +38,7 @@ class VaultSendTest {
         n = 3,
         policy = CustodyPolicy.PersonalCustody,
         address = "tb1qvaultreceive0",
-        bsms = "BSMS 1.0\nwsh(sortedmulti(2,[aaaa0000/48'/1'/0'/2']tpubA,[bbbb0000/48'/1'/0'/2']tpubB,[cccc0000/48'/1'/0'/2']tpubC))\n/0/*,/1/*\ntb1qvaultreceive0",
+        bsms = "BSMS 1.0\n$line2\n/0/*,/1/*\ntb1qvaultreceive0",
         keyFingerprints = listOf("AAAA0000", "BBBB0000", "CCCC0000"),
     )
 
@@ -37,51 +46,79 @@ class VaultSendTest {
     private val hex = "02000000" + "01" + "00".repeat(32) + "00000000" + "00" + "ffffffff" + "01" + "00".repeat(8) + "00" + "00000000"
     private val txid = txidOf(hex)!!
 
-    private fun record(txid: String = this.txid, signed: List<UInt> = emptyList()) =
-        VaultPsbt("cHNidP8=", txid, "tb1qdestination", 600_000uL, 402uL, 399_598uL, 1u, 201uL, signed)
+    /**
+     * Rust's review of a payment of this wallet, its fingerprints 8 lowercase hex as Rust names them. The PSBT text carries every field,
+     * so an answer the fake reads back from it is the payment the send passed.
+     */
+    private fun review(txid: String = this.txid, signed: List<String> = emptyList(), payments: List<SpendOutput> = listOf(SpendOutput("tb1qdestination", 600_000uL))) =
+        SpendReview("psbt $txid $payments $signed", txid, payments, 399_598uL, 402uL, signed, 2u)
 
-    /** Rust as the draft sees it: [sign] adds the asked key unless set otherwise, and every call is counted. */
+    private fun SpendReview.signedBy(fingerprint: String) = review(unsignedTxid, (signed_ + fingerprint).distinct(), payments)
+
+    /** Rust as the send sees it: the book's own wallet, a [sign] that adds the key the words make unless set otherwise, and every call counted. */
     private inner class Rust {
-        var prepares = mutableListOf<Pair<String, ULong?>>()
+        val prepares = mutableListOf<Pair<String, ULong?>>()
         var signs = 0
-        var finalizes = 0
+        var finishes = 0
         val posts = mutableListOf<String>()
-        var sign: (VaultPsbt, UInt) -> VaultPsbt = { held, key -> held.copy(signedKeys = (held.signedKeys + key).distinct().sorted()) }
+        var shape: (CreatedVault) -> WalletShape = { v -> WalletShape(v.m.toUByte(), v.keyFingerprints.map { WalletKey(it.lowercase(), "m/48'/1'/0'/2'", "tpub") }, v.address, 201uL) }
+        var draft: (destination: String) -> SpendReview = { review(payments = listOf(SpendOutput(it.lowercase(), 600_000uL))) }
+        var sign: (held: SpendReview, fingerprint: String) -> SpendReview = { held, fingerprint -> held.signedBy(fingerprint) }
+        var finish: (SpendReview) -> PreparedSend = { PreparedSend(it.unsignedTxid, hex, it.feeSats, 600_000uL) }
         var post: (String) -> HotSendResult = { HotSendResult(it) }
-        var spendable = VaultSpendable(84_200_000uL, HotScan.COMPLETE)
+        var snapshot = HotWalletSnapshot("tb1qnextunused", 84_300_000uL, 84_200_000uL, KeyNetwork.TEST, HotScan.COMPLETE)
+
+        /** Every review this fake answered, by its PSBT text. */
+        private val answered = mutableMapOf<String, SpendReview>()
+
+        private fun answer(review: SpendReview) = review.also { answered[it.psbt] = it }
+
+        private fun named(descriptor: String) = assertEquals(line2, descriptor, "the wallet is named by its BSMS line 2")
 
         fun send(guards: PendingPayments = PendingPayments(FakePlainFile()), now: Long = 1_000L, vault: CreatedVault = this@VaultSendTest.vault) = VaultSend(
             vault,
             guards,
             nowSeconds = { now },
             worker = EmptyCoroutineContext,
-            typicalVsize = { xpubs, m ->
-                assertEquals(listOf("tpubA", "tpubB", "tpubC"), xpubs, "the keys in BSMS order")
-                assertEquals(2u.toUByte(), m)
-                201uL
-            },
-            spendableOf = { _, _ -> spendable },
-            fetchFeeTiers = { FeeTiers(3uL, 7uL, 12uL, true) },
-            prepareSend = { _, _, destination, amount, _ ->
-                prepares += destination to amount
-                record()
-            },
-            signPsbt = { _, _, held, key, _, _ ->
-                signs++
-                sign(held, key)
-            },
-            finalizePsbt = { _, _, held ->
-                finalizes++
-                PreparedSend(held.txid, hex, held.feeSats, held.amountSats)
-            },
-            postHex = { _, _, txid ->
-                posts += txid
-                post(txid)
-            },
+            core = DescribedCore(
+                describe = { d, _ ->
+                    named(d)
+                    shape(vault)
+                },
+                snapshot = { d, _ ->
+                    named(d)
+                    snapshot
+                },
+                feeTiers = { FeeTiers(3uL, 7uL, 12uL, true) },
+                draft = { d, _, destination, amount, _ ->
+                    named(d)
+                    prepares += destination to amount
+                    answer(draft(destination))
+                },
+                signWithWords = { d, _, psbt, shownTxid, words, _ ->
+                    named(d)
+                    signs++
+                    val held = answered.getValue(psbt)
+                    assertEquals(held.unsignedTxid, shownTxid, "the txid 5.2 showed")
+                    answer(sign(held, vault.keyFingerprints[words.single().removePrefix("key").toInt()].lowercase()))
+                },
+                finish = { d, _, psbt, shownTxid ->
+                    named(d)
+                    finishes++
+                    val held = answered.getValue(psbt)
+                    assertEquals(held.unsignedTxid, shownTxid, "the txid 5.2 showed")
+                    finish(held)
+                },
+                postHex = { _, _, txid ->
+                    posts += txid
+                    post(txid)
+                },
+            ),
         )
     }
 
-    private fun phone(key: Int) = KeySigner.Phone(key, listOf("abandon"), "")
+    /** Row [key]'s signer. Its words name the row, so the fake signs as that key, as Rust signs as the key the words make. */
+    private fun phone(key: Int) = KeySigner.Phone(key, listOf("key$key"), "")
 
     private fun signed(rust: Rust, guards: PendingPayments = PendingPayments(FakePlainFile())): VaultSend = runBlocking {
         val send = rust.send(guards)
@@ -105,7 +142,7 @@ class VaultSendTest {
 
     @Test
     fun whatAWalletCanSpendIsUnknownUntilItsScanReachedTheEnd() {
-        val rust = Rust().apply { spendable = VaultSpendable(0uL, HotScan.CONTINUING) }
+        val rust = Rust().apply { snapshot = HotWalletSnapshot("tb1qnextunused", 50_000uL, 50_000uL, KeyNetwork.TEST, HotScan.CONTINUING) }
         val send = rust.send()
         send.load()
         assertNull(send.spendableSats)
@@ -212,18 +249,29 @@ class VaultSendTest {
     }
 
     @Test
-    fun signKeepsRustsAnswerOnlyWhenItNamesTheKeyOnTheSamePayment(): Unit = runBlocking {
+    fun signKeepsRustsAnswerOnlyWhenItNamesTheRowsKeyOnTheSamePayment(): Unit = runBlocking {
         val rust = Rust()
         val send = rust.send()
         assertTrue(send.prepare())
+        val held = send.payment
         rust.sign = { held, _ -> held }
         assertFalse(send.sign(phone(0)) { true }, "an answer without the key")
-        rust.sign = { held, key -> held.copy(txid = "ef".repeat(32), signedKeys = listOf(key)) }
+        assertEquals("เซ็นไม่สำเร็จ ลองใหม่อีกครั้ง", send.lastError)
+        rust.sign = { held, key -> review("ef".repeat(32), listOf(key), held.payments) }
         assertFalse(send.sign(phone(0)) { true }, "an answer of another payment")
+        rust.sign = { held, key -> held.signedBy(key) }
+        assertFalse(send.sign(KeySigner.Phone(0, listOf("key1"), "")) { true }, "words of key 2 on key 1's row sign as key 2")
         assertEquals(emptySet(), send.signedFingerprints)
         assertEquals(emptyMap(), send.signedAt, "a refused answer has no time")
-        rust.sign = { _, _ -> throw MobileSignerException.InvalidPsbtJson("invalid PSBT json: vault key: the words are not key 0 of the wallet") }
-        assertFalse(send.sign(phone(0)) { true })
+        assertSame(held, send.payment, "the payment held is still the one prepared")
+
+        rust.sign = { held, key -> held.signedBy(key).signedBy("5eed0000") }
+        assertTrue(send.sign(phone(0)) { true })
+        assertEquals(setOf("AAAA0000"), send.signedFingerprints, "a fingerprint of no key of the wallet counts nothing")
+        assertEquals(1, send.signaturesNeeded)
+        assertFalse(send.readyToBroadcast())
+        rust.sign = { _, _ -> throw MobileSignerException.InvalidPsbtJson("invalid PSBT json: not a key of this wallet: the phrase's master fingerprint 73c5da0a holds none of its keys") }
+        assertFalse(send.sign(phone(2)) { true })
         assertEquals("กุญแจนี้ไม่ใช่กุญแจของ Wallet นี้", send.lastError)
     }
 
@@ -234,7 +282,7 @@ class VaultSendTest {
         assertTrue(send.prepare())
         assertTrue(send.sign(phone(1)) { true })
         assertFalse(send.broadcast())
-        assertEquals(0 to emptyList<String>(), rust.finalizes to rust.posts)
+        assertEquals(0 to emptyList<String>(), rust.finishes to rust.posts)
     }
 
     @Test
@@ -247,7 +295,7 @@ class VaultSendTest {
         }
         val send = signed(rust, PendingPayments(file))
         assertTrue(send.broadcast())
-        assertEquals(txid, assertIs<VaultSendState.Sent>(send.state).psbt.txid)
+        assertEquals(txid, assertIs<VaultSendState.Sent>(send.state).payment.txid)
         assertEquals(setOf("AAAA0000", "CCCC0000"), send.signedFingerprints, "5.2 still shows who signed while it leaves")
         assertFalse(send.readyToBroadcast())
         assertEquals(listOf(txid), rust.posts)
@@ -388,16 +436,105 @@ class VaultSendTest {
     }
 
     @Test
-    fun aRefusalOfTheWalletSendCheckReadsInThai() {
+    fun aRefusalOfTheWalletSendCheckReadsInThaiOnTheStepThatMetIt(): Unit = runBlocking {
+        val rust = Rust()
+        val send = rust.send()
+        val drafts = rust.draft
+        rust.draft = { throw MobileSignerException.InvalidPsbtJson("invalid PSBT json: not this wallet's payment: output 1 pays 329 sats, under its 330 sat dust floor") }
+        assertFalse(send.prepare())
+        assertEquals("ธุรกรรมไม่ตรงกับที่ตรวจไว้ จึงไม่เซ็น", send.lastError, "5.1")
+        rust.draft = drafts
+        assertTrue(send.prepare())
+        rust.sign = { _, _ -> throw MobileSignerException.InvalidPsbtJson("invalid PSBT json: changed since shown: this payment is ${"ab".repeat(32)}, not $txid") }
+        assertFalse(send.sign(phone(0)) { true })
+        assertEquals("ธุรกรรมไม่ตรงกับที่ตรวจไว้ จึงไม่เซ็น", send.lastError, "5.2")
+        rust.sign = { _, _ -> throw MobileSignerException.InvalidPsbtJson("invalid PSBT json: signatures: key aaaa0000 has not signed every input") }
+        assertFalse(send.sign(phone(0)) { true })
+        assertEquals("เซ็นไม่สำเร็จ ลองใหม่อีกครั้ง", send.lastError, "5.2")
+        rust.sign = { held, fingerprint -> held.signedBy(fingerprint) }
+        assertTrue(send.sign(phone(0)) { true } && send.sign(phone(2)) { true })
+        rust.finish = { throw MobileSignerException.InvalidPsbtJson("invalid PSBT json: signatures: 1 of the 2 keys needed signed every input") }
+        assertFalse(send.broadcast())
+        assertEquals("ลายเซ็นยังไม่ครบ", send.lastError, "the review after 5.2")
+        rust.finish = { throw MobileSignerException.InvalidPsbtJson("invalid PSBT json: finish: signed weight 1000 is above the 900 its fee was sized for") }
+        assertFalse(send.broadcast())
+        assertEquals("ส่งไม่สำเร็จ ลองใหม่ภายหลัง", send.lastError, "the line the vault engine's weight refusal showed")
+        assertTrue(rust.posts.isEmpty())
         assertEquals("ธุรกรรมไม่ตรงกับที่ตรวจไว้ จึงไม่เซ็น", sendErrorThai("invalid PSBT json: vault psbt: fee: inputs less outputs is Some(1001), not the 1000 sats confirmed"))
         assertEquals("กุญแจนี้ไม่ใช่กุญแจของ Wallet นี้", sendErrorThai("invalid PSBT json: vault key: the words are not key 0 of the wallet"))
         assertEquals("ลายเซ็นยังไม่ครบ", sendErrorThai("invalid PSBT json: vault signatures: 1 of 2"))
     }
 
     @Test
+    fun aDraftShowsTheDestinationAsTyped(): Unit = runBlocking {
+        val rust = Rust()
+        val send = rust.send()
+        send.draft.destination = "TB1QDESTINATION"
+        send.draft.setAmountInSats(600_000)
+        assertTrue(send.prepare())
+        assertEquals("TB1QDESTINATION" to 600_000uL, send.payment?.destination to send.payment?.amountSats, "5.2, though Rust names the address in lowercase")
+        assertTrue(send.sign(phone(0)) { true } && send.sign(phone(2)) { true })
+        assertEquals("TB1QDESTINATION", send.payment?.destination, "the review")
+        assertTrue(send.broadcast())
+        assertEquals("TB1QDESTINATION", assertIs<VaultSendState.Sent>(send.state).payment.destination, "5.9's slip")
+    }
+
+    @Test
+    fun aRustAnswerWithTwoPaymentsOrAnotherAddressKeepsNothing(): Unit = runBlocking {
+        val rust = Rust()
+        val send = rust.send()
+        val stranger = SpendOutput("tb1qstranger", 1_000uL)
+        rust.draft = { review(payments = listOf(SpendOutput(it, 600_000uL), stranger)) }
+        assertFalse(send.prepare(), "a draft of two payments")
+        rust.draft = { review(payments = listOf(stranger)) }
+        assertFalse(send.prepare(), "a draft to another address")
+        assertEquals(VaultSendState.Form, send.state)
+        assertEquals("ส่งไม่สำเร็จ ลองใหม่ภายหลัง", send.lastError)
+
+        rust.draft = { review(payments = listOf(SpendOutput(it, 600_000uL))) }
+        assertTrue(send.prepare())
+        val held = send.payment
+        rust.sign = { held, key -> review(held.unsignedTxid, listOf(key), held.payments + stranger) }
+        assertFalse(send.sign(phone(0)) { true }, "an answer of two payments")
+        rust.sign = { held, key -> review(held.unsignedTxid, listOf(key), listOf(stranger)) }
+        assertFalse(send.sign(phone(0)) { true }, "an answer to another address")
+        assertSame(held, send.payment)
+        assertEquals(emptySet(), send.signedFingerprints)
+        assertEquals(emptyMap(), send.signedAt)
+    }
+
+    @Test
+    fun aFinishOfAnotherTxidWritesNoGuardAndPostsNothing() {
+        val file = FakePlainFile()
+        val rust = Rust()
+        val send = signed(rust, PendingPayments(file))
+        rust.finish = { PreparedSend("ef".repeat(32), hex, it.feeSats, 600_000uL) }
+        assertFalse(send.broadcast())
+        assertEquals("ธุรกรรมไม่ตรงกับที่ตรวจไว้ จึงไม่เซ็น", send.lastError)
+        assertEquals("", file.text.orEmpty(), "no guard")
+        assertEquals(emptyList(), rust.posts)
+        assertNull(send.guard)
+        assertTrue(send.readyToBroadcast(), "the payment 5.2 showed is still held")
+    }
+
+    @Test
+    fun aWalletTheCoreReadsAsAnotherIsNoSend() {
+        assertEquals(201L, Rust().send().draft.typicalVsize, "the core that reads the book's own wallet")
+        val other = listOf<(CreatedVault) -> WalletShape>(
+            { v -> WalletShape(3u, v.keyFingerprints.map { WalletKey(it.lowercase(), "m/48'/1'/0'/2'", "tpub") }, v.address, 237uL) },
+            { v -> WalletShape(2u, v.keyFingerprints.reversed().map { WalletKey(it.lowercase(), "m/48'/1'/0'/2'", "tpub") }, v.address, 201uL) },
+            { v -> WalletShape(2u, v.keyFingerprints.map { WalletKey(it.lowercase(), "m/48'/1'/0'/2'", "tpub") }, "tb1qanotherwallet", 201uL) },
+        )
+        for ((i, shape) in other.withIndex()) {
+            assertFailsWith<IllegalArgumentException>("another m, key order or first address: $i") { Rust().apply { this.shape = shape }.send() }
+        }
+        assertFailsWith<MobileSignerException> { Rust().apply { shape = { throw MobileSignerException.InvalidPsbtJson("not a wallet") } }.send() }
+    }
+
+    @Test
     fun aWalletsGuardKeyIsEightHexOfItsAddressAlone() {
         val key = vaultGuardKey(vault)
-        assertTrue(Regex("[0-9a-f]{8}").matches(key), key)
+        assertEquals("a973e2e6", key, "the line Wallet 1's pending payment is kept under")
         assertEquals(key, vaultGuardKey(vault.copy(id = "vault_9", name = "Renamed")))
         assertNotEquals(key, vaultGuardKey(vault.copy(address = "tb1qanotherwallet")))
     }
