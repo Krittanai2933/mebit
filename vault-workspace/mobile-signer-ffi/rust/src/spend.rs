@@ -523,6 +523,11 @@ fn review(
             change_sats = Some(sats);
             continue;
         }
+        if output.bip32_derivation.is_empty() && output.tap_key_origins.is_empty() {
+            return Err(why(
+                "carries PSBT fields but no key origin, so it is not this wallet's change on chain 1",
+            ));
+        }
         let origins = output
             .bip32_derivation
             .values()
@@ -2649,7 +2654,7 @@ pub(crate) mod tests {
             }),
             Case::refused(
                 "47",
-                "output 0 carries key origins but is not this wallet's change on chain 1",
+                "output 0 carries PSBT fields but no key origin, so it is not this wallet's change on chain 1",
                 Rule::Change,
                 |_, p| p.outputs[0].witness_script = Some(ScriptBuf::new()),
             ),
