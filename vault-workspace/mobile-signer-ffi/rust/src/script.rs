@@ -785,6 +785,39 @@ pub(crate) mod tests {
         );
     }
 
+    // Every several-key wallet the app holds was made, paid and scanned at the addresses vault-core derives from its bare
+    // xpubs. A described wallet of the same keys pays exactly those, receive and change, in any key order.
+    #[test]
+    fn a_several_key_wallet_pays_the_addresses_vault_core_derives_on_both_chains() {
+        use vault_core::descriptor::{Branch, build_multisig_descriptor_on, derive_address_at};
+        let wallets: [(usize, &[u8]); 7] = [
+            (2, &[1, 2, 3]),
+            (2, &[1, 3, 2]),
+            (2, &[2, 1, 3]),
+            (2, &[2, 3, 1]),
+            (2, &[3, 1, 2]),
+            (2, &[3, 2, 1]),
+            (3, &[1, 2, 3, 4, 5]),
+        ];
+        for (m, among) in wallets {
+            let wallet = Described::parse(&multisig(m, among)).unwrap();
+            let xpubs: Vec<Xpub> = wallet.keys().iter().map(|key| key.xpub).collect();
+            for (chain, branch) in [
+                (Chain::External, Branch::Receive),
+                (Chain::Internal, Branch::Change),
+            ] {
+                let vault = build_multisig_descriptor_on(&xpubs, m, branch).unwrap();
+                for index in 0..=40 {
+                    assert_eq!(
+                        wallet.address(chain, index).unwrap(),
+                        derive_address_at(&vault, index, Network::Testnet4).unwrap(),
+                        "{m} of {among:?}, {chain:?} {index}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_descriptor_of_another_shape_or_with_a_bad_key_is_refused_with_why() {
         let tpub = |path: &str| account(&abandon_master(Network::Testnet4), path);
@@ -943,6 +976,10 @@ pub(crate) mod tests {
         // script with its length 106), two 43-byte P2WSH outputs, 10 bytes of version, counts and lock time,
         // and the 2-byte segwit marker: 4 x (41 + 86 + 10) + 254 + 2 = 804 WU, 201 vB.
         assert_eq!(shape.typical_vsize, 201);
+        // A 3-of-5's witness: count 1, dummy 1, three signatures 73 each, the 173-byte script with its length 174:
+        // 4 x 137 + 395 + 2 = 945 WU, 237 vB.
+        let five = wallet_describe(three_of_five(), KeyNetwork::Test).unwrap();
+        assert_eq!(five.typical_vsize, 237);
 
         let one = wallet_describe(one_key(AddressType::NativeSegwit), KeyNetwork::Test).unwrap();
         assert_eq!(

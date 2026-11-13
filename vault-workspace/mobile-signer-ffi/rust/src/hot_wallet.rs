@@ -14357,6 +14357,175 @@ pub(crate) mod tests {
         );
     }
 
+    /// The account xpubs of the described several-key wallet `descriptor`, as the vault engine takes them.
+    fn xpubs_of(descriptor: &str) -> Vec<String> {
+        Described::parse(descriptor)
+            .unwrap()
+            .keys()
+            .iter()
+            .map(|key| key.xpub.to_string())
+            .collect()
+    }
+
+    // The bytes `vault_id` gave before the descriptor engine named several-key scan files, read off that build: every
+    // several-key scan file a phone keeps, Wallet 1's included, is named by them.
+    #[test]
+    fn the_several_key_scan_id_is_the_vault_id_every_saved_wallet_file_is_named_by() {
+        use crate::script::tests::{three_of_five, two_of_three};
+        let hex = |id: WalletId| id.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        for (descriptor, m, expected) in [
+            (
+                two_of_three(),
+                2,
+                "ac6839184083edb3851086c9b784b722c68da5c0f7cda92247c4ffcbcfe20442",
+            ),
+            (
+                three_of_five(),
+                3,
+                "66e36a8bcf567bf567832d11689823c31a556317015c0e54bea8fa77d6af7b34",
+            ),
+        ] {
+            let listed = xpubs_of(&descriptor);
+            let keys = crate::parse_and_check_xpubs(&listed).unwrap();
+            assert_eq!(hex(vault_id(&keys, m)), expected, "{descriptor}");
+            assert_eq!(
+                hex(Multisig::new(&listed, m).unwrap().id()),
+                expected,
+                "{descriptor}"
+            );
+        }
+    }
+
+    // Gate until the vault engine goes: a described several-key wallet's Send screen prices a payment at the size the
+    // vault engine priced it, for every m-of-n a described wallet takes.
+    #[test]
+    fn typical_vsize_equals_vault_typical_vsize_for_every_m_of_n_to_15() {
+        for n in 1..=15u8 {
+            let among: Vec<u8> = (1..=n).collect();
+            for m in 1..=n {
+                let descriptor = crate::script::tests::multisig(m.into(), &among);
+                assert_eq!(
+                    crate::script::wallet_describe(descriptor.clone(), KeyNetwork::Test)
+                        .unwrap()
+                        .typical_vsize,
+                    vault_typical_vsize(xpubs_of(&descriptor), m).unwrap(),
+                    "{m}-of-{n}"
+                );
+            }
+        }
+    }
+
+    // Gate until the vault engine goes: on one host, both engines pick the same coins, change index, change and fee for
+    // one payment, so they draft the same unsigned transaction.
+    #[test]
+    fn a_draft_plans_what_the_vault_engine_planned() {
+        use crate::script::tests::{WithMulti, at, fund_multi, two_of_three};
+        use crate::spend::tests::{RATE, drafted_on, funded};
+        let descriptor = two_of_three();
+        let mut one_coin = Fake::new();
+        fund_multi(
+            &mut one_coin,
+            &at(&descriptor, Chain::External, 0),
+            50_000,
+            '1',
+        );
+        let mut with_change = Fake::new();
+        fund_multi(
+            &mut with_change,
+            &at(&descriptor, Chain::External, 0),
+            50_000,
+            '1',
+        );
+        fund_multi(
+            &mut with_change,
+            &at(&descriptor, Chain::Internal, 0),
+            9_000,
+            '3',
+        );
+        for (fake, amount, inputs, change_index) in [
+            (funded(&descriptor), SendAmount::Exact(30_000), 1, Some(0)),
+            (funded(&descriptor), SendAmount::Exact(60_000), 2, Some(0)),
+            (funded(&descriptor), SendAmount::All, 2, None),
+            (one_coin, SendAmount::All, 1, None),
+            (with_change, SendAmount::Exact(55_000), 2, Some(1)),
+        ] {
+            let vault = vault_prepared(
+                &EsploraSource(&WithMulti(&fake)),
+                &xpubs_of(&descriptor),
+                2,
+                SOMEONE,
+                amount,
+                RATE,
+                &|| fake.now(),
+                &fake.store,
+            )
+            .unwrap();
+            let draft = drafted_on(&fake, &descriptor, amount, RATE).unwrap();
+            assert_eq!(
+                (&draft.unsigned_txid, draft.fee_sats, draft.change_sats),
+                (&vault.txid, vault.fee_sats, vault.change_sats),
+                "{amount:?}"
+            );
+            let psbt = psbt_of(&vault);
+            assert_eq!(psbt.unsigned_tx.input.len(), inputs, "{amount:?}");
+            assert_eq!(
+                psbt.outputs.get(1).map(|_| vault.max_change_index),
+                change_index,
+                "{amount:?}"
+            );
+        }
+    }
+
+    // Gate until the vault engine goes: both engines list a several-key wallet's history alike, a payment out of receive
+    // 0 with its change to change 0 once, as the amount and the fee, beside what paid each address.
+    #[test]
+    fn wallet_history_lists_what_vault_history_listed() {
+        use crate::script::tests::{WithMulti, at, fund_multi, two_of_three};
+        let descriptor = two_of_three();
+        let (receive, change) = (
+            at(&descriptor, Chain::External, 0),
+            at(&descriptor, Chain::Internal, 0),
+        );
+        let mut fake = Fake::new();
+        fund_multi(&mut fake, &receive, 50_000, '1');
+        fund_multi(&mut fake, &change, 19_000, '3');
+        let (receive, change) = (receive.to_string(), change.to_string());
+        let payment = tx_json(
+            '5',
+            &[spent(&receive, 50_000)],
+            &[txo(SOMEONE, 30_000), txo(&change, 19_000)],
+            MEMPOOL,
+        );
+        for address in [&receive, &change] {
+            let proven = fake.txs[address].clone();
+            fake.txs
+                .insert(address.clone(), format!("[{payment},{}", &proven[1..]));
+        }
+        let source = EsploraSource(&WithMulti(&fake));
+        let by_vault = vault_history_from(
+            &source,
+            &xpubs_of(&descriptor),
+            2,
+            &|| fake.now(),
+            &fake.store,
+        )
+        .unwrap();
+        let by_descriptor = described_history(
+            &source,
+            &descriptor,
+            KeyNetwork::Test,
+            &|| fake.now(),
+            &fake.store,
+        )
+        .unwrap();
+        assert_eq!(by_descriptor, by_vault);
+        assert_eq!(
+            by_vault.iter().map(|tx| tx.net_sats).collect::<Vec<_>>(),
+            [-31_000, PAID_SATS as i64, PAID_SATS as i64],
+            "the payment once, as the amount and the fee, then what paid each address"
+        );
+    }
+
     // The id names each wallet's scan file. These are the bytes `Account::id` gave before the scan took an
     // `AddressSource`, read off that build, so every file a phone keeps today is found again.
     #[test]
