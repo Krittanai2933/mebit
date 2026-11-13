@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::MobileSignerError;
 use crate::hot_wallet::SCAN_STORE;
 use crate::script::Described;
-use crate::spend::{self, SpendReview};
+use crate::spend::{self, Shown, SpendReview};
 
 mod platform;
 mod stub;
@@ -256,8 +256,8 @@ enum Request {
     },
     SignWallet {
         wallet: Box<Described>,
-        shown: SpendReview,
-        reply: oneshot::Sender<Result<SpendReview, BleError>>,
+        shown: Box<Shown>,
+        reply: oneshot::Sender<Result<Shown, BleError>>,
     },
     Disconnect(oneshot::Sender<Result<(), BleError>>),
 }
@@ -387,13 +387,13 @@ impl WalletLink {
         let refused = |error| BleError::Refused(said(error));
         let wallet = Described::parse(&descriptor).map_err(refused)?;
         let psbt = spend::parse(&psbt_base64).map_err(refused)?;
-        let shown =
-            spend::as_shown(&wallet, &psbt, &unsigned_txid, &SCAN_STORE).map_err(refused)?;
+        let shown = spend::as_shown(&wallet, psbt, &unsigned_txid, &SCAN_STORE).map_err(refused)?;
         self.running
             .get()
             .ok_or_else(closed)?
             .sign_wallet(wallet, shown)
             .await
+            .map(Shown::into_review)
     }
 
     /// Ends the link and waits until it is down, also when a failure or another call is
@@ -481,16 +481,12 @@ impl Running {
         answer.await.map_err(|_| closed())?
     }
 
-    async fn sign_wallet(
-        &self,
-        wallet: Described,
-        shown: SpendReview,
-    ) -> Result<SpendReview, BleError> {
+    async fn sign_wallet(&self, wallet: Described, shown: Shown) -> Result<Shown, BleError> {
         let (reply, answer) = oneshot::channel();
         self.requests
             .send(Request::SignWallet {
                 wallet: Box::new(wallet),
-                shown,
+                shown: Box::new(shown),
                 reply,
             })
             .map_err(|_| closed())?;
@@ -599,7 +595,7 @@ async fn answer_requests<W: Wallet>(
                 if drive_call(
                     reply,
                     &mut link_dropped,
-                    sign_wallet(&mut wallet, &described, shown),
+                    sign_wallet(&mut wallet, &described, *shown),
                 )
                 .await
                 {
@@ -619,18 +615,18 @@ async fn answer_requests<W: Wallet>(
 async fn sign_wallet(
     device: &mut impl Wallet,
     wallet: &Described,
-    shown: SpendReview,
-) -> Result<SpendReview, BleError> {
+    shown: Shown,
+) -> Result<Shown, BleError> {
     let fingerprint = held_key(device, wallet).await?;
-    if shown.signed.contains(&fingerprint) {
+    if shown.review().signed.contains(&fingerprint) {
         return Ok(shown);
     }
-    let signed = device.sign_psbt(&shown.psbt, &fingerprint).await?;
+    let signed = device.sign_psbt(&shown.review().psbt, &fingerprint).await?;
     let out_of_step = |why: String| BleError::Protocol(format!("the device's signed PSBT: {why}"));
     let after = spend::parse(&signed)
-        .and_then(|psbt| spend::as_shown(wallet, &psbt, &shown.unsigned_txid, &SCAN_STORE))
+        .and_then(|psbt| spend::as_shown(wallet, psbt, &shown.review().unsigned_txid, &SCAN_STORE))
         .map_err(|error| out_of_step(said(error)))?;
-    if !after.signed.contains(&fingerprint) {
+    if !after.review().signed.contains(&fingerprint) {
         return Err(out_of_step(format!(
             "key {fingerprint} has not signed every input"
         )));

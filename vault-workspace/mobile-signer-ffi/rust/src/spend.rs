@@ -103,10 +103,11 @@ pub fn wallet_finish(
 ) -> Result<PreparedSend, MobileSignerError> {
     check_network(network)?;
     let wallet = Described::parse(&descriptor)?;
-    let (signed, read) = finished(&wallet, &parse(&psbt)?, &unsigned_txid, &SCAN_STORE)?;
+    let shown = as_shown(&wallet, parse(&psbt)?, &unsigned_txid, &SCAN_STORE)?;
+    let signed = finished(&wallet, &shown)?;
     Ok(PreparedSend {
         // `prepared` reads output 0, and a reviewed payment may put its change there.
-        amount_sats: read.payments.iter().map(|p| p.sats).sum(),
+        amount_sats: shown.review.payments.iter().map(|p| p.sats).sum(),
         ..prepared(signed)
     })
 }
@@ -126,25 +127,19 @@ pub fn wallet_sign_with_words(
     passphrase: String,
 ) -> Result<SpendReview, MobileSignerError> {
     check_network(network)?;
-    signed_with_words(
-        &Described::parse(&descriptor)?,
-        parse(&psbt)?,
-        &expected_txid,
-        &mnemonic_words,
-        &passphrase,
-        &SCAN_STORE,
-    )
+    let wallet = Described::parse(&descriptor)?;
+    let shown = as_shown(&wallet, parse(&psbt)?, &expected_txid, &SCAN_STORE)?;
+    signed_with_words(&wallet, shown, &mnemonic_words, &passphrase, &SCAN_STORE)
+        .map(Shown::into_review)
 }
 
 pub(crate) fn signed_with_words(
     wallet: &Described,
-    mut psbt: Psbt,
-    expected_txid: &str,
+    shown: Shown,
     words: &[String],
     passphrase: &str,
     store: &ScanStore,
-) -> Result<SpendReview, MobileSignerError> {
-    let shown = as_shown(wallet, &psbt, expected_txid, store)?;
+) -> Result<Shown, MobileSignerError> {
     let secp = Secp256k1::new();
     let master = Xpriv::new_master(
         Network::Testnet4,
@@ -166,16 +161,17 @@ pub(crate) fn signed_with_words(
         )));
     }
     let fingerprint = fingerprint.to_string();
-    if shown.signed.contains(&fingerprint) {
+    if shown.review.signed.contains(&fingerprint) {
         return Ok(shown);
     }
+    let Shown { mut psbt, review } = shown;
     psbt.sign(&master, &secp).map_err(|(_, errors)| {
         MobileSignerError::InvalidPsbtJson(format!(
             "signatures: the phrase's key did not sign: {errors:?}"
         ))
     })?;
-    let after = as_shown(wallet, &psbt, expected_txid, store)?;
-    if !after.signed.contains(&fingerprint) {
+    let after = as_shown(wallet, psbt, &review.unsigned_txid, store)?;
+    if !after.review.signed.contains(&fingerprint) {
         return Err(MobileSignerError::InvalidPsbtJson(format!(
             "signatures: key {fingerprint} has not signed every input"
         )));
@@ -275,7 +271,7 @@ fn drafted(
 /// origins name, its value comes from its parent transaction checked by txid, and an output with key origins is
 /// change only when it pays the wallet's change script at that index, at an index the wallet's scan in `store`
 /// looks at. Asks nothing of the network.
-pub(crate) fn review(
+fn review(
     wallet: &Described,
     psbt: &Psbt,
     store: &ScanStore,
@@ -501,33 +497,46 @@ fn signers(
     Ok(signed)
 }
 
+/// A PSBT that `review` read as a payment of its wallet, whose unsigned id is the one the user was shown. Only
+/// `as_shown` makes one, and only a `Shown` is signed (`signed_with_words`, `ble.rs` `sign_wallet`) or finished
+/// (`finished`), so no payment the review did not read reaches a key or the network.
+pub(crate) struct Shown {
+    psbt: Psbt,
+    review: SpendReview,
+}
+
+impl Shown {
+    pub(crate) fn review(&self) -> &SpendReview {
+        &self.review
+    }
+
+    pub(crate) fn into_review(self) -> SpendReview {
+        self.review
+    }
+}
+
 /// `review` of `psbt`, once its unsigned id is `unsigned_txid`, the payment the user was shown.
 pub(crate) fn as_shown(
     wallet: &Described,
-    psbt: &Psbt,
+    psbt: Psbt,
     unsigned_txid: &str,
     store: &ScanStore,
-) -> Result<SpendReview, MobileSignerError> {
-    let read = review(wallet, psbt, store)?;
+) -> Result<Shown, MobileSignerError> {
+    let read = review(wallet, &psbt, store)?;
     if read.unsigned_txid != unsigned_txid {
         return Err(MobileSignerError::InvalidPsbtJson(format!(
             "changed since shown: this payment is {}, not {unsigned_txid}",
             read.unsigned_txid
         )));
     }
-    Ok(read)
+    Ok(Shown { psbt, review: read })
 }
 
-/// The transaction to post, with the review it passed. Refuses unless it is `as_shown` and at least `needed`
-/// distinct fingerprints signed every input. Then finalizes, extracts and checks the bytes: the inputs, sequences
-/// and outputs reviewed, a weight at most the one its fee was sized for, and a fee the node takes.
-pub(crate) fn finished(
-    wallet: &Described,
-    psbt: &Psbt,
-    unsigned_txid: &str,
-    store: &ScanStore,
-) -> Result<(Signed, SpendReview), MobileSignerError> {
-    let read = as_shown(wallet, psbt, unsigned_txid, store)?;
+/// The transaction to post of `shown`. Refuses unless at least `needed` distinct fingerprints signed every input.
+/// Then finalizes, extracts and checks the bytes: the inputs, sequences and outputs reviewed, a weight at most the
+/// one its fee was sized for, and a fee the node takes.
+pub(crate) fn finished(wallet: &Described, shown: &Shown) -> Result<Signed, MobileSignerError> {
+    let (psbt, read) = (&shown.psbt, &shown.review);
     if read.signed.len() < wallet.needed() {
         return Err(MobileSignerError::InvalidPsbtJson(format!(
             "signatures: {} of the {} keys needed signed every input",
@@ -570,13 +579,12 @@ pub(crate) fn finished(
     }
     check_node_rate(read.fee_sats, tx.vsize() as u64)
         .map_err(MobileSignerError::InvalidPsbtJson)?;
-    let signed = Signed {
+    Ok(Signed {
         tx,
         fee_sats: read.fee_sats,
         dust_change_sats: 0,
         amount_cut_sats: 0,
-    };
-    Ok((signed, read))
+    })
 }
 
 #[cfg(test)]
@@ -655,6 +663,30 @@ pub(crate) mod tests {
                 .expect("a software key signs");
         }
         psbt
+    }
+
+    /// `wallet_sign_with_words` on a parsed PSBT and `store`.
+    fn sign_as_shown(
+        wallet: &Described,
+        psbt: Psbt,
+        shown_txid: &str,
+        words: &[String],
+        passphrase: &str,
+        store: &ScanStore,
+    ) -> Result<SpendReview, MobileSignerError> {
+        let shown = as_shown(wallet, psbt, shown_txid, store)?;
+        signed_with_words(wallet, shown, words, passphrase, store).map(Shown::into_review)
+    }
+
+    /// `wallet_finish` on a parsed PSBT and `store`: the transaction to post and the review it passed.
+    fn finish_as_shown(
+        wallet: &Described,
+        psbt: &Psbt,
+        shown_txid: &str,
+        store: &ScanStore,
+    ) -> Result<(Signed, SpendReview), MobileSignerError> {
+        let shown = as_shown(wallet, psbt.clone(), shown_txid, store)?;
+        Ok((finished(wallet, &shown)?, shown.into_review()))
     }
 
     /// `review` refuses `psbt` for `why`, its own words, on a phone that has not scanned the wallet.
@@ -1061,7 +1093,7 @@ pub(crate) mod tests {
             let fake = funded(&descriptor);
             let draft = drafted_on(&fake, &descriptor, SendAmount::Exact(30_000), RATE).unwrap();
             let unsigned = parse(&draft.psbt).unwrap();
-            let read = signed_with_words(
+            let read = sign_as_shown(
                 &wallet,
                 unsigned,
                 &draft.unsigned_txid,
@@ -1075,14 +1107,14 @@ pub(crate) mod tests {
                 std::slice::from_ref(&abandon),
                 "{address_type:?}"
             );
-            finished(
+            finish_as_shown(
                 &wallet,
                 &parse(&read.psbt).unwrap(),
                 &draft.unsigned_txid,
                 &fake.store,
             )
             .unwrap();
-            let again = signed_with_words(
+            let again = sign_as_shown(
                 &wallet,
                 parse(&read.psbt).unwrap(),
                 &draft.unsigned_txid,
@@ -1109,7 +1141,7 @@ pub(crate) mod tests {
             Err(MobileSignerError::InvalidPsbtJson(said)) => said,
             other => panic!("expected a refusal, got {other:?}"),
         };
-        let other_phrase = refusal(signed_with_words(
+        let other_phrase = refusal(sign_as_shown(
             &wallet,
             parse(&draft.psbt).unwrap(),
             &draft.unsigned_txid,
@@ -1121,7 +1153,7 @@ pub(crate) mod tests {
             other_phrase.starts_with("not a key of this wallet: "),
             "{other_phrase}"
         );
-        let not_shown = refusal(signed_with_words(
+        let not_shown = refusal(sign_as_shown(
             &wallet,
             parse(&draft.psbt).unwrap(),
             &"0".repeat(64),
@@ -1135,7 +1167,7 @@ pub(crate) mod tests {
         );
         let other_wallet = Described::parse(&one_key(AddressType::Taproot)).unwrap();
         assert!(
-            signed_with_words(
+            sign_as_shown(
                 &other_wallet,
                 parse(&draft.psbt).unwrap(),
                 &draft.unsigned_txid,
@@ -1161,7 +1193,7 @@ pub(crate) mod tests {
                 let read = review(&wallet, &psbt, &fake.store).unwrap();
                 assert_eq!(read.signed, [fingerprint(&master).to_string()]);
                 let (sent, _) =
-                    finished(&wallet, &psbt, &draft.unsigned_txid, &fake.store).unwrap();
+                    finish_as_shown(&wallet, &psbt, &draft.unsigned_txid, &fake.store).unwrap();
                 let vsize = sent.tx.vsize() as u64;
                 assert!(sent.fee_sats >= RATE * vsize, "{address_type:?} {amount:?}");
                 assert_eq!(sent.tx.output, psbt.unsigned_tx.output);
@@ -1209,7 +1241,7 @@ pub(crate) mod tests {
                 let read = review(&wallet, &psbt, &fake.store).unwrap();
                 let who: Vec<String> = masters.iter().map(|m| fingerprint(m).to_string()).collect();
                 assert_eq!(read.signed, who, "{descriptor} {subset:b}");
-                match finished(&wallet, &psbt, &draft.unsigned_txid, &fake.store) {
+                match finish_as_shown(&wallet, &psbt, &draft.unsigned_txid, &fake.store) {
                     Ok((sent, _)) => {
                         assert!(
                             masters.len() >= wallet.needed(),
@@ -1278,10 +1310,10 @@ pub(crate) mod tests {
         let fake = funded(&descriptor);
         let draft = drafted_on(&fake, &descriptor, SendAmount::Exact(30_000), RATE).unwrap();
         let both = signed_by(&draft.psbt, &[soft_master(1), soft_master(3)]);
-        assert!(finished(&wallet, &both, &draft.unsigned_txid, &fake.store).is_ok());
+        assert!(finish_as_shown(&wallet, &both, &draft.unsigned_txid, &fake.store).is_ok());
 
         let one = signed_by(&draft.psbt, &[soft_master(2)]);
-        let short = finished(&wallet, &one, &draft.unsigned_txid, &fake.store)
+        let short = finish_as_shown(&wallet, &one, &draft.unsigned_txid, &fake.store)
             .err()
             .unwrap();
         assert!(
@@ -1290,7 +1322,7 @@ pub(crate) mod tests {
                 .contains("signatures: 1 of the 2 keys needed signed every input")
         );
 
-        let other = finished(&wallet, &both, &"0".repeat(64), &fake.store)
+        let other = finish_as_shown(&wallet, &both, &"0".repeat(64), &fake.store)
             .err()
             .unwrap();
         assert!(other.to_string().contains("changed since shown"), "{other}");
@@ -1307,7 +1339,7 @@ pub(crate) mod tests {
                 .len(),
             2
         );
-        let changed = finished(&wallet, &rewritten, &draft.unsigned_txid, &fake.store)
+        let changed = finish_as_shown(&wallet, &rewritten, &draft.unsigned_txid, &fake.store)
             .err()
             .unwrap();
         assert!(
@@ -1639,7 +1671,7 @@ pub(crate) mod tests {
         );
         let who = [soft_master(1), soft_master(2)].map(|m| fingerprint(&m).to_string());
         assert_eq!(read.signed, who);
-        assert!(finished(&reordered, &signed, &draft.unsigned_txid, &fake.store).is_ok());
+        assert!(finish_as_shown(&reordered, &signed, &draft.unsigned_txid, &fake.store).is_ok());
     }
 
     // Change a scan of the wallet never asks about drops out of every balance and history. A phone that has not
@@ -1811,7 +1843,7 @@ pub(crate) mod tests {
             reading.recv_timeout(HOLD).expect("the sync reads the host");
             let start = Instant::now();
             let reviewed = review(&wallet, &signed, &fake.store);
-            let ready = finished(&wallet, &signed, &draft.unsigned_txid, &fake.store);
+            let ready = finish_as_shown(&wallet, &signed, &draft.unsigned_txid, &fake.store);
             let took = start.elapsed();
             let _ = release.send(());
             assert!(
@@ -1842,7 +1874,7 @@ pub(crate) mod tests {
         let restarted = ScanStore::default();
         restarted.use_dir(folder.0.clone());
         for store in [&restarted, &ScanStore::default()] {
-            let (_, read) = finished(&wallet, &signed, &draft.unsigned_txid, store).unwrap();
+            let (_, read) = finish_as_shown(&wallet, &signed, &draft.unsigned_txid, store).unwrap();
             assert_eq!(
                 (read.payments, read.change_sats),
                 (draft.payments.clone(), draft.change_sats)
