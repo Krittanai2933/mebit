@@ -63,6 +63,7 @@ import com.mebit.app.data.hardwareSource
 import com.mebit.app.data.oneKeyPath
 import com.mebit.app.feature.onboarding.AddressTypeRows
 import com.mebit.app.rememberBluetoothSettingsOpener
+import com.mebit.app.rememberTestMode
 import com.mebit.app.ui.components.IssueBanner
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.SecondaryCta
@@ -315,8 +316,8 @@ fun HardwareWalletScreen(
             Spacer(Modifier.height(12.dp))
             Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("error"))
         }
-        if (oneKey != null) return@MebitScreen
-        // The board leaves the rest of the first viewport empty; simulator controls remain below it in the scroll.
+        if (oneKey != null || !rememberTestMode()) return@MebitScreen
+        // The board leaves the rest of the first viewport empty; in test mode the simulator controls remain below it in the scroll.
         Spacer(Modifier.height(240.dp))
         Text("โหมดจำลอง · สำหรับ emulator / simulator ไม่ได้เชื่อมต่ออุปกรณ์", color = MbBody, fontSize = 11.5.sp)
         Spacer(Modifier.height(8.dp))

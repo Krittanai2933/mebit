@@ -24,4 +24,8 @@ internal fun isDebugBinary(): Boolean = kotlin.native.Platform.isDebugBinary
 actual fun rememberFakeDeviceSwitch(): Boolean = isDebugBinary() && NSProcessInfo.processInfo.environment["MEBIT_FAKE_DEVICE"] == "1"
 
 @Composable
+actual fun rememberTestMode(): Boolean =
+    rememberFakeDeviceSwitch() || isDebugBinary() && NSProcessInfo.processInfo.environment["MEBIT_TEST_MODE"] == "1"
+
+@Composable
 actual fun rememberFakeDeviceScript(): String? = if (rememberFakeDeviceSwitch()) NSProcessInfo.processInfo.environment["MEBIT_FAKE_SCRIPT"] as? String else null

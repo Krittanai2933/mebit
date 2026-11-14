@@ -35,6 +35,16 @@ actual fun rememberFakeDeviceSwitch(): Boolean {
 }
 
 @Composable
+actual fun rememberTestMode(): Boolean {
+    val context = LocalContext.current
+    val fakeDevice = rememberFakeDeviceSwitch()
+    return remember(context, fakeDevice) {
+        val activity = generateSequence(context) { (it as? ContextWrapper)?.baseContext }.filterIsInstance<Activity>().firstOrNull()
+        fakeDevice || isDebuggable(context.applicationInfo.flags) && activity?.intent?.getStringExtra("MEBIT_TEST_MODE") == "1"
+    }
+}
+
+@Composable
 actual fun rememberFakeDeviceScript(): String? {
     val context = LocalContext.current
     val on = rememberFakeDeviceSwitch()

@@ -30,6 +30,15 @@ expect fun rememberIsDebugBuild(): Boolean
 expect fun rememberFakeDeviceSwitch(): Boolean
 
 /**
+ * True only in a debug build launched in test mode: MEBIT_TEST_MODE=1 in the app's environment on iOS (SIMCTL_CHILD_MEBIT_TEST_MODE=1
+ * for xcrun simctl launch), the launch intent's string extra MEBIT_TEST_MODE set to 1 on Android, or the fake device's switch. Only then
+ * do the route catalog's link and Hardware Wallet's simulator buttons show, so an app opened from the phone's home screen never shows
+ * them. verify.sh starts its simulators and emulators in test mode.
+ */
+@Composable
+expect fun rememberTestMode(): Boolean
+
+/**
  * The fake device's behaviour script, comma separated ([com.mebit.app.data.fakeScript] reads it), from MEBIT_FAKE_SCRIPT next to the
  * switch's own variable (SIMCTL_CHILD_MEBIT_FAKE_SCRIPT for xcrun simctl launch, a string extra on Android). Null without the switch.
  */

@@ -77,6 +77,7 @@ import androidx.compose.ui.semantics.semantics
 import com.mebit.app.CaptureClaim
 import com.mebit.app.hideWhen
 import com.mebit.app.rememberCaptureGuard
+import com.mebit.app.rememberTestMode
 import com.mebit.app.resources.ic_warning
 import com.mebit.app.ui.components.IssueBanner
 
@@ -156,13 +157,17 @@ fun WelcomeScreen(
             Spacer(modifier = Modifier.height(20.dp))
             SecondaryCta("นำเข้ากระเป๋าเดิม", "cta_import", onImport, darkSurface = true, height = 56.dp)
         }
-        // Penpot leaves 22dp under the CTAs above the home-indicator inset; the debug link lives in it so the CTAs keep their design position.
-        TextButton(
-            onClick = onOpenCatalog,
-            contentPadding = PaddingValues(0.dp),
-            modifier = Modifier.fillMaxWidth().height(22.dp).testTag("open_catalog"),
-        ) {
-            Text("รายการหน้าทั้งหมด (debug)", color = MbWhite.copy(alpha = 0.5f), fontSize = 12.sp)
+        // Penpot leaves 22dp under the CTAs above the home-indicator inset; the debug link lives in it in test mode, so the CTAs keep their design position either way.
+        if (rememberTestMode()) {
+            TextButton(
+                onClick = onOpenCatalog,
+                contentPadding = PaddingValues(0.dp),
+                modifier = Modifier.fillMaxWidth().height(22.dp).testTag("open_catalog"),
+            ) {
+                Text("รายการหน้าทั้งหมด (debug)", color = MbWhite.copy(alpha = 0.5f), fontSize = 12.sp)
+            }
+        } else {
+            Spacer(modifier = Modifier.height(22.dp))
         }
     }
 }
