@@ -1317,7 +1317,7 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_method_walletlink_info() != 62108.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_wallet_psbt() != 19281.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_wallet_psbt() != 11962.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_method_walletlink_unlock() != 26656.toShort()) {
@@ -3155,9 +3155,9 @@ public actual open class WalletLink: Disposable, WalletLinkInterface {
      * several-key wallet before it signs for it: the Jade is read, and one that does not hold the
      * wallet is asked to register it after `steps.registering()` (`Refused` when the user
      * declines, `RegistrationRefused` when it cannot). Then `steps.showing()`, the device shows
-     * the payment, and its answer is refused (`Protocol`) unless that key then signed every input.
-     * A Jade must be unlocked first. Cancelling stops only the wait: the device finishes the
-     * request.
+     * the payment, and its answer is refused (`Protocol`) unless that key then signed every input
+     * and every key that had signed still has, with no other. A Jade must be unlocked first.
+     * Cancelling stops only the wait: the device finishes the request.
      */
     @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
     public actual override suspend fun `signWalletPsbt`(`descriptor`: kotlin.String, `psbtBase64`: kotlin.String, `unsignedTxid`: kotlin.String, `steps`: SignSteps): SpendReview {

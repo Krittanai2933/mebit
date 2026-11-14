@@ -3,6 +3,7 @@
     allow(dead_code)
 )]
 
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -430,9 +431,9 @@ impl WalletLink {
     /// several-key wallet before it signs for it: the Jade is read, and one that does not hold the
     /// wallet is asked to register it after `steps.registering()` (`Refused` when the user
     /// declines, `RegistrationRefused` when it cannot). Then `steps.showing()`, the device shows
-    /// the payment, and its answer is refused (`Protocol`) unless that key then signed every input.
-    /// A Jade must be unlocked first. Cancelling stops only the wait: the device finishes the
-    /// request.
+    /// the payment, and its answer is refused (`Protocol`) unless that key then signed every input
+    /// and every key that had signed still has, with no other. A Jade must be unlocked first.
+    /// Cancelling stops only the wait: the device finishes the request.
     pub async fn sign_wallet_psbt(
         &self,
         descriptor: String,
@@ -676,7 +677,7 @@ async fn answer_requests<W: Wallet>(
 ///    signature, and `steps` hears nothing.
 /// 3. `ensure_registered`: a Jade holds a several-key wallet before it signs for it.
 /// 4. `steps.showing()`, then the vendor's own checks and the device's sign.
-/// 5. The answer must be the same payment with that key's signature on every input.
+/// 5. The answer must be the same payment, signed on every input by the keys that had signed and that key, and no other.
 async fn sign_wallet(
     device: &mut impl Wallet,
     wallet: &Described,
@@ -698,6 +699,17 @@ async fn sign_wallet(
         return Err(out_of_step(format!(
             "key {fingerprint} has not signed every input"
         )));
+    }
+    let had: BTreeSet<&str> = shown
+        .review()
+        .signed
+        .iter()
+        .map(String::as_str)
+        .chain([fingerprint.as_str()])
+        .collect();
+    let has: BTreeSet<&str> = after.review().signed.iter().map(String::as_str).collect();
+    if has != had {
+        return Err(out_of_step(format!("signed by {has:?}, not {had:?}")));
     }
     Ok(after)
 }
@@ -1105,11 +1117,13 @@ mod tests {
     }
 
     /// A device holding the seed `master`, as a Jade or a Safe 7 holds one. It answers a signing request with the
-    /// PSBT signed by every key the seed holds there, or as it came when `signs` is false. With `registry` it is a
-    /// Jade, which keeps a list of several-key wallets across links; without, a Safe 7, which keeps none.
+    /// PSBT signed by every key the seed holds there, or as it came when `signs` is false. With `drops_others` it
+    /// also strips the signatures the PSBT came with, as a faulty device might. With `registry` it is a Jade, which
+    /// keeps a list of several-key wallets across links; without, a Safe 7, which keeps none.
     struct Holding {
         master: Xpriv,
         signs: bool,
+        drops_others: bool,
         log: Log,
         registry: Option<Registry>,
     }
@@ -1180,6 +1194,14 @@ mod tests {
                 psbt.sign(&self.master, &Secp256k1::new())
                     .expect("a software key signs");
             }
+            if self.drops_others {
+                let came = Psbt::from_str(psbt_base64).unwrap();
+                for (input, came) in psbt.inputs.iter_mut().zip(&came.inputs) {
+                    input
+                        .partial_sigs
+                        .retain(|key, _| !came.partial_sigs.contains_key(key));
+                }
+            }
             Ok(psbt.to_string())
         }
 
@@ -1234,13 +1256,30 @@ mod tests {
         signs: bool,
         registry: Option<Registry>,
     ) -> (Arc<WalletLink>, Log) {
-        let log = Log::default();
-        let device = Holding {
+        link_to(Holding {
             master,
             signs,
-            log: log.clone(),
+            drops_others: false,
+            log: Log::default(),
             registry,
-        };
+        })
+        .await
+    }
+
+    /// A new link to a Safe 7 holding `master` that signs and strips the signatures the PSBT came with.
+    async fn dropping_others(master: Xpriv) -> (Arc<WalletLink>, Log) {
+        link_to(Holding {
+            master,
+            signs: true,
+            drops_others: true,
+            log: Log::default(),
+            registry: None,
+        })
+        .await
+    }
+
+    async fn link_to(device: Holding) -> (Arc<WalletLink>, Log) {
+        let log = device.log.clone();
         let link = WalletLink::new(found());
         link.attach(async { Ok((Running::spawn(device), None)) })
             .await
@@ -1547,6 +1586,7 @@ mod tests {
         let made = |registry| Holding {
             master: soft_master(1),
             signs: true,
+            drops_others: false,
             log: log.clone(),
             registry,
         };
@@ -1609,6 +1649,27 @@ mod tests {
         let refused = sign(&link, &wallet, &draft.psbt, &draft.unsigned_txid, &log).await;
         assert!(
             matches!(&refused, Err(BleError::Protocol(text)) if text.contains("has not signed every input")),
+            "{refused:?}"
+        );
+        assert_eq!(logged(&log), SIGNS);
+    }
+
+    // A device may add its own signature and nothing else: an answer that signs but drops the key that signed before is
+    // refused here, before the app reads it, though the payment and the device's signature are right.
+    #[tokio::test]
+    async fn an_answer_that_drops_a_signature_it_came_with_is_refused() {
+        let wallet = two_of_three();
+        let draft = drafted(&wallet);
+        let (first, log) = holding(soft_master(1), true).await;
+        let once = sign(&first, &wallet, &draft.psbt, &draft.unsigned_txid, &log)
+            .await
+            .unwrap();
+        let (second, log) = dropping_others(soft_master(3)).await;
+        let refused = sign(&second, &wallet, &once.psbt, &draft.unsigned_txid, &log).await;
+        let had = [fingerprint(&soft_master(1)), fingerprint(&soft_master(3))];
+        assert!(
+            matches!(&refused, Err(BleError::Protocol(text))
+                if text.contains("signed by {\"") && had.iter().all(|key| text.contains(key.as_str()))),
             "{refused:?}"
         );
         assert_eq!(logged(&log), SIGNS);
