@@ -31,8 +31,10 @@ import com.mebit.ffi.signer.WalletKind
  * and 5.7.x once it signed, and the failure boards when it did not. The page of the one-key sign ([DeviceSignPage]) over
  * [VaultSend.signOnDevice], which looks for the kind's one device ([nearest]), has a Jade register the wallet at its first signature
  * (5.3.2.0's fourth step) and counts the signature toward m like a phone key's. k is the count of signatures when the screen opened.
- * ดำเนินการต่อ ([onContinue]) returns to 5.2. Back and ยกเลิกการเซ็น stop the run and leave; a request the device still holds keeps the send
- * claimed until it answers, which 5.2 says. A [sample] shows one state of the boards with its sample data and does nothing: the debug catalog.
+ * ดำเนินการต่อ ([onContinue]) returns to 5.2. A claim the send refuses, because another signature holds it or the key is no longer needed,
+ * returns there at once ([onBack]): nothing reached a device, and 5.2's rows say why. Back and ยกเลิกการเซ็น stop the run and leave; a
+ * request the device still holds keeps the send claimed until it answers, which 5.2 says. A [sample] shows one state of the boards with its
+ * sample data and does nothing: the debug catalog.
  */
 @Composable
 fun SignOnDeviceScreen(
@@ -78,7 +80,7 @@ fun SignOnDeviceScreen(
     // k is fixed when the screen opens: the signature this one adds does not renumber the page that shows it.
     val k = remember { send.signedFingerprints.size + 1 }
     val fingerprint = vault.keyFingerprints[signer.index]
-    val run = remember { DeviceSignRun(scope, kind) { codes, steps -> send.signOnDevice(signer, nearest(kind), codes, steps) } }
+    val run = remember { DeviceSignRun(scope, kind, notCounted = onBack) { codes, steps -> send.signOnDevice(signer, nearest(kind), codes, steps) } }
     val registration = remember { if (kind == WalletKind.JADE) send.jadeRegistration()?.let { SignRegistration(it, send.derivationOf(signer.index)) } else null }
     LaunchedEffect(Unit) { run.start() }
     val leave = onBack?.let { back ->

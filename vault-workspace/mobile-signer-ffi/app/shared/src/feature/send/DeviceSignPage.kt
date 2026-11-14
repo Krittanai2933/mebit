@@ -198,13 +198,15 @@ internal fun deviceFailureText(failure: DeviceFailure, word: String, registratio
 /**
  * One run of a device's signature, the state both sign screens draw: the [stage], whether the Jade registers the wallet this run
  * ([registers], from the first [SignSteps.registering]), and a Safe 7's code field ([asked], [code]). [start] runs [run] in [scope], which
- * returns true once the signature counts, and reads a failure with the step it came at. A new [start] cancels the one before it.
+ * returns true once the signature counts, and reads a failure with the step it came at. A false hands the run back through [notCounted]
+ * when the screen gave one, since the screen that opened it says why, else it reads as a lost link. A new [start] cancels the one before it.
  */
 internal class DeviceSignRun(
     private val scope: CoroutineScope,
     val kind: WalletKind,
     initial: SignStage = SignStage.Connecting,
     registersAtOpen: Boolean = false,
+    private val notCounted: (() -> Unit)? = null,
     private val run: suspend (PairingCodes, SignSteps) -> Boolean = { _, _ -> false },
 ) {
     var stage: SignStage by mutableStateOf(initial)
@@ -241,12 +243,18 @@ internal class DeviceSignRun(
         code = ""
         asked = false
         job = scope.launch {
-            stage = try {
-                if (run(codes, steps)) SignStage.Signed else SignStage.Failed(DeviceFailure.Lost, step)
+            val counted = try {
+                run(codes, steps)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                SignStage.Failed(deviceFailure(e, step), step)
+                stage = SignStage.Failed(deviceFailure(e, step), step)
+                return@launch
+            }
+            when {
+                counted -> stage = SignStage.Signed
+                notCounted != null -> notCounted()
+                else -> stage = SignStage.Failed(DeviceFailure.Lost, step)
             }
         }
     }

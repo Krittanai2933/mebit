@@ -2,6 +2,8 @@ package com.mebit.app.data
 
 import com.mebit.app.data.SingleSigWallet.DamagedGuard
 import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
+import com.mebit.app.feature.send.DeviceSignRun
+import com.mebit.app.feature.send.SignStage
 import com.mebit.ffi.signer.BleException
 import com.mebit.ffi.signer.FeeTiers
 import com.mebit.ffi.signer.FoundWallet
@@ -21,8 +23,10 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -718,6 +722,40 @@ class VaultSendTest {
         assertNull(send.busy)
         assertTrue(send.sign(phone(0)) { true }, "the send is free once the device answered")
         assertEquals(setOf("AAAA0000", "BBBB0000"), send.signedFingerprints)
+    }
+
+    // 5.3.2 opened on another row while a device holds the send: the claim is refused before any device is asked, so the screen goes
+    // back to 5.2, whose rows say why, rather than drawing the lost-link board.
+    @Test
+    fun aSignScreenWhoseClaimIsRefusedGoesBackRatherThanBlamingBluetooth(): Unit = runBlocking {
+        val rust = Rust()
+        val waiting = CompletableDeferred<Unit>()
+        val confirmed = CompletableDeferred<Unit>()
+        val device = rust.device(1)
+        val answer = device.sign
+        device.sign = { d, psbt, shownTxid ->
+            waiting.complete(Unit)
+            confirmed.await()
+            answer(d, psbt, shownTxid)
+        }
+        var opened = 0
+        rust.inRange = {
+            opened++
+            device
+        }
+        val send = rust.send()
+        assertTrue(send.prepare())
+        val signing = async { send.signOnDevice(jade(1), JADE_FOUND, NO_CODES, NO_STEPS) }
+        waiting.await()
+        var wentBack = 0
+        val run = DeviceSignRun(this, WalletKind.JADE, notCounted = { wentBack++ }) { codes, steps -> send.signOnDevice(jade(2), JADE_FOUND, codes, steps) }
+        run.start()
+        withTimeout(5_000) { while (wentBack == 0) delay(1) }
+        assertEquals(SignStage.Connecting, run.stage, "no failure board")
+        assertEquals(1, opened, "only the device that holds the send was reached")
+        confirmed.complete(Unit)
+        assertTrue(signing.await())
+        assertEquals(1, wentBack)
     }
 
     @Test
