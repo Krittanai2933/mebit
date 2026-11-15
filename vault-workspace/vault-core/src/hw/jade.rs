@@ -2443,6 +2443,38 @@ mod tests {
         assert!(WalletRegistration::of(&duplicate, NETWORK).is_err());
     }
 
+    /// Review finding (2026-11-15, open item 97, not yet fixed): `WalletRegistration::of` compares
+    /// whole `Xpub`s, so the same account key written again with another parent
+    /// fingerprint and another claimed master fingerprint passes as a second
+    /// signer. In a 2-of-3 one party would then hold two slots and sign alone.
+    /// This test fails until the check compares public key and chain code.
+    #[test]
+    #[ignore = "open item 97: duplicate signer check compares whole Xpubs"]
+    fn the_same_account_key_under_another_origin_is_a_duplicate_signer() {
+        let signers: Vec<Signer> = (0..2).map(Signer::new).collect();
+        let mut twin = signers[0].account;
+        twin.parent_fingerprint = Fingerprint::from([0xde, 0xad, 0xbe, 0xef]);
+        let twin_key = format!(
+            "[{}/48'/1'/0'/2']{}/0/*",
+            Fingerprint::from([0xca, 0xfe, 0xba, 0xbe]),
+            twin
+        );
+        assert_ne!(twin, signers[0].account);
+        assert_eq!(twin.public_key, signers[0].account.public_key);
+        assert_eq!(twin.chain_code, signers[0].account.chain_code);
+        let descriptor = Descriptor::<DescriptorPublicKey>::from_str(&format!(
+            "wsh(sortedmulti(2,{},{},{}))",
+            signers[0].descriptor_key(),
+            twin_key,
+            signers[1].descriptor_key()
+        ))
+        .unwrap();
+        assert!(
+            WalletRegistration::of(&descriptor, NETWORK).is_err(),
+            "one account key counted as two signers"
+        );
+    }
+
     #[test]
     fn register_then_list_then_compare_equal() {
         let mut jade = FakeJade::new();
