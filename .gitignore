@@ -14,3 +14,4 @@ Cargo.lock
 .codex/
 .cursor/
 .mcp.json
+.audit/
