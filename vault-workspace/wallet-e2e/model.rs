@@ -470,7 +470,7 @@ mod tests {
         let case = find_case(INDEPENDENT_SIGNING_CASE_ID).unwrap();
         assert_eq!(manifest().len(), CASE_COUNT);
         assert!(manifest().iter().all(|row| row.id != case.id));
-        assert_eq!(supplemental_cases(), &[case.clone()]);
+        assert_eq!(supplemental_cases(), std::slice::from_ref(&case));
         assert_eq!(case.threshold, 3);
         assert_eq!(case.holders.len(), 3);
         assert_eq!(case.signing_subset, case.holders);
