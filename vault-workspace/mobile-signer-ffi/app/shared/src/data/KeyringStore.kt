@@ -1,0 +1,423 @@
+package com.mebit.app.data
+
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.mebit.app.Pairings
+import com.mebit.ffi.signer.BleException
+import com.mebit.ffi.signer.FoundWallet
+import com.mebit.ffi.signer.KeyNetwork
+import com.mebit.ffi.signer.PairingCodes
+import com.mebit.ffi.signer.WalletKind
+import com.mebit.ffi.signer.generateSoftwareMultisigKey
+import com.mebit.ffi.signer.scanWallets
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+
+enum class KeySourceLabel {
+    ThisDevice,
+    MebitOther,
+    Jade,
+    TrezorSafe7,
+}
+
+data class PendingKey(
+    val label: String,
+    val fingerprint: String,
+    val xpub: String,
+    val derivationPath: String,
+    val source: KeySourceLabel,
+    val isMock: Boolean = false,
+)
+
+data class SavedKey(
+    val id: String,
+    val label: String,
+    val fingerprint: String,
+    val xpub: String,
+    val derivationPath: String,
+    val source: KeySourceLabel,
+    val verified: Boolean,
+    val isMock: Boolean = false,
+)
+
+/** Why a scan could not list everything. The wallets found before it stay in [HardwareScan.Done.found]. */
+sealed interface ScanProblem {
+    data object BluetoothOff : ScanProblem
+    data class PermissionDenied(val message: String) : ScanProblem
+    data class Failed(val message: String) : ScanProblem
+}
+
+/** What the hardware screen lists: nothing yet, the wallets seen so far, or the end of a scan. */
+sealed interface HardwareScan {
+    data object Idle : HardwareScan
+    data class Scanning(val found: List<FoundWallet>) : HardwareScan
+    data class Done(val found: List<FoundWallet>, val problem: ScanProblem?) : HardwareScan
+}
+
+/** How [KeyringStore.enrollHardware] ended. [Failed] also covers a call ignored because a connect was already running. */
+enum class EnrollResult { Enrolled, UnsupportedModel, Failed }
+
+/**
+ * Keyring for Movie Page 01–05 / T13–T15, kept across restarts in [book]. Only [confirmFingerprint] after a VerifyKey match may add a verified key.
+ *
+ * [scan] lists the wallets of one kind in range, and [openLink] makes the link to one. Tests pass fakes, so they need no Bluetooth.
+ * [ownKeys] is each wallet's own key, in place order. [pairings] keeps each Safe 7's pairing, so a later connect skips the code.
+ */
+class KeyringStore internal constructor(
+    private val scan: suspend (WalletKind) -> List<FoundWallet> = { scanWallets(it) },
+    private val book: SavedVaults = SavedVaults.memoryOnly(),
+    private val ownKeys: () -> List<SavedKey> = { emptyList() },
+    private val pairings: Pairings? = null,
+    openLink: (FoundWallet) -> DeviceLink = ::bleLink,
+) {
+    private val link = HardwareLink(pairings, openLink)
+
+    /** Every wallet's own key first, then every saved key, a key already saved showing once. Read-only, because only [SavedVaults] changes what is saved. */
+    val keys: List<SavedKey>
+        get() {
+            val saved = book.current.keys
+            return ownKeys().filterNot { o -> saved.any { it.fingerprint.equals(o.fingerprint, ignoreCase = true) } } + saved
+        }
+
+    private var staged: PendingKey? by mutableStateOf(null)
+
+    /** The Safe 7 credential of [pending]'s pairing, kept in [pairings] only once [confirmFingerprint] saves the key, and zeroed whenever [pending] changes. */
+    private var stagedPairing: ByteArray? = null
+
+    var pending: PendingKey?
+        get() = staged
+        private set(value) {
+            stagedPairing?.fill(0)
+            stagedPairing = null
+            staged = value
+        }
+    var lastError: String? by mutableStateOf(null)
+        private set
+    var lastMismatch: Boolean by mutableStateOf(false)
+        private set
+
+    /** Six digits a Trezor Safe 7 shows while pairing. A Jade never reads this. */
+    var pairingCode: String by mutableStateOf("")
+
+    /** The Safe 7 of the running [enrollHardware] asked for its code, so the screen shows the code field now and not before. */
+    var pairingAsked: Boolean by mutableStateOf(false)
+        private set
+
+    /** The running [enrollHardware] offered the Safe 7 a pairing this phone kept, so a code it asks for means it forgot this phone. */
+    var pairingKept: Boolean by mutableStateOf(false)
+        private set
+
+    /** Whether this phone keeps a Safe 7 pairing for the key [fingerprint], so a connect to it needs no code. */
+    fun keepsPairing(fingerprint: String): Boolean = link.keeps(fingerprint)
+
+    var hardwareBusy: Boolean by mutableStateOf(false)
+        private set
+
+    var hardwareScan: HardwareScan by mutableStateOf(HardwareScan.Idle)
+        private set
+
+    fun clearError() {
+        lastError = null
+        lastMismatch = false
+    }
+
+    /** Real tpub for a CI run that has no pasted fixture. */
+    fun startMebitOtherMock(network: KeyNetwork = KeyNetwork.TEST) {
+        clearError()
+        try {
+            val key = generateSoftwareMultisigKey("", network, (keys.size + 17).toUInt())
+            pending = PendingKey(
+                label = "mebit · เครื่องอื่น · จำลอง",
+                fingerprint = key.masterFingerprint,
+                xpub = key.xpub,
+                derivationPath = key.derivationPath,
+                source = KeySourceLabel.MebitOther,
+                isMock = true,
+            )
+        } catch (e: Exception) {
+            lastError = e.message
+            pending = null
+        }
+    }
+
+    /**
+     * Paste or share for docs/04 #26. No QR.
+     * A bad paste clears [pending] and sets [lastError].
+     */
+    fun startMebitOtherFromPaste(text: String): Boolean {
+        clearError()
+        pending = null
+        return try {
+            pending = parseExternalKeyPaste(text)
+            true
+        } catch (e: IllegalArgumentException) {
+            lastError = e.message
+            false
+        }
+    }
+
+    /** Demo HW enrollment without live BLE — real account key, HW label. */
+    fun startHardwareMock(source: KeySourceLabel, network: KeyNetwork = KeyNetwork.TEST) {
+        clearError()
+        require(source == KeySourceLabel.Jade || source == KeySourceLabel.TrezorSafe7)
+        try {
+            val account = (keys.size + if (source == KeySourceLabel.Jade) 31 else 47).toUInt()
+            val key = generateSoftwareMultisigKey("", network, account)
+            pending = PendingKey(
+                label = defaultKeyLabel(source, isMock = true),
+                fingerprint = key.masterFingerprint,
+                xpub = key.xpub,
+                derivationPath = key.derivationPath,
+                source = source,
+                isMock = true,
+            )
+        } catch (e: Exception) {
+            lastError = e.message
+            pending = null
+        }
+    }
+
+    /**
+     * Scans for a Jade, then a Safe 7 (about 4 s each), or for the [kinds] given, and publishes the rows after each kind. A kind that is
+     * not in range adds no rows and is no problem. Ignored while a scan or a connect is running. A cancelled
+     * scan keeps the rows it had.
+     */
+    suspend fun scanHardware(kinds: List<WalletKind> = listOf(WalletKind.JADE, WalletKind.TREZOR_SAFE7)) {
+        if (hardwareScan is HardwareScan.Scanning || hardwareBusy) return
+        val found = mutableListOf<FoundWallet>()
+        var problem: ScanProblem? = null
+        hardwareScan = HardwareScan.Scanning(emptyList())
+        try {
+            for (kind in kinds) {
+                try {
+                    found += scan(kind)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: BleException.NotFound) {
+                    // On iOS this is also what Bluetooth off looks like, so it cannot be told apart from an empty room.
+                } catch (e: Exception) {
+                    problem = problem ?: e.toScanProblem()
+                }
+                hardwareScan = HardwareScan.Scanning(found.toList())
+            }
+        } finally {
+            hardwareScan = HardwareScan.Done(found.toList(), problem)
+        }
+    }
+
+    /**
+     * Live BLE enroll of a wallet [scanHardware] found, through [HardwareLink]: connect, unlock, read the account key at [path] (the
+     * multisig account unless a one-key wallet asks for its own) and stage it in [pending]. A Safe 7 pairs with a code, and its new
+     * credential waits with the staged key until [confirmFingerprint] saves it. With [expect], the confirmed key the read is for, the
+     * Safe 7 is offered the pairing kept for that key, a device holding another key is refused and its pairing kept nowhere, a new
+     * pairing is kept at once, and the staged key keeps [expect]'s name. Nothing is saved to the book until [confirmFingerprint]. A model
+     * mebit does not support is [EnrollResult.UnsupportedModel] and sets no error. Any other failure sets [lastError].
+     */
+    suspend fun enrollHardware(found: FoundWallet, path: String = TESTNET_MULTISIG_ACCOUNT, expect: SavedKey? = null): EnrollResult {
+        if (hardwareBusy) return EnrollResult.Failed
+        hardwareBusy = true
+        clearError()
+        pending = null
+        // A code typed for an earlier connect must not answer this one.
+        pairingCode = ""
+        pairingAsked = false
+        pairingKept = found.kind == WalletKind.TREZOR_SAFE7 && expect != null && link.keeps(expect.fingerprint)
+        val source = hardwareSource(found.kind)
+        val codes = FieldPairingCodes(
+            jade = source == KeySourceLabel.Jade,
+            read = { pairingCode },
+            consume = { pairingCode = "" },
+            onAsked = { pairingAsked = true },
+        )
+        try {
+            val (key, pairing) = link.use(found, path, expect = expect?.fingerprint, codes) { it.key to it.pairing?.copyOf() }
+            pending = PendingKey(
+                label = expect?.label ?: defaultKeyLabel(source, isMock = false),
+                fingerprint = key.masterFingerprint,
+                xpub = key.xpub,
+                derivationPath = key.derivationPath,
+                source = source,
+            )
+            stagedPairing = pairing
+            return EnrollResult.Enrolled
+        } catch (e: CancellationException) {
+            pending = null
+            throw e
+        } catch (e: BleException.WrongDevice) {
+            pending = null
+            return EnrollResult.UnsupportedModel
+        } catch (e: BleException.WrongKey) {
+            // Penpot T14's words: the device holds another key than the one picked.
+            lastError = "Fingerprint ไม่ตรง"
+            pending = null
+            return EnrollResult.Failed
+        } catch (e: Exception) {
+            lastError = e.message ?: "เชื่อมต่อไม่สำเร็จ"
+            pending = null
+            return EnrollResult.Failed
+        } finally {
+            hardwareBusy = false
+        }
+    }
+
+    /**
+     * Confirm fingerprint. Mismatch clears pending and does not save. A key the book cannot save for good now ([SavedVaults.editSaved])
+     * is refused with the book's line in [lastError], its Safe 7 pairing written nowhere and [pending] kept, so the tap can be tried again.
+     * @return true if saved
+     */
+    fun confirmFingerprint(observed: String, label: String? = null): Boolean {
+        clearError()
+        val p = pending ?: run {
+            lastError = "ไม่มีกุญแจรอยืนยัน"
+            return false
+        }
+        if (!observed.filterNot(Char::isWhitespace).equals(p.fingerprint, ignoreCase = true)) {
+            lastMismatch = true
+            lastError = "Fingerprint ไม่ตรง · ไม่บันทึกเข้าคลัง"
+            pending = null
+            return false
+        }
+        val name = label?.trim()?.takeIf { it.isNotEmpty() } ?: p.label
+        val savedLabel = if (p.isMock && !name.endsWith(" · จำลอง")) "$name · จำลอง" else name
+        val saved = book.editSaved { b ->
+            // The first number no saved key uses, because a size-based id repeats after a delete and Choose Keys counts picks by id.
+            val id = generateSequence(b.keys.size + 1) { it + 1 }.map { "key_${it}_${p.fingerprint}" }.first { candidate -> b.keys.none { it.id == candidate } }
+            b.copy(
+                keys = b.keys + SavedKey(
+                    id = id,
+                    label = savedLabel,
+                    fingerprint = p.fingerprint,
+                    xpub = p.xpub,
+                    derivationPath = p.derivationPath,
+                    source = p.source,
+                    verified = true,
+                    isMock = p.isMock,
+                ),
+            )
+        }
+        if (!saved) {
+            lastError = vaultsNoticeText(book.health) ?: vaultsNoticeText(VaultsHealth.SaveFailed)
+            return false
+        }
+        stagedPairing?.let { pairings?.write(p.fingerprint, it) }
+        pending = null
+        return true
+    }
+
+    fun discardPending() {
+        pending = null
+        clearError()
+    }
+
+    /** Gives the saved key [id] the name [label], as Confirm Key names it. False, with the name kept, when it could not be saved. */
+    fun rename(id: String, label: String): Boolean = book.editSaved { b -> b.copy(keys = b.keys.map { if (it.id == id) it.copy(label = label) else it }) }
+
+    /**
+     * Deletes the saved key [id]. Refused for a wallet's own key, which comes from its session and goes with its wallet, for a key a
+     * vault uses, and while the book cannot be judged, because a delete queued then would run over a stored vault that needs the key.
+     * False, with the key kept, when the delete could not be saved. The Safe 7 pairing of its fingerprint goes with the last key or
+     * hardware wallet that has it.
+     */
+    fun tryDelete(id: String): Boolean {
+        val key = keys.find { it.id == id } ?: return false
+        if (ownKeys().any { it.id == id } || book.usesKey(key.fingerprint) != false) return false
+        if (!book.editSaved { b -> b.copy(keys = b.keys.filterNot { it.id == id }) }) return false
+        book.forgetUnusedPairing(pairings, key.fingerprint)
+        return true
+    }
+}
+
+/** BIP-48 P2WSH account on testnet. Coin type 1, account 0, script type 2. */
+internal const val TESTNET_MULTISIG_ACCOUNT = "m/48'/1'/0'/2'"
+
+internal fun hardwareName(source: KeySourceLabel): String = when (source) {
+    KeySourceLabel.Jade -> "Jade"
+    KeySourceLabel.TrezorSafe7 -> "Trezor Safe 7"
+    KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")
+}
+
+/** Penpot 2.2's card title for a source, which 2.1 and 3.2 repeat as the start of a key's line. */
+internal fun keySourceName(source: KeySourceLabel): String = when (source) {
+    KeySourceLabel.ThisDevice -> "mebit บนเครื่องนี้"
+    KeySourceLabel.MebitOther -> "mebit บนเครื่องอื่น"
+    KeySourceLabel.Jade, KeySourceLabel.TrezorSafe7 -> hardwareName(source)
+}
+
+/** "Jade · 7f2c a91b": the source, then the fingerprint in groups of four. The sub line on Penpot 3.2 and 2.1. */
+internal fun keyLine(key: SavedKey): String = "${keySourceName(key.source)} · ${fingerprintGroups(key.fingerprint)}"
+
+internal fun hardwareMonogram(source: KeySourceLabel): String = when (source) {
+    KeySourceLabel.Jade -> "JD"
+    KeySourceLabel.TrezorSafe7 -> "TRZ"
+    KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")
+}
+
+/** Penpot 2.1's text tile. [phone] is the phone's own text ([com.mebit.app.Platform.phoneMonogram]); "MB" for a key from another mebit phone is a guess, no board draws it. */
+internal fun keyMonogram(source: KeySourceLabel, phone: String): String = when (source) {
+    KeySourceLabel.ThisDevice -> phone
+    KeySourceLabel.MebitOther -> "MB"
+    KeySourceLabel.Jade, KeySourceLabel.TrezorSafe7 -> hardwareMonogram(source)
+}
+
+/** Pure. Unconfirmed keys first, as Penpot 6.2 has them, each group in keyring order. */
+internal fun keyringOrder(keys: List<SavedKey>): List<SavedKey> = keys.sortedBy { it.verified }
+
+/** Pure. Penpot 2.1's subtitle when every key is confirmed, 6.2's when some is not, and the empty keyring's line when there is none. */
+internal fun keyringSubtitle(keys: List<SavedKey>): String = when {
+    keys.isEmpty() -> "ยังไม่มีกุญแจในคลัง"
+    keys.all { it.verified } -> "${keys.size} กุญแจในคลัง · ยืนยันแล้วทั้งหมด"
+    else -> "${keys.size} กุญแจ · ยังไม่ยืนยัน ${keys.count { !it.verified }} ใบ (ขึ้นก่อน)"
+}
+
+/** Pure. The text of a Keyring card's pill. */
+internal fun keyBadge(confirmed: Boolean): String = if (confirmed) "ยืนยันแล้ว" else "ยังไม่ยืนยัน"
+
+/** "7F2CA91B" becomes "7f2c a91b": lowercase, in groups of four. */
+internal fun fingerprintGroups(fingerprint: String): String = fingerprint.lowercase().chunked(4).joinToString(" ")
+
+internal fun hardwareSource(kind: WalletKind): KeySourceLabel = when (kind) {
+    WalletKind.JADE -> KeySourceLabel.Jade
+    WalletKind.TREZOR_SAFE7 -> KeySourceLabel.TrezorSafe7
+}
+
+/** The device kind of a Jade or Safe 7 key. */
+internal fun hardwareKind(source: KeySourceLabel): WalletKind = when (source) {
+    KeySourceLabel.Jade -> WalletKind.JADE
+    KeySourceLabel.TrezorSafe7 -> WalletKind.TREZOR_SAFE7
+    KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")
+}
+
+/** The name a hardware key starts with on Confirm Key: "Jade ของฉัน" for a real device, "Jade · จำลอง" for a demo one. */
+internal fun defaultKeyLabel(source: KeySourceLabel, isMock: Boolean): String =
+    hardwareName(source) + if (isMock) " · จำลอง" else " ของฉัน"
+
+private fun Exception.toScanProblem(): ScanProblem = when (this) {
+    is BleException.BluetoothOff -> ScanProblem.BluetoothOff
+    is BleException.PermissionDenied -> ScanProblem.PermissionDenied(message.orEmpty())
+    else -> ScanProblem.Failed(message ?: "ค้นหาไม่สำเร็จ")
+}
+
+/**
+ * Jade returns null. A Safe 7 asks only when it must pair with a code, and [onAsked] runs then, so the screen shows the code field
+ * only then. This waits until [read] is six digits, then [consume] clears them so the next ask does not resend the same code.
+ */
+internal class FieldPairingCodes(
+    private val jade: Boolean,
+    private val read: () -> String,
+    private val consume: () -> Unit,
+    private val onAsked: () -> Unit = {},
+) : PairingCodes {
+    override suspend fun pairingCode(): String? {
+        if (jade) return null
+        onAsked()
+        while (true) {
+            val code = read().trim()
+            if (code.length == 6 && code.all(Char::isDigit)) {
+                consume()
+                return code
+            }
+            delay(200)
+        }
+    }
+}

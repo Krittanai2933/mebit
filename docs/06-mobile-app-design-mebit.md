@@ -1,8 +1,16 @@
-# mobile-signer-ffi / แอปมือถือ "mebit" — สเปคจากไฟล์ Design
+# mebit mobile app — design references
 
-สกัดจากไฟล์ดีไซน์ที่ผู้ใช้อัปโหลด (`mebit App.dc.html`) เพื่อใช้เป็น source of truth ของหน้าตาและพฤติกรรมแอปฝั่งผู้กู้ แทนที่คำอธิบายแบบกว้างๆ เดิมใน `01-architecture-overview.md` และ `05-capstone-proposal.md`
+Current UI source: Penpot Organize and Organize · Design System. The current flow and visual summary are listed first below. The earlier 12-screen lending prototype is retained afterward as historical context, not as the current wallet/custody screen source.
 
-## แนวคิดแบรนด์
+## Current Penpot reference — Organize
+
+Organize contains seven flows: Onboarding, Import existing seed, Add key · keyring, Create vault, Single-sig wallet, Vault send (multisig), and Error & edge states. Its inventory has 105 full-size screen boards and 378 navigate-to interactions; 99 boards are reachable from flow starts. Unreached boards are 4.2 Receive · backup gate, 6.8 Vault Detail — actions, 6.2 KeyVault — empty, 6.5 Select Policy — decaying, 6.6 Compose Vault — count mismatch, and 6.7 Confirm Vault — backend error.
+
+The current Settings page offers TH/EN language and sat/BTC currency as text choices, plus light/dark mode as icon controls. Screen references captured from Organize: Anuphan; background #f6f7f9; white cards; border #e4e8ee; primary text #0e1116; secondary text #5b6472; navy #042c49; amber #c2700f; pale amber #fdefdd; 24px card corners. Use Organize · Design System as canonical for shared tokens.
+
+## Historical lending-prototype reference
+
+### แนวคิดแบรนด์
 
 - ชื่อโปรดักต์: **mebit** — sub-brand ภายใต้ Mapboss CI (teal `#007368`, leaf green, จุดสีเหลืองเป็น accent อุ่นจุดเดียว, ฟอนต์ FC Vision ทั้งหมด)
 - แท็กไลน์: *"กระเป๋าบิตคอยน์ที่ถือกุญแจเอง แต่ใช้มูลค่าได้โดยไม่ต้องขาย"*
@@ -11,7 +19,7 @@
 - ปุ่ม Borrow เป็น CTA หลักบน Home — บล็อกทีลสูง 64px พร้อมแถบ accent เหลือง ไม่ใช่แท็บ; bottom nav มี 5 แท็บเท่ากัน ไม่มี center FAB
 - ยังไม่มี icon set ของ Mapboss CI จริง — ดีไซน์ปัจจุบันใช้ minimal line icon 1.8px เป็น placeholder ไปก่อน (ต้องตามงาน brand/design ทีมจริงภายหลัง)
 
-## 12 หน้าจอ ตามลำดับ journey
+### 12 หน้าจอ ตามลำดับ journey
 
 1. **Splash** — เปิดแอปพร้อม endorsement "powered by mapboss"
 2. **Seed backup** — สำรอง seed phrase ตอน onboarding
@@ -28,13 +36,13 @@
 
 Tappable prototype เดินเรื่องเป็น: Splash → Seed backup → Face ID → Home → Receive → Borrow → Loan Dashboard → Repay → Success ส่วน Activity / Portfolio / Settings เข้าถึงผ่าน bottom nav
 
-## ตัวเลขอ้างอิงที่ดีไซน์ใช้ (ตัวอย่างเดโม)
+### ตัวเลขอ้างอิงที่ดีไซน์ใช้ (ตัวอย่างเดโม)
 
 - ยอดรวม 0.412 BTC ≈ ฿2,145,000 (ราคาบิตคอยน์อ้างอิง ฿5,206,000)
 - วงเงินกู้ที่ใช้ได้ ฿1,200,000, หนี้คงเหลือ ฿350,000, LTV 16.3% (โซนปลอดภัย)
 - ตัวอย่างขอกู้: ฿500,000 ค้ำด้วย 0.20 BTC (≈ ฿1,041,200) → LTV 48%, ราคาบังคับขาย ฿3,125,000
 
-## Risk visualization — ค่าที่ดีไซน์ตกลงใช้จริง
+### Risk visualization — ค่าที่ดีไซน์ตกลงใช้จริง
 
 ดีไซน์เสนอค่าตัวเลขที่ชัดเจนกว่าที่เราเคยระบุเป็น "ตัวอย่าง ไม่ finalize" ไว้ในเอกสารเดิม:
 
@@ -54,20 +62,20 @@ Tappable prototype เดินเรื่องเป็น: Splash → Seed b
 
 > หมายเหตุ: ตัวเลข 65/72/80% นี้มาจากดีไซน์ ยังต้องให้ทีมความเสี่ยง/ธุรกิจ sign-off อย่างเป็นทางการ แต่ถือเป็นข้อเสนอที่เป็นรูปธรรมกว่าเดิมแล้ว ควรใช้แทนตัวเลขตัวอย่าง 50/70/80% เดิมในเอกสารสถาปัตยกรรม
 
-## Portfolio (multi-loan) — ผลต่อ data model
+### Portfolio (multi-loan) — ผลต่อ data model
 
 - ลูกค้าหนึ่งคนมีได้หลายสัญญาเงินกู้พร้อมกัน แต่ละสัญญา **แยกหลักประกันเป็นอิสระ ไม่ cross-collateralise กัน**
 - ตัวอย่าง: 0.330 BTC ถูก pledge กระจายใน 3 สัญญา (หนี้รวม ฿710,000, blended LTV 41.3%), เหลือ 0.082 BTC ที่ "free" — ยังไม่ผูกกับสัญญาไหนเลย
 - ลิสต์ในหน้า Portfolio เรียงตามความเสี่ยง ไม่ใช่ตามวันที่ เพื่อให้สัญญาที่ต้องการความสนใจอยู่บนสุดเสมอ
 - **นัยสำคัญต่อสถาปัตยกรรม**: schema เดิม (`loans` ตารางที่มี `vault_descriptor`/`vault_address` ต่อ 1 loan, unique ต่อ `customer_id + loan_index`) รองรับ multi-loan อยู่แล้วในระดับ backend ไม่ต้องแก้ schema แต่ฝั่งแอปต้องรวมยอดข้าม vault address หลายอันมาแสดงเป็น "TOTAL BITCOIN" เดียว และต้องมีแนวคิด "BTC ที่ยังไม่ pledge" แยกต่างหากจาก BTC ที่ pledge ไปกับ loan ใดๆ แล้ว — ดูหัวข้อถัดไป
 
-## Activity — ledger รวม
+### Activity — ledger รวม
 
 - ledger เดียวรวมทั้ง BTC movement (ฝาก/ถอน/รับ) และ loan events (เปิดกู้/ชำระ/margin call/liquidation) จัดกลุ่มตามเดือน มี filter chip 3 แบบ
 - แต่ละแถวที่เกี่ยวกับ loan ต้องโชว์ผลกระทบต่อ LTV ด้านขวา — LTV alert ก็ต้องปรากฏเป็นรายการใน ledger นี้ด้วย ไม่ใช่แค่ push notification เฉยๆ
 - **นัยสำคัญ**: mobile-signer-ffi/demo app ต้องดึงทั้งข้อมูล on-chain (ผ่าน Monitor Service/Esplora) และ loan state events (ผ่าน custody-service) มา merge เป็น timeline เดียว
 
-## Settings — sovereignty framing
+### Settings — sovereignty framing
 
 - เปิดด้วย panel มืด (เขียวเข้ม) เพราะ "การันตีว่ากุญแจอยู่ที่อุปกรณ์นี้" ต้องอยู่บนสุด: แสดงว่า key อยู่บนเครื่องนี้ + วันที่ backup ล่าสุดที่ยืนยันแล้ว
 - ตามด้วย 3 กลุ่ม: keys, loan alerts, preferences
@@ -75,7 +83,7 @@ Tappable prototype เดินเรื่องเป็น: Splash → Seed b
 
 ---
 
-## ผลต่อขอบเขตของ mobile-signer-ffi (สิ่งที่ต้องแก้จากเอกสารเดิม)
+### ผลต่อขอบเขตของ mobile-signer-ffi (สิ่งที่ต้องแก้จากเอกสารเดิม)
 
 เดิมเราเขียน mobile-signer-ffi ไว้แค่ "ห่อ logic การ derive key และเซ็น PSBT จาก vault-core ให้เรียกจาก Kotlin/Swift" ซึ่ง**แคบเกินไป**เมื่อเทียบกับดีไซน์นี้ เพราะดีไซน์นี้คือแอป wallet เต็มรูปแบบ ไม่ใช่แค่หน้าจอเซ็น PSBT ไม่กี่หน้า สิ่งที่ต้องเพิ่มเข้าไปจริงๆ:
 
@@ -86,7 +94,7 @@ Tappable prototype เดินเรื่องเป็น: Splash → Seed b
 
 **สรุปสั้นๆ**: mobile-signer-ffi ต้องเป็นทั้ง (ก) hot wallet เต็มรูปแบบสำหรับ BTC ที่ยังไม่ pledge และ (ข) multisig vault signer สำหรับ BTC ที่ pledge เป็นหลักประกันแล้ว สองเลเยอร์นี้ต้องออกแบบให้สลับโหมดกันได้ลื่นในมุมมองผู้ใช้ (หน้าจอเดียวกันแสดงทั้งสองส่วนรวมเป็นยอดเดียว) แต่แยกกันชัดเจนในเชิง key/signing logic
 
-## Wallet capability checklist (สิ่งที่ "hot wallet เต็มรูปแบบ" ต้องทำได้จริง)
+### Wallet capability checklist (สิ่งที่ "hot wallet เต็มรูปแบบ" ต้องทำได้จริง)
 
 การเรียกว่าเป็น hot wallet ไม่ใช่แค่โชว์ balance — ต้องรองรับทุกความสามารถพื้นฐานของ Bitcoin wallet จริง ไม่ใช่แค่ signing UI:
 

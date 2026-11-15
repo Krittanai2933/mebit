@@ -9,7 +9,7 @@
 3. [`docs/02-roles-and-responsibilities.md`](docs/02-roles-and-responsibilities.md) — ใครถือคีย์ไหน เซ็นคู่กับใครตอนไหน
 4. [`docs/03-flows.md`](docs/03-flows.md) — โฟลว์แบบละเอียด: onboarding, เปิด loan, คืนหลักประกัน, liquidation, fallback
 5. [`docs/04-open-items.md`](docs/04-open-items.md) — สิ่งที่ยังไม่ได้ตัดสินใจ — เช็คก่อนเชื่อว่าตัวเลข/กติกาไหนล็อกแล้ว
-6. [`docs/design-notes.md`](docs/design-notes.md) — ดีไซน์แอปฝั่งผู้กู้ (ถ้าอยู่ทีม mobile-signer-ffi ต้องอ่าน)
+6. [`docs/design-notes.md`](docs/design-notes.md) — current Penpot Organize wallet/custody flow และโน้ตดีไซน์ lending รุ่นก่อน (ทีม mobile-signer-ffi ควรอ่าน)
 7. [`docs/05-progress-and-next-steps.md`](docs/05-progress-and-next-steps.md) — **สถานะปัจจุบันจริงๆ ของแต่ละโมดูล และสิ่งที่ต้องทำต่อ** เช็คอันนี้ก่อนเริ่มงานทุกครั้งเพื่อไม่ให้ทำซ้ำกับที่มีอยู่แล้ว
 
 ## โครงสร้าง repo
@@ -21,12 +21,17 @@ mebit/
 ├── vault-workspace/      # โค้ดจริงทั้งหมด — Rust workspace, cargo build/test จากโฟลเดอร์นี้
 │   ├── vault-core/           # descriptor, key derivation, PSBT, policy engine — จุดวิกฤตของระบบ
 │   ├── custody-service/      # REST service ฝั่งแพลตฟอร์ม (axum, รันได้จริงที่ :8080)
-│   ├── mobile-signer-ffi/    # UniFFI bindings + แอป React Native (รันได้จริง)
+│   ├── mobile-signer-ffi/    # UniFFI bindings + แอป Kotlin Multiplatform สำหรับ Android และ iOS (รันได้จริง)
 │   ├── lender-signer-cli/    # CLI เซ็น PSBT แบบ offline (clap, รันได้จริง)
 │   └── monitor-service/      # ตรวจ LTV / trigger liquidation (รันได้จริง)
 ├── .claude/
 │   ├── agents/           # subagent ต่อโมดูล — ใช้กับ Claude Code เวลาทำงานในโมดูลนั้น
 │   └── skills/           # ความรู้ที่ใช้ร่วมกันได้ทุกโมดูล
+├── .agents/
+│   └── skills            # symlink ไป .claude/skills สำหรับเครื่องมือที่อ่านแค่ .agents/skills
+├── AGENTS.md             # คำสั่งกลางสำหรับ coding agent ทุกตัว
+├── CLAUDE.md             # stub ที่ import AGENTS.md
+├── scripts/              # check-agent-context.py ตรวจไฟล์ของ agent
 └── README.md
 ```
 
@@ -57,18 +62,24 @@ cargo test
 
 ไม่ใส่ `--workspace` โดยตั้งใจ: default build ครอบทุก crate ยกเว้น `jade-ble` (ไดรเวอร์ Jade ผ่าน Bluetooth) เพราะ `btleplug` ต้องใช้ `libdbus-1-dev` + `pkg-config` บน Linux — ถ้าจะ build/test ตัวนี้ใช้ `cargo test -p jade-ble` (ดู `vault-workspace/jade-ble/README.md`)
 
-**Mobile app** (Expo/React Native, รันได้จริงแล้ว มี mock data ครบ 12 หน้าจอ):
+**Mobile app** เป็น Kotlin Multiplatform กับ Compose Multiplatform โมดูล `shared` มีโค้ด UI และ logic ของทั้ง Android และ iOS และแอปเรียก Rust ผ่าน UniFFI bindings ที่ `scripts/ffi.sh` สร้าง รันบน macOS ด้วยคำสั่งนี้:
 ```
-cd vault-workspace/mobile-signer-ffi/app
-npm install
-npm start        # กด w สำหรับเว็บ, i สำหรับ iOS simulator, a สำหรับ Android
+cd vault-workspace/mobile-signer-ffi
+scripts/ffi.sh build          # ครั้งแรกหลัง clone และทุกครั้งที่แก้โค้ด Rust
+scripts/ffi.sh apk            # ครั้งเดียว เพื่อให้ APK ของ Android มีไลบรารี Rust
+cd app
+./kotlin run -m androidApp    # หรือ ./kotlin run -m iosApp
 ```
 
-## ทำงานกับ Claude Code
+คำสั่งอื่นของ `./kotlin` อยู่ใน `vault-workspace/mobile-signer-ffi/app/README.md`
 
-ในโฟลเดอร์นี้มี Claude Code agent และ skill เตรียมไว้ให้แล้ว:
+## ทำงานกับ coding agent
+
+ในโฟลเดอร์นี้มี agent และ skill เตรียมไว้ให้แล้ว:
 - `.claude/agents/` — 1 agent ต่อคน/ขอบเขตงาน (`vault-core-descriptor`, `vault-core-policy`, `platform-services`, `mobile-signer`) ใช้ agent ที่ตรงกับโมดูลที่กำลังทำ
 - `.claude/skills/` — ความรู้ร่วม: `bitcoin-fundamentals` (พื้นฐาน Bitcoin), `policy-engine-review` (checklist รีวิว policy engine), `testnet-workflow` (วิธีทดสอบบน testnet), `design-tokens` (ดีไซน์ระบบของแอป)
+
+`AGENTS.md` เป็นไฟล์คำสั่งกลาง Codex, Cursor, Kimi และ coding agent ตัวอื่นอ่านไฟล์นี้ตรง ๆ ส่วน `CLAUDE.md` เป็น stub ที่ import ไฟล์นั้นให้ Claude Code โหลดข้อความเดียวกัน ดังนั้นให้แก้ข้อความกลางที่ `AGENTS.md` ที่เดียว Claude Code ใช้ agent ใน `.claude/agents/` เป็น subagent ได้เลย ส่วน agent ตัวอื่นให้อ่านไฟล์ที่ตรงกับโมดูลตามตารางใน `AGENTS.md` และ `.agents/skills` เป็น symlink ไป `.claude/skills` สำหรับเครื่องมือที่อ่านแค่ path นั้น หลังแก้ไฟล์เหล่านี้ให้รัน `python3 -I scripts/check-agent-context.py`
 
 ## กฎที่ต้องรู้ก่อนเริ่ม
 

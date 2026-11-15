@@ -1,0 +1,13 @@
+[
+  {
+    "txid": "3333333333333333333333333333333333333333333333333333333333333333",
+    "vin": [
+      {"is_coinbase": false, "prevout": {"scriptpubkey_address": "tb1q6rz28mcfaxtmd6v789l9rrlrusdprr9pqcpvkl", "value": 20000}}
+    ],
+    "vout": [
+      {"scriptpubkey_address": "tb1qfwxzlmn42rh6wu6gt4f0yrfpe4gf0jtwgxagrr", "value": 15000},
+      {"scriptpubkey_address": "tb1q6rz28mcfaxtmd6v789l9rrlrusdprr9pqcpvkl", "value": 4000}
+    ],
+    "status": {"confirmed": false}
+  }
+]

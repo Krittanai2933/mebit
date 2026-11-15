@@ -1,0 +1,421 @@
+package com.mebit.app.navigation
+
+/** Which tab the bottom bar lights on a screen. [None] shows the bar with no tab lit. */
+enum class BarTab { Wallets, Keys, None }
+
+enum class MovieRoute(
+    val path: String,
+    val eyebrow: String,
+    val titleTh: String,
+    val bodyTh: String,
+    /** Null means the screen has no bottom bar. */
+    val bar: BarTab? = null,
+    /** A tab of the bar. Opening it from anywhere makes it the only entry on the Back stack ([stackAfterOpen]), so it never has a back chip. */
+    val tab: Boolean = false,
+    /** A screen of one Jade or Safe 7 wallet, the one its Stop names ([Stop.hardware]). Only these carry that name on. */
+    val hardware: Boolean = false,
+) {
+    Welcome(
+        "welcome",
+        "WELCOME",
+        "Bitcoin ของคุณ Key อยู่ในมือคุณ",
+        "สร้างกระเป๋าใหม่ หรือนำเข้า seed",
+    ),
+    KeySource(
+        "onboarding/key-source",
+        "NEW WALLET",
+        "เก็บกุญแจดอกแรกไว้ที่ไหน",
+        "มือถือ · Hardware wallet",
+    ),
+    ImportSeed(
+        "onboarding/import-seed",
+        "IMPORT SEED",
+        "นำเข้า 24 คำ",
+        "พิมพ์หรือวาง 24 คำตามลำดับ แล้วกู้กุญแจเข้าเครื่องนี้",
+    ),
+    KeyCreated(
+        "onboarding/key-created",
+        "KEY CREATED",
+        "สร้างกุญแจแล้ว",
+        "สำรอง 24 คำก่อนรับเงิน",
+    ),
+    BackupWords(
+        "onboarding/backup-words",
+        "BACKUP",
+        "จด 24 คำสำรอง",
+        "เขียนลงกระดาษ อย่าถ่ายรูป",
+    ),
+    VerifyWords(
+        "onboarding/verify-words",
+        "VERIFY WORDS",
+        "ยืนยันคำสำรอง",
+        "เลือกคำตามลำดับให้ถูก",
+    ),
+    AddressType(
+        "onboarding/address-type",
+        "ADDRESS TYPE",
+        "เลือกรูปแบบที่อยู่",
+        "กำหนดรูปแบบที่อยู่และเส้นทางกุญแจของกระเป๋านี้",
+    ),
+    AppLock(
+        "onboarding/app-lock",
+        "APP LOCK",
+        "ล็อกแอป",
+        "เปิด Face ID หรือรหัสผ่านเครื่อง",
+    ),
+    SpendingPin(
+        "onboarding/spending-pin",
+        "SPENDING PIN",
+        "ตั้ง PIN สำหรับส่งเงิน",
+        "เครื่องที่ไม่มีรหัสล็อกหน้าจอ",
+    ),
+    AddKey(
+        "keys/add",
+        "ADD KEY",
+        "เพิ่มกุญแจ",
+        "mebit บนเครื่องนี้ · เครื่องอื่น · HW",
+        BarTab.Keys,
+    ),
+    PairMebitOther(
+        "keys/pair-mebit",
+        "PAIR DEVICE",
+        "จับคู่เครื่องอื่น",
+        "วาง xpub หรือ BSMS 1.0 ไม่ใช้ QR",
+    ),
+    HardwareWallet(
+        "keys/hardware",
+        "HARDWARE WALLET",
+        "เชื่อมต่ออุปกรณ์",
+        "BLE จริง · จำลองเมื่อไม่มีวิทยุ",
+    ),
+    VerifyKey(
+        "keys/verify",
+        "VERIFY KEY",
+        "ยืนยัน fingerprint",
+        "ตรง บันทึก · ไม่ตรง ไม่บันทึก",
+    ),
+    Keyring(
+        "keys/keyring",
+        "KEYRING",
+        "คลังกุญแจ",
+        "กุญแจที่ยืนยันแล้ว",
+        BarTab.Keys,
+        tab = true,
+    ),
+    Policy(
+        "vault/policy",
+        "POLICY · ขั้น 1/4",
+        "Wallet นี้ใช้กุญแจแบบไหน",
+        "กระเป๋าเดี่ยว · หลายลายเซ็น",
+    ),
+    ChooseKeys(
+        "vault/choose-keys",
+        "POLICY · ขั้น 2/4",
+        "เลือกกุญแจมาประกอบ",
+        "เลือกกุญแจที่ยืนยันแล้วให้ครบ N",
+    ),
+    ScriptType(
+        "vault/script-type",
+        "POLICY · ขั้น 3/4",
+        "เลือกรูปแบบ Multisig",
+        "คงเกณฑ์ M-of-N แล้วเลือกสคริปต์ที่ใช้กับ Wallet",
+    ),
+    Review(
+        "vault/review",
+        "POLICY · ขั้น 4/4",
+        "ตรวจก่อนสร้าง",
+        "descriptor จริงจาก core",
+    ),
+    VaultCreated(
+        "vault/created",
+        "WALLET CREATED",
+        "Wallet พร้อมใช้งาน",
+        "ไฟล์ BSMS บันทึกหรือแชร์",
+    ),
+    VaultList(
+        "vaults",
+        "WALLETS",
+        "Wallet ของคุณ",
+        "personal_custody",
+        BarTab.Wallets,
+        tab = true,
+    ),
+    VaultDetail(
+        "vaults/detail",
+        "WALLET DETAIL",
+        "รายละเอียด Wallet",
+        "รับ · ส่ง",
+        BarTab.Wallets,
+    ),
+    T13UnsupportedModel(
+        "critical/t13",
+        "UNSUPPORTED MODEL",
+        "รุ่นนี้ไม่รองรับ",
+        "เฉพาะ Trezor Safe 7",
+    ),
+    T14VerifyMismatch(
+        "critical/t14",
+        "VERIFY KEY",
+        "Fingerprint ไม่ตรง",
+        "ไม่บันทึกเข้าคลัง",
+    ),
+    T15KeyringEmpty(
+        "critical/t15-empty",
+        "KEYRING",
+        "ยังไม่มีกุญแจในคลัง",
+        "เพิ่มกุญแจก่อน",
+        BarTab.Keys,
+    ),
+    T15UnverifiedFirst(
+        "critical/t15-unverified",
+        "KEYRING",
+        "กุญแจยังไม่ยืนยัน",
+        "ยืนยัน fingerprint ก่อน",
+        BarTab.Keys,
+    ),
+    T16PolicyDecaying(
+        "critical/t16-decaying",
+        "POLICY · ADVANCED",
+        "decaying multisig",
+        "mutually exclusive กับ timelock",
+    ),
+    T16InvalidMn(
+        "critical/t16-mn",
+        "POLICY",
+        "M / N ไม่ถูกต้อง",
+        "ต้อง 1 ≤ M ≤ N",
+    ),
+    T17CountMismatch(
+        "critical/t17",
+        "COMPOSE WALLET",
+        "จำนวนกุญแจไม่ตรง",
+        "เลือกให้ครบตาม N",
+    ),
+    T18BackendError(
+        "critical/t18",
+        "CONFIRM WALLET",
+        "สร้าง Wallet ไม่สำเร็จ",
+        "ลองอีกครั้ง",
+    ),
+    T20VaultActions(
+        "critical/t20",
+        "WALLET ACTIONS",
+        "การกระทำของ Wallet",
+        "BSMS · health check",
+        BarTab.None,
+    ),
+    S1HomeSingleSig(
+        "send/s1",
+        "SINGLE-SIG",
+        "กระเป๋าใช้จ่าย",
+        "Home กุญแจเดียว",
+        BarTab.Wallets,
+    ),
+    S2ReceiveBackupGate(
+        "send/s2",
+        "RECEIVE",
+        "สำรองกุญแจก่อนรับเงิน",
+        "backup gate",
+    ),
+    S3Receive(
+        "send/s3",
+        "RECEIVE",
+        "รับ Bitcoin",
+        "ที่อยู่รับ",
+    ),
+    S4Send(
+        "send/s4",
+        "SEND",
+        "ส่ง Bitcoin",
+        "จำนวน · ค่าธรรมเนียม",
+    ),
+    S5ReviewSign(
+        "send/s5",
+        "REVIEW & SIGN",
+        "ตรวจแล้วเซ็น",
+        "เซ็นบนเครื่องนี้",
+    ),
+    S6Sent(
+        "send/s6",
+        "SENT",
+        "ส่งสำเร็จ",
+        "แชร์ใบเสร็จ",
+    ),
+    S6SentSlip(
+        "send/s6b",
+        "SENT · SLIP",
+        "ใบเสร็จแบบสลิป",
+        "รูปแบบแชร์ B",
+    ),
+    S6SentBlock(
+        "send/s6c",
+        "SENT · BLOCK",
+        "ใบเสร็จแบบบล็อก",
+        "รูปแบบแชร์ C",
+    ),
+    S6SentPoster(
+        "send/s6d",
+        "SENT · POSTER",
+        "ใบเสร็จแบบโปสเตอร์",
+        "รูปแบบแชร์ D",
+    ),
+    S7History(
+        "send/s7",
+        "HISTORY",
+        "ประวัติธุรกรรม",
+        "ธุรกรรมทั้งหมดของกระเป๋านี้",
+    ),
+    S8TxDetail(
+        "send/s8",
+        "TRANSACTION",
+        "รายละเอียดธุรกรรม",
+        "สถานะ · ค่าธรรมเนียม · TXID",
+    ),
+    M1SendVault(
+        "send/m1",
+        "SEND · WALLET",
+        "ส่งจาก Wallet",
+        "ต้องเซ็น M จาก N",
+    ),
+    M2CollectSignatures(
+        "send/m2",
+        "COLLECT SIGNATURES",
+        "เก็บลายเซ็น",
+        "เลือกกุญแจที่พร้อมเซ็น",
+    ),
+    M3SignOnDevice(
+        "send/m3",
+        "SIGN",
+        "ตรวจสอบบนอุปกรณ์",
+        "กดยืนยันบนอุปกรณ์",
+    ),
+    M8ReviewVault(
+        "send/m8",
+        "READY TO BROADCAST",
+        "ตรวจก่อนส่ง",
+        "ลายเซ็นครบแล้ว ตรวจแล้วส่ง",
+    ),
+    M9SentVault(
+        "send/m9",
+        "SENT · WALLET",
+        "ส่งสำเร็จ",
+        "สลิปส่ง Bitcoin",
+    ),
+    ChooseWalletReceive(
+        "wallets/choose-receive",
+        "RECEIVE · เลือกกระเป๋า",
+        "เลือกกระเป๋า",
+        "รับเข้ากระเป๋าที่เลือก",
+    ),
+    ChooseWalletSend(
+        "wallets/choose-send",
+        "SEND · เลือกกระเป๋า",
+        "เลือกกระเป๋า",
+        "ส่งจากกระเป๋าที่เลือก",
+    ),
+    VaultReceive(
+        "vaults/receive",
+        "RECEIVE",
+        "รับเข้า Wallet",
+        "ที่อยู่รับของ Wallet",
+    ),
+    ChooseKey(
+        "vault/choose-key",
+        "POLICY · ขั้น 2/3",
+        "เลือกกุญแจมาประกอบ",
+        "เลือกแล้ว 1 / 1 ใบ",
+    ),
+    HardwareAddressType(
+        "vault/hw-address-type",
+        "POLICY · ขั้น 3/3",
+        "เลือกรูปแบบที่อยู่",
+        "กำหนดรูปแบบที่อยู่และเส้นทางกุญแจของกระเป๋านี้",
+    ),
+    HardwareReadKey(
+        "vault/hw-read-key",
+        "HARDWARE WALLET",
+        "เชื่อมต่ออุปกรณ์",
+        "อ่านกุญแจสาธารณะ (xpub)",
+    ),
+    HardwareConfirmKey(
+        "vault/hw-confirm-key",
+        "VERIFY KEY",
+        "ยืนยัน fingerprint",
+        "เทียบ fingerprint กับที่แสดงบนอุปกรณ์ให้ตรงกันก่อนกดยืนยัน",
+    ),
+    HardwareCreated(
+        "vault/hw-created",
+        "WALLET CREATED",
+        "พร้อมใช้งาน",
+        "เข้าใช้งานกระเป๋า",
+        hardware = true,
+    ),
+    HardwareHome(
+        "hw/home",
+        "SINGLE-SIG",
+        "กุญแจเดียว",
+        "อยู่บนอุปกรณ์",
+        BarTab.Wallets,
+        hardware = true,
+    ),
+    HardwareReceive(
+        "hw/receive",
+        "RECEIVE",
+        "รับ Bitcoin",
+        "ที่อยู่รับ",
+        hardware = true,
+    ),
+    HardwareSend(
+        "hw/send",
+        "SEND",
+        "ส่ง Bitcoin",
+        "จำนวน · ค่าธรรมเนียม",
+        hardware = true,
+    ),
+    HardwareReview(
+        "hw/review",
+        "SEND · ตรวจสอบ",
+        "ตรวจก่อนส่ง",
+        "ส่งแล้วยกเลิกไม่ได้ เทียบที่อยู่กับคนรับอีกครั้ง",
+        hardware = true,
+    ),
+    HardwareSign(
+        "hw/sign",
+        "SIGN",
+        "ตรวจสอบบนอุปกรณ์",
+        "กดยืนยันบนอุปกรณ์",
+        hardware = true,
+    ),
+    HardwareSent(
+        "hw/sent",
+        "SENT · SLIP",
+        "ส่งสำเร็จ",
+        "แชร์ใบเสร็จ",
+        hardware = true,
+    ),
+    HardwareHistory(
+        "hw/history",
+        "HISTORY",
+        "ประวัติธุรกรรม",
+        "ธุรกรรมทั้งหมดของกระเป๋านี้",
+        hardware = true,
+    ),
+    HardwareTxDetail(
+        "hw/tx",
+        "TRANSACTION",
+        "รายละเอียดธุรกรรม",
+        "สถานะ · ค่าธรรมเนียม · TXID",
+        hardware = true,
+    ),
+    ;
+
+    companion object {
+        val start: MovieRoute = Welcome
+        val demoOrder: List<MovieRoute> = entries
+    }
+
+    fun nextInDemo(): MovieRoute {
+        val i = demoOrder.indexOf(this)
+        return demoOrder[(i + 1) % demoOrder.size]
+    }
+}

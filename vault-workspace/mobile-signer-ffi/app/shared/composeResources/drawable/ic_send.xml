@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lucide "send", as in Penpot Organize > 4.3 / 4.4 > รับ / ส่ง switch. Black: tinted where it is used, turned half a turn for รับ. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="21dp"
+    android:height="21dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M14.536,21.686 a0.5,0.5 0 0 0 0.937,-0.024 l6.5,-19 a0.496,0.496 0 0 0 -0.635,-0.635 l-19,6.5 a0.5,0.5 0 0 0 -0.024,0.937 l7.93,3.18 a2,2 0 0 1 1.112,1.11 z"
+        android:strokeColor="#000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+    <path
+        android:pathData="M21.854,2.147 L10.914,13.086"
+        android:strokeColor="#000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+</vector>

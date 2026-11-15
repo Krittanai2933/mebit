@@ -1,0 +1,8 @@
+# Every key sits at the TOML root: Gobley ignores a [bindings.kotlin] table silently,
+# and without the two kotlin_* keys it writes only a common file (observed).
+
+package_name = "com.mebit.ffi.signer"
+kotlin_multiplatform = true
+kotlin_targets = ["android", "native"]
+# Pinned so findLibraryName does not follow the library file's name (observed with a copy named libfoo.dylib, which gave "foo").
+cdylib_name = "mobile_signer_ffi"

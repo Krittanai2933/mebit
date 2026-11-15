@@ -23,7 +23,7 @@ Risk-zone convention used throughout the design: leaf green below 50% LTV, yello
 
 ## Type
 
-Everything is **FC Vision** (`--font-display` / `--font-body` / `--font-label` all resolve to it) — a proprietary Mapboss typeface. The `.otf` files are not in this repo; request them from the design team, and use a system sans-serif fallback (already wired via the CSS `font-family` stack) until then. Thai carries substance; English is reserved for uppercase signposting labels (e.g. "LOAN DASHBOARD", "LTV").
+Shipping typeface is **Kanit** (OFL, Thai + Latin) — `--font-display` / `--font-body` / `--font-label` all resolve to it. Files live in `design-reference/fonts/Kanit-*.ttf`; Compose loads `Res.font.kanit_*`. Penpot historically used FC Vision; do not claim glyph pixel-zero against those boards. Thai carries substance; English is reserved for uppercase signposting labels (e.g. "LOAN DASHBOARD", "LTV").
 
 ## Radii & shadows
 

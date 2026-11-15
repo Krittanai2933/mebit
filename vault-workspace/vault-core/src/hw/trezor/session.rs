@@ -26,16 +26,16 @@
 use std::time::Duration;
 
 use bitcoin::bip32::{DerivationPath, Fingerprint, Xpub};
-use bitcoin::{Network, Psbt};
+use bitcoin::{Address, Network, Psbt};
 use protobuf::{EnumOrUnknown, Message};
 use trezor_thp::channel::PairingState;
 use zeroize::Zeroizing;
 
-use super::bitcoin::{Answer, Signing, XpubOptions, XpubRequest};
+use super::bitcoin::{AddressVerification, Answer, Signing, XpubOptions, XpubRequest};
 use super::cpace::{self, CHALLENGE_LEN};
 use super::identity::{Safe7Identity, check_features};
 use super::protos::MessageType;
-use super::protos::bitcoin::{PublicKey, TxRequest};
+use super::protos::bitcoin::{Address as AddressResponse, PublicKey, TxRequest};
 use super::protos::common::Failure;
 use super::protos::common::failure::FailureType;
 use super::protos::management::{Features, GetFeatures};
@@ -45,9 +45,11 @@ use super::protos::thp::{
     ThpCredentialResponse, ThpEndRequest, ThpMessageType, ThpPairingMethod, ThpPairingRequest,
     ThpSelectMethod,
 };
+use super::signing_trace::{Recorder, SigningTrace, SigningTraceEnd};
 use super::thp::{Arrival, HostCredentials, Link, broken};
 use super::{PairingCredential, SessionPassphrase, TrezorError, decode, encode};
 use crate::error::VaultCoreError;
+use crate::hw::AddressRequest;
 
 /// Pairing, credentials and `GetFeatures` (trezorlib's pairing session and
 /// `_get_session(passphrase=None)`).
@@ -75,6 +77,8 @@ const BUTTON_REQUEST: u16 = MessageType::MessageType_ButtonRequest as u16;
 const BUTTON_ACK: u16 = MessageType::MessageType_ButtonAck as u16;
 const GET_PUBLIC_KEY: u16 = MessageType::MessageType_GetPublicKey as u16;
 const PUBLIC_KEY: u16 = MessageType::MessageType_PublicKey as u16;
+const GET_ADDRESS: u16 = MessageType::MessageType_GetAddress as u16;
+const ADDRESS: u16 = MessageType::MessageType_Address as u16;
 const SIGN_TX: u16 = MessageType::MessageType_SignTx as u16;
 const TX_REQUEST: u16 = MessageType::MessageType_TxRequest as u16;
 const TX_ACK: u16 = MessageType::MessageType_TxAck as u16;
@@ -114,7 +118,7 @@ pub enum UserPrompt {
     ApprovePairing,
     /// Confirm a connection from a host paired before.
     ConfirmConnection,
-    /// Confirm what is on the screen: an xpub, or a transaction.
+    /// Confirm the xpub, address, or transaction shown on the screen.
     Confirm,
 }
 
@@ -145,6 +149,8 @@ pub enum TrezorEvent {
     /// Only ever the PSBT that was sent plus valid signatures from the
     /// signer's keys (see [`crate::hw::psbt_check`]).
     SignedPsbt(Psbt),
+    /// The address displayed by the device matched the enrolled descriptor.
+    AddressVerified(Address),
     /// The request ended without a result, and the connection stays usable:
     /// declined or cancelled on the device, refused by the device, or refused
     /// here (the signatures didn't check out). Write [`Step::send`] anyway:
@@ -174,6 +180,7 @@ pub struct TrezorSession {
     /// A message waiting for the previous one's acknowledgement.
     outbox: Option<(u8, u16, Vec<u8>)>,
     retransmissions: u8,
+    signing_trace: Recorder,
 }
 
 enum Flow {
@@ -181,6 +188,7 @@ enum Flow {
     Connecting(Connect),
     Ready,
     Xpub(XpubRequest),
+    Address(AddressVerification),
     Signing(Box<Signing>),
     Broken,
 }
@@ -244,6 +252,7 @@ impl TrezorSession {
             cancel_pending: false,
             outbox: None,
             retransmissions: 0,
+            signing_trace: Recorder::default(),
         })
     }
 
@@ -297,7 +306,7 @@ impl TrezorSession {
         result.map_err(Into::into)
     }
 
-    /// Asks for the xpub at an account `path` (BIP-48 P2WSH or BIP-84).
+    /// Asks for the xpub at a BIP-48 P2WSH or BIP-44/49/84/86 account.
     pub fn request_xpub(
         &mut self,
         path: &DerivationPath,
@@ -310,8 +319,20 @@ impl TrezorSession {
         Ok(send)
     }
 
+    /// Displays an enrolled descriptor address and checks the returned address.
+    pub fn request_verify_address(
+        &mut self,
+        request: &AddressRequest<'_>,
+    ) -> Result<Vec<Vec<u8>>, VaultCoreError> {
+        self.ensure_ready()?;
+        let (verification, message) = AddressVerification::new(request, self.config.network)?;
+        let send = self.queue(WALLET, GET_ADDRESS, encode(&message)?)?;
+        self.flow = Flow::Address(verification);
+        Ok(send)
+    }
+
     /// Has the device sign `psbt` once the user confirms it on the device.
-    /// `signer` is the master fingerprint the vault expects to sign with.
+    /// `signer` is the master fingerprint the wallet expects to sign with.
     pub fn request_sign_psbt(
         &mut self,
         psbt: &Psbt,
@@ -324,6 +345,36 @@ impl TrezorSession {
         Ok(send)
     }
 
+    /// Starts private capture for one signing attempt. An undrained capture
+    /// refuses a new traced attempt without replacing its evidence.
+    pub fn request_sign_psbt_traced(
+        &mut self,
+        psbt: &Psbt,
+        signer: Fingerprint,
+    ) -> Result<Vec<Vec<u8>>, VaultCoreError> {
+        self.ensure_ready()?;
+        let (signing, message) = Signing::new(psbt, signer, self.config.network)?;
+        let payload = encode(&message)?;
+        if !self.signing_trace.start() {
+            return Err(TrezorError::OutOfOrder.into());
+        }
+        let send = match self.queue(WALLET, SIGN_TX, payload) {
+            Ok(send) => send,
+            Err(error) => {
+                self.signing_trace = Recorder::Empty;
+                self.after_error(&error);
+                return Err(error.into());
+            }
+        };
+        self.flow = Flow::Signing(Box::new(signing));
+        Ok(send)
+    }
+
+    /// Transfers retained private evidence, freezing an unfinished attempt.
+    pub fn take_signing_trace(&mut self) -> Option<SigningTrace> {
+        self.signing_trace.take()
+    }
+
     /// Asks the device to drop the prompt it shows, or the next one: the
     /// request then ends in [`TrezorError::UserCancelled`] and the connection
     /// stays usable. If the request ends before showing another prompt (say,
@@ -333,6 +384,7 @@ impl TrezorSession {
         let cancellable = matches!(
             self.flow,
             Flow::Xpub(_)
+                | Flow::Address(_)
                 | Flow::Signing(_)
                 | Flow::Connecting(
                     Connect::PairingRequested
@@ -404,6 +456,7 @@ impl TrezorSession {
     /// For a caller that gave up midway (a timeout, a dropped link): the
     /// session refuses further calls. Reconnect.
     pub fn abandon(&mut self) {
+        self.signing_trace.freeze(SigningTraceEnd::Interrupted);
         self.break_session();
     }
 
@@ -441,6 +494,8 @@ impl TrezorSession {
                 message_type,
                 payload,
             } => {
+                self.signing_trace
+                    .record(false, session, message_type, &payload);
                 self.on_screen = None;
                 self.on_message(session, message_type, payload)
             }
@@ -455,7 +510,7 @@ impl TrezorSession {
         if self.link.ready_to_send()
             && let Some((session, message_type, payload)) = self.outbox.take()
         {
-            match self.link.send(session, message_type, &payload) {
+            match self.handoff(session, message_type, &payload) {
                 Ok(packets) => send.extend(packets),
                 Err(error) => return (send, Err(error)),
             }
@@ -523,6 +578,15 @@ impl TrezorSession {
                     }),
                 })
             }
+            Flow::Address(request) => {
+                expect(session, WALLET, message_type, ADDRESS, "Address")?;
+                self.become_ready();
+                let address = request.finish(decode::<AddressResponse>(&payload)?)?;
+                Ok(Step {
+                    send: Vec::new(),
+                    event: Some(TrezorEvent::AddressVerified(address)),
+                })
+            }
             Flow::Signing(mut signing) => {
                 expect(session, WALLET, message_type, TX_REQUEST, "TxRequest")?;
                 match signing.answer(&decode::<TxRequest>(&payload)?)? {
@@ -536,7 +600,13 @@ impl TrezorSession {
                     Answer::Finished => {
                         // The exchange is over either way; the channel is in step.
                         self.become_ready();
-                        let signed = signing.finish()?;
+                        let signed = signing.finish();
+                        self.signing_trace.freeze(if signed.is_ok() {
+                            SigningTraceEnd::Completed
+                        } else {
+                            SigningTraceEnd::Rejected
+                        });
+                        let signed = signed?;
                         Ok(Step {
                             send: Vec::new(),
                             event: Some(TrezorEvent::SignedPsbt(signed)),
@@ -790,7 +860,9 @@ impl TrezorSession {
             Flow::Connecting(Connect::PairingRequested) => UserPrompt::ApprovePairing,
             Flow::Connecting(Connect::Ending { .. }) => UserPrompt::ConfirmConnection,
             Flow::Connecting(Connect::CreatingSession { .. }) => UserPrompt::Unlock,
-            Flow::Connecting(_) | Flow::Xpub(_) | Flow::Signing(_) => UserPrompt::Confirm,
+            Flow::Connecting(_) | Flow::Xpub(_) | Flow::Address(_) | Flow::Signing(_) => {
+                UserPrompt::Confirm
+            }
             Flow::Idle | Flow::Ready | Flow::Broken => {
                 return Err(TrezorError::Protocol("a prompt nothing asked for".into()));
             }
@@ -810,6 +882,7 @@ impl TrezorSession {
     }
 
     fn on_failure(&mut self, failure: &Failure) -> TrezorError {
+        self.signing_trace.freeze(SigningTraceEnd::Rejected);
         let message = failure.message.clone().unwrap_or_default();
         let error = match failure.code.and_then(|code| code.enum_value().ok()) {
             Some(FailureType::Failure_ActionCancelled | FailureType::Failure_PinCancelled) => {
@@ -827,7 +900,10 @@ impl TrezorSession {
         };
         // The device is back at its home screen; only a connection that was
         // still being set up is lost.
-        if matches!(self.flow, Flow::Xpub(_) | Flow::Signing(_)) {
+        if matches!(
+            self.flow,
+            Flow::Xpub(_) | Flow::Address(_) | Flow::Signing(_)
+        ) {
             self.become_ready();
         }
         error
@@ -841,6 +917,7 @@ impl TrezorSession {
     }
 
     fn after_error(&mut self, error: &TrezorError) {
+        self.signing_trace.freeze(SigningTraceEnd::ProtocolFailure);
         let connection_lost = matches!(self.flow, Flow::Connecting(_) | Flow::Broken)
             || matches!(
                 error,
@@ -890,7 +967,7 @@ impl TrezorSession {
     ) -> Result<Vec<Vec<u8>>, TrezorError> {
         if self.link.ready_to_send() {
             self.retransmissions = 0;
-            return self.link.send(session, message_type, &payload);
+            return self.handoff(session, message_type, &payload);
         }
         if self
             .outbox
@@ -904,7 +981,25 @@ impl TrezorSession {
         Ok(Vec::new())
     }
 
+    fn handoff(
+        &mut self,
+        session: u8,
+        message_type: u16,
+        payload: &[u8],
+    ) -> Result<Vec<Vec<u8>>, TrezorError> {
+        let packets = self.link.send(session, message_type, payload)?;
+        self.signing_trace
+            .record(true, session, message_type, payload);
+        Ok(packets)
+    }
+
+    #[cfg(test)]
+    pub(super) fn occupy_link_for_test(&mut self) -> Vec<Vec<u8>> {
+        self.handoff(WALLET, BUTTON_ACK, &[]).unwrap()
+    }
+
     fn break_session(&mut self) {
+        self.signing_trace.freeze(SigningTraceEnd::ProtocolFailure);
         self.link.close();
         self.flow = Flow::Broken;
         self.outbox = None;

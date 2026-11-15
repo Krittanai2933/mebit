@@ -12,3 +12,10 @@ pub mod jade;
 pub mod psbt_check;
 #[cfg(feature = "trezor")]
 pub mod trezor;
+
+/// Address that a device must derive and display for its enrolled key.
+pub struct AddressRequest<'a> {
+    pub descriptor: &'a miniscript::Descriptor<miniscript::DescriptorPublicKey>,
+    pub index: u32,
+    pub signer: bitcoin::bip32::Fingerprint,
+}

@@ -1,15 +1,25 @@
-# mebit borrower app — design reference
+# mebit wallet app — design reference
 
-Source: Claude Design project **"Mebit mobile app design"** (`mebit App.dc.html` / `AppScreen.dc.html`), imported 2026-07-31, revised 2026-07-31 to add multi-loan support and three new screens, then again to add the hot-wallet requirement below. This is the UI/UX starting point for the `mobile-signer-ffi` demo app (capstone brief §3.3) — the team should adapt it rather than redesign from scratch. Design tokens live in [`../design-reference/`](../design-reference/); this file captures the screens, flows, and product reasoning behind them.
+Source of truth for the current wallet/custody UI: Penpot Organize and Organize · Design System. This document records the current flow map first, then retains the previous lending-oriented mobile concept as historical product context. Shared visual references live in the design-reference directory.
 
-## Product framing
+## Current Penpot design — Organize
+
+The Organize page contains seven user-flow groups: Onboarding (1.1 Welcome), Import existing seed (1B.1 Import Seed · empty), Add key · keyring (2.1 Add Key), Create vault (3.1 Policy), Single-sig wallet (4.1 Home · single-sig), Vault send (multisig) (5.1 Send · vault), and Error & edge states (6.1 Connect HW — UnsupportedModel).
+
+The page audit found 105 full-size screen boards and 378 navigate-to interactions; 99 boards are reachable from the seven flow starts. Six boards were not reached: 4.2 Receive · backup gate, 6.8 Vault Detail — actions, 6.2 KeyVault — empty, 6.5 Select Policy — decaying, 6.6 Compose Vault — count mismatch, and 6.7 Confirm Vault — backend error. Keep these visible as follow-up coverage items.
+
+The current Settings screen uses Anuphan, a cool gray #f6f7f9 page, white cards, #e4e8ee borders, #0e1116 primary text, #5b6472 secondary text, navy #042c49, amber #c2700f, pale amber #fdefdd, and 24px card corners. Language (TH/EN) and currency (sat/BTC) are text choices; light/dark mode remains icon-led. The Design System page is canonical for shared tokens.
+
+## Historical lending-prototype notes
+
+### Product framing (historical lending concept)
 
 > "กระเป๋าบิตคอยน์ที่ถือกุญแจเอง แต่ใช้มูลค่าได้โดยไม่ต้องขาย"
 > (A Bitcoin wallet where you keep your own keys, but can still use its value without selling.)
 
-Sub-brand `mebit`, built on the Mapboss corporate identity (teal `#007368`, leaf green, a single yellow accent dot, FC Vision typeface throughout, "powered by mapboss" endorsement on onboarding). Light theme by default; the deep green (`#06312D`) surface is reserved for moments that should feel weighty: the Portfolio net-position panel, the Loan Dashboard risk panel, the Settings identity panel, and the success screen. Thai carries all substantive copy; English is used only for uppercase signposting labels (RECEIVE BITCOIN, LOAN DASHBOARD, LTV).
+Historical lending prototype styling: Mapboss teal #007368, leaf green, FC Vision, and deep green #06312D. These are not current Organize screen tokens; use Penpot Design System for current implementation.
 
-## Multi-loan / multi-contract model (new)
+### Multi-loan / multi-contract model (new)
 
 The single-loan model from the first design pass is gone. A borrower can now hold **several concurrent loan contracts against the same wallet**, each pledging its own slice of BTC as collateral — isolated, not cross-collateralized. If one contract's LTV crosses the liquidation threshold, only *that* contract's pledged collateral is at risk; other contracts and any unpledged ("free") BTC are unaffected. This is the single biggest structural change and touches almost every screen:
 
@@ -20,7 +30,7 @@ The single-loan model from the first design pass is gone. A borrower can now hol
 
 This maps cleanly onto the real system: each contract is its own on-chain vault (its own 2-of-3 multisig descriptor per `vault-core`), so "isolated, not cross-collateralized" isn't just a UI framing — it's the actual custody model in `docs/00-capstone-brief.md` §3.1, just made visible for the first time in the mobile UI once there's more than one loan to show.
 
-## This app is a full Bitcoin wallet, not just a PSBT-signing screen (new)
+### This app is a full Bitcoin wallet, not just a PSBT-signing screen (new)
 
 The original scope for `mobile-signer-ffi` was "wrap vault-core's key derivation and PSBT signing." That's too narrow once you look at what the design actually asks for: the borrower's BTC is always in one of two states — **free** (not pledged to any loan) or **pledged** (locked in a specific loan's multisig vault) — and the app has to be a real wallet for the free portion, not just a display of a number:
 
@@ -36,7 +46,7 @@ The vault-signer half (wrapping `vault-core` for pledged BTC) is unchanged from 
 
 **Scope reality check**: 12 full screens *plus* a real hot wallet is more than one person can finish solo in two terms. Split into **MVP screens** (onboarding → seed backup → Face ID → home → receive → borrow → loan dashboard → repay → success — this is the tappable prototype's actual path, and matches the midterm/final demo) and **stretch goals** (activity, portfolio, settings — nice to have if time allows, or picked up by teammates in term 2 once their own modules stabilize).
 
-## Screens (12)
+### Screens (12)
 
 1. **Onboarding** — now a single combined screen (no separate splash): logo eyebrow, headline, tagline, "สร้างกระเป๋าใหม่" (create → seed backup) / "นำเข้ากระเป๋าเดิม" (import → straight to Home), powered-by-mapboss mark
 2. **Seed backup** — "STEP 2 · BACKUP", 12-word grid, scam warning, confirm checkbox
@@ -53,7 +63,7 @@ The vault-signer half (wrapping `vault-core` for pledged BTC) is unchanged from 
 
 Bottom nav (Wallet / Borrow / Activity / Portfolio / Settings, all five now functional) only appears on Home, Activity, Portfolio, and Settings — Receive/Borrow/Loan Dashboard/Repay/Success are stack screens with a back button instead.
 
-## Numbers used throughout (keep consistent in any implementation)
+### Numbers used throughout (keep consistent in any implementation)
 
 Fixture data — three contracts against one wallet, useful as-is for demos/tests:
 
@@ -75,7 +85,7 @@ Fixture data — three contracts against one wallet, useful as-is for demos/test
 
 Per-contract liquidation price and LTV use the same derivation as before (`debt / (collateral × price)` for LTV, `debt / (0.8 × collateral)` for liquidation price) — just computed per-contract now instead of once for the whole wallet.
 
-## Design decisions worth carrying into implementation
+### Design decisions worth carrying into implementation
 
 - **Liquidation is per-contract, never wallet-wide.** A contract crossing 80% LTV only puts *its own* pledged BTC at risk. This must hold all the way down to `vault-core`: each contract's policy engine authorization should reference only that contract's vault/UTXO (see `.claude/skills/policy-engine-review/SKILL.md`'s "wrong loan" checklist item — this design decision is exactly the property that check exists to protect).
 - **Available credit and initial borrow limits are based on free (unpledged) BTC, not total holdings.** Already-pledged BTC isn't available to back a new loan twice.
@@ -85,7 +95,7 @@ Per-contract liquidation price and LTV use the same derivation as before (`debt 
 - **Deleting the app doesn't delete the BTC, but losing the seed phrase means nobody — including the mebit team — can recover the wallet.** This sentence is explicit copy on the Settings screen; keep it verbatim in any real implementation, it's a load-bearing trust claim for a self-custody product.
 - **No icon set exists yet in the Mapboss CI.** Nav glyphs remain minimal line icons as a flagged placeholder.
 
-## Screen variants explored (not all need to ship — pick per team judgment)
+### Screen variants explored (not all need to ship — pick per team judgment)
 
 Still valid from the first design pass — the multi-loan changes above apply on top of whichever variant is chosen:
 
@@ -93,7 +103,7 @@ Still valid from the first design pass — the multi-loan changes above apply on
 - **Risk display**: (a) arc to liquidation [used in the wired prototype]; (b) price ruler — reframes risk as "how far can price fall" with LTV as a footnote; (c) zoned bar with the liquidation consequence spelled out in a sentence, plus Add-BTC/Repay actions inline.
 - **Borrow amount input**: (a) continuous slider with live LTV [used in the wired prototype]; (b) numeric keypad for people who know the exact amount; (c) risk-named presets — the safest default for keeping first-time borrowers away from high LTV, since there's no free-form number entry at all.
 
-## Roadmap context (from the original product brief, `uploads/` in the design project)
+### Roadmap context (from the original product brief, `uploads/` in the design project)
 
 Useful for scoping V2/V3 conversations, but **out of MVP/capstone scope**:
 
@@ -102,8 +112,8 @@ Useful for scoping V2/V3 conversations, but **out of MVP/capstone scope**:
 
 Note that "multi-collateral" was originally scoped as V3 — the multi-*contract* model added here is adjacent but distinct: each contract still has one simple collateral pledge, there's just more than one contract per wallet. True multi-collateral (one loan backed by several distinct pledges) is still out of scope.
 
-## Assets
+### Assets
 
-- Design tokens (colors, type scale, radii, shadows): [`../design-reference/colors_and_type.css`](../design-reference/colors_and_type.css) — unchanged by this revision, no new tokens were introduced
+- Current Organize visual references: colors_and_type.css; confirm shared values against Penpot Organize · Design System.
 - Logos: [`../design-reference/logos/`](../design-reference/logos/)
-- Fonts (FC Vision, proprietary to Mapboss): not copied here — request the `.otf` files from the design team when building the real app; see the CSS file's `@font-face` blocks for the expected filenames/weights.
+- Penpot Organize uses Anuphan. The app currently bundles Kanit under OFL; see design-reference/fonts/README.md. The historical FC Vision note applies only to the earlier lending prototype.

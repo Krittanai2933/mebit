@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penpot Organize > 4.4.2 Send · scan QR > Photos icon. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M6,4 L18,4 C19.657,4 21,5.343 21,7 L21,17 C21,18.657 19.657,20 18,20 L6,20 C4.343,20 3,18.657 3,17 L3,7 C3,5.343 4.343,4 6,4 Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.7"
+        android:strokeLineJoin="round"/>
+    <path
+        android:pathData="M6.5,9 A1.5,1.5 0 1,0 9.5,9 A1.5,1.5 0 1,0 6.5,9 Z"
+        android:fillColor="#FFFFFF"/>
+    <path
+        android:pathData="M4,17 L9,12 L13,16 L15,14 L20,19"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+</vector>

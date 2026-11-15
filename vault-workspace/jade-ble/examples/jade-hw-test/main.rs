@@ -7,6 +7,8 @@
 //! cargo run -p jade-ble --example jade-hw-test -- roundtrip --inputs 16
 //! ```
 
+#[path = "../../../wallet-e2e/mod.rs"]
+pub mod e2e;
 mod roundtrip;
 
 use std::error::Error;
@@ -20,7 +22,9 @@ use bitcoin::bip32::{DerivationPath, Xpub};
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::{Network, Psbt};
 use clap::{Parser, Subcommand};
-use jade_ble::JadeBle;
+use jade_ble::{JadeBle, JadeBleError};
+use vault_core::error::VaultCoreError;
+use vault_core::hw::jade::{JadeError, Registered, WalletRegistration};
 use vault_core::keys::{
     HwVendor, KeySourceType, ScriptType, VaultKey, account_multisig_xpub_from_mnemonic,
     generate_master_xpriv, generate_seed,
@@ -45,6 +49,11 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Offline checks and the serial testnet4 coordinator.
+    E2e {
+        #[command(subcommand)]
+        command: e2e::model::Command,
+    },
     /// Firmware, board, state and network pin. No unlock.
     Info,
     /// Unlock, then print the master fingerprint and the xpub at --path.
@@ -72,6 +81,21 @@ enum Command {
         /// Where to write the unsigned and signed PSBTs
         #[arg(long)]
         out_dir: Option<PathBuf>,
+        /// Spend from the wallet that `register` registered, with the change going to its own
+        /// change address, to see whether the Jade hides it. Run `register` first.
+        #[arg(long)]
+        registered: bool,
+    },
+    /// Register a fixed test 2-of-3 (the Jade's key plus two public test keys) on the Jade
+    /// under its derived name, and read it back. Test networks only.
+    Register {
+        /// Try this name instead of the derived one, to find the Jade's length limit
+        #[arg(long)]
+        name: Option<String>,
+        /// Register a different test 2-of-3 under the same name, to see what the Jade does with
+        /// a taken name (the app itself would refuse)
+        #[arg(long)]
+        other: bool,
     },
 }
 
@@ -86,7 +110,18 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run(args: Args) -> Result<(), Box<dyn Error>> {
+async fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
+    let selected = std::mem::replace(&mut args.command, Command::Info);
+    if let Command::E2e { command } = selected {
+        if args.network != Network::Testnet4 {
+            return Err("e2e requires --network testnet4".into());
+        }
+        let store = e2e::records::Store::new()?;
+        let result = dispatch_e2e(&args, command, &store).await;
+        e2e::records::log_command(&store, &result)?;
+        return result;
+    }
+    args.command = selected;
     eprintln!("Scanning {} s for a Jade…", args.scan_secs);
     let scan = Duration::from_secs(args.scan_secs);
     let mut jade = JadeBle::connect(args.network, args.name.as_deref(), scan).await?;
@@ -97,12 +132,30 @@ async fn run(args: Args) -> Result<(), Box<dyn Error>> {
     Ok(closed?)
 }
 
+async fn dispatch_e2e(
+    args: &Args,
+    command: e2e::model::Command,
+    store: &e2e::records::Store,
+) -> e2e::Result<()> {
+    if e2e::offline_command(&command, store)? {
+        return Ok(());
+    }
+    if let e2e::model::Command::Device { request, response } = command {
+        let request: e2e::records::WorkerRequest = e2e::records::read_json(&request)?;
+        e2e::records::validate_worker_request(&request)?;
+        let _hardware_lease = e2e::records::Lease::acquire_hardware(store)?;
+        return run_device(args, request, response).await;
+    }
+    forward_coordinator(args, command)
+}
+
 async fn command(
     jade: &mut JadeBle,
     network: Network,
     command: Command,
 ) -> Result<(), Box<dyn Error>> {
     match command {
+        Command::E2e { .. } => return Err("e2e commands must dispatch before opening BLE".into()),
         Command::Info => {
             let info = jade.version_info().await?;
             println!("firmware  {}", info.firmware);
@@ -148,7 +201,12 @@ async fn command(
                 None => println!("{signed}"),
             }
         }
-        Command::Roundtrip { inputs, out_dir } => {
+        Command::Register { name, other } => register(jade, network, name, other).await?,
+        Command::Roundtrip {
+            inputs,
+            out_dir,
+            registered,
+        } => {
             if network == Network::Bitcoin {
                 return Err(
                     "roundtrip builds throwaway test transactions: use a test network".into(),
@@ -157,9 +215,37 @@ async fn command(
             unlock(jade).await?;
             let master = jade.xpub(&DerivationPath::master()).await?;
             let account = jade.xpub(&multisig_account_path(network)).await?;
-            let fixture =
-                roundtrip::Fixture::build(network, master.fingerprint(), account, inputs)?;
+            let fixture = if registered {
+                let wallet = registered_wallet(
+                    network,
+                    master.fingerprint(),
+                    account,
+                    roundtrip::REGISTERED_COSIGNERS,
+                )?;
+                if jade.registration(&wallet).await? != Registered::Same {
+                    return Err(
+                        "the test wallet is not registered on this Jade: run `register` first"
+                            .into(),
+                    );
+                }
+                println!("Registered as {}.", wallet.name());
+                roundtrip::Fixture::build_with(
+                    network,
+                    master.fingerprint(),
+                    account,
+                    inputs,
+                    roundtrip::REGISTERED_COSIGNERS,
+                    true,
+                )?
+            } else {
+                roundtrip::Fixture::build(network, master.fingerprint(), account, inputs)?
+            };
             fixture.describe();
+            if registered {
+                println!(
+                    "Look at on the Jade: does the change output show, or is it hidden as the wallet's own?"
+                );
+            }
             if let Some(dir) = &out_dir {
                 std::fs::write(dir.join("unsigned.psbt"), fixture.psbt.to_string())?;
             }
@@ -180,6 +266,92 @@ async fn command(
                 tx.vsize()
             );
         }
+    }
+    Ok(())
+}
+
+fn registered_wallet(
+    network: Network,
+    fingerprint: bitcoin::bip32::Fingerprint,
+    account: Xpub,
+    cosigners: [u8; 2],
+) -> Result<WalletRegistration, Box<dyn Error>> {
+    let descriptor = roundtrip::test_wallet(network, fingerprint, account, cosigners)?;
+    Ok(WalletRegistration::of(&descriptor, network)?)
+}
+
+/// The device check for registering a several-key wallet. UNVERIFIED limits: the output says
+/// what the Jade actually did.
+async fn register(
+    jade: &mut JadeBle,
+    network: Network,
+    name: Option<String>,
+    other: bool,
+) -> Result<(), Box<dyn Error>> {
+    if network == Network::Bitcoin {
+        return Err("register uses throwaway test wallets: use a test network".into());
+    }
+    unlock(jade).await?;
+    let master = jade.xpub(&DerivationPath::master()).await?;
+    let account = jade.xpub(&multisig_account_path(network)).await?;
+    let cosigners = if other {
+        roundtrip::OTHER_COSIGNERS
+    } else {
+        roundtrip::REGISTERED_COSIGNERS
+    };
+    let mut wallet = registered_wallet(network, master.fingerprint(), account, cosigners)?;
+    if let Some(name) = name {
+        wallet = wallet.with_name(name);
+    }
+    println!(
+        "Registered on the Jade now: {:?}",
+        jade.registered_multisigs().await?
+    );
+    println!(
+        "Name to register: {} ({} characters), {}-of-{}, signers {:?}",
+        wallet.name(),
+        wallet.name().len(),
+        wallet.threshold(),
+        wallet.signers().len(),
+        wallet
+            .signers()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
+    match jade.registration(&wallet).await {
+        Ok(Registered::Same) => {
+            println!("This wallet is already registered under that name; nothing to do.");
+            return Ok(());
+        }
+        Ok(Registered::Absent) => println!("Nothing registered under that name."),
+        Err(JadeBleError::Jade(VaultCoreError::Jade(JadeError::WalletNameTaken))) if other => {
+            println!(
+                "The name holds ANOTHER wallet. The app would refuse here. Test only: registering anyway to see what the Jade does."
+            );
+        }
+        Err(error) => return Err(error.into()),
+    }
+    println!("Look at on the Jade: the Jade should show the registration. Note:");
+    println!("  - the name it shows, whole or cut (length limit)");
+    println!("  - M-of-N, and whether it lists the three fingerprints");
+    println!("  - any warning, such as a name already in use");
+    println!("Then confirm on the Jade, or decline to test the decline path.");
+    match jade.register(&wallet).await {
+        Ok(()) => println!("Result: registered, and the readback matches this wallet."),
+        Err(error) => {
+            println!("Result: NOT registered. The Jade's reply, raw: {error}");
+            println!("  (debug: {error:?})");
+            return Ok(());
+        }
+    }
+    println!(
+        "Registered on the Jade now: {:?}",
+        jade.registered_multisigs().await?
+    );
+    match jade.registration(&wallet).await? {
+        Registered::Same => println!("Read by name: matches this wallet exactly."),
+        Registered::Absent => println!("Read by name: NOT listed after registering."),
     }
     Ok(())
 }
@@ -247,4 +419,198 @@ fn read_psbt(file: &Path) -> Result<Psbt, Box<dyn Error>> {
         return Ok(Psbt::deserialize(&bytes)?);
     }
     Ok(Psbt::from_str(std::str::from_utf8(&bytes)?.trim())?)
+}
+
+fn forward_coordinator(args: &Args, command: e2e::model::Command) -> e2e::Result<()> {
+    use e2e::model::Command as E;
+    let executable = std::env::current_exe()?
+        .with_file_name(format!("trezor-hw-test{}", std::env::consts::EXE_SUFFIX));
+    let mut child = std::process::Command::new(executable);
+    child.args([
+        "--network",
+        "testnet4",
+        "--scan-secs",
+        &args.scan_secs.to_string(),
+    ]);
+    if let Some(name) = &args.name {
+        child.args(["--jade-device", name]);
+    }
+    child.arg("e2e");
+    match command {
+        E::Enroll {
+            slot,
+            jade_slot_empty,
+        } => {
+            child.args(["enroll", "--slot", &slot.to_string()]);
+            if jade_slot_empty {
+                child.arg("--jade-slot-empty");
+            }
+        }
+        E::ExportEnrollment { slot, out } => {
+            child.args([
+                "export-enrollment",
+                "--slot",
+                &slot.to_string(),
+                "--out",
+                &out.to_string_lossy(),
+            ]);
+        }
+        E::ImportEnrollment { slot, file } => {
+            child.args([
+                "import-enrollment",
+                "--slot",
+                &slot.to_string(),
+                "--file",
+                &file.to_string_lossy(),
+            ]);
+        }
+        E::Prepare { case, remote_slot } => {
+            child.args(["prepare", "--case", &case]);
+            if let Some(slot) = remote_slot {
+                child.args(["--remote-slot", &slot.to_string()]);
+            }
+        }
+        E::ImportRemote { case, response } => {
+            child.args([
+                "import-remote",
+                "--case",
+                &case,
+                "--response",
+                &response.to_string_lossy(),
+            ]);
+        }
+        E::Run {
+            case,
+            funding_outpoint,
+            broadcast,
+            signing_mode,
+        } => {
+            child.args([
+                "run",
+                "--case",
+                &case,
+                "--funding-outpoint",
+                &funding_outpoint.to_string(),
+            ]);
+            if broadcast {
+                child.arg("--broadcast");
+            }
+            if let Some(mode) = signing_mode {
+                child.args([
+                    "--signing-mode",
+                    match mode {
+                        e2e::model::SigningMode::Sequential => "sequential",
+                        e2e::model::SigningMode::Independent => "independent",
+                    },
+                ]);
+            }
+        }
+        E::Resume { case, broadcast } => {
+            child.args(["resume", "--case", &case]);
+            if broadcast {
+                child.arg("--broadcast");
+            }
+        }
+        _ => return Err("command is not a coordinator operation".into()),
+    }
+    let status = child
+        .status()
+        .map_err(|e| format!("build trezor-hw-test and jade-hw-test before live work: {e}"))?;
+    if !status.success() {
+        return Err(format!("serial coordinator exited with {status}").into());
+    }
+    Ok(())
+}
+
+async fn run_device(
+    args: &Args,
+    request: e2e::records::WorkerRequest,
+    response: PathBuf,
+) -> e2e::Result<()> {
+    use e2e::records::{DeviceAction, DeviceResult, Registration, WorkerResponse};
+    use vault_core::hw::jade::JadeRegistrationPolicy;
+    let mut device = JadeBle::connect(
+        Network::Testnet4,
+        args.name.as_deref(),
+        Duration::from_secs(args.scan_secs),
+    )
+    .await?;
+    let outcome = async {
+        let info = device.version_info().await?;
+        device.unlock().await?;
+        let master = device.xpub(&DerivationPath::master()).await?;
+        let mut accounts = Vec::new();
+        for family in e2e::model::Family::ALL {
+            accounts.push((family, device.xpub(&family.path()).await?));
+        }
+        let identity = e2e::identity_from_accounts(
+            e2e::records::jade_physical_id(device.name()),
+            info.firmware,
+            master.fingerprint(),
+            accounts,
+        );
+        if let Some(expected) = &request.expected {
+            e2e::records::check_identity_for_source(expected, &identity, e2e::model::Source::Jade)?;
+        }
+        let result = match request.action {
+            DeviceAction::Enroll => DeviceResult::Enrolled,
+            DeviceAction::Verify {
+                descriptor,
+                index,
+                signer,
+                registration,
+            } => {
+                if signer != identity.fingerprint {
+                    return Err("address signer differs from enrolled device".into());
+                }
+                let descriptor =
+                    miniscript::Descriptor::<miniscript::DescriptorPublicKey>::from_str(
+                        &descriptor,
+                    )?;
+                let previous = match &registration {
+                    Registration::ReplaceOwned(text) => Some(miniscript::Descriptor::<
+                        miniscript::DescriptorPublicKey,
+                    >::from_str(text)?),
+                    _ => None,
+                };
+                let policy = match registration {
+                    Registration::ExistingOnly => JadeRegistrationPolicy::ExistingOnly,
+                    Registration::DeclaredEmpty => JadeRegistrationPolicy::VerifiedEmpty,
+                    Registration::ReplaceOwned(_) => JadeRegistrationPolicy::ReplaceOwned(
+                        previous
+                            .as_ref()
+                            .ok_or("missing registration ownership descriptor")?,
+                    ),
+                };
+                let address = device
+                    .verify_address_with_registration(
+                        &vault_core::hw::AddressRequest {
+                            descriptor: &descriptor,
+                            index,
+                            signer: signer.parse()?,
+                        },
+                        policy,
+                    )
+                    .await?;
+                DeviceResult::Address(address.to_string())
+            }
+            DeviceAction::Sign { psbt, signer } => {
+                if signer != identity.fingerprint {
+                    return Err("PSBT signer differs from enrolled device".into());
+                }
+                DeviceResult::Signed(
+                    device
+                        .sign_psbt(&psbt.parse()?, signer.parse()?)
+                        .await?
+                        .to_string(),
+                )
+            }
+        };
+        Ok::<_, e2e::Error>(WorkerResponse { identity, result })
+    }
+    .await;
+    let closed = device.disconnect().await;
+    let result = outcome?;
+    closed?;
+    e2e::records::write_json(&response, &result)
 }

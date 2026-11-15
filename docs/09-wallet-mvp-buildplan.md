@@ -10,6 +10,8 @@
 
 ## 2. Stack ที่ตัดสินใจแล้ว
 
+**อัปเดต 2026-11-05** แถว Production mobile ด้านล่าง และคำว่า React Native หรือ RN ทุกที่ในเอกสารนี้ เป็นการตัดสินใจเดิมที่ถูกแทนแล้ว ตั้งแต่ commit `346aeb2` (2026-10-13) แอปมือถือจริงเป็น Kotlin Multiplatform กับ Compose Multiplatform โมดูล `shared` มีโค้ด UI และ logic ของทั้ง Android และ iOS แอปเรียก vault-core และ BLE ของ Jade กับ Trezor Safe 7 ผ่าน UniFFI bindings ที่ `vault-workspace/mobile-signer-ffi/scripts/ffi.sh` สร้าง และ build ด้วย `./kotlin` การตัดสินใจให้ Rust เป็นเจ้าของ BLE ยังใช้ได้เหมือนเดิม ข้อความเดิมเก็บไว้เป็นประวัติ (ดู `04-open-items.md` ข้อ 27)
+
 | ชั้น | เครื่องมือ | บทบาท |
 |---|---|---|
 | **Phase 0 — engine validation** | Rust CLI + automated test suite (ไม่มี GUI, ไม่มี desktop app) | vault-core ล้วนๆ พิสูจน์ตัวเองบน testnet ผ่าน `cargo run`/`cargo test` เท่านั้น — ไม่ต้องมี glue code, ไม่ต้องมี UI framework ใดๆ |
@@ -20,7 +22,7 @@
 
 ## 3. Hardware wallet scope (ตัดสินใจแล้ว — ล็อก)
 
-**รองรับแค่ Bluetooth (BLE) เท่านั้นใน MVP — ไม่ทำ USB และ QR เลื่อนไปเฟสหลัง** (อัปเดต 2026-10-02: เดิมคือ QR + BLE แต่ตัด QR ออกจาก MVP ทั้งหมด รวมถึงการจับคู่ mebit ข้ามเครื่องผ่าน QR — ดู `08-multisig-wallet-spec.md` §5)
+**รองรับแค่ Bluetooth (BLE) เท่านั้นใน MVP — ไม่ทำ USB และ QR เลื่อนไปเฟสหลัง** (อัปเดต 2026-10-02: เดิมคือ QR + BLE แต่ตัด QR ออกจาก MVP ทั้งหมด รวมถึงการจับคู่ mebit ข้ามเครื่องผ่าน QR — ดู `08-multisig-wallet-spec.md` §5) **ข้อยกเว้น (2026-11-02):** ข้อนี้พูดถึงช่องทางของ hardware wallet และการจับคู่ข้ามเครื่องเท่านั้น QR สำหรับแสดงที่อยู่รับเงินบนหน้า Receive และสแกนที่อยู่ปลายทางบนหน้า Send ทำใน MVP (ดู `04-open-items.md` ข้อ 26)
 
 | ยี่ห้อ | รุ่น | ช่องทาง |
 |---|---|---|
@@ -30,7 +32,7 @@
 
 **ข้อจำกัดที่ต้องสื่อสารกับลูกค้าให้ชัด**: Trezor ไม่มีกล้อง ไม่รองรับ QR เลยสักรุ่น (ยืนยันแล้วว่า Safe 7 ก็ยังต้องต่อผ่าน USB-C หรือ BLE) และมีแค่ Safe 7 ที่มี Bluetooth ดังนั้น Trezor รุ่นอื่น (One, T, Safe 3, Safe 5) **ใช้กับ mebit ไม่ได้เลย** ในเวอร์ชันนี้ ต้องระบุในหน้า marketing/support ว่ารองรับ "Trezor Safe 7" เจาะจง ไม่ใช่ "Trezor" แบบกว้างๆ
 
-Ledger, Coldcard, BitBox02, การรองรับ USB ทั้งหมด และ QR — เลื่อนไปเฟสหลัง (ดู `08-multisig-wallet-spec.md` หัวข้อ 10)
+Ledger, Coldcard, BitBox02, การรองรับ USB ทั้งหมด และ QR ของ hardware wallet — เลื่อนไปเฟสหลัง (ดู `08-multisig-wallet-spec.md` หัวข้อ 10)
 
 ## 4. Library ที่เช็คสถานะไว้แล้ว
 
@@ -52,13 +54,15 @@ Ledger, Coldcard, BitBox02, การรองรับ USB ทั้งหม�
 
 ### Phase 1 — thin slice ขึ้นมือถือ (React Native + UniFFI)
 
+**อัปเดต 2026-11-05** เฟสนี้ทำจริงบนแอป Kotlin Multiplatform ไม่ใช่ React Native ดูหมายเหตุใน §2
+
 1. ห่อ vault-core และ `jade-ble` ด้วย UniFFI — ฝั่ง Jade แอป RN แค่เรียก `unlock` / `xpub` / `signPsbt` แบบ async ไม่ต้องเขียน BLE เอง (บน Android ต้องตั้งค่า `btleplug` แบบ Rust+Java ก่อน — ดู `04-open-items.md` ข้อ 14)
 2. ห่อ `trezor-ble` ด้วย UniFFI เช่นเดียวกัน (Trezor ใช้แนวทางเดียวกับ Jade — ตัดสินใจ 2026-10-01; `jade-ble` ย้ายไป btleplug 0.13 แล้วเพื่อให้ Android ใช้ชุดเดียวกัน และผ่าน hardware checklist ของ Jade ซ้ำแล้ว — `04-open-items.md` ข้อ 18) — ไม่มีกล้อง/QR ใน MVP
 3. ทำ flow เดียวให้จบ: เพิ่มกุญแจ (เครื่องนี้) → เพิ่มกุญแจที่สอง (Jade หรือ Trezor Safe 7) → สร้าง vault → รับ/ส่ง BTC จริงบน testnet
 
 ### Phase 2 — ใส่ UI เต็มตามดีไซน์ที่ยืนยันแล้ว
 
-Implement ทั้ง 11 หน้าตามดีไซน์ Claude Design ที่ตรวจแล้ว (เพิ่มกุญแจ → จับคู่/hardware wallet → ยืนยันกุญแจ → คลังกุญแจ → เลือก Policy 3 ขั้น → Vault สร้างสำเร็จ → เลือก Vault → รายละเอียด Vault) — งานเสี่ยงต่ำกว่า phase 0-1 มาก เพราะเป็น UI ประกบ engine ที่พิสูจน์แล้ว
+ใช้ Penpot Organize และ Organize · Design System เป็น source of truth สำหรับ UI ปัจจุบัน: ทำให้ครบ 7 user flows ได้แก่ Onboarding, Import existing seed, Add key · keyring, Create vault, Single-sig wallet, Vault send (multisig), และ Error & edge states. Inventory มี 105 screen boards, 378 navigate-to interactions และ 99 boards reachable จาก flow starts; แยก 6 boards ที่ยังเข้าไม่ถึงไว้เป็น coverage backlog (ดู docs/design-notes.md). เลิกใช้รายการ 11 หน้าจอจาก Claude Design เป็นขอบเขต Phase 2 เพราะเป็นต้นแบบ lending รุ่นก่อน.
 
 ### Phase 3 — advanced policy + เชื่อมขา lending
 

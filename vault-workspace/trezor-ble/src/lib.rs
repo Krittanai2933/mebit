@@ -16,7 +16,8 @@
 //!   numeric comparison (the same six digits on the Safe 7 and the host;
 //!   confirm both). Then the Safe 7 pairs the app: the user approves it on
 //!   the device and types the six-digit code it shows, through
-//!   [`PairingCodeSource`]. Keep the returned [`PairingCredential`] (it is a
+//!   [`PairingCodeSource`], which is asked again on the same link when an
+//!   answer isn't six digits. Keep the returned [`PairingCredential`] (it is a
 //!   secret) to skip the code next time. The Safe 7 still asks the user to
 //!   confirm every connection.
 //! - **Exactly a Safe 7.** Any other model is refused, before any pairing
@@ -41,8 +42,8 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 use vault_core::error::VaultCoreError;
 use vault_core::hw::trezor::{
-    PACKET_LEN, PairingCredential, Safe7Identity, SessionConfig, SessionPassphrase, TrezorError,
-    TrezorEvent, TrezorSession, XpubOptions,
+    PACKET_LEN, PairingCredential, Safe7Identity, SessionConfig, SessionPassphrase, SigningTrace,
+    TrezorError, TrezorEvent, TrezorSession, XpubOptions,
 };
 
 // The Safe 7's GATT interface: `ble_internal.h` and `service.c` in
@@ -73,6 +74,10 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 const REPLY_TIMEOUT: Duration = Duration::from_secs(15);
 /// Anything the user does: PIN, approving, the code, confirming.
 const USER_TIMEOUT: Duration = Duration::from_secs(300);
+/// A code source that answers at once would otherwise keep the retry loop
+/// from ever returning `Pending`, and `timeout` only checks its timer after
+/// the future it wraps returns `Pending`.
+const RETRY_PAUSE: Duration = Duration::from_millis(250);
 const CONNECT_ATTEMPTS: u32 = 3;
 
 #[derive(Debug, thiserror::Error)]
@@ -112,6 +117,16 @@ pub enum TrezorBleError {
     )]
     BondRemoved,
 
+    /// The OS asked this host to pair and the request was declined or not
+    /// confirmed in time. CoreBluetooth words it "Encryption is insufficient"
+    /// (seen on an iPhone 15 with both prompts left unanswered).
+    #[error(
+        "the Bluetooth pairing was not completed: confirm the pairing request on this device and \
+         on the Safe 7 within about 30 seconds. If the Safe 7 shows none, choose Pair new device \
+         in its Bluetooth menu, then connect again"
+    )]
+    PairingNotConfirmed,
+
     #[error("Bluetooth: {0}")]
     Ble(btleplug::Error),
 
@@ -120,6 +135,14 @@ pub enum TrezorBleError {
 
     #[error("the Trezor disconnected")]
     Disconnected,
+
+    /// The link dropped before the connection was ready. Android reports a
+    /// declined or timed out OS pairing this way and says nothing more.
+    #[error(
+        "the Safe 7 dropped the link while connecting. If a pairing request was waiting, it was \
+         not confirmed in time. Confirm it on this device and on the Safe 7, then connect again"
+    )]
+    DisconnectedWhileConnecting,
 
     #[error("pairing cancelled: no code was entered")]
     PairingCancelled,
@@ -138,15 +161,21 @@ impl From<btleplug::Error> for TrezorBleError {
             btleplug::Error::PermissionDenied => Self::PermissionDenied,
             btleplug::Error::NoAdapterAvailable => Self::NoAdapter,
             btleplug::Error::NotConnected => Self::Disconnected,
-            other
-                if other
-                    .to_string()
-                    .contains("Peer removed pairing information") =>
-            {
-                Self::BondRemoved
-            }
-            other => Self::Ble(other),
+            // CoreBluetooth hands btleplug only the localized text, so these match English.
+            other => match other.to_string() {
+                text if text.contains("Peer removed pairing information") => Self::BondRemoved,
+                text if text.contains("Encryption is insufficient") => Self::PairingNotConfirmed,
+                _ => Self::Ble(other),
+            },
         }
+    }
+}
+
+/// A link that drops before the connection is ready is most likely a pairing nobody confirmed.
+fn while_connecting(error: TrezorBleError) -> TrezorBleError {
+    match error {
+        TrezorBleError::Disconnected => TrezorBleError::DisconnectedWhileConnecting,
+        other => other,
     }
 }
 
@@ -196,9 +225,10 @@ impl TrezorBleError {
             Self::MissingCharacteristic(_) => ErrorKind::MissingCharacteristic,
             Self::LinkUnsuitable { .. } => ErrorKind::LinkUnsuitable,
             Self::BondRemoved => ErrorKind::BondRemoved,
+            Self::PairingNotConfirmed => ErrorKind::PairingFailed,
             Self::Ble(_) => ErrorKind::ConnectionFailed,
             Self::Timeout(_) => ErrorKind::Timeout,
-            Self::Disconnected => ErrorKind::Disconnected,
+            Self::Disconnected | Self::DisconnectedWhileConnecting => ErrorKind::Disconnected,
             Self::PairingCancelled => ErrorKind::PairingCancelled,
             Self::Abandoned => ErrorKind::ProtocolError,
             Self::Trezor(VaultCoreError::Trezor(error)) => trezor_kind(error),
@@ -221,13 +251,20 @@ fn trezor_kind(error: &TrezorError) -> ErrorKind {
         TrezorError::UserCancelled => ErrorKind::UserCancelled,
         TrezorError::Failure { .. } | TrezorError::NetworkMismatch(_) => ErrorKind::DeviceError,
         TrezorError::InvalidRequest(_) => ErrorKind::InvalidRequest,
-        TrezorError::Signatures(_) => ErrorKind::SignatureCheckFailed,
+        TrezorError::Signatures(_) | TrezorError::RejectedSignature(_) => {
+            ErrorKind::SignatureCheckFailed
+        }
         TrezorError::Protocol(_) | TrezorError::OutOfOrder => ErrorKind::ProtocolError,
     }
 }
 
 /// Supplies the six digits the Safe 7 shows while pairing (not its PIN), or
 /// `None` if the user gave up.
+///
+/// Asked again, with nothing said about why, when an answer isn't six ASCII
+/// digits. The pairing stays open meanwhile, and every ask shares one
+/// five-minute limit. A well-formed code that the Safe 7 refuses ends the
+/// pairing instead.
 pub trait PairingCodeSource: Send + Sync {
     fn pairing_code(&self) -> Pin<Box<dyn Future<Output = Option<String>> + Send + '_>>;
 }
@@ -255,6 +292,14 @@ pub struct ConnectOptions {
     /// Which device, when several are in range: a [`FoundDevice::id`], or
     /// its name or the end of it. `None` takes the only one in range.
     pub device: Option<String>,
+    /// Set when `device` came from an earlier scan. A Safe 7 changes its id
+    /// and name suffix when its pairing screen is reopened, so that id can be
+    /// stale by the time `connect` scans again. Then, if nothing matches and
+    /// exactly one Safe 7 is in range, take it. Several candidates still end
+    /// in [`TrezorBleError::NotFound`], and the pairing screens show on the
+    /// device actually reached. Leave it off when the user named the device by
+    /// hand, so that a wrong name is an error and not another device.
+    pub device_is_hint: bool,
     pub scan: Duration,
 }
 
@@ -366,12 +411,24 @@ impl TrezorBle {
         let adapter = adapter().await?;
         let events = adapter.events().await?;
         let (found, seen) = scan_for_trezors(&adapter, options.scan).await?;
-        let (device, peripheral) = select(found, seen, options.device.as_deref())?;
+        let (device, peripheral) = select(
+            found,
+            seen,
+            options.device.as_deref(),
+            options.device_is_hint,
+        )?;
         let name = device.name.clone().unwrap_or_else(|| device.id.clone());
 
+        // Armed before `Radio::open` connects: CoreBluetooth keeps a dropped
+        // connect queued, and a future dropped from here to the hand-out
+        // (the pairing prompt included) would skip every close below.
+        let link = Cleanup::link(&peripheral);
         let mut radio = match Radio::open(peripheral, events, &name).await {
             Ok(radio) => radio,
-            Err(error) => return Err(error),
+            Err(error) => {
+                link.disarm();
+                return Err(while_connecting(error));
+            }
         };
         let cancel = Canceller::default();
         let outcome = async {
@@ -383,24 +440,29 @@ impl TrezorBle {
             Ok(TrezorEvent::Connected {
                 identity,
                 new_credential,
-            }) => Ok(Connection {
-                device: Self {
-                    radio,
-                    name,
-                    session,
-                    identity,
-                    cancel,
-                    busy: false,
-                },
-                new_credential,
-            }),
+            }) => {
+                link.disarm();
+                Ok(Connection {
+                    device: Self {
+                        radio,
+                        name,
+                        session,
+                        identity,
+                        cancel,
+                        busy: false,
+                    },
+                    new_credential,
+                })
+            }
             Ok(other) => {
                 radio.close().await;
+                link.disarm();
                 Err(unexpected(other))
             }
             Err(error) => {
                 radio.close().await;
-                Err(error)
+                link.disarm();
+                Err(while_connecting(error))
             }
         }
     }
@@ -415,13 +477,19 @@ impl TrezorBle {
         &self.identity
     }
 
+    /// The platform's BLE identifier, which may change between connections.
+    /// For persistent device identity, use [`Safe7Identity::device_id`] from
+    /// [`Self::identity`] instead.
+    pub fn device_id(&self) -> String {
+        self.radio.peripheral.id().to_string()
+    }
+
     /// The link's negotiated ATT MTU, for diagnostics.
     pub fn mtu(&self) -> u16 {
         self.radio.peripheral.mtu()
     }
 
-    /// The xpub at an account path (BIP-48 P2WSH, or BIP-84 to compare with
-    /// Trezor Suite).
+    /// The xpub at a BIP-48 P2WSH or BIP-44/49/84/86 account path.
     pub async fn xpub(
         &mut self,
         path: &DerivationPath,
@@ -443,8 +511,8 @@ impl TrezorBle {
         }
     }
 
-    /// Has the Safe 7 co-sign a vault PSBT once the user confirms it on the
-    /// device. `signer` is the master fingerprint the vault expects this
+    /// Has the Safe 7 sign a wallet PSBT once the user confirms it on the
+    /// device. `signer` is the master fingerprint the wallet expects this
     /// device to sign with. The result is only returned after it checks out:
     /// `psbt` plus valid signatures from `signer`'s keys, nothing else.
     pub async fn sign_psbt(
@@ -456,6 +524,47 @@ impl TrezorBle {
         let first = self.session.request_sign_psbt(psbt, signer)?;
         match self.run(first).await? {
             TrezorEvent::SignedPsbt(signed) => Ok(signed),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// Returns private evidence even when the host rejects the signature or
+    /// the exchange fails. A request that never starts returns no trace.
+    pub async fn sign_psbt_traced(
+        &mut self,
+        psbt: &Psbt,
+        signer: Fingerprint,
+    ) -> (Result<Psbt, TrezorBleError>, Option<SigningTrace>) {
+        if let Err(error) = self.begin() {
+            return (Err(error), None);
+        }
+        let first = match self.session.request_sign_psbt_traced(psbt, signer) {
+            Ok(first) => first,
+            Err(error) => return (Err(error.into()), None),
+        };
+        let outcome = match self.run(first).await {
+            Ok(TrezorEvent::SignedPsbt(signed)) => Ok(signed),
+            Ok(other) => Err(unexpected(other)),
+            Err(error) => Err(error),
+        };
+        (outcome, self.take_signing_trace())
+    }
+
+    /// Recovers private evidence after a diagnostic future was dropped.
+    /// Taking an unfinished attempt freezes it as interrupted.
+    pub fn take_signing_trace(&mut self) -> Option<SigningTrace> {
+        self.session.take_signing_trace()
+    }
+
+    /// Displays the descriptor address on the Safe 7 and checks its reply.
+    pub async fn verify_address(
+        &mut self,
+        request: &vault_core::hw::AddressRequest<'_>,
+    ) -> Result<bitcoin::Address, TrezorBleError> {
+        self.begin()?;
+        let first = self.session.request_verify_address(request)?;
+        match self.run(first).await? {
+            TrezorEvent::AddressVerified(address) => Ok(address),
             other => Err(unexpected(other)),
         }
     }
@@ -538,8 +647,7 @@ async fn exchange(
                     None | Some(TrezorEvent::AwaitingUser(_)) => {}
                     Some(TrezorEvent::PairingCodeNeeded) => {
                         let codes = codes.ok_or_else(|| unexpected(TrezorEvent::PairingCodeNeeded))?;
-                        let code = code_while_listening(radio, session, codes).await?;
-                        let reply = session.pairing_code(code.trim())?;
+                        let reply = enter_pairing_code(&mut BlePairing { radio, session }, codes).await?;
                         radio.write(&reply).await?;
                     }
                     Some(TrezorEvent::Failed(error)) => return Err(error.into()),
@@ -580,31 +688,71 @@ fn reply_deadline(session: &TrezorSession) -> Instant {
         }
 }
 
-/// Waits for the user's pairing code while still reading the link: the
-/// Safe 7 may end pairing meanwhile (the only button on its code screen
-/// cancels it), and the user shouldn't have to type a code to find out.
+trait PairingLink {
+    async fn next_packet(&mut self) -> Result<Vec<u8>, TrezorBleError>;
+
+    async fn on_packet(&mut self, packet: &[u8]) -> Result<(), TrezorBleError>;
+
+    fn submit(&mut self, code: &str) -> Result<Vec<Vec<u8>>, VaultCoreError>;
+}
+
+struct BlePairing<'a> {
+    radio: &'a mut Radio,
+    session: &'a mut TrezorSession,
+}
+
+impl PairingLink for BlePairing<'_> {
+    async fn next_packet(&mut self) -> Result<Vec<u8>, TrezorBleError> {
+        self.radio.next_packet().await
+    }
+
+    async fn on_packet(&mut self, packet: &[u8]) -> Result<(), TrezorBleError> {
+        let step = self.session.receive(packet)?;
+        self.radio.write(&step.send).await?;
+        match step.event {
+            None | Some(TrezorEvent::AwaitingUser(_)) => Ok(()),
+            Some(TrezorEvent::Failed(error)) => Err(error.into()),
+            Some(other) => Err(unexpected(other)),
+        }
+    }
+
+    fn submit(&mut self, code: &str) -> Result<Vec<Vec<u8>>, VaultCoreError> {
+        self.session.pairing_code(code)
+    }
+}
+
+async fn enter_pairing_code(
+    link: &mut impl PairingLink,
+    codes: &dyn PairingCodeSource,
+) -> Result<Vec<Vec<u8>>, TrezorBleError> {
+    let attempts = async {
+        loop {
+            let code = code_while_listening(link, codes).await?;
+            match link.submit(code.trim()) {
+                Err(VaultCoreError::Trezor(TrezorError::PairingCodeInvalid)) => {
+                    tokio::time::sleep(RETRY_PAUSE).await;
+                }
+                sent => return Ok::<_, TrezorBleError>(sent?),
+            }
+        }
+    };
+    tokio::time::timeout(USER_TIMEOUT, attempts)
+        .await
+        .map_err(|_| TrezorBleError::Timeout("waiting for the pairing code"))?
+}
+
+/// The Safe 7 may end pairing while the user types (the only button on its
+/// code screen cancels it).
 async fn code_while_listening(
-    radio: &mut Radio,
-    session: &mut TrezorSession,
+    link: &mut impl PairingLink,
     codes: &dyn PairingCodeSource,
 ) -> Result<String, TrezorBleError> {
     let code = codes.pairing_code();
     tokio::pin!(code);
-    let deadline = tokio::time::sleep(USER_TIMEOUT);
-    tokio::pin!(deadline);
     loop {
         tokio::select! {
             code = &mut code => return code.ok_or(TrezorBleError::PairingCancelled),
-            packet = radio.next_packet() => {
-                let step = session.receive(&packet?)?;
-                radio.write(&step.send).await?;
-                match step.event {
-                    None | Some(TrezorEvent::AwaitingUser(_)) => {}
-                    Some(TrezorEvent::Failed(error)) => return Err(error.into()),
-                    Some(other) => return Err(unexpected(other)),
-                }
-            }
-            () = &mut deadline => return Err(TrezorBleError::Timeout("waiting for the pairing code")),
+            packet = link.next_packet() => link.on_packet(&packet?).await?,
         }
     }
 }
@@ -733,14 +881,24 @@ async fn adapter() -> Result<Adapter, TrezorBleError> {
 /// Scans for `scan` and returns the devices advertising the Trezor service
 /// (or Trezor's company id), less those advertising another model's code;
 /// and how many named devices were seen in all.
-async fn scan_for_trezors(
-    adapter: &Adapter,
+async fn scan_for_trezors<C: Central + 'static>(
+    adapter: &C,
     scan: Duration,
-) -> Result<(Vec<(FoundDevice, Peripheral)>, usize), TrezorBleError> {
+) -> Result<(Vec<(FoundDevice, C::Peripheral)>, usize), TrezorBleError> {
+    let scanning = Cleanup::scan(adapter);
     // Unfiltered, as jade-ble: the service UUID is in the scan response
     // only, which not every platform's filter looks at.
     adapter.start_scan(ScanFilter::default()).await?;
     tokio::time::sleep(scan).await;
+    let listed = trezors_in_range(adapter).await;
+    adapter.stop_scan().await?;
+    scanning.disarm();
+    listed
+}
+
+async fn trezors_in_range<C: Central>(
+    adapter: &C,
+) -> Result<(Vec<(FoundDevice, C::Peripheral)>, usize), TrezorBleError> {
     let mut found = Vec::new();
     let mut seen = 0;
     for peripheral in adapter.peripherals().await? {
@@ -757,9 +915,70 @@ async fn scan_for_trezors(
             found.push((device, peripheral));
         }
     }
-    adapter.stop_scan().await?;
     Ok((found, seen))
 }
+
+/// Radio work that btleplug stops neither when a future is dropped nor on an early `?`: a scan, or a
+/// link still coming up. Only setup work gets a guard, so `arm` stays private to this module.
+mod cleanup {
+    use std::future::Future;
+    use std::pin::Pin;
+
+    use btleplug::api::{Central, Peripheral as _};
+    use btleplug::platform::Peripheral;
+    use tokio::runtime::Handle;
+
+    use super::LINK_TIMEOUT;
+
+    pub(super) struct Cleanup {
+        work: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
+        // Taken at arm time, inside a poll: a drop from a plain thread (a Kotlin
+        // cleaner) has no runtime of its own.
+        runtime: Handle,
+    }
+
+    impl Cleanup {
+        pub(super) fn scan<C: Central + 'static>(adapter: &C) -> Self {
+            let adapter = adapter.clone();
+            Self::arm(async move {
+                let _ = adapter.stop_scan().await;
+            })
+        }
+
+        pub(super) fn link(peripheral: &Peripheral) -> Self {
+            let peripheral = peripheral.clone();
+            Self::arm(async move {
+                let _ = tokio::time::timeout(LINK_TIMEOUT, peripheral.disconnect()).await;
+            })
+        }
+
+        pub(super) fn disarm(mut self) {
+            self.work = None;
+        }
+
+        fn arm(work: impl Future<Output = ()> + Send + 'static) -> Self {
+            Self {
+                work: Some(Box::pin(work)),
+                runtime: Handle::current(),
+            }
+        }
+
+        #[cfg(test)]
+        pub(super) fn arm_for_test(work: impl Future<Output = ()> + Send + 'static) -> Self {
+            Self::arm(work)
+        }
+    }
+
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let Some(work) = self.work.take() else {
+                return;
+            };
+            self.runtime.spawn(work);
+        }
+    }
+}
+use cleanup::Cleanup;
 
 fn is_candidate(properties: &PeripheralProperties) -> bool {
     let advertises_service = properties
@@ -776,15 +995,16 @@ fn is_candidate(properties: &PeripheralProperties) -> bool {
 }
 
 /// Picks the device whose id or name matches `wanted` (a name may be given
-/// by its end), or, without `wanted`, the only one.
+/// by its end), or, without `wanted`, the only one. With `hint`, a `wanted`
+/// that matches nothing falls back to the only device in range.
 fn select<T>(
     found: Vec<(FoundDevice, T)>,
     seen: usize,
     wanted: Option<&str>,
+    hint: bool,
 ) -> Result<(FoundDevice, T), TrezorBleError> {
-    let mut matching: Vec<_> = found
-        .into_iter()
-        .filter(|(device, _)| {
+    let (mut matching, mut others): (Vec<_>, Vec<_>) =
+        found.into_iter().partition(|(device, _)| {
             wanted.is_none_or(|wanted| {
                 device.id == wanted
                     || device
@@ -792,8 +1012,10 @@ fn select<T>(
                         .as_deref()
                         .is_some_and(|name| name.ends_with(wanted))
             })
-        })
-        .collect();
+        });
+    if matching.is_empty() && hint && others.len() == 1 {
+        return Ok(others.remove(0));
+    }
     match matching.len() {
         0 => Err(TrezorBleError::NotFound { seen }),
         1 => Ok(matching.remove(0)),
@@ -877,8 +1099,14 @@ fn unexpected(event: TrezorEvent) -> TrezorBleError {
 }
 
 #[cfg(test)]
+#[path = "../../jade-ble/src/fake_btle.rs"]
+mod fake_btle;
+
+#[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::Mutex;
+    use std::sync::atomic::AtomicUsize;
 
     use super::*;
 
@@ -896,7 +1124,7 @@ mod tests {
     #[test]
     fn picks_the_only_trezor_or_the_one_asked_for() {
         let one = vec![device("A1", Some("Trezor Safe 7"))];
-        assert_eq!(select(one, 5, None).unwrap().0.id, "A1");
+        assert_eq!(select(one, 5, None, false).unwrap().0.id, "A1");
 
         let two = || {
             vec![
@@ -905,11 +1133,14 @@ mod tests {
             ]
         };
         assert!(
-            matches!(select(two(), 5, None), Err(TrezorBleError::MultipleFound(names)) if names.len() == 2)
+            matches!(select(two(), 5, None, false), Err(TrezorBleError::MultipleFound(names)) if names.len() == 2)
         );
-        assert_eq!(select(two(), 5, Some("B2")).unwrap().0.id, "B2");
-        assert_eq!(select(two(), 5, Some("My Trezor")).unwrap().0.id, "B2");
-        assert_eq!(select(two(), 5, Some("Safe 7")).unwrap().0.id, "A1");
+        assert_eq!(select(two(), 5, Some("B2"), false).unwrap().0.id, "B2");
+        assert_eq!(
+            select(two(), 5, Some("My Trezor"), false).unwrap().0.id,
+            "B2"
+        );
+        assert_eq!(select(two(), 5, Some("Safe 7"), false).unwrap().0.id, "A1");
 
         // Two devices with the same name can still be told apart by id.
         let twins = vec![
@@ -917,7 +1148,7 @@ mod tests {
             device("B2", Some("Trezor Safe 7")),
         ];
         assert!(matches!(
-            select(twins, 5, Some("Trezor Safe 7")),
+            select(twins, 5, Some("Trezor Safe 7"), false),
             Err(TrezorBleError::MultipleFound(_))
         ));
     }
@@ -925,13 +1156,67 @@ mod tests {
     #[test]
     fn nothing_found_says_why() {
         assert!(matches!(
-            select::<()>(Vec::new(), 4, None),
+            select::<()>(Vec::new(), 4, None, false),
             Err(TrezorBleError::NotFound { seen: 4 })
         ));
-        let none = select::<()>(Vec::new(), 0, None).unwrap_err().to_string();
+        let none = select::<()>(Vec::new(), 0, None, false)
+            .unwrap_err()
+            .to_string();
         assert!(none.contains("Bluetooth permission"), "{none}");
-        let wrong = select(vec![device("A1", Some("Trezor Safe 7"))], 3, Some("ffff"));
+        let wrong = select(
+            vec![device("A1", Some("Trezor Safe 7"))],
+            3,
+            Some("ffff"),
+            false,
+        );
         assert!(matches!(wrong, Err(TrezorBleError::NotFound { seen: 3 })));
+    }
+
+    #[test]
+    fn a_stale_hint_falls_back_to_the_only_device() {
+        let one = vec![device("A1", Some("Trezor Safe 7 (6T5)"))];
+        assert_eq!(select(one, 5, Some("stale"), true).unwrap().0.id, "A1");
+    }
+
+    #[test]
+    fn a_stale_hint_never_picks_among_several() {
+        let two = vec![
+            device("A1", Some("Trezor Safe 7 (6T5)")),
+            device("B2", Some("Trezor Safe 7 (7G0)")),
+        ];
+        assert!(matches!(
+            select(two, 5, Some("stale"), true),
+            Err(TrezorBleError::NotFound { seen: 5 })
+        ));
+    }
+
+    #[test]
+    fn a_match_beats_the_fallback() {
+        let two = || {
+            vec![
+                device("A1", Some("Trezor Safe 7 (6T5)")),
+                device("B2", Some("Trezor Safe 7 (7G0)")),
+            ]
+        };
+        assert_eq!(select(two(), 5, Some("B2"), true).unwrap().0.id, "B2");
+        assert_eq!(select(two(), 5, Some("(7G0)"), true).unwrap().0.id, "B2");
+        // Two matches stay ambiguous, hint or not.
+        let twins = vec![
+            device("A1", Some("Trezor Safe 7")),
+            device("B2", Some("Trezor Safe 7")),
+        ];
+        assert!(matches!(
+            select(twins, 5, Some("Trezor Safe 7"), true),
+            Err(TrezorBleError::MultipleFound(_))
+        ));
+    }
+
+    #[test]
+    fn a_hint_with_nothing_in_range_is_not_found() {
+        assert!(matches!(
+            select::<()>(Vec::new(), 2, Some("stale"), true),
+            Err(TrezorBleError::NotFound { seen: 2 })
+        ));
     }
 
     fn properties(services: &[&str], data: Option<Vec<u8>>) -> PeripheralProperties {
@@ -1018,6 +1303,14 @@ mod tests {
                 ErrorKind::BondRemoved,
             ),
             (
+                btleplug::Error::RuntimeError("Encryption is insufficient.".into()).into(),
+                ErrorKind::PairingFailed,
+            ),
+            (
+                btleplug::Error::RuntimeError("GATT 133".into()).into(),
+                ErrorKind::ConnectionFailed,
+            ),
+            (
                 btleplug::Error::DeviceNotFound.into(),
                 ErrorKind::ConnectionFailed,
             ),
@@ -1043,6 +1336,10 @@ mod tests {
             ),
             (TrezorBleError::Timeout("x"), ErrorKind::Timeout),
             (TrezorBleError::Disconnected, ErrorKind::Disconnected),
+            (
+                TrezorBleError::DisconnectedWhileConnecting,
+                ErrorKind::Disconnected,
+            ),
             (
                 TrezorBleError::PairingCancelled,
                 ErrorKind::PairingCancelled,
@@ -1107,6 +1404,44 @@ mod tests {
     }
 
     #[test]
+    fn an_unconfirmed_pairing_has_its_own_error() {
+        let ble = |text: &str| TrezorBleError::from(btleplug::Error::RuntimeError(text.into()));
+        assert!(matches!(
+            ble("Encryption is insufficient."),
+            TrezorBleError::PairingNotConfirmed
+        ));
+        assert!(matches!(
+            ble("Peer removed pairing information"),
+            TrezorBleError::BondRemoved
+        ));
+        // Anything else stays the raw Bluetooth error.
+        assert!(matches!(
+            ble("The connection has timed out unexpectedly."),
+            TrezorBleError::Ble(_)
+        ));
+        let advice = TrezorBleError::PairingNotConfirmed.to_string();
+        assert!(advice.contains("Pair new device"), "{advice}");
+    }
+
+    #[test]
+    fn only_a_plain_disconnect_gains_the_pairing_hint() {
+        assert!(matches!(
+            while_connecting(TrezorBleError::Disconnected),
+            TrezorBleError::DisconnectedWhileConnecting
+        ));
+        assert!(matches!(
+            while_connecting(TrezorBleError::Timeout("subscribing")),
+            TrezorBleError::Timeout("subscribing")
+        ));
+        assert!(matches!(
+            while_connecting(TrezorBleError::BondRemoved),
+            TrezorBleError::BondRemoved
+        ));
+        let hint = TrezorBleError::DisconnectedWhileConnecting.to_string();
+        assert!(hint.contains("pairing request"), "{hint}");
+    }
+
+    #[test]
     fn a_cancel_before_the_request_does_not_leak_into_it() {
         let canceller = Canceller::default();
         canceller.cancel();
@@ -1126,6 +1461,305 @@ mod tests {
         assert!(fired.is_ok());
     }
 
+    struct Typist {
+        pause: Duration,
+        answers: Mutex<VecDeque<Option<&'static str>>>,
+        asked: AtomicUsize,
+    }
+
+    impl Typist {
+        fn new(pause_secs: u64, answers: impl IntoIterator<Item = Option<&'static str>>) -> Self {
+            Self {
+                pause: Duration::from_secs(pause_secs),
+                answers: Mutex::new(answers.into_iter().collect()),
+                asked: AtomicUsize::new(0),
+            }
+        }
+
+        fn asked(&self) -> usize {
+            self.asked.load(Ordering::SeqCst)
+        }
+    }
+
+    impl PairingCodeSource for Typist {
+        fn pairing_code(&self) -> Pin<Box<dyn Future<Output = Option<String>> + Send + '_>> {
+            self.asked.fetch_add(1, Ordering::SeqCst);
+            let answer = self
+                .answers
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("asked more often than scripted");
+            let pause = self.pause;
+            Box::pin(async move {
+                if !pause.is_zero() {
+                    tokio::time::sleep(pause).await;
+                }
+                answer.map(str::to_owned)
+            })
+        }
+    }
+
+    #[derive(Default)]
+    struct QuietLink {
+        verdicts: VecDeque<Result<(), TrezorError>>,
+        submitted: Vec<String>,
+        drops_at: Option<Instant>,
+    }
+
+    impl QuietLink {
+        fn verdicts(verdicts: impl IntoIterator<Item = Result<(), TrezorError>>) -> Self {
+            Self {
+                verdicts: verdicts.into_iter().collect(),
+                ..Self::default()
+            }
+        }
+    }
+
+    impl PairingLink for QuietLink {
+        async fn next_packet(&mut self) -> Result<Vec<u8>, TrezorBleError> {
+            match self.drops_at {
+                Some(at) => {
+                    tokio::time::sleep_until(at).await;
+                    Err(TrezorBleError::Disconnected)
+                }
+                None => std::future::pending().await,
+            }
+        }
+
+        async fn on_packet(&mut self, _packet: &[u8]) -> Result<(), TrezorBleError> {
+            unreachable!("the quiet link delivers nothing")
+        }
+
+        fn submit(&mut self, code: &str) -> Result<Vec<Vec<u8>>, VaultCoreError> {
+            self.submitted.push(code.to_owned());
+            let verdict = self
+                .verdicts
+                .pop_front()
+                .expect("a verdict for every submitted code");
+            Ok(verdict.map(|()| vec![code.as_bytes().to_vec()])?)
+        }
+    }
+
+    fn malformed() -> TrezorError {
+        TrezorError::PairingCodeInvalid
+    }
+
+    fn assert_elapsed(started: Instant, expected: Duration) {
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= expected && elapsed < expected + Duration::from_secs(1),
+            "expected about {expected:?}, took {elapsed:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_malformed_code_is_asked_for_again() {
+        let user = Typist::new(0, [Some("12345"), Some("12345a"), Some(" 123456\n")]);
+        let mut link = QuietLink::verdicts([Err(malformed()), Err(malformed()), Ok(())]);
+        let packets = enter_pairing_code(&mut link, &user).await.unwrap();
+        assert_eq!(packets, [b"123456".to_vec()]);
+        assert_eq!(user.asked(), 3);
+        assert_eq!(link.submitted, ["12345", "12345a", "123456"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retyping_does_not_extend_the_five_minutes() {
+        let user = Typist::new(200, [Some("12345"), Some("123456")]);
+        let mut link = QuietLink::verdicts([Err(malformed()), Ok(())]);
+        let started = Instant::now();
+        let outcome = enter_pairing_code(&mut link, &user).await;
+        assert!(
+            matches!(
+                outcome,
+                Err(TrezorBleError::Timeout("waiting for the pairing code"))
+            ),
+            "{outcome:?}"
+        );
+        assert_elapsed(started, USER_TIMEOUT);
+        assert_eq!(
+            link.submitted,
+            ["12345"],
+            "the late code never reached the session"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn only_a_malformed_code_is_asked_for_again() {
+        let refusals: [fn() -> TrezorError; 3] = [
+            || TrezorError::OutOfOrder,
+            || TrezorError::Protocol("x".into()),
+            || TrezorError::PairingFailed("x"),
+        ];
+        for refusal in refusals {
+            let user = Typist::new(0, [Some("123456"), Some("654321")]);
+            let mut link = QuietLink::verdicts([Err(refusal()), Ok(())]);
+            let outcome = enter_pairing_code(&mut link, &user).await;
+            assert!(
+                matches!(outcome, Err(TrezorBleError::Trezor(_))),
+                "{outcome:?}"
+            );
+            assert_eq!(user.asked(), 1, "{:?}", refusal());
+            assert_eq!(link.submitted, ["123456"]);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn giving_up_cancels_the_pairing() {
+        let user = Typist::new(0, [None]);
+        let mut link = QuietLink::default();
+        let outcome = enter_pairing_code(&mut link, &user).await;
+        assert!(
+            matches!(outcome, Err(TrezorBleError::PairingCancelled)),
+            "{outcome:?}"
+        );
+        assert!(link.submitted.is_empty());
+
+        let user = Typist::new(0, [Some("12345"), None]);
+        let mut link = QuietLink::verdicts([Err(malformed())]);
+        let outcome = enter_pairing_code(&mut link, &user).await;
+        assert!(
+            matches!(outcome, Err(TrezorBleError::PairingCancelled)),
+            "{outcome:?}"
+        );
+        assert_eq!(user.asked(), 2);
+        assert_eq!(link.submitted, ["12345"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_link_is_still_read_while_the_user_retypes() {
+        let user = Typist::new(20, [Some("12345"), Some("123456")]);
+        let mut link = QuietLink::verdicts([Err(malformed()), Ok(())]);
+        link.drops_at = Some(Instant::now() + Duration::from_secs(30));
+        let outcome = enter_pairing_code(&mut link, &user).await;
+        assert!(
+            matches!(outcome, Err(TrezorBleError::Disconnected)),
+            "{outcome:?}"
+        );
+        assert_eq!(user.asked(), 2);
+        assert_eq!(link.submitted, ["12345"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_source_that_never_waits_still_times_out() {
+        let user = Typist::new(0, std::iter::repeat_n(Some("1"), 2000));
+        let mut link = QuietLink::verdicts(std::iter::repeat_with(|| Err(malformed())).take(2000));
+        let started = Instant::now();
+        let outcome = enter_pairing_code(&mut link, &user).await;
+        assert!(
+            matches!(outcome, Err(TrezorBleError::Timeout(_))),
+            "{outcome:?}"
+        );
+        assert_elapsed(started, USER_TIMEOUT);
+        let tries = link.submitted.len();
+        let paced = (USER_TIMEOUT.as_millis() / RETRY_PAUSE.as_millis()) as usize;
+        assert!(
+            tries.abs_diff(paced) <= 1,
+            "{tries} tries, about {paced} expected"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_runs_only_while_armed() {
+        use std::sync::atomic::AtomicUsize;
+
+        let ran = Arc::new(AtomicUsize::new(0));
+        let count = || {
+            let ran = ran.clone();
+            async move {
+                ran.fetch_add(1, Ordering::SeqCst);
+            }
+        };
+        Cleanup::arm_for_test(count()).disarm();
+        let armed = Cleanup::arm_for_test(count());
+        let holder = tokio::spawn(async move {
+            let _armed = armed;
+            std::future::pending::<()>().await
+        });
+        tokio::task::yield_now().await;
+        holder.abort();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while ran.load(Ordering::SeqCst) < 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the armed cleanup ran when its future was dropped");
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            1,
+            "the disarmed cleanup never ran"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dropped_scan_stops_the_scan() {
+        use crate::fake_btle::FakeCentral;
+
+        let central = FakeCentral::default();
+        let scanning = tokio::spawn({
+            let central = central.clone();
+            async move { scan_for_trezors(&central, Duration::from_secs(3600)).await }
+        });
+        wait_for(|| central.calls() == ["start_scan"]).await;
+        scanning.abort();
+        wait_for(|| central.calls() == ["start_scan", "stop_scan"]).await;
+    }
+
+    #[tokio::test]
+    async fn a_failed_listing_stops_the_scan() {
+        use crate::fake_btle::{FakeCentral, FakePeripheral};
+
+        let central = FakeCentral {
+            devices: vec![FakePeripheral(Err("the radio dropped".into()))],
+            ..Default::default()
+        };
+        assert!(scan_for_trezors(&central, Duration::ZERO).await.is_err());
+        settle().await;
+        assert_eq!(central.calls(), ["start_scan", "stop_scan"]);
+    }
+
+    #[tokio::test]
+    async fn a_finished_scan_stops_the_scan_once() {
+        use crate::fake_btle::FakeCentral;
+
+        let central = FakeCentral::default();
+        assert!(scan_for_trezors(&central, Duration::ZERO).await.is_ok());
+        settle().await;
+        assert_eq!(central.calls(), ["start_scan", "stop_scan"]);
+    }
+
+    /// Lets a cleanup the code under test spawned run, so a stop that should not happen shows.
+    async fn settle() {
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_runs_from_a_plain_thread() {
+        use std::sync::atomic::AtomicBool;
+
+        let ran = Arc::new(AtomicBool::new(false));
+        let armed = Cleanup::arm_for_test({
+            let ran = ran.clone();
+            async move { ran.store(true, Ordering::SeqCst) }
+        });
+        // Gobley frees objects on the caller of `close()` or a GC thread: no runtime there.
+        std::thread::spawn(move || drop(armed)).join().unwrap();
+        wait_for(|| ran.load(Ordering::SeqCst)).await;
+    }
+
+    async fn wait_for(done: impl Fn() -> bool) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !done() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("never happened");
+    }
+
     /// UniFFI wraps objects in `Arc` and runs their futures on a runtime it
     /// is handed, so everything public must be `Send`, and these `Sync` too.
     #[test]
@@ -1138,9 +1772,17 @@ mod tests {
         fn connect_future(options: ConnectOptions, codes: &dyn PairingCodeSource) {
             send(&TrezorBle::connect(options, codes));
         }
-        fn requests(device: &mut TrezorBle, path: &DerivationPath, psbt: &Psbt) {
+        fn requests(
+            device: &mut TrezorBle,
+            path: &DerivationPath,
+            psbt: &Psbt,
+            address: &vault_core::hw::AddressRequest<'_>,
+        ) {
             send(&device.xpub(path, XpubOptions::default()));
             send(&device.sign_psbt(psbt, Fingerprint::default()));
+            send(&device.sign_psbt_traced(psbt, Fingerprint::default()));
+            send(&device.take_signing_trace());
+            send(&device.verify_address(address));
         }
         fn whole(device: TrezorBle) {
             send(&device);

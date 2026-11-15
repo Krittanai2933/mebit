@@ -1,0 +1,5 @@
+baselines-raw/
+# App PNGs. Keep the directory. Do not commit copies of baselines.
+captures/*
+!captures/.gitkeep
+*.svg

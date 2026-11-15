@@ -1,0 +1,63 @@
+package com.mebit.app.navigation
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+class MovieRouteTest {
+    @Test
+    fun coversEveryMoviePageBoard() {
+        assertEquals(62, MovieRoute.entries.size)
+        assertEquals(MovieRoute.Welcome, MovieRoute.start)
+        assertEquals("onboarding/import-seed", MovieRoute.ImportSeed.path)
+        assertEquals("IMPORT SEED", MovieRoute.ImportSeed.eyebrow)
+    }
+
+    @Test
+    fun theSpendingPinStepHasARoute() {
+        // Where a phone with no owner check sets its PIN, after create or import and before Home.
+        assertEquals(listOf("SPENDING PIN"), MovieRoute.entries.filter { it.path == "onboarding/spending-pin" }.map { it.eyebrow })
+    }
+
+    @Test
+    fun theAddressTypeStepHasARoute() {
+        assertEquals("onboarding/address-type", MovieRoute.AddressType.path)
+        assertEquals("ADDRESS TYPE", MovieRoute.AddressType.eyebrow)
+    }
+
+    @Test
+    fun historyRouteExists() {
+        assertEquals("send/s7", MovieRoute.S7History.path)
+        assertEquals("HISTORY", MovieRoute.S7History.eyebrow)
+    }
+
+    @Test
+    fun transactionDetailRouteExists() {
+        assertEquals("send/s8", MovieRoute.S8TxDetail.path)
+        assertEquals("TRANSACTION", MovieRoute.S8TxDetail.eyebrow)
+    }
+
+    @Test
+    fun aSeveralKeyWalletsReviewAndSlipHaveTheRoutesOf58And59() {
+        // The recipes open them as catalog_send/m8, the step of Organize 5.8 drawn as S5, and catalog_send/m9, board 5.9.
+        assertEquals("send/m8", MovieRoute.M8ReviewVault.path)
+        assertEquals("send/m9", MovieRoute.M9SentVault.path)
+        assertEquals(listOf(null, null), listOf(MovieRoute.M8ReviewVault.bar, MovieRoute.M9SentVault.bar), "send screens show no bottom bar")
+    }
+
+    @Test
+    fun everyRouteHasUniquePath() {
+        val paths = MovieRoute.entries.map { it.path }
+        assertEquals(paths.size, paths.toSet().size)
+    }
+
+    @Test
+    fun eyebrowsAreUppercaseEnglish() {
+        MovieRoute.entries.forEach { route ->
+            assertTrue(
+                route.eyebrow == route.eyebrow.uppercase(),
+                "eyebrow must be uppercase: ${route.name} -> ${route.eyebrow}",
+            )
+        }
+    }
+}

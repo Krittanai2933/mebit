@@ -58,11 +58,40 @@ pub mod descriptor {
         descriptor::{Descriptor, DescriptorXKey, Wildcard},
     };
 
+    /// A chain of a sorted-multisig wallet, receive or change, as a BSMS file's path line `/0/*,/1/*` declares them.
+    /// Only these two exist, so no caller can build `xpub/7/*`.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Branch {
+        Receive,
+        Change,
+    }
+
+    impl Branch {
+        fn index(self) -> u32 {
+            match self {
+                Branch::Receive => 0,
+                Branch::Change => 1,
+            }
+        }
+    }
+
     pub fn build_multisig_descriptor(
         xpubs: &[Xpub],
         threshold: usize,
     ) -> Result<Descriptor<DescriptorPublicKey>, VaultCoreError> {
-        let receive_path = DerivationPath::from(vec![ChildNumber::Normal { index: 0 }]);
+        build_multisig_descriptor_on(xpubs, threshold, Branch::Receive)
+    }
+
+    /// `wsh(sortedmulti(threshold, xpub/<branch>/*, ...))` over `xpubs` in any order. `Branch::Receive` is exactly the
+    /// descriptor `build_multisig_descriptor` returns, so an address at index `i` is the same whichever is called.
+    pub fn build_multisig_descriptor_on(
+        xpubs: &[Xpub],
+        threshold: usize,
+        branch: Branch,
+    ) -> Result<Descriptor<DescriptorPublicKey>, VaultCoreError> {
+        let branch_path = DerivationPath::from(vec![ChildNumber::Normal {
+            index: branch.index(),
+        }]);
 
         let keys = xpubs
             .iter()
@@ -71,7 +100,7 @@ pub mod descriptor {
                 DescriptorPublicKey::XPub(DescriptorXKey {
                     origin: None,
                     xkey,
-                    derivation_path: receive_path.clone(),
+                    derivation_path: branch_path.clone(),
                     wildcard: Wildcard::Unhardened,
                 })
             })
@@ -220,6 +249,59 @@ pub mod descriptor {
                 .expect("reordered testnet P2WSH address");
 
             assert_eq!(address, reordered_address);
+        }
+
+        #[test]
+        fn the_receive_branch_is_build_multisig_descriptor() {
+            let xpubs = test_xpubs();
+            assert_eq!(
+                build_multisig_descriptor_on(&xpubs, 2, Branch::Receive)
+                    .unwrap()
+                    .to_string(),
+                build_multisig_descriptor(&xpubs, 2).unwrap().to_string(),
+                "no receive address moves"
+            );
+        }
+
+        // Built from rust-bitcoin alone, as wallet-e2e's `independent_script` is, so miniscript is checked against something that is not miniscript.
+        #[test]
+        fn the_change_branch_is_each_key_at_1_i_sorted_into_one_p2wsh_multisig() {
+            let secp = bitcoin::secp256k1::Secp256k1::verification_only();
+            let xpubs = test_xpubs();
+            let change = build_multisig_descriptor_on(&xpubs, 2, Branch::Change).unwrap();
+            let receive = build_multisig_descriptor_on(&xpubs, 2, Branch::Receive).unwrap();
+            for index in [0, 1, 7, 19, 20, 1000] {
+                let path = [
+                    ChildNumber::Normal { index: 1 },
+                    ChildNumber::Normal { index },
+                ];
+                let mut keys: Vec<bitcoin::PublicKey> = xpubs
+                    .iter()
+                    .map(|xpub| {
+                        bitcoin::PublicKey::new(xpub.derive_pub(&secp, &path).unwrap().public_key)
+                    })
+                    .collect();
+                keys.sort_by_key(|key| key.to_bytes());
+                let mut script = bitcoin::script::Builder::new().push_int(2);
+                for key in &keys {
+                    script = script.push_key(key);
+                }
+                let script = script
+                    .push_int(3)
+                    .push_opcode(bitcoin::opcodes::all::OP_CHECKMULTISIG)
+                    .into_script();
+                let address = derive_address_at(&change, index, Network::Testnet4).unwrap();
+                assert_eq!(
+                    address.script_pubkey(),
+                    script.to_p2wsh(),
+                    "change address {index}"
+                );
+                assert_ne!(
+                    address,
+                    derive_address_at(&receive, index, Network::Testnet4).unwrap(),
+                    "receive and change at index {index}"
+                );
+            }
         }
 
         #[test]

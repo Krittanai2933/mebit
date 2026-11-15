@@ -1,0 +1,3 @@
+package = mobile_signer_ffi.cinterop
+headers = mobile_signer_ffi.h
+headerFilter = mobile_signer_ffi.h
