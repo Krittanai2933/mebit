@@ -7,7 +7,7 @@ Start with [`docs/07-product-vision-mebit.md`](docs/07-product-vision-mebit.md) 
 ## Layout
 
 - `docs/` — numbered doc set (`00`-`09`); see `docs/00-README.md` for what's current vs. lending-specific
-- `design-reference/` — mebit/Mapboss design tokens + logos (for `mobile-signer-ffi`)
+- `design-reference/` — mebit/Mapboss design tokens and fonts (for `mobile-signer-ffi`)
 - `vault-workspace/` — the Rust workspace; `cargo build`/`cargo test` from here. Seven crates (`vault-core`, `custody-service`, `lender-signer-cli`, `mobile-signer-ffi`, `monitor-service`, `jade-ble`, `trezor-ble`), each with its own `README.md` with owner/deps/responsibilities. `jade-ble` and `trezor-ble` sit outside `default-members` (btleplug needs libdbus on Linux): reach them with `-p jade-ble` / `-p trezor-ble`. vault-core's Trezor protocol is behind its non-default `trezor` feature (`cargo test -p vault-core --features trezor`). Don't run cargo commands from the repo root, there's no top-level `Cargo.toml`.
 - `.claude/`, `.agents/skills` and `scripts/` hold the agent context and its check. See Agent context below.
 

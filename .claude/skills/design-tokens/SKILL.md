@@ -5,21 +5,11 @@ description: Quick reference to the mebit/Mapboss design tokens (colors, type, r
 
 # mebit design tokens
 
-Full screens/flows/product reasoning: `docs/design-notes.md`. Full token file: `design-reference/colors_and_type.css`. Logos: `design-reference/logos/`. This skill is just the cheat sheet.
+Full screens/flows/product reasoning: `docs/design-notes.md`. Full token file: `design-reference/colors_and_type.css`. There are no logo files in the repo yet (`docs/04-open-items.md` item 102). This skill is just the cheat sheet.
 
 ## Core palette
 
-| Token | Hex | Use |
-|---|---|---|
-| `--mb-teal` | `#007368` | Primary — headings, key UI, primary buttons |
-| `--mb-green-900` | `#06312D` | Darkest surface — reserve for weighty moments only (Loan Dashboard risk panel, success screen) |
-| `--mb-green-leaf` | `#4DB848` | "Safe" / positive status, card accent bars |
-| `--mb-yellow` | `#FCC330` | The single warm accent dot — use sparingly, never as a base color |
-| `--mb-orange` | `#F8981C` | Secondary warm — risk/warning zones, icons/data-viz only |
-| `--mb-mint-tint` | `#F2F8F7` | Default light-theme background wash |
-| `--mb-ink` / `--mb-gray-700` | `#1E1E1E` / `#4B4B4B` | Primary / body text on light |
-
-Risk-zone convention used throughout the design: leaf green below 50% LTV, yellow 50–65%, orange above 65% — reuse this exact mapping in any new risk UI so it stays consistent with the Loan Dashboard.
+The brand palette (Orbit Navy `#002B49`, Mercury Gold `#FFBD59`, and the rest) is in `DESIGN.md`; the CSS variables are in `design-reference/colors_and_type.css`. Take values from those two files, and see `docs/04-open-items.md` items 103 and 104 for where they still disagree with Penpot.
 
 ## Type
 
@@ -27,7 +17,7 @@ Shipping typeface is **Kanit** (OFL, Thai + Latin) — `--font-display` / `--fon
 
 ## Radii & shadows
 
-`--radius-lg` (28px) is the signature soft card corner, especially on dark surfaces. `--shadow-card` / `--shadow-soft` / `--shadow-float` give three elevation tiers — see `design-reference/colors_and_type.css` for exact values.
+`--radius-lg` (24px, the same value as `--org-radius-card`) is the signature soft card corner, especially on dark surfaces. `--shadow-card` / `--shadow-soft` / `--shadow-float` give three elevation tiers — see `design-reference/colors_and_type.css` for exact values.
 
 ## Before building a new screen
 

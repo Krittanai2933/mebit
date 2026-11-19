@@ -7,8 +7,7 @@ This directory is the maintained source for verifying what a user sees and does 
 - `verify.sh doctor` passes, and `verify.sh start` has just finished in this run.
 - The emulator is `emulator-5580`, portrait, started by this run. `start` uninstalls the app first, so the app data is empty.
 - Never drive an emulator or simulator that this run did not start.
-- `start` uses the first AVD that `emulator -list-avds` prints, or `VERIFY_AVD`. The recipes passed on the nine AVDs listed in `SKILL.md`. A different AVD changes the API level in the greeting text.
-
+- `start` uses the first AVD that `emulator -list-avds` prints, or `VERIFY_AVD`. The recipes passed on the nine AVDs listed in `SKILL.md`.
 ## Driving conventions
 
 - Start every recipe from the baseline state unless its preconditions say otherwise.
@@ -40,7 +39,6 @@ Keep implementation details out of the map. Name only user paths, stable handles
 
 ## Features
 
-- [Home greeting](./home-greeting.md) covers the legacy template button/greeting (kept for launch smoke).
 - [App launch](./app-launch.md) covers opening the app from the launcher icon, what survives leaving it, a cold start, and the iOS launch.
 - [Movie Page welcome](./movie-page-welcome.md) covers Welcome, catalog, and create CTA.
 - [Movie Page onboarding](./movie-page-onboarding.md) covers 00.* software key → backup → home.

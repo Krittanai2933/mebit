@@ -8,7 +8,7 @@ You own `vault-workspace/mobile-signer-ffi`: the borrower's phone-side wallet an
 
 ## Scope — this is two layers, not one
 
-- **Hot wallet (single-sig)**, for BTC that isn't pledged to any loan yet: address generation, UTXO tracking, fee estimation, send/receive, its own node connectivity (Electrum/Esplora — not routed through the backend, that's what makes self-custody real), and watch-only PSBT construction. The docs recommend **`bdk` (Bitcoin Dev Kit) Rust core** over hand-rolling it, because `bdk` supports all of the above natively. The wallet in `rust/src/hot_wallet.rs` is hand-written today, and moving it to `bdk` or not is still item 2 of `docs/04-open-items.md`. Do not use `bdk-rn`/`bdk-dart` wrappers (still integration-testing-only as of July 2026).
+- **Hot wallet (single-sig)**, for BTC that isn't pledged to any loan yet: address generation, UTXO tracking, fee estimation, send/receive, its own node connectivity (Electrum/Esplora — not routed through the backend, that's what makes self-custody real), and watch-only PSBT construction. The docs recommend **`bdk` (Bitcoin Dev Kit) Rust core** over hand-rolling it, because `bdk` supports all of the above natively. The wallet in `rust/src/hot_wallet.rs` is hand-written today, and moving it to `bdk` or not is still item 2 of `docs/04-open-items.md`.
 - **Vault signer (multisig)**, for BTC pledged to a loan: UniFFI interface exposing `vault-core`'s key derivation and PSBT signing to Kotlin/Swift. This is the original, narrower scope this module used to be — it's now half the job, not all of it.
 - **`app/`**: the mebit app, a Kotlin Multiplatform project with Compose Multiplatform. The `shared` module holds the UI and the logic for Android and iOS, `androidApp` and `iosApp` are thin launchers, and `mobileSignerFfi` holds the UniFFI bindings to the Rust crate, which `scripts/ffi.sh` generates. Build and run it with `./kotlin` as `app/README.md` describes, and drive it with the app's `verify` skill. Its screens follow the Penpot Organize boards (`docs/09-wallet-mvp-buildplan.md`, Phase 2). Commit `346aeb2` replaced the earlier Expo (React Native) prototype.
 
@@ -24,7 +24,7 @@ You own `vault-workspace/mobile-signer-ffi`: the borrower's phone-side wallet an
 - three explored variants each for the Home screen, risk visualization, and borrow-amount input, with reasoning for which was chosen for the wired prototype
 - design decisions worth preserving (Borrow as primary CTA, risk shown spatially via an arc to the liquidation threshold, liquidation price always derived never hand-typed, per-contract liquidation isolation)
 
-`design-reference/colors_and_type.css` and `design-reference/logos/` have the actual mebit/Mapboss tokens and logo marks to build against. Do not port `android-frame.jsx`/`ios-frame.jsx` from the original design project — those are Claude Design's own preview device frames, not reusable app code.
+`design-reference/colors_and_type.css` has the actual tokens to build against; logo files are not in the repo yet (`docs/04-open-items.md` item 102). Do not port `android-frame.jsx`/`ios-frame.jsx` from the original design project — those are Claude Design's own preview device frames, not reusable app code.
 
 ## Dependency on vault-core (vault-signer half only)
 
@@ -36,7 +36,7 @@ You don't need `vault-core` to be finished to start the hot-wallet half or the U
 - **MVP screens** (must finish): onboarding, seed backup, Face ID, home, receive, borrow, loan dashboard, repay, success — this is the tappable prototype's actual path and what the midterm/final demo shows
 - **Stretch goals** (nice to have, or hand off to teammates in term 2 once their modules stabilize): activity, portfolio, settings
 
-Don't let the hot-wallet requirement block getting the MVP loan flow working end-to-end on testnet first.
+The product is wallet-first (`AGENTS.md`, `docs/09-wallet-mvp-buildplan.md`): the wallet screens come before the loan screens, and the loan screens above are the lending leg's MVP, built on top of a proven wallet.
 
 ## Milestones (see `docs/00-capstone-brief.md` §4)
 
