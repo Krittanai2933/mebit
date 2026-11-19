@@ -16,9 +16,9 @@ W=$REPO/${REL%/.claude/skills/verify/scripts}/build/verify/trials-$(date +%Y%m%d
 mkdir -p "$W"
 trap '[ -n "${V:-}" ] && "$V" stop > /dev/null 2>&1' EXIT
 
-probe() { # first screen, one tap, the greeting, a 30 s settle, then doctor
-  "$1" see "Click me! na kub" 10 > /dev/null 2>&1 && "$1" tap "Click me! na kub" > /dev/null 2>&1 \
-    && "$1" see "text~:Hello, Android" 10 > /dev/null 2>&1 && sleep 30 && "$1" doctor > /dev/null 2>&1
+probe() { # Welcome, one tap, the key source screen, a 30 s settle, then doctor
+  "$1" see "id:screen_welcome" 10 > /dev/null 2>&1 && "$1" tap "id:cta_create" > /dev/null 2>&1 \
+    && "$1" see "id:screen_onboarding/key-source" 10 > /dev/null 2>&1 && sleep 30 && "$1" doctor > /dev/null 2>&1
 }
 
 init=0; rec=0; failed=0

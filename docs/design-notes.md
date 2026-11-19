@@ -1,14 +1,36 @@
 # mebit wallet app — design reference
 
-Source of truth for the current wallet/custody UI: Penpot Organize and Organize · Design System. This document records the current flow map first, then retains the previous lending-oriented mobile concept as historical product context. Shared visual references live in the design-reference directory.
+The wallet app's design lives in Penpot file `mebit`. The `Organize` page has the screens, and the `Organize · Design System` page has the colors, type, geometry and components they are built from. Colors, type, layout, logo use and voice are written out in [`../DESIGN.md`](../DESIGN.md).
 
-## Current Penpot design — Organize
+This document maps the flows on `Organize`. After it come notes from the earlier lending prototype, kept as product context for the lending leg.
 
-The Organize page contains seven user-flow groups: Onboarding (1.1 Welcome), Import existing seed (1B.1 Import Seed · empty), Add key · keyring (2.1 Add Key), Create vault (3.1 Policy), Single-sig wallet (4.1 Home · single-sig), Vault send (multisig) (5.1 Send · vault), and Error & edge states (6.1 Connect HW — UnsupportedModel).
+## Current design: Penpot Organize
 
-The page audit found 105 full-size screen boards and 378 navigate-to interactions; 99 boards are reachable from the seven flow starts. Six boards were not reached: 4.2 Receive · backup gate, 6.8 Vault Detail — actions, 6.2 KeyVault — empty, 6.5 Select Policy — decaying, 6.6 Compose Vault — count mismatch, and 6.7 Confirm Vault — backend error. Keep these visible as follow-up coverage items.
+### Reading the page
 
-The current Settings screen uses Anuphan, a cool gray #f6f7f9 page, white cards, #e4e8ee borders, #0e1116 primary text, #5b6472 secondary text, navy #042c49, amber #c2700f, pale amber #fdefdd, and 24px card corners. Language (TH/EN) and currency (sat/BTC) are text choices; light/dark mode remains icon-led. The Design System page is canonical for shared tokens.
+- Every screen is a 402 × 874 board named by its number and title, as in `4.3 Send`. A number with more parts is a state or a branch of the screen above it, as in `4.4.4 Send · insufficient funds`.
+- A board marked `(proposal)` is a suggested screen that hasn't been agreed yet.
+- Flow labels and lane labels above the rows of boards name each flow and each branch, such as passphrase, skipped backup, or failure cases.
+- Text notes that start `หมายเหตุสำหรับ dev` sit beside some boards. They describe behavior a board can't show, such as what copying an address does.
+- Penpot prototype flows start at the first board of each flow. Run them in view mode to step through the screens.
+
+### Flows
+
+| Flow | Starts at | What it covers |
+|---|---|---|
+| 1 Onboarding · software key | `1.1 Welcome` | Key source, key created, backup words with an optional passphrase, verify words, address type, app lock, then Home. Includes a lane where the user skips the backup. |
+| 1B Import existing seed | `1B.1 Import Seed · empty` | Typing the 24 words, picking the last word, optional passphrase, confirming the fingerprint, address type, app lock, then Home. Includes invalid-word and invalid-checksum states. |
+| 1B Unlock on return | `1B.6.1 App Lock · unlock on return` | Unlocking the app when the user comes back to it. |
+| 2 Add key · keyring | `2.1 Keyring` | The keyring, adding a key, pairing a hardware wallet over Bluetooth (Jade, Trezor Safe 7), and confirming the key. Includes Bluetooth-off and code-mismatch states. |
+| Delete key · Keyring ⋯ | `2.1.0 Keyring · ⋯ closed` | The ⋯ menu on a key card. A key used by any wallet can't be deleted. |
+| 3 Create wallet | `3.1 Policy` | Choosing the policy (one key or several), choosing keys, script and address type, reviewing the descriptor, and the created wallet. |
+| 3 Wallets | `3.6 Wallets` | The wallet list, wallet detail, its keys, refreshing, and transaction detail. |
+| 4 Single-sig wallet | `4.1 Home · single-sig` | Home for a one-key wallet. Send (choose wallet, address, amount in BTC or baht, send all, scan QR), review and sign, the sent slip, and Receive (choose wallet, backup gate, sharing). |
+| 5 Wallet send (multisig) | `5.1 Send · wallet` | Sending from a several-key wallet. Collecting signatures one key at a time on this phone, a Jade or a Trezor, ready to broadcast, and sent. Includes rejection, lost connection, Face ID failure and broadcast failure. |
+| Delete wallet · Home ⋯ | `1.8.0 Home · ⋯ closed` | The ⋯ menu on a wallet card, which removes a one-key or several-key wallet from this phone. |
+| 6 Error & edge states | `6.1 Connect HW — UnsupportedModel` | Connecting a hardware wallet model the app doesn't support. |
+
+The page also has Settings boards (`Settings Idea 1 — Compact Rows`, plus network and node proposals) and History boards (`4.1.3`, `4.1.4`), which aren't yet linked into a flow.
 
 ## Historical lending-prototype notes
 
@@ -16,8 +38,6 @@ The current Settings screen uses Anuphan, a cool gray #f6f7f9 page, white cards,
 
 > "กระเป๋าบิตคอยน์ที่ถือกุญแจเอง แต่ใช้มูลค่าได้โดยไม่ต้องขาย"
 > (A Bitcoin wallet where you keep your own keys, but can still use its value without selling.)
-
-Historical lending prototype styling: Mapboss teal #007368, leaf green, FC Vision, and deep green #06312D. These are not current Organize screen tokens; use Penpot Design System for current implementation.
 
 ### Multi-loan / multi-contract model (new)
 
@@ -93,7 +113,6 @@ Per-contract liquidation price and LTV use the same derivation as before (`debt 
 - **Risk is shown spatially, not just numerically.** The arc-to-liquidation visualization (full sweep = 80% LTV) is used on both the Borrow screen and Loan Dashboard. Zone coloring is consistent everywhere: leaf green <50%, yellow 50–65%, orange ≥65%.
 - **Liquidation price is always derived from LTV + collateral + loan, never typed as a raw number.** Unchanged from the original correction against the product brief's hand-entered figure — now applies per-contract.
 - **Deleting the app doesn't delete the BTC, but losing the seed phrase means nobody — including the mebit team — can recover the wallet.** This sentence is explicit copy on the Settings screen; keep it verbatim in any real implementation, it's a load-bearing trust claim for a self-custody product.
-- **No icon set exists yet in the Mapboss CI.** Nav glyphs remain minimal line icons as a flagged placeholder.
 
 ### Screen variants explored (not all need to ship — pick per team judgment)
 
@@ -114,6 +133,5 @@ Note that "multi-collateral" was originally scoped as V3 — the multi-*contract
 
 ### Assets
 
-- Current Organize visual references: colors_and_type.css; confirm shared values against Penpot Organize · Design System.
-- Logos: [`../design-reference/logos/`](../design-reference/logos/)
-- Penpot Organize uses Anuphan. The app currently bundles Kanit under OFL; see design-reference/fonts/README.md. The historical FC Vision note applies only to the earlier lending prototype.
+- Colors, type, layout, components, logo use and voice are in [`../DESIGN.md`](../DESIGN.md) and on Penpot `Organize · Design System`.
+- Place the logo from its file. Never redraw it.

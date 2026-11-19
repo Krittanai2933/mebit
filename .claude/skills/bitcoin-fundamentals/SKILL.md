@@ -36,4 +36,4 @@ The multisig script guarantees *how many* signers. It says nothing about *what* 
 - `bitcoin` (rust-bitcoin) — script, transaction, PSBT primitives
 - `miniscript` — descriptor parsing/compilation, policy compilation on top of script
 
-Confirm exact versions as a team before uncommenting them in any `Cargo.toml` — they're commented out in the scaffold pending that decision.
+`vault-core` pins `bitcoin = "0.32"` and `miniscript = "13"`; match those versions in any other crate that adds them.
