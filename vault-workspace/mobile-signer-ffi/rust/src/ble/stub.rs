@@ -15,7 +15,8 @@ pub(super) async fn scan(_: WalletKind) -> Result<Vec<FoundWallet>, BleError> {
 pub(super) async fn connect(
     _: &FoundWallet,
     _: Arc<dyn PairingCodes>,
-) -> Result<Running, BleError> {
+    _: Option<Vec<u8>>,
+) -> Result<(Running, Option<Vec<u8>>), BleError> {
     Err(platform::no_backend())
 }
 
@@ -44,7 +45,7 @@ mod tests {
             name: "Safe 7".into(),
         };
         assert!(matches!(
-            connect(&wallet, Arc::new(NoCodes)).await,
+            connect(&wallet, Arc::new(NoCodes), None).await,
             Err(BleError::Unsupported(_))
         ));
     }

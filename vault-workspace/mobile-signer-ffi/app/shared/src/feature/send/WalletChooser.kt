@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import com.mebit.app.Place
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.FiatQuote
+import com.mebit.app.data.HardwareWallet
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_chevron
 import com.mebit.app.resources.ic_vault_row
@@ -59,6 +60,9 @@ private val NoteTitle = Color(0xFF244B66)
 /** One wallet the user owns. A later wallet is one more row, not another screen. */
 sealed interface WalletChoice {
     data class Spending(val place: Place) : WalletChoice
+
+    /** A one-key wallet whose key is on a Jade or a Safe 7. */
+    data class Hardware(val wallet: HardwareWallet) : WalletChoice
     data class Vault(val vault: CreatedVault) : WalletChoice
 }
 
@@ -72,11 +76,17 @@ data class WalletLine(val name: String, val balance: String, val baht: String?)
 internal fun vaultLine(vault: CreatedVault, knownSats: Long?, quote: FiatQuote?): WalletLine =
     WalletLine(vault.name, homeBalanceText(knownSats ?: 0L, known = knownSats != null, loading = false), knownSats?.let { fiatLine(it, quote) })
 
-/** Every individual wallet in place order, then the vaults in the order they were made. */
-internal fun walletChoices(spending: List<Place>, vaults: List<CreatedVault>): List<WalletChoice> =
-    spending.map { WalletChoice.Spending(it) } + vaults.map { WalletChoice.Vault(it) }
+/**
+ * The order of every list of wallets, the Wallet list's and the รับ/ส่ง chooser's, as the user set it on 12 Nov 2026: this phone's
+ * wallets in place order, then the Jade and Trezor wallets, then the several-key wallets, each in the order it was made.
+ */
+internal fun walletChoices(spending: List<Place>, hardware: List<HardwareWallet>, vaults: List<CreatedVault>): List<WalletChoice> =
+    spending.map { WalletChoice.Spending(it) } + hardware.map { WalletChoice.Hardware(it) } + vaults.map { WalletChoice.Vault(it) }
 
-/** Penpot 4.2 and 4.7: the wallets to pick from before a Receive or Send, each with its own balance. */
+/**
+ * Penpot 4.2 and 4.7: the wallets to pick from before a Receive or Send, each with its own balance. A Jade or Safe 7 wallet is a one-key
+ * wallet's card.
+ */
 @Composable
 fun ChooseWalletScreen(
     send: Boolean,
@@ -116,6 +126,17 @@ fun ChooseWalletScreen(
                         baht = l.baht,
                         vault = false,
                         tag = if (choice.place == Place.FIRST) "choose_spending" else "choose_spending_${choice.place.number}",
+                        onClick = { onChoose(choice) },
+                    )
+                }
+                is WalletChoice.Hardware -> line(choice).let { l ->
+                    WalletCard(
+                        name = l.name,
+                        policy = "Single-sig · กุญแจ 1 ใบ",
+                        balance = l.balance,
+                        baht = l.baht,
+                        vault = false,
+                        tag = "choose_hw_${choice.wallet.id}",
                         onClick = { onChoose(choice) },
                     )
                 }

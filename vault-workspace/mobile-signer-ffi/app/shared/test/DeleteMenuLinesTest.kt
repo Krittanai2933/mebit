@@ -64,6 +64,17 @@ class DeleteMenuLinesTest {
     }
 
     @Test
+    fun aHardwareWalletIsOfferedOnTheSameRuleAsASeveralKeyWallet() {
+        val notSaved = DeleteItem.Blocked("ลบไม่ได้ · กระเป๋านี้ยังไม่ได้บันทึกในเครื่อง")
+        val wallet = { VaultOwners(listOf(TEST_CHECK), everyPlaceOpened = true) }
+        fun item(storage: VaultsStorage?, owners: () -> VaultOwners?) = hardwareDeleteItem(SavedVaults(storage, owners).apply { sync() }.saving)
+        assertEquals(notSaved, item(FakeVaultsStorage(), { null }), "no saved wallet")
+        assertEquals(unreadable, item(FakeVaultsStorage("not a book"), wallet), "a damaged book")
+        assertEquals(unreadable, item(FakeVaultsStorage().apply { unreadable = true }, wallet), "a book not read yet")
+        assertEquals(DeleteItem.Offered, item(FakeVaultsStorage(), wallet), "a healthy book")
+    }
+
+    @Test
     fun theSheetsSpaceLatinAndDigitNamesFromTheVerbAndJoinThaiOnes() {
         assertEquals("ลบกระเป๋า 2 ออกจากเครื่องนี้ไหม", removeSheetTitle("กระเป๋า 2"))
         assertEquals("ลบกระเป๋า 2 ออกจากเครื่องนี้", removeReason("กระเป๋า 2"))

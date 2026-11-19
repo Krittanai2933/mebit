@@ -54,6 +54,7 @@ import com.mebit.app.data.CreateWalletDraft
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.Preset
 import com.mebit.app.data.ReadyPlan
+import com.mebit.app.data.SamePhrase
 import com.mebit.app.data.SavedKey
 import com.mebit.app.data.Signing
 import com.mebit.app.data.keyLine
@@ -73,6 +74,7 @@ import com.mebit.app.ui.theme.MbBtcOrange
 import com.mebit.app.ui.theme.MbChip
 import com.mebit.app.ui.theme.MbDisabledFill
 import com.mebit.app.ui.theme.MbDisabledInk
+import com.mebit.app.ui.theme.MbEyebrow
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbPage
@@ -85,9 +87,12 @@ import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
 
 /** What Penpot leaves under the primary button on every wizard board, so the button sits at y 732. */
-private val BelowPrimary = 38.dp
+internal val BelowPrimary = 38.dp
 
-/** Penpot 3.1 and 3.1.1. Multisig is selected when the screen opens. Single-sig goes on as Add Key's "mebit บนเครื่องนี้", and [line] says why a refused start did not. */
+/** Penpot 3.1.1's eyebrow, for the three steps of a one-key wallet: Policy, Choose Key (3.2.1 to 3.2.3) and the address type. */
+internal const val SINGLE_SIG_POLICY_EYEBROW = "POLICY · ขั้น 1/3"
+
+/** Penpot 3.1 and 3.1.1. Multisig is selected when the screen opens. Single-sig goes on to Choose Key, and [line] says why a refused start did not. */
 @Composable
 fun PolicyScreen(
     draft: CreateWalletDraft,
@@ -99,7 +104,7 @@ fun PolicyScreen(
 ) {
     val single = draft.signing == Signing.SingleSig
     MebitScreen(
-        eyebrow = MovieRoute.Policy.eyebrow,
+        eyebrow = if (single) SINGLE_SIG_POLICY_EYEBROW else MovieRoute.Policy.eyebrow,
         title = MovieRoute.Policy.titleTh,
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
@@ -229,6 +234,7 @@ fun ChooseKeysScreen(
 ) {
     val plan = draft.ready(keys)
     val duplicate = plan?.duplicateOf(wallets)
+    val blocked = draft.blocked(keys)
     MebitScreen(
         eyebrow = MovieRoute.ChooseKeys.eyebrow,
         title = MovieRoute.ChooseKeys.titleTh,
@@ -241,6 +247,10 @@ fun ChooseKeysScreen(
         },
     ) {
         PickCounter(draft.livePicks(keys).size, draft.preset.n)
+        samePhraseLines(blocked).forEach {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(it, color = MbEyebrow, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, lineHeight = 18.sp, modifier = Modifier.testTag("choose_same_phrase"))
+        }
         if (duplicate != null) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(duplicateLine(duplicate.name), color = MaterialTheme.colorScheme.error, fontSize = 13.sp, lineHeight = 20.sp, modifier = Modifier.testTag("choose_duplicate"))
@@ -248,7 +258,7 @@ fun ChooseKeysScreen(
         Spacer(modifier = Modifier.height(19.dp))
         // A skipped backup leaves a phone's key unconfirmed, and it stays off the list until it is backed up.
         keys.filter { it.verified }.forEach { key ->
-            PickRow(key.label, keyLine(key), checked = key.id in draft.picks, tag = "pick_${key.id}") { draft.toggle(key.id, keys) }
+            PickRow(key.label, keyLine(key), checked = key.id in draft.picks, enabled = key.id !in blocked, tag = "pick_${key.id}") { draft.toggle(key.id, keys) }
             Spacer(modifier = Modifier.height(10.dp))
         }
         SecondaryCta("เพิ่มกุญแจอีก", "cta_choose_add_key", onAddKey)
@@ -265,21 +275,28 @@ private fun PickCounter(picked: Int, n: Int) {
     }
 }
 
+/**
+ * An [enabled] false row is a key another pick rules out: greyed, and a tap does nothing. A [radio] row is one choice of several, as
+ * 3.2.1 to 3.2.3 draw it, with a round mark in place of the box.
+ */
 @Composable
-private fun PickRow(name: String, line: String, checked: Boolean, tag: String, onToggle: () -> Unit) {
+internal fun PickRow(name: String, line: String, checked: Boolean, tag: String, enabled: Boolean = true, radio: Boolean = false, onToggle: () -> Unit) {
     val shape = RoundedCornerShape(20.dp)
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(64.dp)
-            .shadow(4.dp, shape, clip = false)
+            .shadow(if (enabled) 4.dp else 0.dp, shape, clip = false)
             .clip(shape)
-            .background(if (checked) MbWarmTint else MbWhite)
+            .background(if (checked) MbWarmTint else if (enabled) MbWhite else MbDisabledFill)
             .border(if (checked) 2.dp else 1.dp, if (checked) MbBtcOrange else MbBorder, shape)
-            .toggleable(value = checked, role = Role.Checkbox, onValueChange = { onToggle() })
+            .then(
+                if (radio) Modifier.selectable(selected = checked, enabled = enabled, role = Role.RadioButton, onClick = onToggle)
+                else Modifier.toggleable(value = checked, enabled = enabled, role = Role.Checkbox, onValueChange = { onToggle() }),
+            )
             .testTag(tag),
     ) {
-        val box = RoundedCornerShape(7.dp)
+        val box = if (radio) CircleShape else RoundedCornerShape(7.dp)
         Box(
             Modifier
                 .offset(x = 16.dp, y = 20.dp)
@@ -291,16 +308,19 @@ private fun PickRow(name: String, line: String, checked: Boolean, tag: String, o
             if (checked) Tick(Modifier.offset(x = 6.dp, y = 6.dp).size(9.8.dp, 7.7.dp))
         }
         Column(Modifier.padding(start = 52.dp, top = 12.dp, end = 16.dp)) {
-            Text(name, color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(name, color = if (enabled) MbNavyInk else MbDisabledInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(modifier = Modifier.height(2.dp))
-            Text(line, color = MbSlate, fontSize = 11.sp, fontWeight = FontWeight.Light, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(line, color = if (enabled) MbSlate else MbDisabledInk, fontSize = 11.sp, fontWeight = FontWeight.Light, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
 
+/** Pure. One line under the counter per pick that rules keys out, each naming the pick and the key, in keyring order. */
+internal fun samePhraseLines(blocked: Map<String, SamePhrase>): List<String> = blocked.values.map { it.line }.distinct()
+
 /** A white check drawn corner to corner of its box: down to the low point a third in, then up to the far corner. */
 @Composable
-private fun Tick(modifier: Modifier) {
+internal fun Tick(modifier: Modifier) {
     Canvas(modifier) {
         val tick = Path().apply {
             moveTo(0f, size.height * 0.5f)
@@ -513,7 +533,7 @@ fun VaultCreatedScreen(
 
 /** One of the hero's two decorative rings, [offsetX] past the screen's right edge, clipped by the hero. */
 @Composable
-private fun BoxScope.Ring(size: Int, offsetX: Int, offsetY: Int, alpha: Float) {
+internal fun BoxScope.Ring(size: Int, offsetX: Int, offsetY: Int, alpha: Float) {
     Box(Modifier.align(Alignment.TopEnd).offset(x = offsetX.dp, y = offsetY.dp).size(size.dp).border(1.dp, MbProgress.copy(alpha = alpha), CircleShape))
 }
 

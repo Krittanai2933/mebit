@@ -14,6 +14,8 @@ pub mod price;
 mod proof;
 mod scan;
 mod scan_store;
+pub mod script;
+pub mod spend;
 
 use std::str::FromStr;
 
@@ -240,9 +242,13 @@ pub fn restore_software_multisig_key(
 pub enum MnemonicCheck {
     Valid,
     /// The word at `index` (0-based) is not in the BIP-39 English list.
-    UnknownWord { index: u32 },
+    UnknownWord {
+        index: u32,
+    },
     /// BIP-39 mnemonics have 12, 15, 18, 21 or 24 words.
-    BadWordCount { count: u32 },
+    BadWordCount {
+        count: u32,
+    },
     /// Every word is in the list, but the checksum does not match.
     InvalidChecksum,
 }
@@ -808,7 +814,11 @@ mod tests {
     fn last_word_candidates_complete_the_mnemonic() {
         let first23 = vec!["abandon".to_string(); 23];
         let candidates = bip39_last_word_candidates(first23.clone());
-        assert_eq!(candidates.len(), 8, "3 entropy bits leave 8 words: {candidates:?}");
+        assert_eq!(
+            candidates.len(),
+            8,
+            "3 entropy bits leave 8 words: {candidates:?}"
+        );
         assert!(candidates.contains(&"art".to_string()));
         let mut sorted = candidates.clone();
         sorted.sort();
@@ -937,32 +947,40 @@ mod tests {
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_is_valid_address(),
             ),
             (
-                "func_vault_snapshot",
-                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_snapshot(),
+                "func_wallet_snapshot",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_wallet_snapshot(),
             ),
             (
-                "func_vault_history",
-                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_history(),
+                "func_wallet_history",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_wallet_history(),
             ),
             (
-                "func_vault_typical_vsize",
-                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_typical_vsize(),
+                "func_wallet_tx_detail",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_wallet_tx_detail(),
             ),
             (
-                "func_vault_spendable",
-                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_spendable(),
+                "func_wallet_balance",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_wallet_balance(),
             ),
             (
-                "func_vault_prepare_send",
-                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_vault_prepare_send(),
+                "func_wallet_describe",
+                script::uniffi_mobile_signer_ffi_checksum_func_wallet_describe(),
             ),
             (
-                "func_vault_sign_psbt",
-                hot_wallet::vault_spend::uniffi_mobile_signer_ffi_checksum_func_vault_sign_psbt(),
+                "func_wallet_draft",
+                spend::uniffi_mobile_signer_ffi_checksum_func_wallet_draft(),
             ),
             (
-                "func_vault_finalize_psbt",
-                hot_wallet::vault_spend::uniffi_mobile_signer_ffi_checksum_func_vault_finalize_psbt(),
+                "func_wallet_review",
+                spend::uniffi_mobile_signer_ffi_checksum_func_wallet_review(),
+            ),
+            (
+                "func_wallet_finish",
+                spend::uniffi_mobile_signer_ffi_checksum_func_wallet_finish(),
+            ),
+            (
+                "func_wallet_sign_with_words",
+                spend::uniffi_mobile_signer_ffi_checksum_func_wallet_sign_with_words(),
             ),
             (
                 "func_scan_wallets",
@@ -993,8 +1011,8 @@ mod tests {
                 ble::uniffi_mobile_signer_ffi_checksum_method_walletlink_account_xpub(),
             ),
             (
-                "method_walletlink_sign_psbt",
-                ble::uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_psbt(),
+                "method_walletlink_sign_wallet_psbt",
+                ble::uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_wallet_psbt(),
             ),
             (
                 "method_walletlink_disconnect",
@@ -1003,6 +1021,18 @@ mod tests {
             (
                 "method_pairingcodes_pairing_code",
                 ble::uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(),
+            ),
+            (
+                "method_signsteps_registering",
+                ble::uniffi_mobile_signer_ffi_checksum_method_signsteps_registering(),
+            ),
+            (
+                "method_signsteps_showing",
+                ble::uniffi_mobile_signer_ffi_checksum_method_signsteps_showing(),
+            ),
+            (
+                "func_jade_wallet_registration",
+                ble::uniffi_mobile_signer_ffi_checksum_func_jade_wallet_registration(),
             ),
             (
                 "func_fetch_btc_thb",

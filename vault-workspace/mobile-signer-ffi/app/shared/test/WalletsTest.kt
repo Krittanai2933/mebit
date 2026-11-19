@@ -9,17 +9,21 @@ import com.mebit.app.Why
 import com.mebit.app.WriteMode
 import com.mebit.app.WriteResult
 import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
+import com.mebit.app.feature.vault.duplicateLine
 import com.mebit.app.navigation.Boot
 import com.mebit.app.navigation.MovieRoute
 import com.mebit.app.navigation.Stop
 import com.mebit.app.navigation.WalletGateState
 import com.mebit.app.navigation.endSetup
 import com.mebit.app.walletName
+import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.HotWalletSnapshot
+import com.mebit.ffi.signer.HwAccountKey
 import com.mebit.ffi.signer.SoftwareAccountKey
-import com.mebit.ffi.signer.VaultSnapshot
+import com.mebit.ffi.signer.WalletBalance
+import com.mebit.ffi.signer.WalletKind
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -49,13 +53,13 @@ private fun check(words: List<String>, passphrase: String = ""): String =
 
 private val SENT_AT = 1_792_740_720L
 
-/** The keys vault [n]'s BSMS names, in order. */
-private fun vaultKeys(n: Int): List<String> = listOf("tpub$n-a", "tpub$n-b", "tpub$n-c")
+/** Vault [n]'s descriptor, its BSMS line 2: a 2-of-3 over three keys of its own. */
+private fun vaultLine(n: Int): String = "wsh(sortedmulti(2,${listOf("a", "b", "c").joinToString(",") { "[0000000$n/48'/1'/0'/2']tpub$n-$it" }}))"
 
-/** Vault [n] of the book, a 2-of-3 whose BSMS descriptor line names [vaultKeys] of [n]. */
+/** Vault [n] of the book, a 2-of-3 whose BSMS descriptor line is [vaultLine] of [n]. */
 private fun vault(n: Int, address: String = "tb1qvault$n") = CreatedVault(
     "vault_$n", "Wallet $n", 2, 3, CustodyPolicy.PersonalCustody, address,
-    "BSMS 1.0\nwsh(sortedmulti(2,${vaultKeys(n).joinToString(",") { "[0000000$n/48'/1'/0'/2']$it" }}))\n/0/*,/1/*\n$address",
+    "BSMS 1.0\n${vaultLine(n)}\n/0/*,/1/*\n$address",
     List(3) { "0000000$n" },
 )
 
@@ -83,8 +87,8 @@ private class ShelfPhone {
     val binds = mutableListOf<String>()
     var scanResult = HotScan.COMPLETE
 
-    /** Each vault read the core was asked for, as its keys and m. */
-    val vaultReads = mutableListOf<Pair<List<String>, UByte>>()
+    /** Each vault balance the core was asked for, as the descriptor it named the vault by. */
+    val vaultReads = mutableListOf<String>()
     var vaultScan = HotScan.COMPLETE
     var vaultSatsOnChain = 84_200_000uL
     var vaultFails = false
@@ -95,13 +99,19 @@ private class ShelfPhone {
     /** Runs each time [Wallets] reads its own clock, which a vault read does after the network answers and before it writes the figure. */
     var onWalletsNow: () -> Unit = {}
 
-    /** Each vault history the core was asked for, as its keys and m. */
-    val historyReads = mutableListOf<Pair<List<String>, UByte>>()
+    /** Each vault history the core was asked for, as the descriptor it named the vault by. */
+    val historyReads = mutableListOf<String>()
     var vaultTxsOnChain = listOf(HotTx("tx1", 84_200_000, 3u, 1_790_000_000uL))
     var historyFails = false
 
     /** Runs inside each history read, so a test can erase the phone while one is out. */
     var duringHistoryRead: () -> Unit = {}
+
+    /** The book's wallets' guard keys, null for a book that cannot be judged. */
+    var bookKeys: List<String>? = emptyList()
+
+    /** The book's Jade and Trezor wallets. */
+    var bookHardware: List<HardwareWallet> = emptyList()
 
     /** Writes a record at [place] as an earlier launch did, and forgets that write, so a test sees only what this launch writes. */
     fun saved(place: Place, record: WalletRecord): ShelfPhone {
@@ -134,22 +144,26 @@ private class ShelfPhone {
                 nowSeconds = { nowSeconds },
             )
         },
-        vaultSnapshotOf = { xpubs, m ->
-            vaultReads += xpubs to m
-            duringVaultRead()
-            if (vaultFails) error("network error: down")
-            VaultSnapshot(vaultSatsOnChain, vaultScan)
-        },
-        vaultHistoryOf = { xpubs, m ->
-            historyReads += xpubs to m
-            duringHistoryRead()
-            if (historyFails) error("esplora history: tx 0: unreadable")
-            vaultTxsOnChain
-        },
+        vaultCore = DescribedCore(
+            balance = { descriptor, _ ->
+                vaultReads += descriptor
+                duringVaultRead()
+                if (vaultFails) error("network error: down")
+                WalletBalance(vaultSatsOnChain, vaultScan)
+            },
+            history = { descriptor, _ ->
+                historyReads += descriptor
+                duringHistoryRead()
+                if (historyFails) error("esplora history: tx 0: unreadable")
+                vaultTxsOnChain
+            },
+        ),
         nowSeconds = {
             onWalletsNow()
             nowSeconds
         },
+        bookGuardKeys = { bookKeys },
+        bookHardware = { bookHardware },
     )
 
     private fun key(w: List<String>, passphrase: String) = SoftwareAccountKey(w, derive(w, passphrase), "tpub-${derive(w, passphrase)}", "m/48'/1'/0'/2'")
@@ -483,6 +497,28 @@ class WalletsTest {
     }
 
     @Test
+    fun aHardwareWalletIsRefusedWhileAPlaceThatMayOpenLaterDidNotOpen(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P1, 1).saved(P2, testRecord(words = words(2), fingerprint = PUBLIC_FINGERPRINT, backupConfirmed = true))
+        phone.derive = { w, p -> if (w == words(2) && p.isEmpty()) PUBLIC_FINGERPRINT else check(w, p) }
+        phone.place(P2).read = ReadResult.Unavailable(Why.TryLater)
+        val wallets = phone.unlocked()
+        val storage = FakeVaultsStorage()
+        val type = AddressType.NATIVE_SEGWIT
+        val key = HwAccountKey(PUBLIC_ACCOUNTS.getValue(type).tpub, PUBLIC_FINGERPRINT, oneKeyPath(type))
+
+        val added = HardwareWallets(book(storage, wallets).apply { sync() }).add(WalletKind.JADE, type, key, wallets.phoneWallets())
+        assertEquals(HardwareAdd.Unopened, added, "refused as a phone add is then")
+
+        phone.place(P2).read = null
+        val next = phone.unlocked()
+        val reread = book(storage, next).apply { sync() }
+        assertEquals(emptyList(), reread.current.hardware, "a Jade wallet over place 2's addresses, added as $added")
+        assertEquals(HardwareAdd.Duplicate(next.at(P2).session.walletName), HardwareWallets(reread).add(WalletKind.JADE, type, key, next.phoneWallets()), "with place 2 open, its wallet")
+        val broken = ShelfPhone().saved(P1, 1).saved(P2, 2).apply { place(P2).read = ReadResult.Unreadable }.unlocked()
+        assertNotNull(broken.phoneWallets(), "a place that can never open in this build holds no add back")
+    }
+
+    @Test
     fun aPlaceThatCanNeverOpenStillAllowsAnAddEvenOfItsWords(): Unit = runBlocking {
         val broken = listOf(
             Cause.Corrupt to ReadResult.Unreadable,
@@ -632,6 +668,25 @@ class WalletsTest {
     }
 
     @Test
+    fun aPhoneWalletsClearOfADamagedGuardFileKeepsItDamagedForTheBooksWallets(): Unit = runBlocking {
+        val hardware = PUBLIC_JADE_WALLET.guardKey
+        val phone = ShelfPhone().saved(P1, 1).saved(P2, 2)
+        phone.bookKeys = listOf(hardware)
+        val wallets = phone.unlocked()
+        assertEquals(listOf(check(words(1)), check(words(2)), hardware), wallets.guardKeys())
+        phone.guards.text = "garbage\n"
+        assertTrue(wallets.at(P1).session.clearUnconfirmedSend(SingleSigWallet.DamagedGuard), "wallet 1's clear")
+        assertEquals(SingleSigWallet.DamagedGuard, PendingPayments(phone.guards).of(hardware), "the hardware wallet's payment may be out")
+        assertEquals(SingleSigWallet.DamagedGuard, wallets.at(P2).session.unconfirmedSend())
+
+        phone.guards.text = "garbage\n"
+        phone.bookKeys = null
+        assertNull(wallets.guardKeys())
+        assertFalse(wallets.at(P1).session.clearUnconfirmedSend(SingleSigWallet.DamagedGuard), "a book that cannot be judged may hold a wallet whose guard this would drop")
+        assertEquals("garbage\n", phone.guards.text)
+    }
+
+    @Test
     fun aDamagedGuardFileIsNotClearedWhileAWalletThatMayOpenLaterIsUnread(): Unit = runBlocking {
         val phone = ShelfPhone().saved(P1, 1).saved(P2, 2)
         phone.guards.text = "garbage\n"
@@ -721,7 +776,7 @@ class WalletsTest {
     fun aBookThatCannotBeJudgedRefusesARemovalWithoutAnOwnerCheck(): Unit = runBlocking {
         val cases = listOf(
             "damaged" to FakeVaultsStorage("not a book"),
-            "written by a newer app" to FakeVaultsStorage("MV2\n8 0a1b2c3d\n"),
+            "written by a newer app" to FakeVaultsStorage("MV3\n8 0a1b2c3d\n"),
             "not readable this moment" to FakeVaultsStorage().apply { unreadable = true },
         )
         for ((case, storage) in cases) {
@@ -850,6 +905,64 @@ class WalletsTest {
     }
 
     @Test
+    fun theBookIsHandedToTheKeyThePhoneHoldsAfterAPassphraseSaveFailed(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P1, 1)
+        val wallets = phone.unlocked()
+        val storage = FakeVaultsStorage()
+        val book = book(storage, wallets).apply { sync() }
+        book.edit { it.copy(keys = listOf(HARDWARE)) }
+        val w = assertNotNull(wallets.beginAdd())
+        phone.nextWords = words(2)
+        w.session.generateThisDevice()
+        phone.place(P2).write = WriteResult.Unavailable(Why.Other)
+        w.session.changeNewKeyPassphrase("pw") // the phone keeps the copy without it
+        w.session.confirmAddressType()
+        endSetup(w.session) // a later wallet has no App Lock read-back
+        assertEquals(WalletRemoval.Removed, wallets.remove(wallets.at(P1), book, "test") {})
+
+        val next = book(storage, phone.unlocked()).apply { sync() }
+        assertEquals(listOf(HARDWARE), next.current.keys, "the next launch opens wallet 2 by the key the phone holds, and its book")
+    }
+
+    @Test
+    fun aRemovalWaitsWhileTheBookCannotBeSavedForAKeyThatChangedAndTheBookOutlivesTheNextLaunch(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P2, 2).saved(P3, 3)
+        val wallets = phone.unlocked()
+        val w = assertNotNull(wallets.beginAdd())
+        phone.nextWords = words(1)
+        w.session.generateThisDevice()
+        val storage = FakeVaultsStorage()
+        val book = book(storage, wallets).apply { sync() }
+        book.edit { it.copy(keys = listOf(HARDWARE)) }
+        assertEquals(check(words(1)), storedOwner(storage), "the book names the wallet at place 1, still in setup")
+        storage.failWrite = true
+        w.session.changeNewKeyPassphrase("pw")
+        book.sync() // the move to the new key is not saved
+        assertEquals(WalletRemoval.NotErased, wallets.remove(wallets.at(P2), book, "test") { error("not gone") })
+        assertEquals(0, phone.place(P2).erases, "wallet 2 stays while the book cannot be saved")
+
+        storage.failWrite = false
+        val next = book(storage, phone.unlocked()).apply { sync() }
+        assertEquals(listOf(HARDWARE), next.current.keys, "the next launch keeps the book its wallet saved before the passphrase")
+    }
+
+    @Test
+    fun aRemovalWaitsForAnEditTheBookCouldNotSaveAndGoesAheadOnceItSaves(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P1, 1).saved(P2, 2)
+        val wallets = phone.unlocked()
+        val storage = FakeVaultsStorage()
+        val book = book(storage, wallets).apply { sync() }
+        storage.failWrite = true
+        book.edit { it.copy(keys = listOf(HARDWARE)) }
+        assertEquals(WalletRemoval.NotErased, wallets.remove(wallets.at(P2), book, "test") { error("not gone") })
+        assertEquals(0, phone.place(P2).erases, "nothing is erased while the book holds a change the phone does not")
+
+        storage.failWrite = false
+        assertEquals(WalletRemoval.Removed, wallets.remove(wallets.at(P2), book, "test") {})
+        assertEquals(listOf(HARDWARE), book(storage, phone.unlocked()).apply { sync() }.current.keys, "the edit was saved before the erase")
+    }
+
+    @Test
     fun aCopyThatCanNeverOpenIsNotRemovedBecauseItsWordsAreOnlyInMemory(): Unit = runBlocking {
         val phone = ShelfPhone().saved(P1, 1).saved(P2, 2)
         val wallets = phone.unlocked()
@@ -956,7 +1069,7 @@ class WalletsTest {
         wallets.refreshBalances(listOf(vault(1), vault(2)))
         assertEquals(listOf(check(words(1)), check(words(2))), phone.binds)
         assertEquals(listOf(2, 2), bindsBeforeEachVault, "both one-key wallets are read before the first vault")
-        assertEquals(listOf(vaultKeys(1) to 2.toUByte(), vaultKeys(2) to 2.toUByte()), phone.vaultReads, "each vault once, in book order, with its own keys and m")
+        assertEquals(listOf(vaultLine(1), vaultLine(2)), phone.vaultReads, "each vault once, in book order, by its own descriptor")
         assertEquals(84_200_000L, wallets.vaultSats(vault(1)))
     }
 
@@ -997,13 +1110,13 @@ class WalletsTest {
         val wallets = phone.launch()
         phone.vaultScan = HotScan.CONTINUING
         wallets.refreshBalances(listOf(vault(1), vault(2)))
-        assertEquals(listOf(vaultKeys(1) to 2.toUByte()), phone.vaultReads, "a host that limits one vault would limit the next")
+        assertEquals(listOf(vaultLine(1)), phone.vaultReads, "a host that limits one vault would limit the next")
         assertNull(wallets.vaultSats(vault(1)), "part of a vault never reads as all of it")
 
         phone.vaultScan = HotScan.UNVERIFIED
         phone.nowSeconds += 61
         wallets.refreshBalances(listOf(vault(1), vault(2)))
-        assertEquals(listOf(1, 1, 2).map { vaultKeys(it) to 2.toUByte() }, phone.vaultReads, "a host that lied ends no pass")
+        assertEquals(listOf(1, 1, 2).map(::vaultLine), phone.vaultReads, "a host that lied ends no pass")
         assertNull(wallets.vaultSats(vault(1)))
         assertNull(wallets.vaultSats(vault(2)), "a figure a host lied about is a dash")
     }
@@ -1094,7 +1207,7 @@ class WalletsTest {
         phone.vaultScan = HotScan.COMPLETE
         phone.nowSeconds += 61
         wallets.readVaultDetail(vault(1))
-        assertEquals(listOf(vaultKeys(1) to 2.toUByte()), phone.historyReads, "its own keys and m")
+        assertEquals(listOf(vaultLine(1)), phone.historyReads, "by its own descriptor")
         assertEquals(phone.vaultTxsOnChain, wallets.vaultTxs(vault(1)))
         assertEquals(84_200_000L, wallets.vaultSats(vault(1)))
     }
@@ -1228,6 +1341,29 @@ class WalletsTest {
         assertEquals(emptyList(), wallets.listed)
         assertNull(wallets.addRefusal(), "the empty first wallet can always be filled")
         assertSame(wallets.at(P1), wallets.beginAdd(), "the first add fills the empty entry")
+    }
+
+    @Test
+    fun aPhraseIsNeverImportedIntoTheAddressTypeOfAHardwareWalletOfItsKey(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P1, 1)
+        phone.derive = { w, p -> if (w == PUBLIC_WORDS_12 && p.isEmpty()) PUBLIC_FINGERPRINT else check(w, p) }
+        phone.bookHardware = listOf(PUBLIC_JADE_WALLET)
+        val w = assertNotNull(phone.unlocked().beginAdd())
+
+        w.session.restoreFromWords(PUBLIC_WORDS_12)
+        assertEquals(duplicateLine(PUBLIC_JADE_WALLET.name), w.session.lastError, "Native SegWit, where an import starts, has the Jade wallet's addresses")
+        assertTrue(w.session.words.isEmpty(), "nothing of the import is kept")
+        assertTrue(phone.place(w.place).writes.isEmpty(), "and nothing is saved, so no second guard can cover those addresses")
+
+        val taproot = PUBLIC_ACCOUNTS.getValue(AddressType.TAPROOT)
+        phone.bookHardware = listOf(PUBLIC_JADE_WALLET.copy(addressType = AddressType.TAPROOT, xpub = taproot.tpub, address = taproot.receive0))
+        w.session.restoreFromWords(PUBLIC_WORDS_12)
+        assertNull(w.session.lastError, "with the Jade wallet in Taproot, Native SegWit has other addresses")
+        assertEquals(PUBLIC_JADE_WALLET.name, w.session.takenBy(AddressType.TAPROOT))
+        w.session.chooseAddressType(AddressType.TAPROOT)
+        assertEquals(AddressType.NATIVE_SEGWIT, w.session.addressType, "the Jade wallet's type cannot be picked")
+        w.session.chooseAddressType(AddressType.LEGACY)
+        assertEquals(AddressType.LEGACY, w.session.addressType)
     }
 
     private fun book(storage: FakeVaultsStorage, wallets: Wallets) =

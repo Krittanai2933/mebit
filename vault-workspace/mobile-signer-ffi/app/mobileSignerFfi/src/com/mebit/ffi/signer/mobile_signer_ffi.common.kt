@@ -111,6 +111,8 @@ public object NoPointer
 
 
 
+
+
 /**
  * Asks the user for the six digits a Trezor Safe 7 shows while pairing (not its PIN).
  * Return null if the user gives up, and never throw: an exception cannot be mapped, so the
@@ -157,6 +159,69 @@ public expect open class PairingCodesImpl: Disposable, PairingCodes {
 
 
 /**
+ * Hears where a device signature is as the device reaches each step, so the screen draws what
+ * the device shows. Never throw: an exception cannot be mapped.
+ */
+public interface SignSteps {
+    
+    /**
+     * A Jade is about to ask the user to register the several-key wallet: its first signature of
+     * the wallet, or the first since it lost the record. At most once per signing request, and
+     * always before `showing`.
+     */
+    public suspend fun `registering`()
+    
+    /**
+     * The device is about to show the payment. Once per signing request that reaches the device,
+     * and never for a key whose signature the payment already carries.
+     */
+    public suspend fun `showing`()
+    
+    public companion object
+}
+
+
+/**
+ * Hears where a device signature is as the device reaches each step, so the screen draws what
+ * the device shows. Never throw: an exception cannot be mapped.
+ */
+public expect open class SignStepsImpl: Disposable, SignSteps {
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("ConvertSecondaryConstructorToPrimary")
+    public constructor(noPointer: NoPointer)
+
+    
+
+    override fun destroy()
+    override fun close()
+
+    
+    /**
+     * A Jade is about to ask the user to register the several-key wallet: its first signature of
+     * the wallet, or the first since it lost the record. At most once per signing request, and
+     * always before `showing`.
+     */
+    public override suspend fun `registering`()
+    
+    /**
+     * The device is about to show the payment. Once per signing request that reaches the device,
+     * and never for a key whose signature the payment already carries.
+     */
+    public override suspend fun `showing`()
+    
+
+    
+    public companion object
+}
+
+
+
+
+/**
  * A link to one wallet that `scan_wallets` found. Make it, call `connect`, close it when done.
  *
  * A task owns the device and this object sends it requests, so a cancelled call never leaves
@@ -187,9 +252,15 @@ public interface WalletLinkInterface {
      * Cancelling while it runs leaves nothing that closing the link cannot end: measured with a
      * Jade, unit-tested with a fake central for a Safe 7. A Jade that fails disconnects in the
      * background, a Safe 7 before this returns.
+     *
+     * `pairing` is a Safe 7 credential an earlier connect returned, so the Safe 7 asks only to
+     * allow the connection. Unreadable bytes are dropped and the Safe 7 then pairs with a code.
+     * Returns the credential to keep when this connect paired with a code (the first pairing, or a
+     * kept one the Safe 7 no longer knows), else null. It is a secret: keep it in the Keychain or
+     * Keystore. A Jade ignores `pairing` and returns null.
      */
     @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
-    public suspend fun `connect`(`codes`: PairingCodes)
+    public suspend fun `connect`(`codes`: PairingCodes, `pairing`: kotlin.ByteArray?): kotlin.ByteArray?
     
     /**
      * Ends the link and waits until it is down, also when a failure or another call is
@@ -207,16 +278,22 @@ public interface WalletLinkInterface {
     public suspend fun `info`(): WalletInfo
     
     /**
-     * Has the hardware wallet sign `psbt_base64` for `signer_fingerprint`.
-     *
-     * `psbt_base64` is a BIP-174 PSBT. `signer_fingerprint` is 8 lowercase hex
-     * characters (the vault key's master fingerprint). Jade must be unlocked
-     * first. Returns the signed PSBT as base64. Callers must run spend policy
-     * before this (vault-core policy against real PSBTs is still Term-2 work;
-     * the app checks destination and amount at the UI boundary today).
+     * Signs `psbt_base64`, a payment of the wallet `descriptor` whose unsigned id is
+     * `unsigned_txid` (the payment the user was shown), with the key of that wallet this device
+     * holds, and returns what the PSBT says after it. Before anything reaches the device, it
+     * refuses a descriptor `wallet_describe` refuses, a PSBT `wallet_review` refuses, and a PSBT
+     * whose id is another ("changed since shown"). `WrongKey` means the device holds no key of the
+     * wallet, and nothing showed on it. When that key has already signed, the review comes back
+     * without asking the device to sign, and `steps` hears nothing. Else a Jade must hold a
+     * several-key wallet before it signs for it: the Jade is read, and one that does not hold the
+     * wallet is asked to register it after `steps.registering()` (`Refused` when the user
+     * declines, `RegistrationRefused` when it cannot). Then `steps.showing()`, the device shows
+     * the payment, and its answer is refused (`Protocol`) unless that key then signed every input
+     * and every key that had signed still has, with no other. A Jade must be unlocked first.
+     * Cancelling stops only the wait: the device finishes the request.
      */
     @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
-    public suspend fun `signPsbt`(`psbtBase64`: kotlin.String, `signerFingerprint`: kotlin.String): kotlin.String
+    public suspend fun `signWalletPsbt`(`descriptor`: kotlin.String, `psbtBase64`: kotlin.String, `unsignedTxid`: kotlin.String, `steps`: SignSteps): SpendReview
     
     /**
      * Unlocks the wallet for this connection.
@@ -285,9 +362,15 @@ public expect open class WalletLink: Disposable, WalletLinkInterface {
      * Cancelling while it runs leaves nothing that closing the link cannot end: measured with a
      * Jade, unit-tested with a fake central for a Safe 7. A Jade that fails disconnects in the
      * background, a Safe 7 before this returns.
+     *
+     * `pairing` is a Safe 7 credential an earlier connect returned, so the Safe 7 asks only to
+     * allow the connection. Unreadable bytes are dropped and the Safe 7 then pairs with a code.
+     * Returns the credential to keep when this connect paired with a code (the first pairing, or a
+     * kept one the Safe 7 no longer knows), else null. It is a secret: keep it in the Keychain or
+     * Keystore. A Jade ignores `pairing` and returns null.
      */
     @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
-    public override suspend fun `connect`(`codes`: PairingCodes)
+    public override suspend fun `connect`(`codes`: PairingCodes, `pairing`: kotlin.ByteArray?): kotlin.ByteArray?
     
     /**
      * Ends the link and waits until it is down, also when a failure or another call is
@@ -305,16 +388,22 @@ public expect open class WalletLink: Disposable, WalletLinkInterface {
     public override suspend fun `info`(): WalletInfo
     
     /**
-     * Has the hardware wallet sign `psbt_base64` for `signer_fingerprint`.
-     *
-     * `psbt_base64` is a BIP-174 PSBT. `signer_fingerprint` is 8 lowercase hex
-     * characters (the vault key's master fingerprint). Jade must be unlocked
-     * first. Returns the signed PSBT as base64. Callers must run spend policy
-     * before this (vault-core policy against real PSBTs is still Term-2 work;
-     * the app checks destination and amount at the UI boundary today).
+     * Signs `psbt_base64`, a payment of the wallet `descriptor` whose unsigned id is
+     * `unsigned_txid` (the payment the user was shown), with the key of that wallet this device
+     * holds, and returns what the PSBT says after it. Before anything reaches the device, it
+     * refuses a descriptor `wallet_describe` refuses, a PSBT `wallet_review` refuses, and a PSBT
+     * whose id is another ("changed since shown"). `WrongKey` means the device holds no key of the
+     * wallet, and nothing showed on it. When that key has already signed, the review comes back
+     * without asking the device to sign, and `steps` hears nothing. Else a Jade must hold a
+     * several-key wallet before it signs for it: the Jade is read, and one that does not hold the
+     * wallet is asked to register it after `steps.registering()` (`Refused` when the user
+     * declines, `RegistrationRefused` when it cannot). Then `steps.showing()`, the device shows
+     * the payment, and its answer is refused (`Protocol`) unless that key then signed every input
+     * and every key that had signed still has, with no other. A Jade must be unlocked first.
+     * Cancelling stops only the wait: the device finishes the request.
      */
     @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
-    public override suspend fun `signPsbt`(`psbtBase64`: kotlin.String, `signerFingerprint`: kotlin.String): kotlin.String
+    public override suspend fun `signWalletPsbt`(`descriptor`: kotlin.String, `psbtBase64`: kotlin.String, `unsignedTxid`: kotlin.String, `steps`: SignSteps): SpendReview
     
     /**
      * Unlocks the wallet for this connection.
@@ -525,6 +614,30 @@ public data class HwAccountKey (
 
 
 /**
+ * What a Jade registers for a several-key wallet before it signs for it, as its registration
+ * screen shows it.
+ */
+
+public data class JadeRegistration (
+    /**
+     * At most 15 characters, `mebit{m}of{n}-` and hex: the name the Jade shows and lists.
+     */
+    var `name`: kotlin.String, 
+    /**
+     * m.
+     */
+    var `threshold`: kotlin.UByte, 
+    /**
+     * Master fingerprints, 8 lowercase hex each, in the order the Jade lists the signers.
+     */
+    var `signers`: List<kotlin.String>
+) {
+    public companion object
+}
+
+
+
+/**
  * A signed payment that has not been posted anywhere.
  */
 
@@ -619,48 +732,52 @@ public data class SoftwareAccountKey (
 
 
 
+
+public data class SpendOutput (
+    var `address`: kotlin.String, 
+    var `sats`: kotlin.ULong
+) {
+    public companion object
+}
+
+
+
 /**
- * One payment from a several-key wallet, from `vault_prepare_send` to `vault_finalize_psbt`. The app holds the latest one
- * and passes it back whole. Every field but `psbt` is what the user confirmed or what the core read from `psbt` once it
- * passed every check, so the record never says anything its PSBT does not.
+ * A payment of a described wallet as its PSBT says: what it pays and who has signed it.
  */
 
-public data class VaultPsbt (
+public data class SpendReview (
     /**
-     * The PSBT, base64.
+     * Base64 BIP-174, the whole state of the payment: the next signer and `wallet_finish` take it as it is.
      */
     var `psbt`: kotlin.String, 
     /**
-     * The id of the finished transaction. A segwit id leaves the signatures out, so it is fixed from the unsigned PSBT on,
-     * and the app's pay-twice guard names the payment by it.
+     * The id of the unsigned transaction. Every signature commits to it, and `wallet_finish` refuses a PSBT
+     * whose id is another. It is also the sent transaction's id when every input is native SegWit or
+     * Taproot; a Legacy or Nested SegWit signature goes into the transaction itself, so that id differs.
      */
-    var `txid`: kotlin.String, 
+    var `unsignedTxid`: kotlin.String, 
     /**
-     * What the first output pays, as the user typed it.
+     * Every output that is not this wallet's change, in order. A draft's first is the destination.
      */
-    var `destination`: kotlin.String, 
-    var `amountSats`: kotlin.ULong, 
+    var `payments`: List<SpendOutput>, 
     /**
-     * Inputs less outputs. Every input's value is read from its parent transaction, which the PSBT carries.
-     */
-    var `feeSats`: kotlin.ULong, 
-    /**
-     * The one output back to the wallet's change chain, 1/i. 0 when there is none.
+     * This wallet's change, 0 for none.
      */
     var `changeSats`: kotlin.ULong, 
     /**
-     * The highest change index the payment may pay its change to: the one the wallet handed out next when the payment was
-     * prepared, so no PSBT parks change past the addresses a scan reads.
+     * The inputs, as their parent transactions prove them, less the outputs.
      */
-    var `maxChangeIndex`: kotlin.UInt, 
+    var `feeSats`: kotlin.ULong, 
     /**
-     * The finished transaction's virtual size: exact for the phone's signatures, an upper bound for shorter ones.
+     * The master fingerprints, 8 lowercase hex, of the wallet's keys with a valid signature on every input,
+     * each once, in the descriptor's order.
      */
-    var `vsize`: kotlin.ULong, 
+    var `signed_`: List<kotlin.String>, 
     /**
-     * Positions in `xpubs` of the keys with a valid SIGHASH_ALL signature on every input, ascending, each once.
+     * How many keys must sign: 1 for one key.
      */
-    var `signedKeys`: List<kotlin.UInt>
+    var `needed`: kotlin.UByte
 ) {
     public companion object
 }
@@ -668,34 +785,17 @@ public data class VaultPsbt (
 
 
 /**
- * A several-key wallet's balance as one sync of both its chains found it. Not `HotWalletSnapshot`, because a vault's
- * spendable figure is `vault_spendable`'s, read apart so a list that shows balances pays for no coin list, and a next
- * unused receive address would contradict the Receive screen, which shows address 0.
+ * A wallet's balance as one sync of both its chains found it, for the wallet list and a several-key wallet's detail. Not
+ * `HotWalletSnapshot`: no spendable figure, which needs a coin list, and no receive address, since a several-key wallet's
+ * Receive screen shows the address 0 its book holds.
  */
 
-public data class VaultSnapshot (
+public data class WalletBalance (
     /**
-     * Confirmed plus mempool over every address of both chains the scan counts. Before `scan` is `Complete`, only
-     * what the scan has found so far, which no screen may show as the balance.
+     * Confirmed plus mempool over every address of both chains the scan counts. Before `scan` is `Complete`, only what
+     * the scan has found so far, which no screen may show as the balance.
      */
     var `balanceSats`: kotlin.ULong, 
-    var `scan`: HotScan
-) {
-    public companion object
-}
-
-
-
-/**
- * What a payment from a several-key wallet could spend now, as a one-key wallet's `spendable_sats` is read.
- */
-
-public data class VaultSpendable (
-    /**
-     * The coins `vault_prepare_send` would consider: every confirmed coin of both chains and the wallet's own
-     * unconfirmed change. 0 unless `scan` is `Complete`.
-     */
-    var `spendableSats`: kotlin.ULong, 
     var `scan`: HotScan
 ) {
     public companion object
@@ -714,6 +814,51 @@ public data class WalletInfo (
      */
     var `firmware`: kotlin.String, 
     var `details`: WalletDetails
+) {
+    public companion object
+}
+
+
+
+
+public data class WalletKey (
+    /**
+     * The master key's fingerprint, 8 lowercase hex characters.
+     */
+    var `fingerprint`: kotlin.String, 
+    /**
+     * The account's path, as `m/84'/1'/0'`.
+     */
+    var `path`: kotlin.String, 
+    var `xpub`: kotlin.String
+) {
+    public companion object
+}
+
+
+
+/**
+ * What `wallet_describe` tells of a wallet.
+ */
+
+public data class WalletShape (
+    /**
+     * How many keys must sign a payment: 1 for one key.
+     */
+    var `needed`: kotlin.UByte, 
+    /**
+     * In the descriptor's order.
+     */
+    var `keys`: List<WalletKey>, 
+    /**
+     * Receive address 0.
+     */
+    var `firstAddress`: kotlin.String, 
+    /**
+     * The virtual size of one of its coins paying an address of its own type, with change: what the Send
+     * screen prices a payment at before Review reads the real one.
+     */
+    var `typicalVsize`: kotlin.ULong
 ) {
     public companion object
 }
@@ -848,6 +993,21 @@ public sealed class BleException(message: String): kotlin.Exception(message) {
      * A bug, or a wallet out of step with this app. Connect again, and report it.
      */
     public class Protocol(message: String) : BleException(message)
+    
+    /**
+     * The device holds no key of the wallet it was asked to sign for: no key with its master
+     * fingerprint, or another key at that key's path. Nothing showed on the device, and the link
+     * stays usable.
+     */
+    public class WrongKey(message: String) : BleException(message)
+    
+    /**
+     * A Jade cannot register the several-key wallet it was asked to sign for, so it signs nothing:
+     * another wallet holds the wallet's name, its list of wallets is full, what it read back is
+     * another wallet, or the wallet has more signers than a Jade registers (seven). Nothing showed
+     * the payment, and the link stays usable. The user declining the registration is `Refused`.
+     */
+    public class RegistrationRefused(message: String) : BleException(message)
     
 }
 
@@ -1146,6 +1306,12 @@ public enum class WalletKind {
 
 
 
+
+
+
+
+
+
 /**
  * The words that turn `first_words` into a valid mnemonic, in list order. For 23
  * words that is 8: the last word carries 3 entropy bits and 8 checksum bits.
@@ -1394,6 +1560,15 @@ public expect fun `hotWalletSnapshot`(`mnemonicWords`: List<kotlin.String>, `pas
 public expect fun `isValidAddress`(`address`: kotlin.String, `network`: KeyNetwork): kotlin.Boolean
 
 /**
+ * What a Jade registers for the wallet `descriptor` before it signs for it, null for a one-key
+ * wallet, which a Jade signs as it is. Pure: no device, no network. Refuses mainnet, a
+ * descriptor `wallet_describe` refuses, and a several-key wallet a Jade cannot register (more
+ * than seven signers). Signing builds the same registration from the same descriptor.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `jadeWalletRegistration`(`descriptor`: kotlin.String, `network`: KeyNetwork): JadeRegistration?
+
+/**
  * How many `WalletLink` objects exist in this process. For tests, not a stable API: a link
  * that a call kept alive after `close()` still counts here.
  */
@@ -1425,75 +1600,71 @@ public expect suspend fun `scanWallets`(`kind`: WalletKind): List<FoundWallet>
 public expect fun `signPsbt`(`psbtJson`: kotlin.String, `borrowerPubkey`: kotlin.String): kotlin.String
 
 /**
- * The signed transaction of `held` once at least `threshold` keys of the wallet signed every input, for `hot_broadcast`.
- * Runs every check `vault_sign_psbt` runs, refuses fewer signers than `threshold`, puts `threshold` of their signatures in
- * each input's witness in the order its script names their keys, and refuses bytes heavier than the size the fee was
- * priced at or a fee past the network's 10,000 sat/vB. Testnet4 only. No network call.
+ * The confirmed + mempool balance of the wallet `descriptor` describes, by the sync a read of it within ten seconds
+ * shares, with how far the scan got. It reads no coin list, so a list that shows balances pays for none, and a coin list
+ * a host fails or limits never blanks a balance. Testnet4 only. About 40 Esplora calls for a wallet nobody paid and a
+ * routine sync's few after that, so call it off the main thread. No screen may show `balance_sats` unless `scan` is
+ * `Complete`.
  */
 @Throws(MobileSignerException::class)
-public expect fun `vaultFinalizePsbt`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte, `held`: VaultPsbt): PreparedSend
+public expect fun `walletBalance`(`descriptor`: kotlin.String, `network`: KeyNetwork): WalletBalance
 
 /**
- * The latest transactions of the `threshold`-of-`xpubs.len()` sorted multisig that `vault_snapshot` reads, over every
- * used address of its receive and change chains, each once, as the wallet saw it: the mempool first, then confirmed
- * transactions newest first. Only each address's first page comes back (about 25 confirmed transactions plus the
- * mempool), so older history is not here. Testnet4 only, so mainnet `xpub` keys are refused before any request. Fails
- * unless the scan reached the end of both chains, and an answer it cannot read fails the whole call. Makes a network
- * call per used address plus one for the tip, on top of the sync it shares with a `vault_snapshot` of the last ten
- * seconds, so call it off the main thread.
+ * The keys, how many must sign, receive address 0 and the typical payment size of the wallet `descriptor`
+ * describes. Asks nothing of the network.
  */
 @Throws(MobileSignerException::class)
-public expect fun `vaultHistory`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte): List<HotTx>
+public expect fun `walletDescribe`(`descriptor`: kotlin.String, `network`: KeyNetwork): WalletShape
 
 /**
- * The unsigned payment of `amount_sats` to `destination` from the `threshold`-of-`xpubs.len()` sorted multisig at
- * `fee_rate_sat_vb`, or with a null amount everything it can spend less the fee in one output, as a PSBT every key of the
- * wallet signs with `vault_sign_psbt` and `vault_finalize_psbt` finishes. Coins, change and fee as
- * `hot_prepare_send_at_rate` and `hot_prepare_send_all` pick them, with their refusals, change to the first unused address
- * of the change chain, and every input's parent transaction in the PSBT, read once per transaction and refused when it does
- * not pay the coin as listed, so each signer proves the fee. Fails unless the scan reached the end of both chains. Signs and
- * posts nothing. Testnet4 only, so mainnet `xpub` keys are refused before any request. About 40 Esplora calls for a wallet
- * nobody paid, so call it off the main thread.
+ * Scans the wallet `descriptor` describes, plans a payment of `amount_sats`, or of the whole balance when it
+ * is null, to `destination` at `fee_rate_sat_vb` as `hot_quote_send` plans one, and returns the unsigned PSBT
+ * with what it pays. Signs nothing and posts nothing.
  */
 @Throws(MobileSignerException::class)
-public expect fun `vaultPrepareSend`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte, `destination`: kotlin.String, `amountSats`: kotlin.ULong?, `feeRateSatVb`: kotlin.ULong): VaultPsbt
+public expect fun `walletDraft`(`descriptor`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong?, `feeRateSatVb`: kotlin.ULong): SpendReview
 
 /**
- * `held` with key `key_index`'s signature on every input, made with the words and passphrase of a phone key, whose BIP-48
- * account key at m/48'/1'/0'/2' must be key `key_index` of the `threshold`-of-`xpubs.len()` wallet on public key and chain
- * code. Before it signs it refuses, naming the rule, a PSBT that is not this wallet's payment of `held.amount_sats` to
- * `held.destination` for `held.fee_sats` with at most one change output back to the wallet's change chain at or below
- * `held.max_change_index`, a txid other than `held.txid`, any sighash but ALL, and a signature that does not verify. The
- * same words sign the same PSBT the same way, so signing again changes nothing. Testnet4 only. No network call.
+ * The signed transaction for `hot_broadcast`, once `psbt` still pays what `unsigned_txid` named and at least
+ * the needed number of distinct keys of the wallet `descriptor` describes have signed every input. Its
+ * `amount_sats` is what every output but this wallet's change pays.
  */
 @Throws(MobileSignerException::class)
-public expect fun `vaultSignPsbt`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte, `held`: VaultPsbt, `keyIndex`: kotlin.UInt, `mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String): VaultPsbt
+public expect fun `walletFinish`(`descriptor`: kotlin.String, `network`: KeyNetwork, `psbt`: kotlin.String, `unsignedTxid`: kotlin.String): PreparedSend
 
 /**
- * The confirmed + mempool balance over every address of both chains, receive `0/i` and change `1/i`, of the
- * `threshold`-of-`xpubs.len()` sorted multisig that `compute_vault_address_multisig` takes, with how far the scan
- * got. Testnet4 only, so mainnet `xpub` keys are refused before any request. About 40 Esplora calls for a wallet
- * nobody paid and a routine sync's few after that, so call it off the main thread. No screen may show
- * `balance_sats` unless `scan` is `Complete`.
+ * What `hot_wallet_history` answers, for the wallet `descriptor` describes, whose keys are not on this phone.
  */
 @Throws(MobileSignerException::class)
-public expect fun `vaultSnapshot`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte): VaultSnapshot
+public expect fun `walletHistory`(`descriptor`: kotlin.String, `network`: KeyNetwork): List<HotTx>
 
 /**
- * What a payment from the `threshold`-of-`xpubs.len()` sorted multisig could spend now, for the 5.1 Send screen: every
- * confirmed coin of its receive and change chains and its own unconfirmed change, by the sync `vault_snapshot` makes,
- * which a read within ten seconds shares, and one coin list per funded address once that scan is complete. A scan that
- * goes on or that a host lied in answers 0 with how far it got. Testnet4 only, so mainnet `xpub` keys are refused before
- * any request. Call it off the main thread.
+ * What `psbt` pays and which keys of the wallet `descriptor` describes have signed it, once it is a payment
+ * of that wallet. Its change must sit where this phone's scan of the wallet looks, at most 20 indices past the
+ * last change proven used, or below 20 while none is. Asks nothing of the network.
  */
 @Throws(MobileSignerException::class)
-public expect fun `vaultSpendable`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte): VaultSpendable
+public expect fun `walletReview`(`descriptor`: kotlin.String, `network`: KeyNetwork, `psbt`: kotlin.String): SpendReview
 
 /**
- * The virtual size the 5.1 Send screen prices a payment of the `threshold`-of-`xpubs.len()` sorted multisig at, before
- * `vault_prepare_send` builds the real one: one of its coins paying a P2WSH address, with change, signed by `threshold`
- * keys. 201 for a 2-of-3. Testnet4 only. No network call.
+ * Signs `psbt`, a payment of the wallet `descriptor` describes that the user was shown as `expected_txid`, with the
+ * key of that wallet the phrase `mnemonic_words` and `passphrase` make, as a device signs one
+ * (`WalletLink::sign_wallet_psbt`): refused before any signature when it is not that payment or the phrase makes no
+ * key of the wallet, back as it is when that key already signed, and refused unless that key then signed every
+ * input. A key of several kept on this phone signs through it, and so does a debug build's stand-in for a device.
  */
 @Throws(MobileSignerException::class)
-public expect fun `vaultTypicalVsize`(`xpubs`: List<kotlin.String>, `threshold`: kotlin.UByte): kotlin.ULong
+public expect fun `walletSignWithWords`(`descriptor`: kotlin.String, `network`: KeyNetwork, `psbt`: kotlin.String, `expectedTxid`: kotlin.String, `mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String): SpendReview
+
+/**
+ * What `hot_wallet_snapshot` answers, for the wallet `descriptor` describes, whose keys are not on this phone.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `walletSnapshot`(`descriptor`: kotlin.String, `network`: KeyNetwork): HotWalletSnapshot
+
+/**
+ * One transaction of the wallet `descriptor` describes in full, or None when the explorer does not know `txid`.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `walletTxDetail`(`descriptor`: kotlin.String, `network`: KeyNetwork, `txid`: kotlin.String): HotTxDetail?
 

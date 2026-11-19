@@ -155,7 +155,8 @@ internal fun testRecord(
     appLockEnabled: Boolean = false,
     addressType: AddressType = AddressType.NATIVE_SEGWIT,
     addressTypeConfirmed: Boolean = true,
-) = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled, addressType, addressTypeConfirmed)
+    earlierFingerprints: List<String> = emptyList(),
+) = WalletRecord(words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled, addressType, addressTypeConfirmed, earlierFingerprints)
 
 /**
  * An in-memory [PlainFile] for common tests. [text] is what the file holds, null for no file. [failWrite] makes each write fail
@@ -223,6 +224,9 @@ private fun u16(n: Int) = byteArrayOf((n shr 8).toByte(), n.toByte())
 /** The section that follows the passphrase when flag 8 is set, laid out by hand as the codec's KDoc documents it. */
 internal fun sendSection(txid: ByteArray, sinceSeconds: Long): ByteArray =
     u16(txid.size) + txid + ByteArray(8) { (sinceSeconds shr (56 - 8 * it)).toByte() }
+
+/** The section that comes last when flag 128 is set, laid out by hand as the codec's KDoc documents it. */
+internal fun earlierSection(vararg fingerprints: String): ByteArray = fingerprints.joinToString("").encodeToByteArray().let { u16(it.size) + it }
 
 /** A txid as Esplora writes it: 64 lowercase hex characters. */
 internal const val TEST_TXID = "a14858161cc59cc1fdcafd3b8dfa3d8eb1731e69f28a304f806f98c1d2b9eb9f"

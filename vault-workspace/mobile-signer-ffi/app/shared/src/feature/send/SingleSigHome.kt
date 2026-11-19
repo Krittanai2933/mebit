@@ -13,6 +13,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -61,11 +62,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mebit.app.data.DescribedWallet
+import com.mebit.app.data.HomeSource
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
+import com.mebit.app.data.fingerprintGroups
+import com.mebit.app.data.hardwareMonogram
+import com.mebit.app.data.hardwareSource
+import com.mebit.app.data.keySourceName
 import com.mebit.app.data.rememberFiatQuote
+import com.mebit.app.feature.onboarding.AddressTypeRows
 import com.mebit.app.feature.onboarding.NotSavedNotice
 import com.mebit.app.rememberIsDebugBuild
 import com.mebit.app.resources.Res
@@ -112,8 +120,7 @@ fun S1HomeSingleSigScreen(
     onChangePin: (() -> Unit)? = null,
 ) = SingleSigHome(wallet, session, quotes, onReceive, onSend, onVault, onHistory, onOpenTx, onOpenCatalog, tag = "screen_send/s1", onChangePin = onChangePin)
 
-/** The home itself, so the backup gate can show it dimmed behind its sheet under a tag of its own. */
-@OptIn(ExperimentalMaterial3Api::class)
+/** The phone wallet's home, so the backup gate can show it dimmed behind its sheet under a tag of its own. */
 @Composable
 internal fun SingleSigHome(
     wallet: SingleSigWallet,
@@ -127,15 +134,128 @@ internal fun SingleSigHome(
     onOpenCatalog: () -> Unit,
     tag: String,
     onChangePin: (() -> Unit)? = null,
+) = OneKeyHome(
+    wallet = wallet,
+    walletName = session.walletName,
+    // A key of 12 or more words is a real one, yet the wallet says Demo until its first bind ends. Read from the session, this holds on the first frame, before any bind has started.
+    loading = session.words.size >= 12 && wallet.mode == WalletMode.Demo,
+    bindKey = listOf(session.words, session.fingerprint, session.passphrase),
+    // The snapshot is a blocking network call: keep it off the main thread.
+    bind = { withContext(Dispatchers.Default) { wallet.bindSession(session) } },
+    quotes = quotes,
+    onReceive = onReceive,
+    onSend = onSend,
+    onHistory = onHistory,
+    onOpenTx = onOpenTx,
+    onOpenCatalog = onOpenCatalog,
+    tag = tag,
+) {
+    var keyDetails by remember { mutableStateOf(false) }
+    PolicyCard(
+        board = WalletBoard.Home,
+        dot = if (session.backupConfirmed) MbSuccess else MbBtcOrange,
+        summary = "กุญแจ: iPhone ของฉัน · " + if (session.backupConfirmed) "สำรองแล้ว" else "ยังไม่สำรอง",
+        keys = listOf(KeyRowText("iPhone ของฉัน", "mebit บนเครื่องนี้ · " + session.fingerprint.chunked(4).joinToString(" ").ifBlank { "—" }, "key_fingerprint")),
+        expanded = keyDetails,
+        onToggle = { keyDetails = !keyDetails },
+    ) {
+        // A link under the key's row where the session Spending PIN guards spending, which no board has yet.
+        onChangePin?.let {
+            Text(
+                text = "เปลี่ยน PIN",
+                color = MbNavy,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 17.sp,
+                modifier = Modifier.padding(start = 62.dp, bottom = 14.dp).clickable(role = Role.Button, onClick = it).testTag("cta_change_pin"),
+            )
+        }
+    }
+    Spacer(modifier = Modifier.height(14.dp))
+    UpgradeCard(onVault)
+    NotSavedNotice(session, Modifier.padding(top = 12.dp))
+}
+
+/**
+ * Penpot 4.1.5 Home of a one-key hardware wallet, and 4.1.5.1 with its key details open: the phone wallet's home over [wallet], with the
+ * key on the device in the key card and no upgrade card, since a Jade wallet's upgrade would add a Jade to a Jade wallet. [keyName] is
+ * the Keyring's name of its key ([com.mebit.app.data.hardwareKeyName]).
+ */
+@Composable
+fun HardwareHomeScreen(
+    wallet: DescribedWallet,
+    keyName: String,
+    quotes: QuoteCache,
+    onReceive: () -> Unit,
+    onSend: () -> Unit,
+    onHistory: () -> Unit,
+    onOpenTx: (HotTx) -> Unit,
+    onOpenCatalog: () -> Unit,
+) {
+    val hw = wallet.wallet
+    OneKeyHome(
+        wallet = wallet,
+        walletName = hw.name,
+        // Demo only until the first refresh ends: the device's key is a real one from the start.
+        loading = wallet.mode == WalletMode.Demo,
+        bindKey = hw.descriptor,
+        bind = { wallet.refresh() },
+        quotes = quotes,
+        onReceive = onReceive,
+        onSend = onSend,
+        onHistory = onHistory,
+        onOpenTx = onOpenTx,
+        onOpenCatalog = onOpenCatalog,
+        tag = "screen_hw/home",
+    ) {
+        var keyDetails by remember { mutableStateOf(false) }
+        val source = hardwareSource(hw.kind)
+        PolicyCard(
+            board = WalletBoard.Home,
+            dot = MbSuccess,
+            summary = "กุญแจ: $keyName · อยู่บนอุปกรณ์",
+            keys = listOf(
+                KeyRowText(
+                    keyName,
+                    "${keySourceName(source)} · ${AddressTypeRows.first { it.type == hw.addressType }.label} · ${fingerprintGroups(hw.fingerprint)}",
+                    "key_fingerprint",
+                    badge = hardwareMonogram(source),
+                ),
+            ),
+            expanded = keyDetails,
+            onToggle = { keyDetails = !keyDetails },
+        )
+    }
+}
+
+/**
+ * The home of a one-key wallet, whichever signs its payments. [bind] reads [wallet] again, and runs whenever [bindKey] changes, on a retry
+ * and on a pull. [keyCard] is what sits between the buttons and the transactions.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OneKeyHome(
+    wallet: HomeSource,
+    walletName: String,
+    loading: Boolean,
+    bindKey: Any,
+    bind: suspend () -> Unit,
+    quotes: QuoteCache,
+    onReceive: () -> Unit,
+    onSend: () -> Unit,
+    onHistory: () -> Unit,
+    onOpenTx: (HotTx) -> Unit,
+    onOpenCatalog: () -> Unit,
+    tag: String,
+    keyCard: @Composable ColumnScope.() -> Unit,
 ) {
     var retries by remember { mutableIntStateOf(0) }
     // One bind at a time, because each one blocks a thread until it ends and an older one could end last.
     var binding by remember { mutableStateOf(false) }
     var pulled by remember { mutableStateOf(false) }
-    // The snapshot is a blocking network call: keep it off the main thread.
-    LaunchedEffect(session.words, session.fingerprint, session.passphrase, retries) {
+    LaunchedEffect(bindKey, retries) {
         binding = true
-        withContext(Dispatchers.Default) { wallet.bindSession(session) }
+        bind()
         binding = false
         pulled = false
     }
@@ -151,11 +271,8 @@ internal fun SingleSigHome(
             retries++
         }
     }
-    var keyDetails by remember { mutableStateOf(false) }
     val debugBuild = rememberIsDebugBuild()
     val quote = rememberFiatQuote(quotes)
-    // A key of 12 or more words is a real one, yet the wallet says Demo until its first bind ends. Read from the session, this holds on the first frame, before any bind has started.
-    val loading = session.words.size >= 12 && wallet.mode == WalletMode.Demo
     val rows = if (wallet.mode == WalletMode.Live) historyRows(wallet.history) else emptyList()
     val pull = remember { RowsPullState() }
     // Derived, so a drag recomposes the page only when one of these flips and not on every frame.
@@ -177,7 +294,7 @@ internal fun SingleSigHome(
         WalletHero(
             board = WalletBoard.Home,
             eyebrow = "SINGLE-SIG · กุญแจเดียว",
-            name = session.walletName,
+            name = walletName,
             balance = homeBalanceText(wallet.balanceSats, wallet.balanceKnown, loading),
             balanceTag = "ss_balance",
             receiveTag = "cta_s1_receive",
@@ -207,29 +324,7 @@ internal fun SingleSigHome(
             }
         }
         Spacer(modifier = Modifier.height(58.dp))
-        PolicyCard(
-            board = WalletBoard.Home,
-            dot = if (session.backupConfirmed) MbSuccess else MbBtcOrange,
-            summary = "กุญแจ: iPhone ของฉัน · " + if (session.backupConfirmed) "สำรองแล้ว" else "ยังไม่สำรอง",
-            keys = listOf(KeyRowText("iPhone ของฉัน", "mebit บนเครื่องนี้ · " + session.fingerprint.chunked(4).joinToString(" ").ifBlank { "—" }, "key_fingerprint")),
-            expanded = keyDetails,
-            onToggle = { keyDetails = !keyDetails },
-        ) {
-            // A link under the key's row where the session Spending PIN guards spending, which no board has yet.
-            onChangePin?.let {
-                Text(
-                    text = "เปลี่ยน PIN",
-                    color = MbNavy,
-                    fontSize = 12.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    lineHeight = 17.sp,
-                    modifier = Modifier.padding(start = 62.dp, bottom = 14.dp).clickable(role = Role.Button, onClick = it).testTag("cta_change_pin"),
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(14.dp))
-        UpgradeCard(onVault)
-        NotSavedNotice(session, Modifier.padding(top = 12.dp))
+        keyCard()
         wallet.lastError?.let {
             Spacer(modifier = Modifier.height(12.dp))
             // Already plain Thai: every read error goes through readErrorThai, so none names the server or the library.
@@ -354,8 +449,15 @@ private fun PullArc(boxSize: Dp, circle: Dp, sweep: Float, modifier: Modifier = 
 /** The retry count after a pull. A pull during a bind joins that bind, because a second one would block another thread and could end first. */
 internal fun afterPull(retries: Int, binding: Boolean): Int = if (binding) retries else retries + 1
 
-/** The Rust text under the error line, which names the request that failed. A debug build only: a release build shows the Thai line alone, as before. */
-internal fun debugFailureLine(failure: String?, debugBuild: Boolean): String? = failure?.takeIf { debugBuild }
+private val serverAddress = Regex("""https?://[^/\s)]+|\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b""")
+
+/**
+ * The Rust text under the error line, which names the request that failed, with every server's address shown as <host>,
+ * because a screenshot of a debug build must not give away the private node's host. A debug build only: a release build
+ * shows the Thai line alone, as before.
+ */
+internal fun debugFailureLine(failure: String?, debugBuild: Boolean): String? =
+    failure?.takeIf { debugBuild }?.replace(serverAddress, "<host>")
 
 /**
  * One recent transaction: the arrow, the title over the date, and the amount over the status, on the board's 67 dp pitch.

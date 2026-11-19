@@ -10,6 +10,7 @@ import com.mebit.app.data.SavedVaults
 import com.mebit.app.data.Wallets
 import com.mebit.app.feature.onboarding.UnlockScreen
 import com.mebit.app.plainFile
+import com.mebit.app.rememberPairings
 import com.mebit.app.rememberScanStateDir
 import com.mebit.app.rememberSecureShelf
 import com.mebit.app.rememberVaultsStorage
@@ -27,20 +28,34 @@ fun WalletGate() {
     remember(scanDir) { scanDir?.let(::hotUseStateDir) }
     val storage = rememberVaultsStorage()
     val shelf = rememberSecureShelf()
-    // The pay-twice guard files, one-key and several-key, and the last-used wallet sit beside the scan files.
-    val wallets = remember(shelf, scanDir, storage) {
-        Wallets(
+    val pairings = rememberPairings()
+    // The pay-twice guard files, one-key and several-key, and the last-used wallet sit beside the scan files. Built together, because
+    // each asks the other: the book is saved for the wallets' keys, and a wallet's clear of a damaged guard file names the book's wallets.
+    val (wallets, vaults) = remember(shelf, scanDir, storage, pairings) {
+        lateinit var book: SavedVaults
+        val wallets = Wallets(
             shelf,
             payments = PendingPayments(scanDir?.let { plainFile("$it/pending-payment") }),
             lastUsed = scanDir?.let { plainFile("$it/last-wallet") },
-            forgetBook = { storage?.delete() },
+            forgetBook = {
+                storage?.delete()
+                pairings?.deleteAll()
+            },
             vaultPayments = PendingPayments(scanDir?.let { plainFile("$it/pending-vault-payment") }),
+            bookGuardKeys = { book.guardKeys() },
+            bookHardware = { book.current.hardware },
         )
+        book = SavedVaults(storage, owners = { wallets.vaultOwners() })
+        wallets to book
     }
-    val vaults = remember(wallets, storage) { SavedVaults(storage, owners = { wallets.vaultOwners() }) }
     val gate = remember(wallets) { WalletGateState(wallets) }
-    // Welcome means this phone holds no wallet, so what the store holds is nobody's now, as after a reinstall, which a Keychain item survives.
-    remember(gate) { if (gate.boot == Boot.Onboarding) storage?.delete() }
+    // Welcome means this phone holds no wallet, so what the stores hold is nobody's now, as after a reinstall, which a Keychain item survives.
+    remember(gate) {
+        if (gate.boot == Boot.Onboarding) {
+            storage?.delete()
+            pairings?.deleteAll()
+        }
+    }
 
     // A failed save is tried again when the app comes back, for example once the user has set a passcode. Not while Locked or
     // Broken: a session with nothing in it has nothing to flush there, and if the iOS store ever falls back to the Keychain's
@@ -50,8 +65,8 @@ fun WalletGate() {
     }
 
     when (val boot = gate.boot) {
-        Boot.Onboarding -> MebitNavHost(wallets, Stop(MovieRoute.start, Place.FIRST), gate.notice, vaults)
-        is Boot.Open -> MebitNavHost(wallets, Stop(boot.route, boot.place), vaults = vaults)
+        Boot.Onboarding -> MebitNavHost(wallets, Stop(MovieRoute.start, Place.FIRST), gate.notice, vaults, pairings)
+        is Boot.Open -> MebitNavHost(wallets, Stop(boot.route, boot.place), vaults = vaults, pairings = pairings)
         Boot.Locked, is Boot.Broken -> UnlockScreen(gate)
     }
 }

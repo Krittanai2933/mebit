@@ -30,6 +30,7 @@ use crate::chain::{
 use crate::proof::{Anchor, NotProven, prove_use, verify};
 use crate::scan::{ChainScan, Event, GAP, Proof, ScanStatus, Seen, Step, step};
 use crate::scan_store::{FullPass, Last, ScanStore, WalletId, WalletScan};
+use crate::script::Described;
 use crate::{KeyNetwork, MobileSignerError};
 use bip39::Mnemonic;
 use bitcoin::absolute::LockTime;
@@ -39,12 +40,9 @@ use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::{All, Message, Secp256k1, SecretKey, ecdsa};
 use bitcoin::transaction::{InputWeightPrediction, predict_weight};
 use bitcoin::{
-    Address, Amount, CompressedPublicKey, Network, NetworkKind, OutPoint, PrivateKey, Script,
-    ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness, sighash::SighashCache,
+    Address, Amount, CompressedPublicKey, Network, OutPoint, PrivateKey, Script, ScriptBuf,
+    Sequence, Transaction, TxIn, TxOut, Txid, Witness, sighash::SighashCache,
 };
-use vault_core::descriptor::{Branch, build_multisig_descriptor_on, derive_address_at};
-
-pub(crate) mod vault_spend;
 
 /// How long after a sync of a wallet ended the next call shares its answer with no request, so the
 /// app's snapshot followed by history costs one sync. A used address's balance is never older than this.
@@ -103,20 +101,20 @@ fn network_of(key_network: KeyNetwork) -> Network {
     }
 }
 
-fn mnemonic_from(words: &[String]) -> Result<Mnemonic, MobileSignerError> {
+pub(crate) fn mnemonic_from(words: &[String]) -> Result<Mnemonic, MobileSignerError> {
     let phrase = words.join(" ");
     Mnemonic::parse_normalized(&phrase)
         .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Chain {
+pub(crate) enum Chain {
     External = 0,
     Internal = 1,
 }
 
 impl Chain {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Chain::External => "receive",
             Chain::Internal => "change",
@@ -133,8 +131,28 @@ pub(crate) struct OwnKey {
     pub(crate) address: Address,
 }
 
+/// What a scan needs of a wallet: the address at each index of its two chains, and the name its scan is
+/// kept under. The phone wallet's `Account` derives both from its words; a wallet the book describes, one key or
+/// several, from its keys alone. The id travels with the addresses it names, so no call can pair one wallet's
+/// addresses with another's file.
+pub(crate) trait AddressSource {
+    fn address(&self, chain: Chain, index: u32) -> Result<Address, MobileSignerError>;
+    fn id(&self) -> WalletId;
+}
+
+/// What a `Wallet` keeps of each index it derived: its address, and whatever a payment from it needs.
+pub(crate) trait Owner {
+    fn address(&self) -> &Address;
+}
+
+impl Owner for OwnKey {
+    fn address(&self) -> &Address {
+        &self.address
+    }
+}
+
 /// The account's two chain keys, derived once per call. `key` derives one index offline.
-struct Account {
+pub(crate) struct Account {
     secp: Secp256k1<All>,
     network: Network,
     address_type: AddressType,
@@ -142,7 +160,7 @@ struct Account {
 }
 
 impl Account {
-    fn new(
+    pub(crate) fn new(
         words: &[String],
         passphrase: &str,
         network: Network,
@@ -170,7 +188,7 @@ impl Account {
         })
     }
 
-    fn key(&self, chain: Chain, index: u32) -> Result<OwnKey, MobileSignerError> {
+    pub(crate) fn key(&self, chain: Chain, index: u32) -> Result<OwnKey, MobileSignerError> {
         let bad = |e: String| MobileSignerError::InvalidPsbtJson(e);
         let step = ChildNumber::from_normal_idx(index).map_err(|e| bad(e.to_string()))?;
         let child = self.chains[chain as usize]
@@ -189,15 +207,7 @@ impl Account {
     }
 }
 
-/// A wallet as a scan sees it. Its public id names its store entry and scan file, and `address` gives each index of each
-/// chain. A sync needs nothing else, so one sync serves a seed's wallet and a several-key wallet. The id travels with the
-/// addresses it names, so no call can pair one wallet's addresses with another's file.
-trait Addresses {
-    fn id(&self) -> WalletId;
-    fn address(&self, chain: Chain, index: u32) -> Result<Address, MobileSignerError>;
-}
-
-impl Addresses for Account {
+impl AddressSource for Account {
     /// SHA-256 of the two chain xpubs. Public data, so the store can name a wallet without holding
     /// a key, and different words, passphrase or network give a different id.
     fn id(&self) -> WalletId {
@@ -222,7 +232,7 @@ fn anchor_of(network: KeyNetwork) -> Anchor {
 }
 
 /// Every wallet's scan, in the folder `hot_use_state_dir` names once the app has called it.
-static SCAN_STORE: LazyLock<ScanStore> = LazyLock::new(ScanStore::default);
+pub(crate) static SCAN_STORE: LazyLock<ScanStore> = LazyLock::new(ScanStore::default);
 
 /// The testnet4 hosts this wallet reads and posts through outside a sync. A GET that loses the host
 /// in use marks every wallet's picture stale, so the next call syncs on the host chosen next.
@@ -231,7 +241,7 @@ static TESTNET4: EsploraSource = EsploraSource(&TESTNET4_HOSTS);
 
 /// The testnet4 hosts for one call that syncs. A host the scan catches lying is left for the next
 /// one for the rest of the call.
-fn testnet4() -> Http {
+pub(crate) fn testnet4() -> Http {
     Http::new(mark_scans_stale)
 }
 
@@ -240,23 +250,25 @@ fn mark_scans_stale() {
 }
 
 /// Both chains as a sync left them, with the key of every index it asked about and of the address each
-/// chain hands out, and each index's balance by that sync.
-struct Wallet {
+/// chain hands out, and each index's balance by that sync. A wallet the book describes keeps each
+/// index's address and where it sits in place of a key, so `K` is the phone wallet's `OwnKey` or a
+/// `script::Derived`.
+pub(crate) struct Wallet<K = OwnKey> {
     scans: [ChainScan; 2],
-    keys: [Vec<OwnKey>; 2],
+    keys: [Vec<K>; 2],
     balances: [Vec<u64>; 2],
     status: ScanStatus,
 }
 
-impl Wallet {
+impl<K: Owner> Wallet<K> {
     /// The address the wallet hands out next on `chain`, by `ChainScan::issued`.
-    fn next_unused(&self, chain: Chain) -> &OwnKey {
+    pub(crate) fn next_unused(&self, chain: Chain) -> &K {
         let chain = chain as usize;
         &self.keys[chain][self.scans[chain].issued() as usize]
     }
 
     /// Each index the sync saw, with its key, what it keeps of the index and its balance.
-    fn indices(&self) -> impl Iterator<Item = (Chain, &OwnKey, &Seen, u64)> {
+    fn indices(&self) -> impl Iterator<Item = (Chain, &K, &Seen, u64)> {
         [Chain::External, Chain::Internal]
             .into_iter()
             .flat_map(move |chain| {
@@ -269,7 +281,7 @@ impl Wallet {
             })
     }
 
-    fn used(&self) -> impl Iterator<Item = (Chain, &OwnKey)> {
+    fn used(&self) -> impl Iterator<Item = (Chain, &K)> {
         self.indices()
             .filter(|(_, _, seen, _)| seen.used)
             .map(|(chain, key, _, _)| (chain, key))
@@ -278,7 +290,7 @@ impl Wallet {
     /// The used addresses whose balance is above zero: the only ones whose coin lists are worth a
     /// request. A host whose list for an emptied address still holds a coin contradicts its own
     /// stats, and the coin is left alone.
-    fn funded(&self) -> impl Iterator<Item = (Chain, &OwnKey)> {
+    fn funded(&self) -> impl Iterator<Item = (Chain, &K)> {
         self.indices()
             .filter(|(_, _, seen, balance)| seen.used && *balance > 0)
             .map(|(chain, key, _, _)| (chain, key))
@@ -288,7 +300,7 @@ impl Wallet {
         self.keys
             .iter()
             .flatten()
-            .map(|key| key.address.to_string())
+            .map(|key| key.address().to_string())
             .collect()
     }
 
@@ -299,7 +311,7 @@ impl Wallet {
 
 /// `wallet` when its scan reached the end of the wallet, so no payment or history works from part of it.
 /// A scan that goes on fails with `esplora get:` and one a host lied in with `esplora scan:`, as the app maps them.
-fn complete(wallet: Wallet) -> Result<Wallet, MobileSignerError> {
+pub(crate) fn complete<K>(wallet: Wallet<K>) -> Result<Wallet<K>, MobileSignerError> {
     finished(&wallet.status)?;
     Ok(wallet)
 }
@@ -344,7 +356,7 @@ struct Synced {
 /// a sync ends, and the period of full passes from when one starts.
 fn sync_scan(
     source: &dyn ChainSource,
-    wallet: &dyn Addresses,
+    wallet: &dyn AddressSource,
     anchor: Anchor,
     clock: &dyn Fn() -> SystemTime,
     store: &ScanStore,
@@ -430,7 +442,7 @@ fn sync_scan(
     })
 }
 
-/// The one-key wallet `words` and `passphrase` make, by `sync_scan`, with every key derived again. `Account::new` and
+/// The one-key wallet `words` and `passphrase` make, by `synced_by`, with every key derived again. `Account::new` and
 /// `check_network` run before the store or any host hears of the wallet.
 fn synced(
     source: &dyn ChainSource,
@@ -443,8 +455,22 @@ fn synced(
 ) -> Result<Wallet, MobileSignerError> {
     let account = Account::new(words, passphrase, network_of(network), address_type)?;
     check_network(network)?;
-    let synced = sync_scan(source, &account, anchor_of(network), clock, store)?;
-    wallet_of(&account, synced)
+    synced_by(source, &account, network, clock, store, |chain, index| {
+        account.key(chain, index)
+    })
+}
+
+/// The wallet `addresses` names, by `sync_scan`, keeping `key` of each index, derived again with no lock held.
+pub(crate) fn synced_by<K>(
+    source: &dyn ChainSource,
+    addresses: &dyn AddressSource,
+    network: KeyNetwork,
+    clock: &dyn Fn() -> SystemTime,
+    store: &ScanStore,
+    key: impl Fn(Chain, u32) -> Result<K, MobileSignerError>,
+) -> Result<Wallet<K>, MobileSignerError> {
+    let synced = sync_scan(source, addresses, anchor_of(network), clock, store)?;
+    wallet_of(&key, synced)
 }
 
 /// How often a full pass runs on the host the next read goes to, by who runs it.
@@ -472,12 +498,15 @@ fn unix_seconds(at: SystemTime) -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
-/// `synced` as the wallet it describes, with every key derived again. No request.
-fn wallet_of(account: &Account, synced: Synced) -> Result<Wallet, MobileSignerError> {
+/// `synced` as the wallet it describes, with `key` of every index derived again. No request.
+fn wallet_of<K>(
+    key: &impl Fn(Chain, u32) -> Result<K, MobileSignerError>,
+    synced: Synced,
+) -> Result<Wallet<K>, MobileSignerError> {
     Ok(Wallet {
         keys: [
-            keys_of(account, Chain::External, &synced.scan.chains[0])?,
-            keys_of(account, Chain::Internal, &synced.scan.chains[1])?,
+            keys_of(key, Chain::External, &synced.scan.chains[0])?,
+            keys_of(key, Chain::Internal, &synced.scan.chains[1])?,
         ],
         scans: synced.scan.chains,
         balances: synced.balances,
@@ -492,7 +521,7 @@ fn wallet_of(account: &Account, synced: Synced) -> Result<Wallet, MobileSignerEr
 fn scan_chains(
     source: &dyn ChainSource,
     anchor: Anchor,
-    wallet: &dyn Addresses,
+    wallet: &dyn AddressSource,
     scans: &mut [ChainScan; 2],
     balances: &mut [Vec<u64>; 2],
     routine: &mut [usize; 2],
@@ -541,7 +570,7 @@ fn scan_chains(
 fn scan_chain(
     source: &dyn ChainSource,
     anchor: Anchor,
-    wallet: &dyn Addresses,
+    wallet: &dyn AddressSource,
     chain: Chain,
     scan: &mut ChainScan,
     balances: &mut Vec<u64>,
@@ -619,13 +648,13 @@ fn counted(scan: &ChainScan) -> usize {
 /// The key of every index `scan` has seen below its frontier plus `GAP`, and of the one it hands out, which a
 /// pass cut short may not have reached, derived again. No request. The index the scan file holds moves no
 /// frontier before a source proves it used again, so a file never makes this derive keys a source did not prove.
-fn keys_of(
-    account: &Account,
+fn keys_of<K>(
+    key: &impl Fn(Chain, u32) -> Result<K, MobileSignerError>,
     chain: Chain,
     scan: &ChainScan,
-) -> Result<Vec<OwnKey>, MobileSignerError> {
+) -> Result<Vec<K>, MobileSignerError> {
     (0..counted(scan) as u32)
-        .map(|index| account.key(chain, index))
+        .map(|index| key(chain, index))
         .collect()
 }
 
@@ -646,7 +675,7 @@ fn held(scans: &[ChainScan; 2], balances: &[Vec<u64>; 2]) -> Result<u64, MobileS
 /// What the source says of `indices` of `chain`, in order.
 fn lookup(
     source: &dyn ChainSource,
-    wallet: &dyn Addresses,
+    wallet: &dyn AddressSource,
     chain: Chain,
     indices: impl IntoIterator<Item = u32>,
 ) -> Result<Vec<Summary>, MobileSignerError> {
@@ -675,7 +704,7 @@ fn lookup(
 /// nothing here.
 fn refresh(
     source: &dyn ChainSource,
-    wallet: &dyn Addresses,
+    wallet: &dyn AddressSource,
     chain: Chain,
     scan: &mut ChainScan,
     balances: &mut Vec<u64>,
@@ -790,6 +819,86 @@ pub fn hot_wallet_snapshot(
     )
 }
 
+/// What `hot_wallet_snapshot` answers, for the wallet `descriptor` describes, whose keys are not on this phone.
+#[uniffi::export]
+pub fn wallet_snapshot(
+    descriptor: String,
+    network: KeyNetwork,
+) -> Result<HotWalletSnapshot, MobileSignerError> {
+    described_snapshot(
+        &EsploraSource(&testnet4()),
+        &descriptor,
+        network,
+        &SystemTime::now,
+        &SCAN_STORE,
+    )
+}
+
+/// `snapshot_from` for the wallet `descriptor` describes.
+pub(crate) fn described_snapshot(
+    source: &dyn ChainSource,
+    descriptor: &str,
+    network: KeyNetwork,
+    clock: &dyn Fn() -> SystemTime,
+    store: &ScanStore,
+) -> Result<HotWalletSnapshot, MobileSignerError> {
+    check_network(network)?;
+    let wallet = Described::parse(descriptor)?;
+    snapshot_of(
+        source,
+        &wallet.synced(source, network, clock, store)?,
+        network,
+    )
+}
+
+/// A wallet's balance as one sync of both its chains found it, for the wallet list and a several-key wallet's detail. Not
+/// `HotWalletSnapshot`: no spendable figure, which needs a coin list, and no receive address, since a several-key wallet's
+/// Receive screen shows the address 0 its book holds.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct WalletBalance {
+    /// Confirmed plus mempool over every address of both chains the scan counts. Before `scan` is `Complete`, only what
+    /// the scan has found so far, which no screen may show as the balance.
+    pub balance_sats: u64,
+    pub scan: HotScan,
+}
+
+/// The confirmed + mempool balance of the wallet `descriptor` describes, by the sync a read of it within ten seconds
+/// shares, with how far the scan got. It reads no coin list, so a list that shows balances pays for none, and a coin list
+/// a host fails or limits never blanks a balance. Testnet4 only. About 40 Esplora calls for a wallet nobody paid and a
+/// routine sync's few after that, so call it off the main thread. No screen may show `balance_sats` unless `scan` is
+/// `Complete`.
+#[uniffi::export]
+pub fn wallet_balance(
+    descriptor: String,
+    network: KeyNetwork,
+) -> Result<WalletBalance, MobileSignerError> {
+    described_balance(
+        &EsploraSource(&testnet4()),
+        &descriptor,
+        network,
+        &SystemTime::now,
+        &SCAN_STORE,
+    )
+}
+
+/// `wallet_balance` on `source`, `clock` and `store`, so tests run it on `Fake`: the sum of the scan, with the wallet read
+/// from its descriptor and refused before the store or any host hears of it.
+fn described_balance(
+    source: &dyn ChainSource,
+    descriptor: &str,
+    network: KeyNetwork,
+    clock: &dyn Fn() -> SystemTime,
+    store: &ScanStore,
+) -> Result<WalletBalance, MobileSignerError> {
+    check_network(network)?;
+    let wallet = Described::parse(descriptor)?;
+    let synced = sync_scan(source, &wallet, Anchor::Testnet4, clock, store)?;
+    Ok(WalletBalance {
+        balance_sats: held(&synced.scan.chains, &synced.balances)?,
+        scan: HotScan::from(&synced.status),
+    })
+}
+
 /// Keeps each wallet's scan in `dir`, app storage that no backup copies, so the first sync after a restart
 /// asks only what can have changed. Call it once at app start. Without it scans live in memory only.
 #[uniffi::export]
@@ -827,8 +936,17 @@ fn snapshot_from(
         clock,
         store,
     )?;
+    snapshot_of(source, &wallet, network)
+}
+
+/// `snapshot_from`'s figures for `wallet`, as a sync left it, plus its coin lists once the scan is complete.
+pub(crate) fn snapshot_of<K: Owner>(
+    source: &dyn ChainSource,
+    wallet: &Wallet<K>,
+    network: KeyNetwork,
+) -> Result<HotWalletSnapshot, MobileSignerError> {
     let (scan, spendable_sats) = match HotScan::from(&wallet.status) {
-        HotScan::Complete => match spendable_coins(source, &wallet) {
+        HotScan::Complete => match spendable_coins(source, wallet) {
             Ok((_, have)) => (HotScan::Complete, have),
             // The request limit a read of the sync can meet, so the snapshot goes on later the same way.
             Err(e) if throttled(&e).is_some() => (HotScan::Continuing, 0),
@@ -837,400 +955,12 @@ fn snapshot_from(
         scan @ (HotScan::Continuing | HotScan::Unverified) => (scan, 0),
     };
     Ok(HotWalletSnapshot {
-        receive_address: wallet.next_unused(Chain::External).address.to_string(),
+        receive_address: wallet.next_unused(Chain::External).address().to_string(),
         balance_sats: wallet.balance()?,
         spendable_sats,
         network,
         scan,
     })
-}
-
-/// A sorted-multisig wallet's two chains, watch-only. It holds the checked keys and threshold and no key that signs. Every
-/// address comes from vault-core, which gives the vault its receive address on the Receive screen and in the book's
-/// address check, so the scan's receive chain is that address's chain.
-struct Multisig {
-    keys: Vec<Xpub>,
-    threshold: usize,
-    id: WalletId,
-}
-
-impl Multisig {
-    /// The wallet `compute_vault_address_multisig(xpubs, threshold)` names, checked the same way, then refused when its
-    /// keys are mainnet `xpub`s, since this build reads testnet4 only. All before the store or any host hears of it.
-    fn new(xpubs: &[String], threshold: u8) -> Result<Self, MobileSignerError> {
-        let keys = crate::parse_and_check_xpubs(xpubs)?;
-        // vault-core's threshold rule, which also refuses an empty list, so keys[0] exists below.
-        build_multisig_descriptor_on(&keys, threshold.into(), Branch::Receive)?;
-        check_network(match keys[0].network {
-            NetworkKind::Main => KeyNetwork::Main,
-            NetworkKind::Test => KeyNetwork::Test,
-        })?;
-        Ok(Self {
-            id: vault_id(&keys, threshold),
-            keys,
-            threshold: threshold.into(),
-        })
-    }
-}
-
-impl Addresses for Multisig {
-    fn id(&self) -> WalletId {
-        self.id
-    }
-
-    fn address(&self, chain: Chain, index: u32) -> Result<Address, MobileSignerError> {
-        let branch = match chain {
-            Chain::External => Branch::Receive,
-            Chain::Internal => Branch::Change,
-        };
-        // shortcut: the descriptor is rebuilt for each address, because vault-core returns a miniscript type this crate
-        // does not name; it costs microseconds beside the GET each address costs. Hold the two descriptors (add
-        // `miniscript = "13"` beside `bitcoin`, as the Cargo.toml comment does for Xpub) if a profile ever shows it.
-        let descriptor = build_multisig_descriptor_on(&self.keys, self.threshold, branch)?;
-        Ok(derive_address_at(&descriptor, index, Network::Testnet4)?)
-    }
-}
-
-/// Domain tag for vault ids, so no preimage is ever a one-key id's two 78-byte xpubs in the folder both kinds share.
-const VAULT_ID_TAG: &[u8] = b"mebit/wallet-id/wsh-sortedmulti/v1";
-
-/// SHA-256 of `VAULT_ID_TAG`, a network byte (0 main, 1 test), `threshold`, then each key's 33-byte public key and
-/// 32-byte chain code, the 65-byte records in byte order. Public, like a one-key id.
-/// - Sorted, because sortedmulti makes the same keys in any order the same wallet, so a reordered BSMS reuses the scan file.
-/// - Only what makes addresses goes in, so a key re-encoded with another depth or parent fingerprint is the same wallet.
-/// - The network byte keeps a future mainnet build from sharing a testnet vault's file over the same key material.
-/// - `threshold` goes in, because 2-of-3 and 3-of-3 over the same keys pay different scripts.
-fn vault_id(keys: &[Xpub], threshold: u8) -> WalletId {
-    let mut records: Vec<[u8; 65]> = keys
-        .iter()
-        .map(|key| {
-            let mut record = [0; 65];
-            record[..33].copy_from_slice(&key.public_key.serialize());
-            record[33..].copy_from_slice(key.chain_code.as_bytes());
-            record
-        })
-        .collect();
-    records.sort();
-    let mut bytes = VAULT_ID_TAG.to_vec();
-    bytes.push(match keys[0].network {
-        NetworkKind::Main => 0,
-        NetworkKind::Test => 1,
-    });
-    bytes.push(threshold);
-    bytes.extend_from_slice(&records.concat());
-    sha256::Hash::hash(&bytes).to_byte_array()
-}
-
-/// A several-key wallet's balance as one sync of both its chains found it. Not `HotWalletSnapshot`, because a vault's
-/// spendable figure is `vault_spendable`'s, read apart so a list that shows balances pays for no coin list, and a next
-/// unused receive address would contradict the Receive screen, which shows address 0.
-#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
-pub struct VaultSnapshot {
-    /// Confirmed plus mempool over every address of both chains the scan counts. Before `scan` is `Complete`, only
-    /// what the scan has found so far, which no screen may show as the balance.
-    pub balance_sats: u64,
-    pub scan: HotScan,
-}
-
-/// The confirmed + mempool balance over every address of both chains, receive `0/i` and change `1/i`, of the
-/// `threshold`-of-`xpubs.len()` sorted multisig that `compute_vault_address_multisig` takes, with how far the scan
-/// got. Testnet4 only, so mainnet `xpub` keys are refused before any request. About 40 Esplora calls for a wallet
-/// nobody paid and a routine sync's few after that, so call it off the main thread. No screen may show
-/// `balance_sats` unless `scan` is `Complete`.
-#[uniffi::export]
-pub fn vault_snapshot(
-    xpubs: Vec<String>,
-    threshold: u8,
-) -> Result<VaultSnapshot, MobileSignerError> {
-    vault_snapshot_from(
-        &EsploraSource(&testnet4()),
-        &xpubs,
-        threshold,
-        &SystemTime::now,
-        &SCAN_STORE,
-    )
-}
-
-/// `vault_snapshot` on `source`, `clock` and `store`, so tests run it on `Fake`. No coin list is read, because a
-/// vault's figure is the scan's sum. `vault_spendable` reads the coins a payment may spend.
-fn vault_snapshot_from(
-    source: &dyn ChainSource,
-    xpubs: &[String],
-    threshold: u8,
-    clock: &dyn Fn() -> SystemTime,
-    store: &ScanStore,
-) -> Result<VaultSnapshot, MobileSignerError> {
-    let vault = Multisig::new(xpubs, threshold)?;
-    let synced = sync_scan(source, &vault, Anchor::Testnet4, clock, store)?;
-    Ok(VaultSnapshot {
-        balance_sats: held(&synced.scan.chains, &synced.balances)?,
-        scan: HotScan::from(&synced.status),
-    })
-}
-
-/// The latest transactions of the `threshold`-of-`xpubs.len()` sorted multisig that `vault_snapshot` reads, over every
-/// used address of its receive and change chains, each once, as the wallet saw it: the mempool first, then confirmed
-/// transactions newest first. Only each address's first page comes back (about 25 confirmed transactions plus the
-/// mempool), so older history is not here. Testnet4 only, so mainnet `xpub` keys are refused before any request. Fails
-/// unless the scan reached the end of both chains, and an answer it cannot read fails the whole call. Makes a network
-/// call per used address plus one for the tip, on top of the sync it shares with a `vault_snapshot` of the last ten
-/// seconds, so call it off the main thread.
-#[uniffi::export]
-pub fn vault_history(xpubs: Vec<String>, threshold: u8) -> Result<Vec<HotTx>, MobileSignerError> {
-    vault_history_from(
-        &EsploraSource(&testnet4()),
-        &xpubs,
-        threshold,
-        &SystemTime::now,
-        &SCAN_STORE,
-    )
-}
-
-/// `vault_history` on `source`, `clock` and `store`, so tests run it on `Fake`. `Multisig::new` checks the keys, the
-/// threshold and the network before the store or any host hears of the vault. Every address the scan counts is the
-/// vault's own, change included, so a payment out with change reads as minus the amount and the fee.
-fn vault_history_from(
-    source: &dyn ChainSource,
-    xpubs: &[String],
-    threshold: u8,
-    clock: &dyn Fn() -> SystemTime,
-    store: &ScanStore,
-) -> Result<Vec<HotTx>, MobileSignerError> {
-    let vault = Multisig::new(xpubs, threshold)?;
-    let synced = sync_scan(source, &vault, Anchor::Testnet4, clock, store)?;
-    finished(&synced.status)?;
-    let counted = counted_addresses(&vault, &synced)?;
-    let used: Vec<&Address> = counted
-        .iter()
-        .filter(|(_, used)| *used)
-        .map(|(address, _)| address)
-        .collect();
-    let own: Vec<String> = counted
-        .iter()
-        .map(|(address, _)| address.to_string())
-        .collect();
-    history_over(source, &used, &own)
-}
-
-/// Every address `counted` gives of both chains, receive then change, each in index order, with whether the scan saw it
-/// used. These are the addresses a one-key `Wallet` derives, and the used ones are those `Wallet::used` walks: an index
-/// counts as used only where the scan holds both what it saw there and its balance. No request.
-fn counted_addresses(
-    wallet: &dyn Addresses,
-    synced: &Synced,
-) -> Result<Vec<(Address, bool)>, MobileSignerError> {
-    let mut counted_all = Vec::new();
-    for chain in [Chain::External, Chain::Internal] {
-        let c = chain as usize;
-        let (scan, balances) = (&synced.scan.chains[c], &synced.balances[c]);
-        for index in 0..counted(scan) {
-            let used = index < balances.len() && scan.seen.get(index).is_some_and(|seen| seen.used);
-            counted_all.push((wallet.address(chain, index as u32)?, used));
-        }
-    }
-    Ok(counted_all)
-}
-
-/// The virtual size the 5.1 Send screen prices a payment of the `threshold`-of-`xpubs.len()` sorted multisig at, before
-/// `vault_prepare_send` builds the real one: one of its coins paying a P2WSH address, with change, signed by `threshold`
-/// keys. 201 for a 2-of-3. Testnet4 only. No network call.
-#[uniffi::export]
-pub fn vault_typical_vsize(xpubs: Vec<String>, threshold: u8) -> Result<u64, MobileSignerError> {
-    let vault = Multisig::new(&xpubs, threshold)?;
-    let p2wsh = vault.address(Chain::External, 0)?.script_pubkey().len();
-    Ok(vsize(&[vault_spend::input_weight(&vault)?], &[p2wsh, p2wsh]))
-}
-
-/// What a payment from a several-key wallet could spend now, as a one-key wallet's `spendable_sats` is read.
-#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
-pub struct VaultSpendable {
-    /// The coins `vault_prepare_send` would consider: every confirmed coin of both chains and the wallet's own
-    /// unconfirmed change. 0 unless `scan` is `Complete`.
-    pub spendable_sats: u64,
-    pub scan: HotScan,
-}
-
-/// What a payment from the `threshold`-of-`xpubs.len()` sorted multisig could spend now, for the 5.1 Send screen: every
-/// confirmed coin of its receive and change chains and its own unconfirmed change, by the sync `vault_snapshot` makes,
-/// which a read within ten seconds shares, and one coin list per funded address once that scan is complete. A scan that
-/// goes on or that a host lied in answers 0 with how far it got. Testnet4 only, so mainnet `xpub` keys are refused before
-/// any request. Call it off the main thread.
-#[uniffi::export]
-pub fn vault_spendable(
-    xpubs: Vec<String>,
-    threshold: u8,
-) -> Result<VaultSpendable, MobileSignerError> {
-    vault_spendable_from(
-        &EsploraSource(&testnet4()),
-        &xpubs,
-        threshold,
-        &SystemTime::now,
-        &SCAN_STORE,
-    )
-}
-
-/// `vault_spendable` on `source`, `clock` and `store`, so tests run it on `Fake`. A request limit on the coin lists ends it
-/// `Continuing` with 0, as a one-key snapshot does.
-fn vault_spendable_from(
-    source: &dyn ChainSource,
-    xpubs: &[String],
-    threshold: u8,
-    clock: &dyn Fn() -> SystemTime,
-    store: &ScanStore,
-) -> Result<VaultSpendable, MobileSignerError> {
-    let vault = Multisig::new(xpubs, threshold)?;
-    let synced = sync_scan(source, &vault, Anchor::Testnet4, clock, store)?;
-    let (scan, spendable_sats) = match HotScan::from(&synced.status) {
-        HotScan::Complete => {
-            let (funded, own) = vault_coin_owners(&vault, &synced)?;
-            match vault_coins(source, &funded, &own) {
-                Ok((_, have)) => (HotScan::Complete, have),
-                Err(e) if throttled(&e).is_some() => (HotScan::Continuing, 0),
-                Err(e) => return Err(e),
-            }
-        }
-        scan @ (HotScan::Continuing | HotScan::Unverified) => (scan, 0),
-    };
-    Ok(VaultSpendable {
-        spendable_sats,
-        scan,
-    })
-}
-
-/// The unsigned payment of `amount_sats` to `destination` from the `threshold`-of-`xpubs.len()` sorted multisig at
-/// `fee_rate_sat_vb`, or with a null amount everything it can spend less the fee in one output, as a PSBT every key of the
-/// wallet signs with `vault_sign_psbt` and `vault_finalize_psbt` finishes. Coins, change and fee as
-/// `hot_prepare_send_at_rate` and `hot_prepare_send_all` pick them, with their refusals, change to the first unused address
-/// of the change chain, and every input's parent transaction in the PSBT, read once per transaction and refused when it does
-/// not pay the coin as listed, so each signer proves the fee. Fails unless the scan reached the end of both chains. Signs and
-/// posts nothing. Testnet4 only, so mainnet `xpub` keys are refused before any request. About 40 Esplora calls for a wallet
-/// nobody paid, so call it off the main thread.
-#[uniffi::export]
-pub fn vault_prepare_send(
-    xpubs: Vec<String>,
-    threshold: u8,
-    destination: String,
-    amount_sats: Option<u64>,
-    fee_rate_sat_vb: u64,
-) -> Result<vault_spend::VaultPsbt, MobileSignerError> {
-    vault_prepared(
-        &EsploraSource(&testnet4()),
-        &xpubs,
-        threshold,
-        &destination,
-        amount_sats.map_or(SendAmount::All, SendAmount::Exact),
-        fee_rate_sat_vb,
-        &SystemTime::now,
-        &SCAN_STORE,
-    )
-}
-
-/// `vault_prepare_send` on `source`, `clock` and `store`, so tests run it on `Fake`. The several-key wallet's `planned`:
-/// `Multisig::new` and `checked` before the store or any host hears of the payment, then one sync, `finished`, the coins
-/// by `spendable_among`, `plan_for`, the parents by `proven_parents`, and the PSBT `vault_spend::unsigned` builds, which
-/// `vault_spend::described` holds to the plan's own figures.
-#[allow(clippy::too_many_arguments)]
-fn vault_prepared(
-    source: &dyn ChainSource,
-    xpubs: &[String],
-    threshold: u8,
-    destination: &str,
-    amount: SendAmount,
-    rate_sat_vb: u64,
-    clock: &dyn Fn() -> SystemTime,
-    store: &ScanStore,
-) -> Result<vault_spend::VaultPsbt, MobileSignerError> {
-    let vault = Multisig::new(xpubs, threshold)?;
-    let own = vault_spend::input_weight(&vault)?;
-    let dest = checked(destination, KeyNetwork::Test, own, amount, rate_sat_vb)?;
-    let synced = sync_scan(source, &vault, Anchor::Testnet4, clock, store)?;
-    finished(&synced.status)?;
-    let (funded, addresses) = vault_coin_owners(&vault, &synced)?;
-    let (spendable, have) = vault_coins(source, &funded, &addresses)?;
-    let change = synced.scan.chains[1].issued();
-    let change_script = vault.address(Chain::Internal, change)?.script_pubkey();
-    let plan = plan_for(amount, &spendable, have, change_script, own, &dest, rate_sat_vb)?;
-    let parents = proven_parents(
-        source,
-        plan.selected.iter().map(|(utxo, slot)| (*utxo, &slot.address)),
-    )?;
-    let coins: Vec<(OutPoint, Chain, u32)> = plan
-        .selected
-        .iter()
-        .map(|(utxo, slot)| {
-            let outpoint = OutPoint {
-                txid: utxo.txid,
-                vout: utxo.vout,
-            };
-            (outpoint, slot.chain, slot.index)
-        })
-        .collect();
-    let amount_sats = plan.outputs[0].value.to_sat();
-    let has_change = plan.outputs.len() > 1;
-    let psbt = vault_spend::unsigned(
-        &vault,
-        &coins,
-        &parents,
-        plan.outputs,
-        has_change.then_some(change),
-    )?;
-    let confirmed = vault_spend::Confirmed {
-        destination,
-        amount_sats,
-        fee_sats: plan.fee_sats,
-        max_change_index: change,
-        txid: None,
-    };
-    vault_spend::described(&vault, psbt, &confirmed)
-}
-
-/// A funded address of a several-key wallet and where it sits: what a payment from it spends.
-struct VaultSlot {
-    chain: Chain,
-    index: u32,
-    address: Address,
-}
-
-/// The wallet's funded addresses, picked as `Wallet::funded` picks a one-key wallet's (used and holding more than nothing,
-/// among the indices `counted` gives), and every address `counted` gives of both chains, which its own change spends from.
-/// No request.
-fn vault_coin_owners(
-    vault: &Multisig,
-    synced: &Synced,
-) -> Result<(Vec<VaultSlot>, Vec<String>), MobileSignerError> {
-    let (mut funded, mut own) = (Vec::new(), Vec::new());
-    for chain in [Chain::External, Chain::Internal] {
-        let c = chain as usize;
-        let (scan, balances) = (&synced.scan.chains[c], &synced.balances[c]);
-        for index in 0..counted(scan) {
-            let address = vault.address(chain, index as u32)?;
-            own.push(address.to_string());
-            if scan.seen.get(index).is_some_and(|seen| seen.used)
-                && balances.get(index).is_some_and(|balance| *balance > 0)
-            {
-                funded.push(VaultSlot {
-                    chain,
-                    index: index as u32,
-                    address,
-                });
-            }
-        }
-    }
-    Ok((funded, own))
-}
-
-/// The coins of `funded` a payment may spend and their sum, by `spendable_among`, with `own` the wallet's every address.
-fn vault_coins<'s>(
-    source: &dyn ChainSource,
-    funded: &'s [VaultSlot],
-    own: &[String],
-) -> Result<(Coins<'s, VaultSlot>, u64), MobileSignerError> {
-    let owners: Vec<(Chain, &VaultSlot, &Address)> = funded
-        .iter()
-        .map(|slot| (slot.chain, slot, &slot.address))
-        .collect();
-    let own: Vec<&str> = own.iter().map(String::as_str).collect();
-    spendable_among(source, &owners, &own)
 }
 
 /// One transaction of the hot wallet, seen from the wallet's side.
@@ -1276,6 +1006,37 @@ pub fn hot_wallet_history(
     )
 }
 
+/// What `hot_wallet_history` answers, for the wallet `descriptor` describes, whose keys are not on this phone.
+#[uniffi::export]
+pub fn wallet_history(
+    descriptor: String,
+    network: KeyNetwork,
+) -> Result<Vec<HotTx>, MobileSignerError> {
+    described_history(
+        &EsploraSource(&testnet4()),
+        &descriptor,
+        network,
+        &SystemTime::now,
+        &SCAN_STORE,
+    )
+}
+
+/// `history_of` for the wallet `descriptor` describes.
+pub(crate) fn described_history(
+    source: &dyn ChainSource,
+    descriptor: &str,
+    network: KeyNetwork,
+    clock: &dyn Fn() -> SystemTime,
+    store: &ScanStore,
+) -> Result<Vec<HotTx>, MobileSignerError> {
+    check_network(network)?;
+    let wallet = Described::parse(descriptor)?;
+    history_by(
+        source,
+        &complete(wallet.synced(source, network, clock, store)?)?,
+    )
+}
+
 /// The latest transactions of every used address of the wallet, each once, as the wallet saw it:
 /// the mempool first, then confirmed transactions newest first. Only each address's first page
 /// comes back (about 25 confirmed transactions plus the mempool), so older history is not here.
@@ -1302,7 +1063,15 @@ fn history_of(
         clock,
         store,
     )?)?;
-    let used: Vec<&Address> = wallet.used().map(|(_, k)| &k.address).collect();
+    history_by(source, &wallet)
+}
+
+/// `history_of`'s rows for `wallet`, whose scan is complete.
+pub(crate) fn history_by<K: Owner>(
+    source: &dyn ChainSource,
+    wallet: &Wallet<K>,
+) -> Result<Vec<HotTx>, MobileSignerError> {
+    let used: Vec<&Address> = wallet.used().map(|(_, k)| k.address()).collect();
     history_over(source, &used, &wallet.addresses())
 }
 
@@ -1442,6 +1211,30 @@ pub fn hot_tx_detail(
     )
 }
 
+/// One transaction of the wallet `descriptor` describes in full, or None when the explorer does not know `txid`.
+#[uniffi::export]
+pub fn wallet_tx_detail(
+    descriptor: String,
+    network: KeyNetwork,
+    txid: String,
+) -> Result<Option<HotTxDetail>, MobileSignerError> {
+    described_detail(&TESTNET4, &descriptor, network, &txid, &SCAN_STORE)
+}
+
+/// `detail_of` for the wallet `descriptor` describes, refusing in the same order.
+pub(crate) fn described_detail(
+    source: &dyn ChainSource,
+    descriptor: &str,
+    network: KeyNetwork,
+    txid: &str,
+    store: &ScanStore,
+) -> Result<Option<HotTxDetail>, MobileSignerError> {
+    let txid = Txid::from_str(txid)
+        .map_err(|e| tx_error(format!("txid is not 64 hex characters: {e}")))?;
+    check_network(network)?;
+    detail_by(source, &Described::parse(descriptor)?, &txid, store)
+}
+
 /// Refuses a txid that is not 64 hex before any request. Then `/tx/{txid}` and, second so a block landing between the
 /// two only adds a confirmation, the tip. A 404 for that transaction is None and asks nothing more. There is no scan, because
 /// the wallet's own addresses are derived offline, as far as `own_addresses` says.
@@ -1458,21 +1251,31 @@ fn detail_of(
         .map_err(|e| tx_error(format!("txid is not 64 hex characters: {e}")))?;
     check_network(network)?;
     let account = Account::new(words, passphrase, network_of(network), address_type)?;
-    let Some((tx, tip)) = source.tx(&txid)? else {
+    detail_by(source, &account, &txid, store)
+}
+
+/// `detail_of` once the txid and the wallet are known: `/tx/{txid}`, then the tip.
+pub(crate) fn detail_by(
+    source: &dyn ChainSource,
+    addresses: &dyn AddressSource,
+    txid: &Txid,
+    store: &ScanStore,
+) -> Result<Option<HotTxDetail>, MobileSignerError> {
+    let Some((tx, tip)) = source.tx(txid)? else {
         return Ok(None);
     };
-    hot_detail(&tx, tip, &txid, &own_addresses(&account, store)?).map(Some)
+    hot_detail(&tx, tip, txid, &own_addresses(addresses, store)?).map(Some)
 }
 
 /// Every address a scan of this wallet reaches, with its chain. That is each index below its chain's `frontier + GAP`
 /// in the stored scan, which for a wallet never scanned, or one whose file no sync has proven again since the app
 /// started, is the first `GAP` of each chain.
 fn own_addresses(
-    account: &Account,
+    addresses: &dyn AddressSource,
     store: &ScanStore,
 ) -> Result<HashMap<String, Chain>, MobileSignerError> {
     let reach = store
-        .wallet(&account.id())
+        .wallet(&addresses.id())
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .scan
@@ -1482,7 +1285,7 @@ fn own_addresses(
     let mut own = HashMap::new();
     for chain in [Chain::External, Chain::Internal] {
         for index in 0..reach[chain as usize] {
-            own.insert(account.key(chain, index)?.address.to_string(), chain);
+            own.insert(addresses.address(chain, index)?.to_string(), chain);
         }
     }
     Ok(own)
@@ -1668,14 +1471,14 @@ pub fn hot_prepare_send_at_rate(
 /// A transaction a builder signed, with the fee it pays, the change below its floor that went into
 /// that fee and what a fee bump cut from the destination's amount. Named fields, because the sums side
 /// by side would swap silently.
-struct Signed {
-    tx: Transaction,
-    fee_sats: u64,
-    dust_change_sats: u64,
-    amount_cut_sats: u64,
+pub(crate) struct Signed {
+    pub(crate) tx: Transaction,
+    pub(crate) fee_sats: u64,
+    pub(crate) dust_change_sats: u64,
+    pub(crate) amount_cut_sats: u64,
 }
 
-fn prepared(signed: Signed) -> PreparedSend {
+pub(crate) fn prepared(signed: Signed) -> PreparedSend {
     PreparedSend {
         txid: signed.tx.compute_txid().to_string(),
         hex: serialize_hex(&signed.tx),
@@ -1796,11 +1599,11 @@ fn broadcast_via(
 /// Bitcoin Core's default dust floor for an output paying `script`: P2WPKH 294, P2WSH and P2TR 330, P2SH
 /// 540, P2PKH 546. Both testnet4 hosts refuse a transaction with a fee and any output below it, and take
 /// one at it.
-fn dust_floor(script: &Script) -> u64 {
+pub(crate) fn dust_floor(script: &Script) -> u64 {
     script.minimal_non_dust().to_sat()
 }
 
-const MIN_FEE_RATE: u64 = 1;
+pub(crate) const MIN_FEE_RATE: u64 = 1;
 /// Bitcoin Core's default `maxfeerate` for `sendrawtransaction`, 0.1 BTC/kvB. Esplora's `POST /tx`
 /// sends the hex alone, so both testnet4 hosts refuse a fee above this rate times the virtual size.
 pub(crate) const MAX_FEE_RATE: u64 = 10_000;
@@ -1808,7 +1611,7 @@ pub(crate) const MAX_FEE_RATE: u64 = 10_000;
 /// The node's test on the signed bytes: `fee_sats` at most `MAX_FEE_RATE` times `vsize`, the signed
 /// transaction's virtual size. `signed` makes that the size the fee was built for, and change put into
 /// the fee raises the fee, so the real rate can sit above the rate asked.
-fn check_node_rate(fee_sats: u64, vsize: u64) -> Result<(), String> {
+pub(crate) fn check_node_rate(fee_sats: u64, vsize: u64) -> Result<(), String> {
     if fee_sats > MAX_FEE_RATE * vsize {
         return Err(above_limit(fee_sats, vsize));
     }
@@ -1823,7 +1626,7 @@ fn above_limit(fee_sats: u64, vsize: u64) -> String {
 /// scripts are `output_scripts` bytes long, every count at its real varint width: from 253 inputs
 /// the input count takes 3 bytes. Exact for what `signed` builds, which spends every input at its
 /// type's `AddressType::input_weight`.
-fn vsize(inputs: &[InputWeightPrediction], output_scripts: &[usize]) -> u64 {
+pub(crate) fn vsize(inputs: &[InputWeightPrediction], output_scripts: &[usize]) -> u64 {
     predict_weight(inputs.iter().copied(), output_scripts.iter().copied()).to_vbytes_ceil()
 }
 
@@ -1902,7 +1705,7 @@ fn settle(
 
 /// Bitcoin Core's MAX_STANDARD_TX_WEIGHT, 400,000 WU: the network refuses a larger transaction as
 /// non-standard.
-const MAX_STANDARD_VSIZE: u64 = 100_000;
+pub(crate) const MAX_STANDARD_VSIZE: u64 = 100_000;
 
 /// The coins a payment of `amount` to a `dest`-byte script at `rate` spends, as a count from the
 /// front of `coins`, and how its leftover settles with change to `change`. `coins` are each a value
@@ -1982,14 +1785,14 @@ fn coins_overflow() -> MobileSignerError {
 /// every call, never cached, plus one `/tx` lookup per transaction with unconfirmed change. An
 /// outpoint listed twice, a sum past u64 or a lookup that is not that transaction fails the whole
 /// call.
-type Coins<'w, K = OwnKey> = Vec<(Utxo, &'w K)>;
+pub(crate) type Coins<'w, K = OwnKey> = Vec<(Utxo, &'w K)>;
 
-fn spendable_coins<'w>(
+pub(crate) fn spendable_coins<'w, K: Owner>(
     source: &dyn ChainSource,
-    wallet: &'w Wallet,
-) -> Result<(Coins<'w>, u64), MobileSignerError> {
-    let owners: Vec<(Chain, &OwnKey, &Address)> =
-        wallet.funded().map(|(c, k)| (c, k, &k.address)).collect();
+    wallet: &'w Wallet<K>,
+) -> Result<(Coins<'w, K>, u64), MobileSignerError> {
+    let owners: Vec<(Chain, &K, &Address)> =
+        wallet.funded().map(|(c, k)| (c, k, k.address())).collect();
     let own = wallet.addresses();
     let own: Vec<&str> = own.iter().map(String::as_str).collect();
     spendable_among(source, &owners, &own)
@@ -2055,9 +1858,7 @@ fn own_change_transactions<K>(
 /// Refuses unless each coin of `selected` whose signature commits to no value, a Legacy one, is output
 /// `vout` of the transaction `source` serves for its txid, paying the coin's key exactly the value the
 /// selection used. A host that listed a Legacy coin at another value would otherwise get a valid payment
-/// whose fee is not the one Review shows. One read per transaction, none for the other types. A read
-/// that got no answer fails with `esplora get:`, which asking again may pass, and an answer that is not
-/// that coin, or does not know its transaction, with `esplora scan:`, as a scan maps the same answers.
+/// whose fee is not the one Review shows. One read per transaction, none for the other types.
 fn prove_values(
     source: &dyn ChainSource,
     selected: &[(&Utxo, &OwnKey)],
@@ -2069,9 +1870,12 @@ fn prove_values(
     proven_parents(source, legacy).map(|_| ())
 }
 
-/// `prove_values`' reads and refusals for every coin of `coins`, each with the address it pays, and the parents it read,
-/// by txid. A several-key wallet proves every input this way and puts each parent in its PSBT.
-fn proven_parents<'u>(
+/// The transaction behind each of `coins`, each with the address it pays, read once per txid, once each is proven: its id
+/// is the coin's txid, and its output `vout` pays that address exactly the value the coin was listed at. Handed back by
+/// txid, so a several-key wallet puts each parent in its PSBT. A read that got no answer fails with `esplora get:`, which
+/// asking again may pass, and an answer that is not that coin, or does not know its transaction, with `esplora scan:`, as
+/// a scan maps the same answers.
+pub(crate) fn proven_parents<'u>(
     source: &dyn ChainSource,
     coins: impl Iterator<Item = (&'u Utxo, &'u Address)>,
 ) -> Result<HashMap<Txid, Transaction>, MobileSignerError> {
@@ -2214,29 +2018,29 @@ pub(crate) fn full_size(
 
 /// What a payment sends: the amount the user typed, or the whole balance less the fee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SendAmount {
+pub(crate) enum SendAmount {
     Exact(u64),
     All,
 }
 
 /// What `signed` spends and pays for one payment, decided from one sync and one read of the coin
-/// lists, before any proof or signature. `K` owns each coin: a one-key wallet's key, or a several-key
-/// wallet's address.
-struct Plan<'c, K = OwnKey> {
+/// lists, before any proof or signature. `K` owns each coin: a one-key wallet's key, a several-key
+/// wallet's address, or a described wallet's `script::Derived`.
+pub(crate) struct Plan<'c, K = OwnKey> {
     /// In input order: largest first for an exact amount, the listing order for send all.
-    selected: Vec<(&'c Utxo, &'c K)>,
+    pub(crate) selected: Vec<(&'c Utxo, &'c K)>,
     /// The destination first, then change if any, as `prepared` reads them.
-    outputs: Vec<TxOut>,
+    pub(crate) outputs: Vec<TxOut>,
     /// Inputs less outputs, change that went into the fee included.
-    fee_sats: u64,
+    pub(crate) fee_sats: u64,
     dust_change_sats: u64,
 }
 
 /// The refusals before any lookup, each kind in the order it has always made them, and the
 /// destination they parsed. An exact amount: the destination, the amount against its dust floor, the
 /// rate, then the amount with one coin's fee, which must fit u64. Send all: the rate, then the
-/// destination.
-fn checked(
+/// destination. `own` is how one of the wallet's coins is spent.
+pub(crate) fn checked(
     destination: &str,
     network: KeyNetwork,
     own: InputWeightPrediction,
@@ -2305,9 +2109,35 @@ fn planned<T>(
         clock,
         store,
     )?)?;
-    let (spendable, have) = spendable_coins(source, &wallet)?;
-    let change_script = wallet.next_unused(Chain::Internal).address.script_pubkey();
-    let plan = plan_for(amount, &spendable, have, change_script, own, &dest, rate_sat_vb)?;
+    plan_from(source, &wallet, own, &dest, amount, rate_sat_vb, finish)
+}
+
+/// What `amount` to `dest` at `rate_sat_vb` spends and pays from `wallet`, whose scan is complete and whose
+/// coins each spend as `own`, handed to `finish`: one `spendable_coins` and `plan_for`, change to the next
+/// unused change address.
+pub(crate) fn plan_from<K: Owner, T>(
+    source: &dyn ChainSource,
+    wallet: &Wallet<K>,
+    own: InputWeightPrediction,
+    dest: &Address,
+    amount: SendAmount,
+    rate_sat_vb: u64,
+    finish: impl FnOnce(Plan<'_, K>) -> Result<T, MobileSignerError>,
+) -> Result<T, MobileSignerError> {
+    let (spendable, have) = spendable_coins(source, wallet)?;
+    let change_script = wallet
+        .next_unused(Chain::Internal)
+        .address()
+        .script_pubkey();
+    let plan = plan_for(
+        amount,
+        &spendable,
+        have,
+        change_script,
+        own,
+        dest,
+        rate_sat_vb,
+    )?;
     finish(plan)
 }
 
@@ -2367,8 +2197,7 @@ fn plan_payment<'c, K>(
             coins.iter().map(|(u, _)| (u.value, own)).collect();
         select(&spends, amount_sats, rate_sat_vb, dest_len, &change_script)
     };
-    let confirmed: Vec<&(Utxo, &K)> =
-        every.iter().copied().filter(|(u, _)| u.confirmed).collect();
+    let confirmed: Vec<&(Utxo, &K)> = every.iter().copied().filter(|(u, _)| u.confirmed).collect();
     let picked = match walk(&confirmed) {
         Ok(found) => Ok((confirmed, found)),
         Err(first) => walk(&every)
@@ -2832,7 +2661,7 @@ fn signed_replacement(
                 let (with, without) = (vsize(&spends, &scripts), vsize(&spends, &scripts[..1]));
                 // The earlier coins hold at least its outputs, so `have` covers the amount.
                 let left = have.saturating_sub(amount);
-                match settle(left, with, without, change_floor, &fee, &least) {
+                match settle(left, with, without, change_floor, fee, least) {
                     Ok(Settle::Change(rest) | Settle::FloorChange(rest)) => {
                         let back = TxOut {
                             value: Amount::from_sat(rest),
@@ -2886,7 +2715,7 @@ fn signed_replacement(
                             SETS_TRIED.with(|n| n.set(n.get() + 1));
                             let (with, without) = sizes[set.count_ones() as usize];
                             let left = holds(set).saturating_sub(amount);
-                            settle(left, with, without, change_floor, &fee, &least).is_ok()
+                            settle(left, with, without, change_floor, fee, least).is_ok()
                         });
                         // The walk's next turn settles that set and signs it.
                         if let Some(set) = found {
@@ -3066,7 +2895,11 @@ fn fee_tiers_from(
 }
 
 #[cfg(test)]
-mod tests {
+#[expect(
+    clippy::result_large_err,
+    reason = "Answer is ureq's own call() result, so its error stays ureq's"
+)]
+pub(crate) mod tests {
     use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet, VecDeque};
     use std::sync::Mutex;
@@ -3082,7 +2915,7 @@ mod tests {
 
     const OWN_SPEND: InputWeightPrediction = AddressType::NativeSegwit.input_weight();
 
-    fn abandon_about() -> Vec<String> {
+    pub(crate) fn abandon_about() -> Vec<String> {
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
             .split_whitespace()
             .map(str::to_string)
@@ -4125,7 +3958,7 @@ mod tests {
     const UNUSED: &str = r#"{"chain_stats":{"funded_txo_sum":0,"spent_txo_sum":0,"tx_count":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0,"tx_count":0}}"#;
 
     // A real testnet address that is not the wallet's: the coinbase payee of the recording.
-    const SOMEONE: &str = REAL_COINBASE_PAYEE;
+    pub(crate) const SOMEONE: &str = REAL_COINBASE_PAYEE;
     /// A P2WPKH output's script, this wallet's change and `SOMEONE`: 22 bytes.
     const P2WPKH_SCRIPT: usize = 22;
     /// `SOMEONE`'s script length.
@@ -4170,12 +4003,12 @@ mod tests {
     /// history. One set up lists its payment in `PROOF` when that block pays it, so a claim of use
     /// proves like a real one. Each Fake has its own scan cache and a clock that moves only by `tick`,
     /// so no test sleeps and none sees another's cache.
-    struct Fake {
+    pub(crate) struct Fake {
         stats: HashMap<String, String>,
-        txs: HashMap<String, String>,
+        pub(crate) txs: HashMap<String, String>,
         utxos: HashMap<String, String>,
         /// What `/tx/{txid}` answers. A transaction not set up is a stranger's: it spends none of the wallet's coins.
-        parents: HashMap<String, String>,
+        pub(crate) parents: HashMap<String, String>,
         /// Transactions this host does not know, so every read of one answers 404: a payment a reorg undid, or one
         /// in a block the host never saw.
         unknown: HashSet<String>,
@@ -4186,13 +4019,13 @@ mod tests {
         tip: String,
         calls: Mutex<Vec<String>>,
         now: Mutex<SystemTime>,
-        store: ScanStore,
+        pub(crate) store: ScanStore,
         /// The type of the wallet every call reads and signs, Native SegWit unless a test sets another.
         address_type: AddressType,
     }
 
     impl Fake {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             Self {
                 stats: HashMap::new(),
                 txs: HashMap::new(),
@@ -4209,20 +4042,20 @@ mod tests {
             }
         }
 
-        fn now(&self) -> SystemTime {
+        pub(crate) fn now(&self) -> SystemTime {
             *self.now.lock().unwrap()
         }
 
-        fn tick(&self, by: Duration) {
+        pub(crate) fn tick(&self, by: Duration) {
             *self.now.lock().unwrap() += by;
         }
 
-        fn requests(&self) -> usize {
+        pub(crate) fn requests(&self) -> usize {
             self.calls.lock().unwrap().len()
         }
 
         /// `address` holds one coin of `value` sats, in a transaction whose id repeats `digit`.
-        fn fund(&mut self, address: &str, value: u64, digit: char) {
+        pub(crate) fn fund(&mut self, address: &str, value: u64, digit: char) {
             self.stats.insert(address.into(), used_stats(value));
             self.utxos
                 .insert(address.into(), format!("[{}]", coin(digit, 0, value, true)));
@@ -4230,7 +4063,13 @@ mod tests {
 
         /// `address` holds output 1 of a confirmed transaction that this host serves raw and that pays it `value` sats,
         /// and the coin list says `listed`, which an honest host makes `value`. Returns the transaction's id.
-        fn fund_raw(&mut self, address: &str, value: u64, listed: u64, digit: char) -> Txid {
+        pub(crate) fn fund_raw(
+            &mut self,
+            address: &str,
+            value: u64,
+            listed: u64,
+            digit: char,
+        ) -> Txid {
             let pay = |to: &str, sats| TxOut {
                 value: Amount::from_sat(sats),
                 script_pubkey: Address::from_str(to)
@@ -4251,7 +4090,7 @@ mod tests {
 
         /// `address` holds one coin of each of `values`, each output 1 of its own confirmed transaction that this
         /// host serves raw, the first made with digit `1`, the next with `2`. Returns the transactions' ids.
-        fn fund_coins(&mut self, address: &str, values: &[u64]) -> Vec<Txid> {
+        pub(crate) fn fund_coins(&mut self, address: &str, values: &[u64]) -> Vec<Txid> {
             let pay = |to: &str, sats| TxOut {
                 value: Amount::from_sat(sats),
                 script_pubkey: Address::from_str(to)
@@ -4318,11 +4157,11 @@ mod tests {
         }
 
         /// `address` was paid once and emptied again: used, with nothing to spend.
-        fn touch(&mut self, address: &str) {
+        pub(crate) fn touch(&mut self, address: &str) {
             self.stats.insert(address.into(), used_stats(0));
         }
 
-        fn get(&self, url: &str) -> Result<String, MobileSignerError> {
+        pub(crate) fn get(&self, url: &str) -> Result<String, MobileSignerError> {
             self.calls.lock().unwrap().push(url.to_string());
             let path = url
                 .strip_prefix(ESPLORA_TESTNET4)
@@ -6349,7 +6188,7 @@ mod tests {
                     let spends = vec![OWN_SPEND; spent.len() + set.len()];
                     let left = had + set.iter().map(|&i| spares[i].0).sum::<u64>() - amount;
                     let sizes = (vsize(&spends, &scripts), vsize(&spends, &scripts[..1]));
-                    let settled = settle(left, sizes.0, sizes.1, 294, &fee, &least);
+                    let settled = settle(left, sizes.0, sizes.1, 294, fee, least);
                     settled.ok().map(|settled| match settled {
                         Settle::Change(rest) | Settle::FloorChange(rest) => left - rest,
                         Settle::Fold(_) | Settle::Fit(_) => left,
@@ -7797,11 +7636,11 @@ mod tests {
         assert_eq!(fake.requests(), 120, "each wallet keeps its own entry");
     }
 
-    fn txo(address: &str, value: u64) -> String {
+    pub(crate) fn txo(address: &str, value: u64) -> String {
         format!(r#"{{"scriptpubkey_address":"{address}","value":{value}}}"#)
     }
 
-    fn spent(address: &str, value: u64) -> String {
+    pub(crate) fn spent(address: &str, value: u64) -> String {
         format!(
             r#"{{"is_coinbase":false,"prevout":{}}}"#,
             txo(address, value)
@@ -7820,7 +7659,7 @@ mod tests {
         tx_of(&id(digit), vin, vout, status)
     }
 
-    fn tx_of(txid: &str, vin: &[String], vout: &[String], status: &str) -> String {
+    pub(crate) fn tx_of(txid: &str, vin: &[String], vout: &[String], status: &str) -> String {
         format!(
             r#"{{"txid":"{txid}","vin":[{}],"vout":[{}],"status":{status}}}"#,
             vin.join(","),
@@ -11768,7 +11607,7 @@ mod tests {
     const PAID: [u32; 2] = [320, 120];
     /// Receive 0 and 1 and change 0 and 1 of `abandon_about` as Legacy, Nested SegWit and Taproot, which the proof
     /// block pays too, from `TYPE_VECTORS`.
-    const OTHER_TYPES_PAID: [&str; 12] = [
+    pub(crate) const OTHER_TYPES_PAID: [&str; 12] = [
         "mkpZhYtJu2r87Js3pDiWJDmPte2NRZ8bJV",
         "mzpbWabUQm1w8ijuJnAof5eiSTep27deVH",
         "mi8nhzZgGZQthq6DQHbru9crMDerUdTKva",
@@ -11782,7 +11621,7 @@ mod tests {
         "tb1p6uav7en8k7zsumsqugdmg5j6930zmzy4dg7jcddshsr0fvxlqx7q7p5els",
         "tb1pwhn9lzpaukrjwvwe365x7hcgvtcfywwsaxcq7j04jgrfcxzdq23qhzr7wt",
     ];
-    const PAID_SATS: u64 = 10_000;
+    pub(crate) const PAID_SATS: u64 = 10_000;
     /// The proof block's height on the pages that list its payments.
     const PROOF_HEIGHT: u64 = 100;
 
@@ -11888,7 +11727,7 @@ mod tests {
     });
 
     /// A transaction's status as a source lists it once `header`'s block holds it at `height`.
-    fn in_proof_block(header: &bitcoin::block::Header, height: u64) -> String {
+    pub(crate) fn in_proof_block(header: &bitcoin::block::Header, height: u64) -> String {
         format!(
             r#"{{"confirmed":true,"block_height":{height},"block_time":1790000000,"block_hash":"{}"}}"#,
             header.block_hash()
@@ -11896,7 +11735,7 @@ mod tests {
     }
 
     /// The merkle root of `txids` and the branch of the one at `pos`. An odd level repeats its last node, as in Bitcoin.
-    fn merkle(
+    pub(crate) fn merkle(
         txids: &[Txid],
         mut pos: usize,
     ) -> (bitcoin::TxMerkleNode, Vec<bitcoin::TxMerkleNode>) {
@@ -11916,7 +11755,11 @@ mod tests {
         (bitcoin::TxMerkleNode::from_byte_array(level[0]), branch)
     }
 
-    fn proof_header(root: bitcoin::TxMerkleNode, time: u32, nonce: u32) -> bitcoin::block::Header {
+    pub(crate) fn proof_header(
+        root: bitcoin::TxMerkleNode,
+        time: u32,
+        nonce: u32,
+    ) -> bitcoin::block::Header {
         bitcoin::block::Header {
             version: bitcoin::block::Version::from_consensus(0x2000_0000),
             prev_blockhash: bitcoin::BlockHash::from_byte_array([0x33; 32]),
@@ -13449,600 +13292,141 @@ mod tests {
         );
     }
 
-    /// Three testnet4 tpubs of `abandon_about`'s accounts 0, 1 and 2, what a vault of this phone's keys looks like.
-    fn vault_keys() -> Vec<String> {
-        (0..3)
-            .map(|account| {
-                crate::restore_software_multisig_key(
-                    abandon_about(),
-                    String::new(),
-                    KeyNetwork::Test,
-                    account,
-                )
-                .unwrap()
-                .xpub
-            })
-            .collect()
-    }
-
-    /// Address `index` of `branch` of the 2-of-3 over `vault_keys()`, from vault-core, not from the scan under test.
-    fn vault_addr(branch: Branch, index: u32) -> String {
-        let keys = crate::parse_and_check_xpubs(&vault_keys()).unwrap();
-        let descriptor = build_multisig_descriptor_on(&keys, 2, branch).unwrap();
-        derive_address_at(&descriptor, index, Network::Testnet4)
-            .unwrap()
-            .to_string()
-    }
-
-    impl Fake {
-        fn vault(&self, keys: &[String], m: u8) -> Result<VaultSnapshot, MobileSignerError> {
-            vault_snapshot_from(
-                &EsploraSource(&Reads(&|url| self.get(url))),
-                keys,
-                m,
-                &|| self.now(),
-                &self.store,
-            )
-        }
-
-        fn vault_history(&self, keys: &[String], m: u8) -> Result<Vec<HotTx>, MobileSignerError> {
-            vault_history_from(
-                &EsploraSource(&Reads(&|url| self.get(url))),
-                keys,
-                m,
-                &|| self.now(),
-                &self.store,
-            )
-        }
-    }
-
-    #[test]
-    fn a_vault_nobody_paid_holds_nothing_after_twenty_reads_per_chain() {
-        let fake = Fake::new();
-        assert_eq!(
-            fake.vault(&vault_keys(), 2).unwrap(),
-            VaultSnapshot {
-                balance_sats: 0,
-                scan: HotScan::Complete
-            }
-        );
-        assert_eq!(
-            fake.requests(),
-            40,
-            "GAP lookups per chain and no coin list"
-        );
-    }
-
-    #[test]
-    fn a_vault_counts_coins_on_its_receive_and_change_chains() {
-        let mut fake = Fake::new();
-        fake.fund_unconfirmed(&vault_addr(Branch::Receive, 3), 84_000_000, '1');
-        fake.fund_unconfirmed(&vault_addr(Branch::Change, 0), 200_000, '2');
-        assert_eq!(
-            fake.vault(&vault_keys(), 2).unwrap(),
-            VaultSnapshot {
-                balance_sats: 84_200_000,
-                scan: HotScan::Complete
-            }
-        );
-        assert!(
-            fake.asked_about(&vault_addr(Branch::Change, 19)),
-            "the change chain is asked to its gap"
-        );
-        assert!(
-            !fake.asked_about(&vault_addr(Branch::Change, 20)),
-            "and no further"
-        );
-    }
-
-    #[test]
-    fn a_vault_read_within_ten_seconds_shares_the_last_answer_whatever_the_key_order() {
-        let fake = Fake::new();
-        let mut keys = vault_keys();
-        fake.vault(&keys, 2).unwrap();
-        let before = fake.requests();
-        keys.rotate_left(1);
-        fake.vault(&keys, 2).unwrap();
-        assert_eq!(
-            fake.requests(),
-            before,
-            "the same keys in another order are the same wallet"
-        );
-        fake.tick(SHARE_TTL);
-        fake.vault(&keys, 2).unwrap();
-        assert!(fake.requests() - before < 40, "a routine sync");
-    }
-
-    #[test]
-    fn another_threshold_over_the_same_keys_is_another_wallet() {
-        let fake = Fake::new();
-        fake.vault(&vault_keys(), 2).unwrap();
-        let before = fake.requests();
-        fake.vault(&vault_keys(), 3).unwrap();
-        assert_eq!(
-            fake.requests() - before,
-            40,
-            "a 3-of-3 pays other scripts, so its first scan asks every index"
-        );
-    }
-
-    #[test]
-    fn a_vault_of_mainnet_keys_is_refused_before_any_request() {
-        let fake = Fake::new();
-        let keys: Vec<String> = (0..3)
-            .map(|account| {
-                crate::restore_software_multisig_key(
-                    abandon_about(),
-                    String::new(),
-                    KeyNetwork::Main,
-                    account,
-                )
-                .unwrap()
-                .xpub
-            })
-            .collect();
-        match fake.vault(&keys, 2) {
-            Err(MobileSignerError::InvalidPsbtJson(m)) => {
-                assert_eq!(m, "mainnet Esplora is not enabled in this build")
-            }
-            other => panic!("expected the mainnet refusal, got {other:?}"),
-        }
-        assert_eq!(fake.requests(), 0);
-    }
-
-    #[test]
-    fn bad_keys_or_threshold_fail_as_the_vault_address_does() {
-        let fake = Fake::new();
-        let keys = vault_keys();
-        let mainnet = crate::restore_software_multisig_key(
-            abandon_about(),
-            String::new(),
-            KeyNetwork::Main,
-            0,
-        )
-        .unwrap()
-        .xpub;
-        let refused = |keys: Vec<String>, m: u8| {
-            let vault = fake.vault(&keys, m).unwrap_err();
-            let address = crate::compute_vault_address_multisig(keys, m).unwrap_err();
-            assert_eq!(vault.to_string(), address.to_string());
-            vault
-        };
-        assert!(matches!(
-            refused(vec![keys[0].clone(), keys[0].clone(), keys[1].clone()], 2),
-            MobileSignerError::DuplicateXpub { first: 0, index: 1 }
-        ));
-        assert!(matches!(
-            refused(keys.clone(), 0),
-            MobileSignerError::InvalidThreshold(_)
-        ));
-        assert!(matches!(
-            refused(keys.clone(), 4),
-            MobileSignerError::InvalidThreshold(_)
-        ));
-        assert!(matches!(
-            refused(vec![keys[0].clone(), mainnet], 1),
-            MobileSignerError::NetworkMismatch { index: 1 }
-        ));
-        assert_eq!(fake.requests(), 0);
-    }
-
-    #[test]
-    fn a_vault_read_while_every_host_is_limited_goes_on_later() {
-        let fake = Fake::new();
-        let limited = vault_snapshot_from(
-            &EsploraSource(&Refusing(EVERY_HOST_LIMITED)),
-            &vault_keys(),
-            2,
-            &|| fake.now(),
-            &fake.store,
-        )
-        .unwrap();
-        assert_eq!(limited.scan, HotScan::Continuing);
-    }
-
-    // The proof block pays only `abandon_about`'s own addresses, so nothing proves this claim. `Unverified`, or
-    // `Complete` with the claim withdrawn, are both honest.
-    #[test]
-    fn a_confirmed_claim_nothing_proves_is_not_counted_as_the_balance() {
-        let mut fake = Fake::new();
-        fake.fund(&vault_addr(Branch::Receive, 0), 50_000, '1');
-        let snapshot = fake.vault(&vault_keys(), 2).unwrap();
-        assert!(
-            !(snapshot.scan == HotScan::Complete && snapshot.balance_sats == 50_000),
-            "an unproven claim read as the balance: {snapshot:?}"
-        );
-    }
-
-    #[test]
-    fn a_vault_scan_file_names_no_address_or_amount() {
-        let mut fake = Fake::new();
-        fake.fund_unconfirmed(&vault_addr(Branch::Receive, 3), 84_000_000, '1');
-        let folder = Folder::new("vault");
-        let store = ScanStore::default();
-        store.use_dir(folder.0.clone());
-        vault_snapshot_from(
-            &EsploraSource(&Reads(&|url| fake.get(url))),
-            &vault_keys(),
-            2,
-            &|| fake.now(),
-            &store,
-        )
-        .unwrap();
-        let (path, _) = scan_file(&folder);
-        let text = fs::read_to_string(path).unwrap();
-        for part in ["tb1", "84000000", "tpub"] {
-            assert!(!text.contains(part), "the file names {part}: {text}");
-        }
-    }
-
-    // 84,000,000 lands on receive 3 and is spent: 83,700,000 to someone, 200,000 back to change 0, 100,000 fee. Both pages
-    // list the payment. Mempool claims mark both addresses used, because the proof block pays no vault address.
-    #[test]
-    fn a_vault_history_lists_each_transaction_once_and_counts_its_change_as_its_own() {
-        let (r3, c0) = (
-            vault_addr(Branch::Receive, 3),
-            vault_addr(Branch::Change, 0),
-        );
-        let receive = tx_json(
-            '1',
-            &[spent(SOMEONE, 84_001_000)],
-            &[txo(&r3, 84_000_000)],
-            MEMPOOL,
-        );
-        let payment = tx_json(
-            '3',
-            &[spent(&r3, 84_000_000)],
-            &[txo(SOMEONE, 83_700_000), txo(&c0, 200_000)],
-            MEMPOOL,
-        );
-        let mut fake = Fake::new();
-        fake.fund_unconfirmed(&r3, 84_000_000, '1');
-        fake.fund_unconfirmed(&c0, 200_000, '2');
-        fake.txs.insert(r3, format!("[{payment},{receive}]"));
-        fake.txs.insert(c0, format!("[{payment}]"));
-        assert_eq!(
-            fake.vault_history(&vault_keys(), 2).unwrap(),
-            [
-                hot(&id('3'), -83_800_000, 0, None),
-                hot(&id('1'), 84_000_000, 0, None)
-            ],
-            "the payment once, as the amount and the fee, then the receive"
-        );
-    }
-
-    #[test]
-    fn a_vault_history_right_after_its_snapshot_adds_only_the_pages_and_the_tip() {
-        let mut fake = Fake::new();
-        fake.fund_unconfirmed(&vault_addr(Branch::Receive, 3), 84_000_000, '1');
-        fake.fund_unconfirmed(&vault_addr(Branch::Change, 0), 200_000, '2');
-        fake.vault(&vault_keys(), 2).unwrap();
-        let before = fake.requests();
-        fake.vault_history(&vault_keys(), 2).unwrap();
-        assert_eq!(
-            fake.requests() - before,
-            3,
-            "two used addresses' pages and the tip, the sync shared"
-        );
-    }
-
-    #[test]
-    fn a_vault_nobody_paid_has_an_empty_history_and_asks_no_page() {
-        let fake = Fake::new();
-        assert!(fake.vault_history(&vault_keys(), 2).unwrap().is_empty());
-        assert_eq!(fake.requests(), 40, "the sync alone, as a snapshot's");
-        assert!(
-            fake.calls
-                .lock()
-                .unwrap()
-                .iter()
-                .all(|url| !url.ends_with("/txs")),
-            "no page and no tip"
-        );
-    }
-
-    #[test]
-    fn a_vault_history_is_refused_until_the_scan_reaches_the_end_of_both_chains() {
-        let fake = Fake::new();
-        let limited = vault_history_from(
-            &EsploraSource(&Refusing(EVERY_HOST_LIMITED)),
-            &vault_keys(),
-            2,
-            &|| fake.now(),
-            &fake.store,
-        );
-        match limited {
-            Err(MobileSignerError::InvalidPsbtJson(m)) => {
-                assert!(m.starts_with("esplora get: "), "{m}")
-            }
-            other => panic!("expected the scan's refusal, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_vault_history_of_mainnet_keys_is_refused_before_any_request() {
-        let fake = Fake::new();
-        let keys: Vec<String> = (0..3)
-            .map(|account| {
-                crate::restore_software_multisig_key(
-                    abandon_about(),
-                    String::new(),
-                    KeyNetwork::Main,
-                    account,
-                )
-                .unwrap()
-                .xpub
-            })
-            .collect();
-        match fake.vault_history(&keys, 2) {
-            Err(MobileSignerError::InvalidPsbtJson(m)) => {
-                assert_eq!(m, "mainnet Esplora is not enabled in this build")
-            }
-            other => panic!("expected the mainnet refusal, got {other:?}"),
-        }
-        assert_eq!(fake.requests(), 0);
-    }
-
-    // Built by hand, so the scan can hold what no host gives: a used index with no balance beside it, and indices past
-    // the gap that `counted` leaves out.
-    #[test]
-    fn a_vault_counts_the_addresses_a_one_key_wallet_counts_receive_first_each_in_index_order() {
-        let vault = Multisig::new(&vault_keys(), 2).unwrap();
-        let seen = |used: &[usize], len: usize| {
-            (0..len)
-                .map(|i| Seen {
-                    used: used.contains(&i),
-                    ..Seen::default()
-                })
-                .collect()
-        };
-        let mut synced = Synced {
-            scan: WalletScan::default(),
-            balances: [vec![0; 2], vec![0; 25]],
-            status: ScanStatus::Complete,
-        };
-        synced.scan.chains[0].seen = seen(&[1, 2], 3);
-        synced.scan.chains[1].seen = seen(&[0, 22], 25);
-        let counted = counted_addresses(&vault, &synced).unwrap();
-        let named =
-            |branch, indices: std::ops::Range<u32>| indices.map(move |i| vault_addr(branch, i));
-        assert_eq!(
-            counted
-                .iter()
-                .map(|(a, _)| a.to_string())
-                .collect::<Vec<_>>(),
-            named(Branch::Receive, 0..4)
-                .chain(named(Branch::Change, 0..20))
-                .collect::<Vec<_>>(),
-            "receive to the index it hands out, then change to the gap past its frontier"
-        );
-        assert_eq!(
-            counted
-                .iter()
-                .filter(|(_, used)| *used)
-                .map(|(a, _)| a.to_string())
-                .collect::<Vec<_>>(),
-            [
-                vault_addr(Branch::Receive, 1),
-                vault_addr(Branch::Change, 0)
-            ],
-            "receive 2 has no balance beside it and change 22 is past the gap"
-        );
-    }
-
-    /// The words of three phone keys of three seeds, each at account 0 as a phone wallet makes its key, so every key of
-    /// `phone_vault_keys()` signs with its own words, which only key 0 of `vault_keys()` can.
-    const PHONE_WORDS: [&str; 3] = [
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
-        "legal winner thank year wave sausage worth useful legal winner thank yellow",
-        "letter advice cage absurd amount doctor acoustic avoid letter advice cage above",
+    /// The typical size of every m-of-n up to 15, row n - 1, entry m - 1, as the vault engine priced it before the engine
+    /// merge deleted it. The U1 gate held `wallet_describe` to the vault engine's figure for each.
+    const VAULT_ENGINE_TYPICAL_VSIZE: [&[u64]; 15] = [
+        &[166],
+        &[175, 193],
+        &[183, 201, 220],
+        &[192, 210, 228, 246],
+        &[200, 218, 237, 255, 273],
+        &[209, 227, 245, 263, 282, 300],
+        &[217, 235, 254, 272, 290, 308, 327],
+        &[226, 244, 263, 281, 299, 317, 336, 354],
+        &[235, 253, 271, 289, 308, 326, 344, 362, 381],
+        &[243, 261, 280, 298, 316, 334, 353, 371, 389, 407],
+        &[252, 270, 288, 306, 325, 343, 361, 379, 398, 416, 434],
+        &[260, 278, 297, 315, 333, 351, 370, 388, 406, 424, 443, 461],
+        &[
+            269, 287, 305, 323, 342, 360, 378, 396, 415, 433, 451, 469, 488,
+        ],
+        &[
+            277, 295, 314, 332, 350, 368, 387, 405, 423, 441, 460, 478, 496, 514,
+        ],
+        &[
+            286, 304, 322, 340, 359, 377, 395, 413, 432, 450, 468, 486, 505, 523, 541,
+        ],
     ];
 
-    fn phone_words(i: usize) -> Vec<String> {
-        PHONE_WORDS[i].split(' ').map(str::to_string).collect()
+    // A several-key wallet's Send screen prices a payment at the size the vault engine priced it, for every m-of-n a
+    // described wallet takes.
+    #[test]
+    fn typical_vsize_for_every_m_of_n_to_15_is_what_the_vault_engine_priced() {
+        for n in 1..=15u8 {
+            let among: Vec<u8> = (1..=n).collect();
+            for m in 1..=n {
+                let descriptor = crate::script::tests::multisig(m.into(), &among);
+                assert_eq!(
+                    crate::script::wallet_describe(descriptor, KeyNetwork::Test)
+                        .unwrap()
+                        .typical_vsize,
+                    VAULT_ENGINE_TYPICAL_VSIZE[usize::from(n) - 1][usize::from(m) - 1],
+                    "{m}-of-{n}"
+                );
+            }
+        }
     }
 
-    fn phone_vault_keys() -> Vec<String> {
-        (0..3)
-            .map(|i| {
-                crate::restore_software_multisig_key(phone_words(i), String::new(), KeyNetwork::Test, 0)
-                    .unwrap()
-                    .xpub
-            })
-            .collect()
+    // On one host, a draft picks the coins, change index, change and fee the vault engine picked, so it drafts the unsigned
+    // transaction the vault engine drafted. The ids, fees and change are the vault engine's, read off it on these hosts
+    // before the engine merge deleted it, when the U1 gate held the draft to them.
+    #[test]
+    fn a_draft_plans_what_the_vault_engine_planned() {
+        use crate::script::tests::{at, fund_multi, two_of_three};
+        use crate::spend::tests::{RATE, drafted_on, funded};
+        let descriptor = two_of_three();
+        let mut one_coin = Fake::new();
+        fund_multi(
+            &mut one_coin,
+            &at(&descriptor, Chain::External, 0),
+            50_000,
+            '1',
+        );
+        let mut with_change = Fake::new();
+        fund_multi(
+            &mut with_change,
+            &at(&descriptor, Chain::External, 0),
+            50_000,
+            '1',
+        );
+        fund_multi(
+            &mut with_change,
+            &at(&descriptor, Chain::Internal, 0),
+            9_000,
+            '3',
+        );
+        for (fake, amount, txid, fee, change) in [
+            (
+                funded(&descriptor),
+                SendAmount::Exact(30_000),
+                "6b0fd1ec33009e7a446e5ee0d11f50ada9816c30f15abf4aae00334ad518e6b6",
+                567,
+                19_433,
+            ),
+            (
+                funded(&descriptor),
+                SendAmount::Exact(60_000),
+                "b82fe9e99f68c68586bf149a5c0ec2bbc07345ceb63bb3a5138724793f018af4",
+                882,
+                9_118,
+            ),
+            (
+                funded(&descriptor),
+                SendAmount::All,
+                "acf0119140f51f74a36feb6b6f26bdabf9587fbb73dae6263f5dc4c88bf993f3",
+                753,
+                0,
+            ),
+            (
+                one_coin,
+                SendAmount::All,
+                "16d097ba7727312e4dc540f97f66d413392704d26e3e25b01588eb1a08a1a21e",
+                438,
+                0,
+            ),
+            (
+                with_change,
+                SendAmount::Exact(55_000),
+                "a86153866f32a9827450a445c7829ff910becec7fb6fd1959f88154e2b2951ef",
+                882,
+                3_118,
+            ),
+        ] {
+            let draft = drafted_on(&fake, &descriptor, amount, RATE).unwrap();
+            assert_eq!(
+                (
+                    draft.unsigned_txid.as_str(),
+                    draft.fee_sats,
+                    draft.change_sats
+                ),
+                (txid, fee, change),
+                "{amount:?}"
+            );
+        }
     }
 
-    /// Address `index` of `branch` of the `m`-of-`keys` wallet, from vault-core.
-    fn address_of(keys: &[String], m: u8, branch: Branch, index: u32) -> String {
-        let keys = crate::parse_and_check_xpubs(keys).unwrap();
-        let descriptor = build_multisig_descriptor_on(&keys, m.into(), branch).unwrap();
-        derive_address_at(&descriptor, index, Network::Testnet4)
+    // Each input of a draft carries its parent transaction, read once, so every signer can prove the fee.
+    #[test]
+    fn a_draft_reads_each_parent_once_and_puts_it_in_its_input() {
+        use crate::script::tests::{at, fund_multi, two_of_three};
+        use crate::spend::tests::{RATE, drafted_on};
+        let descriptor = two_of_three();
+        let mut fake = Fake::new();
+        let first = fund_multi(&mut fake, &at(&descriptor, Chain::External, 0), 50_000, '1');
+        let second = fund_multi(&mut fake, &at(&descriptor, Chain::Internal, 0), 9_000, '3');
+        let draft = drafted_on(&fake, &descriptor, SendAmount::Exact(55_000), RATE).unwrap();
+        let mut parents: Vec<Txid> = bitcoin::psbt::Psbt::from_str(&draft.psbt)
             .unwrap()
-            .to_string()
-    }
-
-    /// The stats of an address only the mempool paid, which a scan counts as used with no proof.
-    fn mempool_stats(funded: u64, spent: u64) -> String {
-        format!(
-            r#"{{"chain_stats":{{"funded_txo_sum":0,"spent_txo_sum":0,"tx_count":0}},"mempool_stats":{{"funded_txo_sum":{funded},"spent_txo_sum":{spent},"tx_count":1}}}}"#
-        )
-    }
-
-    fn output_to(to: &str, sats: u64) -> TxOut {
-        TxOut {
-            value: Amount::from_sat(sats),
-            script_pubkey: Address::from_str(to).unwrap().assume_checked().script_pubkey(),
-        }
-    }
-
-    impl Fake {
-        /// A coin of `value` at `address`, a vault's, as output 1 of a transaction this host serves raw. Its stats show it in
-        /// the mempool, because no proof block pays a vault address, and its coin list calls it confirmed, so a scan counts it
-        /// and a payment may spend it. `listed` is the coin list's value, which an honest host makes `value`.
-        fn fund_vault(&mut self, address: &str, value: u64, listed: u64, digit: char) -> Txid {
-            let tx = paying(digit, vec![output_to(SOMEONE, 1_000), output_to(address, value)]);
-            let txid = tx.compute_txid();
-            self.stats.insert(address.into(), mempool_stats(listed, 0));
-            self.utxos.insert(
-                address.into(),
-                format!(r#"[{{"txid":"{txid}","vout":1,"status":{{"confirmed":true}},"value":{listed}}}]"#),
-            );
-            self.raw.insert(txid.to_string(), serialize_hex(&tx));
-            txid
-        }
-
-        /// The wallet's own change of `value` at `address`, still in the mempool, as output 1 of a transaction this host
-        /// serves raw and lists as spending a coin of `from`, another address of the wallet.
-        fn fund_vault_change(&mut self, address: &str, from: &str, value: u64, digit: char) -> Txid {
-            let tx = paying(digit, vec![output_to(SOMEONE, 1_000), output_to(address, value)]);
-            let txid = tx.compute_txid();
-            self.stats.insert(address.into(), mempool_stats(value, 0));
-            self.utxos.insert(
-                address.into(),
-                format!(r#"[{{"txid":"{txid}","vout":1,"status":{{"confirmed":false}},"value":{value}}}]"#),
-            );
-            self.raw.insert(txid.to_string(), serialize_hex(&tx));
-            self.parents.insert(
-                txid.to_string(),
-                tx_of(&txid.to_string(), &[spent(from, value + 2_000)], &[txo(address, value)], MEMPOOL),
-            );
-            txid
-        }
-
-        fn vault_prepare(
-            &self,
-            keys: &[String],
-            m: u8,
-            to: &str,
-            amount: Option<u64>,
-            rate: u64,
-        ) -> Result<vault_spend::VaultPsbt, MobileSignerError> {
-            vault_prepared(
-                &EsploraSource(&Reads(&|url| self.get(url))),
-                keys,
-                m,
-                to,
-                amount.map_or(SendAmount::All, SendAmount::Exact),
-                rate,
-                &|| self.now(),
-                &self.store,
-            )
-        }
-
-        fn vault_spendable(&self, keys: &[String], m: u8) -> Result<VaultSpendable, MobileSignerError> {
-            vault_spendable_from(
-                &EsploraSource(&Reads(&|url| self.get(url))),
-                keys,
-                m,
-                &|| self.now(),
-                &self.store,
-            )
-        }
-    }
-
-    fn psbt_of(held: &vault_spend::VaultPsbt) -> bitcoin::psbt::Psbt {
-        bitcoin::psbt::Psbt::from_str(&held.psbt).unwrap()
-    }
-
-    #[test]
-    fn a_2_of_3_wallet_prices_a_payment_with_change_at_201_vb() {
-        assert_eq!(vault_typical_vsize(vault_keys(), 2).unwrap(), 201);
-    }
-
-    #[test]
-    fn a_vault_can_spend_its_confirmed_coins_and_its_own_change_but_not_a_strangers_unconfirmed_coin() {
-        let keys = vault_keys();
-        let mut fake = Fake::new();
-        fake.fund_vault(&vault_addr(Branch::Receive, 3), 84_000_000, 84_000_000, '1');
-        fake.fund_vault_change(
-            &vault_addr(Branch::Change, 0),
-            &vault_addr(Branch::Receive, 3),
-            200_000,
-            '2',
-        );
-        fake.fund_unconfirmed(&vault_addr(Branch::Change, 1), 30_000, '3');
-        assert_eq!(
-            fake.vault_spendable(&keys, 2).unwrap(),
-            VaultSpendable {
-                spendable_sats: 84_200_000,
-                scan: HotScan::Complete
-            }
-        );
-        assert_eq!(
-            fake.vault(&keys, 2).unwrap().balance_sats,
-            84_230_000,
-            "the stranger's coin is in the balance and not in what a payment spends"
-        );
-    }
-
-    #[test]
-    fn a_vault_nobody_paid_can_spend_nothing_and_asks_no_coin_list() {
-        let fake = Fake::new();
-        assert_eq!(
-            fake.vault_spendable(&vault_keys(), 2).unwrap(),
-            VaultSpendable {
-                spendable_sats: 0,
-                scan: HotScan::Complete
-            }
-        );
-        assert_eq!(fake.requests(), 40, "GAP lookups per chain and no coin list");
-    }
-
-    #[test]
-    fn a_vault_spendable_read_while_every_host_is_limited_goes_on_later() {
-        let fake = Fake::new();
-        let read = vault_spendable_from(
-            &EsploraSource(&Refusing(EVERY_HOST_LIMITED)),
-            &vault_keys(),
-            2,
-            &|| fake.now(),
-            &fake.store,
-        )
-        .unwrap();
-        assert_eq!(
-            read,
-            VaultSpendable {
-                spendable_sats: 0,
-                scan: HotScan::Continuing
-            }
-        );
-    }
-
-    #[test]
-    fn prepare_pays_the_destination_first_and_change_to_the_first_unused_change_address() {
-        let mut fake = Fake::new();
-        fake.fund_vault(&vault_addr(Branch::Receive, 3), 1_000_000, 1_000_000, '1');
-        fake.stats.insert(vault_addr(Branch::Change, 0), mempool_stats(5_000, 5_000));
-        let held = fake.vault_prepare(&vault_keys(), 2, SOMEONE, Some(600_000), 2).unwrap();
-        assert_eq!(
-            psbt_of(&held).unsigned_tx.output.iter().map(pays).collect::<Vec<_>>(),
-            [SOMEONE.to_string(), vault_addr(Branch::Change, 1)]
-        );
-        assert_eq!(
-            (held.amount_sats, held.max_change_index, held.signed_keys.len()),
-            (600_000, 1, 0)
-        );
-        assert_eq!(held.change_sats, 1_000_000 - 600_000 - held.fee_sats);
-    }
-
-    #[test]
-    fn prepare_prices_the_fee_at_the_rate_times_the_size_as_finished() {
-        let mut fake = Fake::new();
-        fake.fund_vault(&vault_addr(Branch::Receive, 3), 1_000_000, 1_000_000, '1');
-        let held = fake.vault_prepare(&vault_keys(), 2, SOMEONE, Some(600_000), 7).unwrap();
-        let vault = Multisig::new(&vault_keys(), 2).unwrap();
-        let input = vault_spend::input_weight(&vault).unwrap();
-        assert_eq!(held.vsize, vsize(&[input], &[SOMEONE_SCRIPT, 34]));
-        assert_eq!(held.fee_sats, 7 * held.vsize);
-    }
-
-    #[test]
-    fn prepare_reads_each_parent_once_and_puts_it_in_its_input() {
-        let mut fake = Fake::new();
-        let first = fake.fund_vault(&vault_addr(Branch::Receive, 0), 400_000, 400_000, '1');
-        let second = fake.fund_vault(&vault_addr(Branch::Receive, 1), 400_000, 400_000, '2');
-        let held = fake.vault_prepare(&vault_keys(), 2, SOMEONE, Some(600_000), 2).unwrap();
-        let mut parents: Vec<Txid> = psbt_of(&held)
             .inputs
             .iter()
             .map(|input| input.non_witness_utxo.as_ref().unwrap().compute_txid())
@@ -14054,135 +13438,434 @@ mod tests {
         assert_eq!((fake.reads_of(first), fake.reads_of(second)), (1, 1));
     }
 
+    // A host whose coin list values a coin above what its parent transaction pays is caught before a draft holds the
+    // payment, as the vault engine's prepare caught it.
     #[test]
-    fn prepare_send_all_spends_every_spendable_coin_in_one_output() {
+    fn a_draft_refuses_a_host_whose_parent_pays_the_coin_another_value() {
+        use crate::script::tests::{at, fund_multi, two_of_three};
+        use crate::spend::tests::{RATE, drafted_on};
+        let descriptor = two_of_three();
+        let receive = at(&descriptor, Chain::External, 0);
         let mut fake = Fake::new();
-        fake.fund_vault(&vault_addr(Branch::Receive, 0), 300_000, 300_000, '1');
-        fake.fund_vault_change(
-            &vault_addr(Branch::Change, 0),
-            &vault_addr(Branch::Receive, 0),
-            200_000,
-            '2',
+        let txid = fund_multi(&mut fake, &receive, 50_000, '1');
+        fake.utxos.insert(
+            receive.to_string(),
+            format!(
+                r#"[{{"txid":"{txid}","vout":1,"status":{{"confirmed":true}},"value":50001}}]"#
+            ),
         );
-        let held = fake.vault_prepare(&vault_keys(), 2, SOMEONE, None, 2).unwrap();
-        let tx = psbt_of(&held).unsigned_tx;
-        assert_eq!((tx.input.len(), tx.output.len(), held.change_sats), (2, 1, 0));
-        assert_eq!(held.amount_sats + held.fee_sats, 500_000);
-    }
-
-    #[test]
-    fn prepare_refuses_before_any_request_what_a_one_key_payment_refuses_and_mainnet_keys() {
-        let fake = Fake::new();
-        let keys = vault_keys();
-        let mainnet: Vec<String> = (0..3)
-            .map(|account| {
-                crate::restore_software_multisig_key(abandon_about(), String::new(), KeyNetwork::Main, account)
-                    .unwrap()
-                    .xpub
-            })
-            .collect();
-        let refused = |keys: &[String], to: &str, amount: Option<u64>, rate: u64| {
-            fake.vault_prepare(keys, 2, to, amount, rate)
-                .unwrap_err()
-                .to_string()
-        };
-        let mainnet_destination = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
-        assert_eq!(
-            refused(&mainnet, SOMEONE, Some(10_000), 2),
-            "invalid PSBT json: mainnet Esplora is not enabled in this build"
-        );
-        assert_eq!(
-            refused(&keys, mainnet_destination, Some(10_000), 2),
-            destination_on(mainnet_destination, KeyNetwork::Test)
-                .unwrap_err()
-                .to_string()
-        );
-        assert_eq!(
-            refused(&keys, SOMEONE, Some(293), 2),
-            "invalid PSBT json: amount 293 is below the network's 294 sat dust floor"
-        );
-        assert_eq!(
-            refused(&keys, SOMEONE, Some(10_000), 0),
-            "invalid PSBT json: fee rate 0 is below 1 sat/vB"
-        );
-        assert_eq!(
-            refused(&keys, SOMEONE, None, 10_001),
-            "invalid PSBT json: fee rate 10001 is above the network's 10000 sat/vB limit"
-        );
-        assert_eq!(fake.requests(), 0);
-    }
-
-    #[test]
-    fn prepare_refuses_a_scan_that_did_not_reach_the_end() {
-        let fake = Fake::new();
-        let refused = vault_prepared(
-            &EsploraSource(&Refusing(EVERY_HOST_LIMITED)),
-            &vault_keys(),
-            2,
-            SOMEONE,
-            SendAmount::Exact(10_000),
-            2,
-            &|| fake.now(),
-            &fake.store,
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(refused.starts_with("invalid PSBT json: esplora get: "), "{refused}");
-    }
-
-    #[test]
-    fn prepare_refuses_too_little_with_the_one_key_text() {
-        let mut fake = Fake::new();
-        fake.fund_vault(&vault_addr(Branch::Receive, 0), 5_000, 5_000, '1');
-        let refused = fake
-            .vault_prepare(&vault_keys(), 2, SOMEONE, Some(600_000), 2)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            refused.starts_with("invalid PSBT json: insufficient funds: have 5000 confirmed, need "),
-            "{refused}"
-        );
-    }
-
-    #[test]
-    fn prepare_refuses_a_host_whose_parent_pays_the_coin_another_value() {
-        let mut fake = Fake::new();
-        fake.fund_vault(&vault_addr(Branch::Receive, 0), 1_000_000, 1_000_001, '1');
-        let refused = fake
-            .vault_prepare(&vault_keys(), 2, SOMEONE, Some(600_000), 2)
+        let refused = drafted_on(&fake, &descriptor, SendAmount::Exact(30_000), RATE)
             .unwrap_err()
             .to_string();
         assert!(
             refused.contains("esplora scan: coin ")
-                && refused.ends_with("listed at 1000001 sats, and its transaction pays 1000000"),
+                && refused.ends_with("listed at 50001 sats, and its transaction pays 50000"),
             "{refused}"
         );
     }
 
+    // A payment out of receive 0 with its change to change 0 lists once, as the amount and the fee, beside what paid each
+    // address: the list the vault engine gave on this host before the engine merge deleted it, when the U1 gate held the
+    // descriptor engine's history to it.
     #[test]
-    fn a_vault_payment_signed_by_two_phone_keys_posts_once_with_the_prepared_txid_and_the_next_read_syncs() {
-        let keys = phone_vault_keys();
+    fn wallet_history_lists_a_several_key_payment_once_as_the_vault_engine_did() {
+        use crate::script::tests::{WithMulti, at, fund_multi, two_of_three};
+        let descriptor = two_of_three();
+        let (receive, change) = (
+            at(&descriptor, Chain::External, 0),
+            at(&descriptor, Chain::Internal, 0),
+        );
         let mut fake = Fake::new();
-        fake.fund_vault(&address_of(&keys, 2, Branch::Receive, 0), 1_000_000, 1_000_000, '1');
-        let held = fake.vault_prepare(&keys, 2, SOMEONE, Some(600_000), 2).unwrap();
-        let held =
-            vault_spend::vault_sign_psbt(keys.clone(), 2, held, 0, phone_words(0), String::new())
-                .unwrap();
-        let held =
-            vault_spend::vault_sign_psbt(keys.clone(), 2, held, 2, phone_words(2), String::new())
-                .unwrap();
-        assert_eq!(held.signed_keys, [0, 2]);
-        let ready = vault_spend::vault_finalize_psbt(keys.clone(), 2, held.clone()).unwrap();
-        assert_eq!(ready.txid, held.txid);
+        fund_multi(&mut fake, &receive, 50_000, '1');
+        fund_multi(&mut fake, &change, 19_000, '3');
+        let (receive, change) = (receive.to_string(), change.to_string());
+        let payment = tx_json(
+            '5',
+            &[spent(&receive, 50_000)],
+            &[txo(SOMEONE, 30_000), txo(&change, 19_000)],
+            MEMPOOL,
+        );
+        for address in [&receive, &change] {
+            let proven = fake.txs[address].clone();
+            fake.txs
+                .insert(address.clone(), format!("[{payment},{}", &proven[1..]));
+        }
+        let listed = described_history(
+            &EsploraSource(&WithMulti(&fake)),
+            &descriptor,
+            KeyNetwork::Test,
+            &|| fake.now(),
+            &fake.store,
+        )
+        .unwrap();
+        let paid = |txid: &str| hot(txid, PAID_SATS as i64, 5, Some(1_790_000_000));
         assert_eq!(
-            fake.broadcast(&ready, answer(200, &ready.txid)).unwrap().txid,
-            held.txid
+            listed,
+            [
+                hot(&id('5'), -31_000, 0, None),
+                paid("0db03d4a9a265d7a54f4f210011a1f994dc942dc93098a9addc23d7f826a7e6d"),
+                paid("f7bac1af8529a7d9ec7ce0326f44aaba3b5b2bae216c03f4919da0d90f3391e0"),
+            ],
+            "the payment once, as the amount and the fee, then what paid each address"
         );
-        let before = fake.requests();
-        fake.vault(&keys, 2).unwrap();
+    }
+
+    // A balance is the scan's sum, so the wallet list asks no coin list, which a snapshot of the same wallet does ask.
+    #[test]
+    fn wallet_balance_is_the_scans_sum_and_asks_no_coin_list() {
+        use crate::script::tests::{WithMulti, at, fund_multi, two_of_three};
+        let descriptor = two_of_three();
+        let mut fake = Fake::new();
+        fund_multi(&mut fake, &at(&descriptor, Chain::External, 0), 50_000, '1');
+        fund_multi(&mut fake, &at(&descriptor, Chain::Internal, 0), 9_000, '3');
+        let source = EsploraSource(&WithMulti(&fake));
+        let coin_lists = || {
+            let calls = fake.calls.lock().unwrap();
+            calls.iter().filter(|url| url.ends_with("/utxo")).count()
+        };
+        let balance = described_balance(
+            &source,
+            &descriptor,
+            KeyNetwork::Test,
+            &|| fake.now(),
+            &ScanStore::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            balance,
+            WalletBalance {
+                balance_sats: 59_000,
+                scan: HotScan::Complete
+            }
+        );
+        assert_eq!(coin_lists(), 0, "the balance asks no coin list");
+        described_snapshot(
+            &source,
+            &descriptor,
+            KeyNetwork::Test,
+            &|| fake.now(),
+            &ScanStore::default(),
+        )
+        .unwrap();
+        assert!(coin_lists() > 0, "a snapshot asks the coin lists");
+    }
+
+    // A several-key wallet nobody paid costs GAP reads per chain, as a one-key wallet does, and its balance, spendable
+    // figure and history then ask nothing more: no coin list, no page and no tip.
+    #[test]
+    fn a_several_key_wallet_nobody_paid_holds_nothing_after_twenty_reads_per_chain() {
+        let descriptor = crate::script::tests::two_of_three();
+        let fake = Fake::new();
+        let source = EsploraSource(&Reads(&|url| fake.get(url)));
+        let balance = described_balance(
+            &source,
+            &descriptor,
+            KeyNetwork::Test,
+            &|| fake.now(),
+            &fake.store,
+        )
+        .unwrap();
+        assert_eq!(
+            balance,
+            WalletBalance {
+                balance_sats: 0,
+                scan: HotScan::Complete
+            }
+        );
+        assert_eq!(fake.requests(), 40, "GAP lookups per chain");
+        let snapshot = described_snapshot(
+            &source,
+            &descriptor,
+            KeyNetwork::Test,
+            &|| fake.now(),
+            &fake.store,
+        )
+        .unwrap();
+        assert_eq!(
+            (snapshot.spendable_sats, snapshot.scan),
+            (0, HotScan::Complete)
+        );
+        let history = described_history(
+            &source,
+            &descriptor,
+            KeyNetwork::Test,
+            &|| fake.now(),
+            &fake.store,
+        )
+        .unwrap();
+        assert!(history.is_empty());
+        assert_eq!(fake.requests(), 40, "the sync shared, and nothing else");
+    }
+
+    // While every host is limited, a several-key wallet's balance and spendable figure go on later and its history and a
+    // draft are refused, so no screen reads part of the wallet as all of it.
+    #[test]
+    fn a_several_key_wallet_read_while_every_host_is_limited_goes_on_later() {
+        let descriptor = crate::script::tests::two_of_three();
+        let fake = Fake::new();
+        let source = EsploraSource(&Refusing(EVERY_HOST_LIMITED));
+        let clock = || fake.now();
+        let balance =
+            described_balance(&source, &descriptor, KeyNetwork::Test, &clock, &fake.store).unwrap();
+        assert_eq!(balance.scan, HotScan::Continuing);
+        let snapshot =
+            described_snapshot(&source, &descriptor, KeyNetwork::Test, &clock, &fake.store)
+                .unwrap();
+        assert_eq!(
+            (snapshot.scan, snapshot.spendable_sats),
+            (HotScan::Continuing, 0)
+        );
+        for refused in [
+            described_history(&source, &descriptor, KeyNetwork::Test, &clock, &fake.store)
+                .map(drop),
+            crate::spend::draft(
+                &source,
+                &descriptor,
+                KeyNetwork::Test,
+                SOMEONE,
+                SendAmount::Exact(10_000),
+                2,
+                &clock,
+                &fake.store,
+            )
+            .map(drop),
+        ] {
+            let said = refused.unwrap_err().to_string();
+            assert!(
+                said.starts_with("invalid PSBT json: esplora get: "),
+                "{said}"
+            );
+        }
+    }
+
+    /// `answer` is the refusal of mainnet, which this build has no host for, word for word.
+    #[track_caller]
+    pub(crate) fn refused_as_mainnet<T: std::fmt::Debug>(answer: Result<T, MobileSignerError>) {
         assert!(
-            fake.requests() > before,
-            "the post made every scan stale, so the next read syncs"
+            matches!(&answer, Err(MobileSignerError::InvalidPsbtJson(why))
+                if why == "mainnet Esplora is not enabled in this build"),
+            "{answer:?}"
         );
+    }
+
+    // A described wallet on mainnet is refused before the store or any host hears of it, by each read the app makes.
+    #[test]
+    fn wallet_snapshot_refuses_mainnet_before_any_request() {
+        let fake = Fake::new();
+        refused_as_mainnet(described_snapshot(
+            &EsploraSource(&Reads(&|url| fake.get(url))),
+            &crate::script::tests::two_of_three(),
+            KeyNetwork::Main,
+            &|| fake.now(),
+            &fake.store,
+        ));
+        assert_eq!(fake.requests(), 0);
+    }
+
+    #[test]
+    fn wallet_balance_refuses_mainnet_before_any_request() {
+        let fake = Fake::new();
+        refused_as_mainnet(described_balance(
+            &EsploraSource(&Reads(&|url| fake.get(url))),
+            &crate::script::tests::two_of_three(),
+            KeyNetwork::Main,
+            &|| fake.now(),
+            &fake.store,
+        ));
+        assert_eq!(fake.requests(), 0);
+    }
+
+    #[test]
+    fn wallet_history_refuses_mainnet_before_any_request() {
+        let fake = Fake::new();
+        refused_as_mainnet(described_history(
+            &EsploraSource(&Reads(&|url| fake.get(url))),
+            &crate::script::tests::two_of_three(),
+            KeyNetwork::Main,
+            &|| fake.now(),
+            &fake.store,
+        ));
+        assert_eq!(fake.requests(), 0);
+    }
+
+    #[test]
+    fn wallet_tx_detail_refuses_mainnet_before_any_request() {
+        let fake = Fake::new();
+        refused_as_mainnet(described_detail(
+            &EsploraSource(&Reads(&|url| fake.get(url))),
+            &crate::script::tests::two_of_three(),
+            KeyNetwork::Main,
+            &id('5'),
+            &fake.store,
+        ));
+        assert_eq!(fake.requests(), 0);
+    }
+
+    // The id names each wallet's scan file. These are the bytes `Account::id` gave before the scan took an
+    // `AddressSource`, read off that build, so every file a phone keeps today is found again.
+    #[test]
+    fn the_phone_wallets_scan_id_is_the_one_its_files_are_named_by() {
+        let before = [
+            (
+                "",
+                AddressType::Legacy,
+                "723079f55c49407e1f219156f1f2fab1fe505516d1bf7fc4fe905c0ec3db2787",
+            ),
+            (
+                "",
+                AddressType::NestedSegwit,
+                "c31a615fdb407ebcecc16d1bf03e6d9ad32a6ea6e9fd03899c954c794faadb4a",
+            ),
+            (
+                "",
+                AddressType::NativeSegwit,
+                "aff0e466879aa7bab413a73f33936f95ea16dfab16151fe708f96e98486e1e94",
+            ),
+            (
+                "",
+                AddressType::Taproot,
+                "2a6b085cca247cc3359ca04a74ac41c9bb24dd4902ffadeb5d739a77f0f6f84d",
+            ),
+            (
+                "TREZOR",
+                AddressType::Legacy,
+                "b0fcc5f844bd5d08f9049f8276e95a4176e577739fc85cc174b565d4e1d4a3a2",
+            ),
+            (
+                "TREZOR",
+                AddressType::NestedSegwit,
+                "bee4e6f522bae98dcd0a85b371bfa9eb73a780b29b6ef56b95f57086a98196cc",
+            ),
+            (
+                "TREZOR",
+                AddressType::NativeSegwit,
+                "17744203d9439f9f7788ee99eb461f7fc73cd854273303ee1f9887e8ca1f70dd",
+            ),
+            (
+                "TREZOR",
+                AddressType::Taproot,
+                "68fe80e9a2b02ddcb6c416170ca2d3c3b38aa40669c47631fba9aede82fdf5f7",
+            ),
+        ];
+        for (passphrase, address_type, expected) in before {
+            let account = Account::new(
+                &abandon_about(),
+                passphrase,
+                Network::Testnet4,
+                address_type,
+            )
+            .unwrap();
+            let id: String = account.id().iter().map(|b| format!("{b:02x}")).collect();
+            assert_eq!(id, expected, "{passphrase:?} {address_type:?}");
+        }
+    }
+
+    /// The phone wallet's first addresses with no key behind them, as a wallet the book describes gives the scan.
+    struct Listed {
+        id: WalletId,
+        chains: [Vec<Address>; 2],
+    }
+
+    impl AddressSource for Listed {
+        fn address(&self, chain: Chain, index: u32) -> Result<Address, MobileSignerError> {
+            self.chains[chain as usize]
+                .get(index as usize)
+                .cloned()
+                .ok_or_else(|| MobileSignerError::InvalidPsbtJson(format!("{index} not listed")))
+        }
+
+        fn id(&self) -> WalletId {
+            self.id
+        }
+    }
+
+    struct Bare(Address);
+
+    impl Owner for Bare {
+        fn address(&self) -> &Address {
+            &self.0
+        }
+    }
+
+    // The seam the described wallets use: a source that holds no key scans, shows and plans exactly what the
+    // phone wallet of the same addresses does.
+    #[test]
+    fn a_source_with_no_key_scans_and_plans_as_the_phone_wallet_does() {
+        let account = Account::new(
+            &abandon_about(),
+            "",
+            Network::Testnet4,
+            AddressType::NativeSegwit,
+        )
+        .unwrap();
+        let listed = Listed {
+            id: account.id(),
+            chains: [Chain::External, Chain::Internal].map(|chain| {
+                (0..80)
+                    .map(|i| account.key(chain, i).unwrap().address)
+                    .collect()
+            }),
+        };
+        let mut fake = Fake::new();
+        fake.fund_coins(&addr(Chain::External, 0), &[40_000, 9_000]);
+        fake.fund(&addr(Chain::External, 3), 25_000, 'a');
+        fake.touch(&addr(Chain::Internal, 0));
+        let phone = fake.snapshot("").unwrap();
+        assert_eq!(
+            (phone.balance_sats, phone.scan),
+            (74_000, HotScan::Complete)
+        );
+
+        let source = EsploraSource(&Reads(&|url| fake.get(url)));
+        let keyless = synced_by(
+            &source,
+            &listed,
+            KeyNetwork::Test,
+            &|| fake.now(),
+            &ScanStore::default(),
+            |chain, index| Ok(Bare(listed.address(chain, index)?)),
+        )
+        .unwrap();
+        assert_eq!(
+            snapshot_of(&source, &keyless, KeyNetwork::Test).unwrap(),
+            phone
+        );
+
+        let phone = complete(
+            synced(
+                &source,
+                &abandon_about(),
+                "",
+                KeyNetwork::Test,
+                AddressType::NativeSegwit,
+                &|| fake.now(),
+                &fake.store,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let keyless = complete(keyless).unwrap();
+        let dest = Address::from_str(SOMEONE).unwrap().assume_checked();
+        type Summary = (Vec<(OutPoint, String)>, Vec<TxOut>, u64, u64);
+        fn summary<K: Owner>(plan: Plan<'_, K>) -> Result<Summary, MobileSignerError> {
+            let spent = plan
+                .selected
+                .iter()
+                .map(|(u, owner)| (OutPoint::new(u.txid, u.vout), owner.address().to_string()))
+                .collect();
+            Ok((spent, plan.outputs, plan.fee_sats, plan.dust_change_sats))
+        }
+        for amount in [
+            SendAmount::Exact(30_000),
+            SendAmount::Exact(60_000),
+            SendAmount::Exact(100_000),
+            SendAmount::All,
+        ] {
+            let by_phone = plan_from(&source, &phone, OWN_SPEND, &dest, amount, 7, summary)
+                .map_err(|e| e.to_string());
+            let by_keyless = plan_from(&source, &keyless, OWN_SPEND, &dest, amount, 7, summary)
+                .map_err(|e| e.to_string());
+            assert_eq!(by_keyless, by_phone, "{amount:?}");
+        }
     }
 }

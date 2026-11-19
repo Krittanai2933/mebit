@@ -8,8 +8,8 @@ use bitcoin::bip32::{DerivationPath, Fingerprint};
 use jade_ble::{JadeBle, JadeBleError};
 use trezor_ble::{ConnectOptions, ErrorKind, TrezorBle, TrezorBleError};
 use vault_core::error::VaultCoreError;
-use vault_core::hw::jade::{self as jade, JadeError};
-use vault_core::hw::trezor::XpubOptions;
+use vault_core::hw::jade::{self as jade, JadeError, Registered, WalletRegistration};
+use vault_core::hw::trezor::{PairingCredential, XpubOptions};
 
 use super::{
     BleError, FoundWallet, HwAccountKey, JadeState, PairingCodes, Running, Wallet, WalletDetails,
@@ -63,7 +63,8 @@ pub(super) async fn scan(kind: WalletKind) -> Result<Vec<FoundWallet>, BleError>
 pub(super) async fn connect(
     wallet: &FoundWallet,
     codes: Arc<dyn PairingCodes>,
-) -> Result<Running, BleError> {
+    pairing: Option<Vec<u8>>,
+) -> Result<(Running, Option<Vec<u8>>), BleError> {
     // Both crates match by suffix, so an empty selector would pick any wallet in range.
     let selector = match wallet.kind {
         WalletKind::Jade => &wallet.name,
@@ -75,32 +76,38 @@ pub(super) async fn connect(
         ));
     }
     Ok(match wallet.kind {
-        WalletKind::Jade => {
-            Running::spawn(JadeBle::connect(NETWORK, Some(&wallet.name), SCAN_WINDOW).await?)
-        }
+        WalletKind::Jade => (
+            Running::spawn(JadeBle::connect(NETWORK, Some(&wallet.name), SCAN_WINDOW).await?),
+            None,
+        ),
         WalletKind::TrezorSafe7 => {
             let ask = move || {
                 let codes = codes.clone();
                 async move { codes.pairing_code().await }
             };
-            // `new_credential` is dropped: no secret leaves Rust, so every connect asks for
-            // the code (docs/04 item 20).
-            Running::spawn(
-                TrezorBle::connect(trezor_options(wallet), &ask)
-                    .await?
-                    .device,
+            // The credential leaves Rust for the app's Keychain or Keystore and comes back on the next
+            // connect, so a Safe 7 asks for its code once per phone: the user's decision of 12 Nov 2026,
+            // which reverses docs/04 item 20.
+            let connected =
+                TrezorBle::connect(trezor_options(wallet, pairing.as_deref()), &ask).await?;
+            (
+                Running::spawn(connected.device),
+                connected
+                    .new_credential
+                    .map(|made| made.to_bytes().to_vec()),
             )
         }
     })
 }
 
-fn trezor_options(wallet: &FoundWallet) -> ConnectOptions {
+fn trezor_options(wallet: &FoundWallet, pairing: Option<&[u8]>) -> ConnectOptions {
     ConnectOptions {
         network: NETWORK,
         host_name: HOST_NAME.into(),
         app_name: APP_NAME.into(),
         passphrase: Default::default(),
-        credential: None,
+        // Unreadable bytes are dropped, and the Safe 7 then pairs with a code.
+        credential: pairing.and_then(|bytes| PairingCredential::from_bytes(bytes).ok()),
         device: Some(wallet.id.clone()),
         // The id came from a scan a moment ago, and a Safe 7 changes it when its pairing screen
         // is reopened.
@@ -152,6 +159,18 @@ impl Wallet for JadeBle {
     async fn disconnect(self) -> Result<(), BleError> {
         Ok(JadeBle::disconnect(self).await?)
     }
+
+    fn registers(&self) -> bool {
+        true
+    }
+
+    async fn registration(&mut self, wallet: &WalletRegistration) -> Result<Registered, BleError> {
+        Ok(JadeBle::registration(self, wallet).await?)
+    }
+
+    async fn register(&mut self, wallet: &WalletRegistration) -> Result<(), BleError> {
+        Ok(JadeBle::register(self, wallet).await?)
+    }
 }
 
 impl Wallet for TrezorBle {
@@ -201,15 +220,13 @@ impl Wallet for TrezorBle {
 }
 
 fn parse_psbt_base64(psbt_base64: &str) -> Result<Psbt, BleError> {
-    Psbt::from_str(psbt_base64.trim()).map_err(|error| {
-        BleError::Refused(format!("invalid PSBT base64: {error}"))
-    })
+    Psbt::from_str(psbt_base64.trim())
+        .map_err(|error| BleError::Refused(format!("invalid PSBT base64: {error}")))
 }
 
 fn parse_fingerprint(hex: &str) -> Result<Fingerprint, BleError> {
-    Fingerprint::from_str(hex.trim()).map_err(|error| {
-        BleError::Refused(format!("invalid signer fingerprint: {error}"))
-    })
+    Fingerprint::from_str(hex.trim())
+        .map_err(|error| BleError::Refused(format!("invalid signer fingerprint: {error}")))
 }
 
 impl From<jade::JadeState> for JadeState {
@@ -262,9 +279,11 @@ fn jade_category(error: &JadeError) -> fn(String) -> BleError {
         | E::UnsupportedSigningPolicy
         | E::InvalidAddressRequest(_)
         | E::SignerMismatch
-        | E::RegistrationConflict
-        | E::RegistrationMismatch
         | E::RegistrationRequired => BleError::Refused,
+        E::WalletNameTaken
+        | E::RegistrationFailed { .. }
+        | E::RegistrationMismatch
+        | E::RegistrationConflict => BleError::RegistrationRefused,
         E::Protocol(_)
         | E::OutOfOrder
         | E::NoSignatures
@@ -337,11 +356,36 @@ mod tests {
             id: "id-from-a-scan".into(),
             name: "Trezor Safe 7 (6T5)".into(),
         };
-        let options = trezor_options(&wallet);
+        let options = trezor_options(&wallet, None);
         assert_eq!(options.device.as_deref(), Some("id-from-a-scan"));
         assert!(options.device_is_hint);
         assert!(options.credential.is_none());
         assert!(options.host_name.len() <= 32 && options.app_name.len() <= 32);
+    }
+
+    // The bytes a code pairing hands out (`to_bytes`) are what the next connect offers the Safe 7. Bytes that do not
+    // read as a credential are not offered, so that connect pairs with a code. vault-core's tests show the Safe 7
+    // session makes a credential only when it paired with a code.
+    #[test]
+    fn a_kept_credential_reaches_the_safe_7_and_unreadable_bytes_are_dropped() {
+        let wallet = FoundWallet {
+            kind: WalletKind::TrezorSafe7,
+            id: "id".into(),
+            name: "Trezor Safe 7 (6T5)".into(),
+        };
+        let mut kept = vec![1u8];
+        kept.extend(0..84u8);
+        let offered = trezor_options(&wallet, Some(&kept)).credential;
+        assert_eq!(offered.map(|c| c.to_bytes().to_vec()), Some(kept.clone()));
+        for unreadable in [&[][..], &kept[..65], &[2u8; 85][..]] {
+            assert!(
+                trezor_options(&wallet, Some(unreadable))
+                    .credential
+                    .is_none(),
+                "{} bytes",
+                unreadable.len()
+            );
+        }
     }
 
     #[test]
@@ -420,6 +464,28 @@ mod tests {
             |error: JadeError| BleError::from(JadeBleError::from(VaultCoreError::from(error)));
         assert!(matches!(jade(JadeError::Locked), BleError::Refused(_)));
         assert!(matches!(jade(JadeError::OutOfOrder), BleError::Protocol(_)));
+        // A decline is the user's, at whichever step: the screen knows which. A wallet the Jade
+        // cannot hold is its own refusal, with the Jade's words kept.
+        assert!(matches!(
+            jade(JadeError::UserCancelled),
+            BleError::Refused(text) if text.contains("declined on the device")
+        ));
+        for cannot in [
+            JadeError::WalletNameTaken,
+            JadeError::RegistrationMismatch,
+            JadeError::RegistrationFailed {
+                code: -32603,
+                message: "No room left".into(),
+            },
+        ] {
+            let said = cannot.to_string();
+            let refused = jade(cannot);
+            assert!(
+                matches!(&refused, BleError::RegistrationRefused(text) if text.contains(&said))
+                    && refused.leaves_link_usable(),
+                "{refused:?}"
+            );
+        }
         assert!(matches!(
             BleError::from(JadeBleError::NotFound { seen: 0 }),
             BleError::NotFound(text) if text.contains("Bluetooth permission")
@@ -452,7 +518,8 @@ mod tests {
     #[test]
     fn every_error_kind_has_a_documented_variant() {
         use ErrorKind as K;
-        let table: [(ErrorKind, fn(String) -> BleError); 22] = [
+        type Row = (ErrorKind, fn(String) -> BleError);
+        let table: [Row; 22] = [
             (K::NoBluetoothAdapter, BleError::BluetoothOff),
             (K::BluetoothPermissionDenied, BleError::PermissionDenied),
             (K::NoDeviceFound, BleError::NotFound),
@@ -505,7 +572,7 @@ mod tests {
             wallet(WalletKind::Jade, "id", ""),
             wallet(WalletKind::TrezorSafe7, "", "Safe 7"),
         ] {
-            let refused = connect(&empty, Arc::new(NoCodes)).await;
+            let refused = connect(&empty, Arc::new(NoCodes), None).await;
             assert!(
                 matches!(&refused, Err(BleError::NotFound(text)) if text.contains("FoundWallet needs")),
                 "{empty:?}"

@@ -149,10 +149,22 @@ typedef void (*UniffiForeignFutureCompleteVoid)(int64_t, UniffiForeignFutureStru
 typedef void (*UniffiCallbackInterfacePairingCodesMethod0)(int64_t, UniffiForeignFutureCompleteRustBuffer, int64_t, UniffiForeignFuture *
     );
 
+typedef void (*UniffiCallbackInterfaceSignStepsMethod0)(int64_t, UniffiForeignFutureCompleteVoid, int64_t, UniffiForeignFuture *
+    );
+
+typedef void (*UniffiCallbackInterfaceSignStepsMethod1)(int64_t, UniffiForeignFutureCompleteVoid, int64_t, UniffiForeignFuture *
+    );
+
 typedef struct UniffiVTableCallbackInterfacePairingCodes {
     UniffiCallbackInterfacePairingCodesMethod0 pairingCode;
     UniffiCallbackInterfaceFree uniffiFree;
 } UniffiVTableCallbackInterfacePairingCodes;
+
+typedef struct UniffiVTableCallbackInterfaceSignSteps {
+    UniffiCallbackInterfaceSignStepsMethod0 registering;
+    UniffiCallbackInterfaceSignStepsMethod1 showing;
+    UniffiCallbackInterfaceFree uniffiFree;
+} UniffiVTableCallbackInterfaceSignSteps;
 
 void * uniffi_mobile_signer_ffi_fn_clone_pairingcodes(void * ptr, UniffiRustCallStatus *_Nonnull out_status
 );
@@ -162,6 +174,16 @@ void uniffi_mobile_signer_ffi_fn_init_callback_vtable_pairingcodes(UniffiVTableC
 );
 int64_t uniffi_mobile_signer_ffi_fn_method_pairingcodes_pairing_code(void * ptr
 );
+void * uniffi_mobile_signer_ffi_fn_clone_signsteps(void * ptr, UniffiRustCallStatus *_Nonnull out_status
+);
+void uniffi_mobile_signer_ffi_fn_free_signsteps(void * ptr, UniffiRustCallStatus *_Nonnull out_status
+);
+void uniffi_mobile_signer_ffi_fn_init_callback_vtable_signsteps(UniffiVTableCallbackInterfaceSignSteps const * vtable
+);
+int64_t uniffi_mobile_signer_ffi_fn_method_signsteps_registering(void * ptr
+);
+int64_t uniffi_mobile_signer_ffi_fn_method_signsteps_showing(void * ptr
+);
 void * uniffi_mobile_signer_ffi_fn_clone_walletlink(void * ptr, UniffiRustCallStatus *_Nonnull out_status
 );
 void uniffi_mobile_signer_ffi_fn_free_walletlink(void * ptr, UniffiRustCallStatus *_Nonnull out_status
@@ -170,13 +192,13 @@ void * uniffi_mobile_signer_ffi_fn_constructor_walletlink_new(RustBuffer wallet,
 );
 int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_account_xpub(void * ptr, RustBuffer derivationPath
 );
-int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_connect(void * ptr, void * codes
+int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_connect(void * ptr, void * codes, RustBuffer pairing
 );
 int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_disconnect(void * ptr
 );
 int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_info(void * ptr
 );
-int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_sign_psbt(void * ptr, RustBuffer psbtBase64, RustBuffer signerFingerprint
+int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_sign_wallet_psbt(void * ptr, RustBuffer descriptor, RustBuffer psbtBase64, RustBuffer unsignedTxid, void * steps
 );
 int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_unlock(void * ptr
 );
@@ -232,6 +254,8 @@ RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_wallet_snapshot(RustBuffer mnemo
 );
 int8_t uniffi_mobile_signer_ffi_fn_func_is_valid_address(RustBuffer address, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
 );
+RustBuffer uniffi_mobile_signer_ffi_fn_func_jade_wallet_registration(RustBuffer descriptor, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
+);
 int64_t uniffi_mobile_signer_ffi_fn_func_live_wallet_links(UniffiRustCallStatus *_Nonnull out_status
     
 );
@@ -241,19 +265,23 @@ int64_t uniffi_mobile_signer_ffi_fn_func_scan_wallets(RustBuffer kind
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_sign_psbt(RustBuffer psbtJson, RustBuffer borrowerPubkey, UniffiRustCallStatus *_Nonnull out_status
 );
-RustBuffer uniffi_mobile_signer_ffi_fn_func_vault_finalize_psbt(RustBuffer xpubs, int8_t threshold, RustBuffer held, UniffiRustCallStatus *_Nonnull out_status
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_balance(RustBuffer descriptor, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
 );
-RustBuffer uniffi_mobile_signer_ffi_fn_func_vault_history(RustBuffer xpubs, int8_t threshold, UniffiRustCallStatus *_Nonnull out_status
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_describe(RustBuffer descriptor, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
 );
-RustBuffer uniffi_mobile_signer_ffi_fn_func_vault_prepare_send(RustBuffer xpubs, int8_t threshold, RustBuffer destination, RustBuffer amountSats, int64_t feeRateSatVb, UniffiRustCallStatus *_Nonnull out_status
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_draft(RustBuffer descriptor, RustBuffer network, RustBuffer destination, RustBuffer amountSats, int64_t feeRateSatVb, UniffiRustCallStatus *_Nonnull out_status
 );
-RustBuffer uniffi_mobile_signer_ffi_fn_func_vault_sign_psbt(RustBuffer xpubs, int8_t threshold, RustBuffer held, int32_t keyIndex, RustBuffer mnemonicWords, RustBuffer passphrase, UniffiRustCallStatus *_Nonnull out_status
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_finish(RustBuffer descriptor, RustBuffer network, RustBuffer psbt, RustBuffer unsignedTxid, UniffiRustCallStatus *_Nonnull out_status
 );
-RustBuffer uniffi_mobile_signer_ffi_fn_func_vault_snapshot(RustBuffer xpubs, int8_t threshold, UniffiRustCallStatus *_Nonnull out_status
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_history(RustBuffer descriptor, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
 );
-RustBuffer uniffi_mobile_signer_ffi_fn_func_vault_spendable(RustBuffer xpubs, int8_t threshold, UniffiRustCallStatus *_Nonnull out_status
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_review(RustBuffer descriptor, RustBuffer network, RustBuffer psbt, UniffiRustCallStatus *_Nonnull out_status
 );
-int64_t uniffi_mobile_signer_ffi_fn_func_vault_typical_vsize(RustBuffer xpubs, int8_t threshold, UniffiRustCallStatus *_Nonnull out_status
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_sign_with_words(RustBuffer descriptor, RustBuffer network, RustBuffer psbt, RustBuffer expectedTxid, RustBuffer mnemonicWords, RustBuffer passphrase, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_snapshot(RustBuffer descriptor, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_tx_detail(RustBuffer descriptor, RustBuffer network, RustBuffer txid, UniffiRustCallStatus *_Nonnull out_status
 );
 RustBuffer ffi_mobile_signer_ffi_rustbuffer_alloc(int64_t size, UniffiRustCallStatus *_Nonnull out_status
 );
@@ -442,6 +470,9 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_hot_wallet_snapshot(void
 int16_t uniffi_mobile_signer_ffi_checksum_func_is_valid_address(void
     
 );
+int16_t uniffi_mobile_signer_ffi_checksum_func_jade_wallet_registration(void
+    
+);
 int16_t uniffi_mobile_signer_ffi_checksum_func_live_wallet_links(void
     
 );
@@ -454,28 +485,40 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_scan_wallets(void
 int16_t uniffi_mobile_signer_ffi_checksum_func_sign_psbt(void
     
 );
-int16_t uniffi_mobile_signer_ffi_checksum_func_vault_finalize_psbt(void
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_balance(void
     
 );
-int16_t uniffi_mobile_signer_ffi_checksum_func_vault_history(void
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_describe(void
     
 );
-int16_t uniffi_mobile_signer_ffi_checksum_func_vault_prepare_send(void
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_draft(void
     
 );
-int16_t uniffi_mobile_signer_ffi_checksum_func_vault_sign_psbt(void
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_finish(void
     
 );
-int16_t uniffi_mobile_signer_ffi_checksum_func_vault_snapshot(void
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_history(void
     
 );
-int16_t uniffi_mobile_signer_ffi_checksum_func_vault_spendable(void
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_review(void
     
 );
-int16_t uniffi_mobile_signer_ffi_checksum_func_vault_typical_vsize(void
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_sign_with_words(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_snapshot(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_tx_detail(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_method_signsteps_registering(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_method_signsteps_showing(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_account_xpub(void
@@ -490,7 +533,7 @@ int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_disconnect(void
 int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_info(void
     
 );
-int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_psbt(void
+int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_wallet_psbt(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_unlock(void

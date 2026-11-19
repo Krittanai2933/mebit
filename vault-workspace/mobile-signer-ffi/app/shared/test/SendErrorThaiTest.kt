@@ -1,10 +1,18 @@
 package com.mebit.app.data
 
+import com.mebit.ffi.signer.HotScan
+import com.mebit.ffi.signer.HotWalletSnapshot
+import com.mebit.ffi.signer.KeyNetwork
+import com.mebit.ffi.signer.MobileSignerException
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 
-/** Every Rust refusal of hot_prepare_send_at_rate, hot_broadcast, hot_wallet_snapshot and hot_wallet_history has a Thai line, and none shows its English text. */
+/**
+ * Every Rust refusal of hot_prepare_send_at_rate, hot_broadcast, hot_wallet_snapshot, hot_wallet_history and the wallet_* calls a
+ * payment makes has a Thai line, and none shows its English text.
+ */
 class SendErrorThaiTest {
     private val rows = listOf(
         // The floor is the destination script's, read from the Rust text.
@@ -49,6 +57,19 @@ class SendErrorThaiTest {
         "replace: fee 1100110 for 110 vB is above the network's 10000 sat/vB limit" to "รายการใหม่ต้องใช้ค่าธรรมเนียมเกิน 10,000 sat/vB ซึ่งเครือข่ายไม่รับ",
         "replace: what is left, 843 less the fee 550, is below the network's 294 sat dust floor" to "ยอดที่เหลือหลังหักค่าธรรมเนียมใหม่ต่ำกว่า 294 sat ซึ่งเครือข่ายไม่รับ",
         "replace: check failed: its rate is above the earlier rate" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
+        // wallet_draft, wallet_sign_with_words and wallet_finish, for a Jade, a Safe 7 and a several-key wallet alike: the lines the
+        // several-key wallet's own check showed for the same refusals before the two engines became one.
+        "not this wallet's payment: output 1 pays 329 sats, under its 330 sat dust floor" to "ธุรกรรมไม่ตรงกับที่ตรวจไว้ จึงไม่เซ็น",
+        "not this wallet's payment: its fee 2010000 for 201 vB is outside 1 to 10000 sat/vB, or the size passes 100000 vB" to "ธุรกรรมไม่ตรงกับที่ตรวจไว้ จึงไม่เซ็น",
+        "not this wallet's payment: input 0 spends a coin the wallet's keys do not lock there" to "ธุรกรรมไม่ตรงกับที่ตรวจไว้ จึงไม่เซ็น",
+        "changed since shown: this payment is 2222222222222222222222222222222222222222222222222222222222222222, not 1111111111111111111111111111111111111111111111111111111111111111" to "ธุรกรรมไม่ตรงกับที่ตรวจไว้ จึงไม่เซ็น",
+        "not a key of this wallet: the phrase's master fingerprint 73c5da0a holds none of its keys" to "กุญแจนี้ไม่ใช่กุญแจของ Wallet นี้",
+        "signatures: 1 of the 2 keys needed signed every input" to "ลายเซ็นยังไม่ครบ",
+        "signatures: key 73c5da0a has not signed every input" to "เซ็นไม่สำเร็จ ลองใหม่อีกครั้ง",
+        "signatures: the phrase's key did not sign: {0: KeyNotFound}" to "เซ็นไม่สำเร็จ ลองใหม่อีกครั้ง",
+        "signatures: it does not finalize: [InputError(MissingWitness, 0)]" to "เซ็นไม่สำเร็จ ลองใหม่อีกครั้ง",
+        // As the vault engine's weight refusal, which had no prefix, showed.
+        "finish: signed weight 1000 is above the 900 its fee was sized for" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
         "missing witness slot" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
         "" to "ส่งไม่สำเร็จ ลองใหม่ภายหลัง",
     )
@@ -68,6 +89,25 @@ class SendErrorThaiTest {
         assertEquals("ดึงข้อมูลกระเป๋าไม่สำเร็จ ลองใหม่ภายหลัง", readErrorThai(null))
         assertEquals("ติดต่อ explorer ไม่ได้ ลองใหม่ภายหลัง", readErrorThai("invalid PSBT json: esplora get: lookup thread panicked"))
         assertEquals("explorer จำกัดจำนวนการเรียกชั่วคราว รอสักครู่แล้วลองใหม่", readErrorThai("invalid PSBT json: esplora get: https://blockstream.info/testnet4/api: HTTP status 429, limited for 60 s more"))
+    }
+
+    @Test
+    fun aJadeOrSafe7DraftTheWalletCheckRefusesReadsTheLineASeveralKeyWalletShows(): Unit = runBlocking {
+        val chain = DescribedWallet(
+            PUBLIC_JADE_WALLET,
+            PendingPayments(FakePlainFile()),
+            HardwareLink(null) { FakeDeviceLink() },
+            { listOf(TEST_CHECK) },
+            DescribedCore(
+                snapshot = { _, _ -> HotWalletSnapshot(PUBLIC_JADE_WALLET.address, 50_000uL, 40_000uL, KeyNetwork.TEST, HotScan.COMPLETE) },
+                history = { _, _ -> emptyList() },
+                draft = { _, _, _, _, _ -> throw MobileSignerException.InvalidPsbtJson("invalid PSBT json: not this wallet's payment: it pays no one but this wallet") },
+            ),
+            { 1_000L },
+        )
+        chain.refresh()
+        assertFalse(chain.draft("tb1qdestination", 10_000, 2))
+        assertEquals("ธุรกรรมไม่ตรงกับที่ตรวจไว้ จึงไม่เซ็น", chain.lastError)
     }
 
     @Test

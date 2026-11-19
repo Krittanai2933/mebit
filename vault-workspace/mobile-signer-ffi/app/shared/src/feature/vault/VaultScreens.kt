@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import com.mebit.app.ExportOutcome
 import com.mebit.app.Place
 import com.mebit.app.data.CreatedVault
+import com.mebit.app.data.HardwareWallet
 import com.mebit.app.data.SavedVaults
 import com.mebit.app.data.VaultDraft
 import com.mebit.app.data.VaultsNotice
@@ -42,6 +43,7 @@ import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.feature.onboarding.NotSavedNotice
 import com.mebit.app.feature.send.ConfirmSheet
+import com.mebit.app.feature.send.RemoveHardwareSheet
 import com.mebit.app.feature.send.RemoveWalletSheet
 import com.mebit.app.feature.send.homeBalanceText
 import com.mebit.app.feature.send.removeSheetTitle
@@ -78,39 +80,47 @@ data class SpendingCard(val place: Place, val name: String, val sats: Long, val 
     val backupTag: String? get() = if (backedUp) null else "ยังไม่ได้สำรอง"
 }
 
+/** A Jade or Safe 7 one-key wallet's card on Penpot 1.8.1, under the phone's wallets: its key's name, and [sats] once [known], as [SpendingCard]'s. */
+data class HardwareCard(val wallet: HardwareWallet, val keyName: String, val sats: Long, val known: Boolean, val delete: DeleteItem)
+
 /** A card's amount, every sat that matters, and a dash until [known]. The card carries no unit. */
 internal fun cardBalanceText(sats: Long, known: Boolean): String = if (known) formatBtcCompact(sats) else "—"
 
 /**
- * Penpot 1.8's total adds every wallet's balance, one-key and several-key, as 1.8.0 adds 0.0312, 0.0150 and 0.8420 to 0.8882 BTC. A dash
- * while any figure is unknown, a wallet that did not open this run included ([walletUnopened]), so part of the money never reads as all
- * of it. [vaults] holds one figure per several-key wallet, as [listTotal] gives them, null while unknown. Null, so no line, only while no
- * wallet of either kind is listed or waiting to open.
+ * Penpot 1.8's total adds every wallet's balance, one-key and several-key, as 1.8.0 adds 0.0312, 0.0150 and 0.8420 to 0.8882 BTC, and each
+ * Jade or Safe 7 wallet's in [hardware] as a one-key wallet's (1.8.1). A dash while any figure is unknown, a wallet that did not open this
+ * run included ([walletUnopened]), so part of the money never reads as all of it. [vaults] holds one figure per several-key wallet, as
+ * [listTotal] gives them, null while unknown. Null, so no line, only while no wallet of any kind is listed or waiting to open.
  */
 /**
- * The Wallet list's total of [spending] and every several-key wallet [book] lists, each counted once. Two entries with one address are one
- * wallet, the same keys and m, which a book saved before Choose Keys refused a repeat can hold. A dash while [book] cannot be
+ * The Wallet list's total of [spending], [hardware] and every several-key wallet [book] lists, each counted once. Two entries with one address
+ * are one wallet, the same keys and m, which a book saved before Choose Keys refused a repeat can hold. A dash while [book] cannot be
  * [SavedVaults.judged], because it may list wallets this run cannot show.
  */
-internal fun listTotal(spending: List<SpendingCard>, book: SavedVaults, vaultSats: (CreatedVault) -> Long?, walletUnopened: Boolean): String? =
-    walletsTotal(spending, book.current.vaults.distinctBy { it.address }.map(vaultSats), walletUnopened || !book.judged)
+internal fun listTotal(
+    spending: List<SpendingCard>,
+    book: SavedVaults,
+    vaultSats: (CreatedVault) -> Long?,
+    walletUnopened: Boolean,
+    hardware: List<HardwareCard> = emptyList(),
+): String? = walletsTotal(spending, book.current.vaults.distinctBy { it.address }.map(vaultSats), walletUnopened || !book.judged, hardware)
 
-internal fun walletsTotal(cards: List<SpendingCard>, vaults: List<Long?>, walletUnopened: Boolean): String? = when {
+internal fun walletsTotal(cards: List<SpendingCard>, vaults: List<Long?>, walletUnopened: Boolean, hardware: List<HardwareCard> = emptyList()): String? = when {
     walletUnopened -> "—"
-    cards.isEmpty() && vaults.isEmpty() -> null
+    cards.isEmpty() && hardware.isEmpty() && vaults.isEmpty() -> null
     else -> homeBalanceText(
-        cards.sumOf { it.sats } + vaults.sumOf { it ?: 0L },
-        known = cards.all { it.known } && vaults.all { it != null },
+        cards.sumOf { it.sats } + hardware.sumOf { it.sats } + vaults.sumOf { it ?: 0L },
+        known = cards.all { it.known } && hardware.all { it.known } && vaults.all { it != null },
         loading = false,
     )
 }
 
 /**
- * Penpot 1.8 Wallet list: the title, the + that opens Policy, the total, one card per one-key wallet with its backup tag, then one card
- * per vault. No back chip, no Keyring link, no buttons under the list. Kept though no board draws them: the vaults notice, the line for
- * places that did not open, and [inUse]'s not-saved line, which tells the user straight after setup that this phone does not hold the key.
- * Each card's ⋯ removes it after a confirm (1.8.8 and 1.8.9), and [removeLine] says a removal failed. [vaultSats] is a vault's balance, null
- * while unknown.
+ * Penpot 1.8 Wallet list: the title, the + that opens Policy, the total, one card per one-key wallet with its backup tag, then each Jade
+ * or Safe 7 one-key wallet (1.8.1), then one card per vault. No back chip, no Keyring link, no buttons under the list. Kept though no board
+ * draws them: the vaults notice, the line for places that did not open, and [inUse]'s not-saved line, which tells the user straight after
+ * setup that this phone does not hold the key. Each card's ⋯ removes it after a confirm (1.8.8 and 1.8.9), and [removeLine] says a
+ * removal failed. [vaultSats] is a vault's balance, null while unknown.
  */
 @Composable
 fun VaultListScreen(
@@ -127,9 +137,13 @@ fun VaultListScreen(
     onRemoveVault: (CreatedVault) -> Unit,
     onCreate: () -> Unit,
     onOpenCatalog: () -> Unit,
+    hardware: List<HardwareCard> = emptyList(),
+    onOpenHardware: (HardwareWallet) -> Unit = {},
+    onRemoveHardware: (HardwareWallet) -> Unit = {},
 ) {
     var removing by remember { mutableStateOf<SpendingCard?>(null) }
     var removingVault by remember { mutableStateOf<CreatedVault?>(null) }
+    var removingHardware by remember { mutableStateOf<HardwareWallet?>(null) }
     MebitScreen(
         eyebrow = null,
         // The title is drawn below so the + shares its row, as on the board.
@@ -147,7 +161,7 @@ fun VaultListScreen(
             // Penpot 1.8 puts the + 29 dp from the screen's right edge, so 9 dp past the screen's own padding.
             PlusButton("cta_vaults_add", "สร้าง Wallet", onCreate, Modifier.padding(end = 9.dp))
         }
-        listTotal(spending, vaults, vaultSats, walletUnopened = unopenedNotice != null)?.let { TotalLine(it) }
+        listTotal(spending, vaults, vaultSats, walletUnopened = unopenedNotice != null, hardware = hardware)?.let { TotalLine(it) }
         Spacer(modifier = Modifier.height(16.dp))
         VaultsNotice(vaults)
         unopenedNotice?.let {
@@ -175,6 +189,22 @@ fun VaultListScreen(
             )
             Spacer(modifier = Modifier.height(11.dp))
         }
+        hardware.forEach { card ->
+            WalletListCard(
+                kind = "SINGLE-SIG",
+                name = card.wallet.name,
+                detail = "กุญแจเดียว · ${card.keyName}",
+                balance = cardBalanceText(card.sats, card.known),
+                dark = false,
+                badge = null,
+                tag = "card_hw_${card.wallet.id}",
+                menuTag = card.wallet.id,
+                item = card.delete,
+                onDelete = { removingHardware = card.wallet },
+                onClick = { onOpenHardware(card.wallet) },
+            )
+            Spacer(modifier = Modifier.height(11.dp))
+        }
         val vaultItem = vaultDeleteItem(vaults.saving)
         draft.created.forEach { vault ->
             WalletListCard(
@@ -195,9 +225,20 @@ fun VaultListScreen(
             )
             Spacer(modifier = Modifier.height(11.dp))
         }
-        if (spending.isEmpty() && draft.created.isEmpty()) {
+        if (spending.isEmpty() && hardware.isEmpty() && draft.created.isEmpty()) {
             Text("ยังไม่มี Wallet", modifier = Modifier.testTag("vaults_empty"))
         }
+    }
+    removingHardware?.let { wallet ->
+        RemoveHardwareSheet(
+            name = wallet.name,
+            kind = wallet.kind,
+            onConfirm = {
+                removingHardware = null
+                onRemoveHardware(wallet)
+            },
+            onCancel = { removingHardware = null },
+        )
     }
     removing?.let { card ->
         RemoveWalletSheet(

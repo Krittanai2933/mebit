@@ -84,7 +84,7 @@ Preconditions:
 - The sign button reads เซ็นด้วย Face ID with the app lock on, เซ็นและส่ง for a live wallet, and เซ็นบนเครื่องนี้ (demo) otherwise.
 - The high-fee card with its ค่าธรรมเนียมเปลี่ยนจากที่แสดง reason, the ยังคำนวณค่าธรรมเนียมไม่ได้ banner, กำลังคำนวณ… on the fee row, the ส่งทั้งหมด · จำนวนโดยประมาณ label and the `≈` before a send-all amount still being quoted have no Penpot board. Their copy is a default awaiting design review (open items 76 and 77).
 - S* chain/PSBT paths are mocked unless the wallet is live. M* is never mocked: it reads the chain and posts real testnet4 transactions.
-- 5.2 has no hardware signing yet: a Jade or Trezor key's row says ยังเซ็นด้วยอุปกรณ์ฮาร์ดแวร์ในแอปไม่ได้, so a wallet needs m keys on this phone to post.
+- 5.2 has no hardware signing screen yet: a Jade or Trezor key's row draws an outlined เซ็น that does nothing, with no line under it, until the 5.3 screens land, so a wallet needs m keys on this phone to post.
 - `verify.sh ios-tap` printed ok for 5 of 119 taps that never reached the app in run `20261105-221653-ios`, 4 PIN digits and the ส่ง button on S1. Follow each tap with an `ios-see` of its result, and read the dots after each PIN digit.
 - On the PIN sheet `idb ui describe-all` shows the title, the dots and the lines only inside the one label of `pin_sheet`, for example `ยืนยันการเซ็นส่งเงิน, 0 / 6, ลืม PIN? ปิดแอปแล้วนำเข้า 24 คำอีกครั้ง`. XCUITest still finds `id:pin_forgot`, `id:pin_wrong` and `id:pin_wait`. The keys stay separate, and during a wait idb reports them with `enabled` false.
 - idb listed the clear confirm card on Send only after `idb ui swipe --udid <udid> 200 650 200 250 --duration 0.4` brought it on screen.

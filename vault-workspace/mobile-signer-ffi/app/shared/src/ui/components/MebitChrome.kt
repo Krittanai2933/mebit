@@ -45,7 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.mebit.app.rememberIsDebugBuild
+import com.mebit.app.rememberTestMode
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBtcOrange
 import com.mebit.app.ui.theme.MbChip
@@ -410,10 +410,10 @@ fun Modifier.coversScreen(): Modifier = semantics { dialog() }.pointerInput(Unit
 /** How far the debug link rises, so the bottom bar's orange button does not cover it. */
 val LocalDebugLinkLift = compositionLocalOf { 0.dp }
 
-/** Debug-only link floating in the home-indicator inset, so it takes no layout space: the bottom block then ends where the boards end it. Nothing in a release build. */
+/** Test-mode link floating in the home-indicator inset, so it takes no layout space: the bottom block then ends where the boards end it. Nothing outside [rememberTestMode]. */
 @Composable
 fun BoxScope.DebugLink(onClick: () -> Unit, dark: Boolean = false) {
-    if (!rememberIsDebugBuild()) return
+    if (!rememberTestMode()) return
     Text(
         text = "รายการหน้าทั้งหมด (debug)",
         color = if (dark) MbWhite.copy(alpha = 0.5f) else MbBody,

@@ -2015,6 +2015,18 @@ fn vault_at(
     change_chain: u32,
     inputs: u32,
 ) -> Vault {
+    vault_at_index(device, others, account_path, change_chain, 0, inputs)
+}
+
+/// [`vault_at`], with the change at `change_index` of its chain rather than 0.
+fn vault_at_index(
+    device: &Xpriv,
+    others: [Xpriv; 2],
+    account_path: &DerivationPath,
+    change_chain: u32,
+    change_index: u32,
+    inputs: u32,
+) -> Vault {
     let secp = Secp256k1::new();
     let mut keys = Vec::new();
     let mut cosigners = Vec::new();
@@ -2050,7 +2062,7 @@ fn vault_at(
             }],
         })
         .collect();
-    let change_at = change.at_derivation_index(0).unwrap();
+    let change_at = change.at_derivation_index(change_index).unwrap();
     let fee = 1_000;
     let unsigned_tx = Transaction {
         version: transaction::Version::TWO,
@@ -2101,6 +2113,54 @@ fn sign(wire: &mut Wire, psbt: &Psbt, signer: Fingerprint) -> Result<(), VaultCo
     let packets = wire.host.request_sign_psbt(psbt, signer)?;
     wire.to_device.extend(packets);
     wire.run()
+}
+
+/// Review finding (2026-11-15, open item 98, not yet fixed): a vault output is hidden from the
+/// Trezor's screen as change at any index, though the wallet scans change only a
+/// few indexes past the last one used. Change at index 2,000,000,000 would show
+/// in no balance. Either the request is refused or the output is shown to the
+/// user as an external payment. This test fails until one of the two holds.
+#[test]
+#[ignore = "open item 98: vault change at any index is hidden from the Trezor screen"]
+fn vault_change_at_an_unscanned_index_is_not_hidden_as_change() {
+    // Held prompts keep the fake's signing record alive after the exchange, as in
+    // `one_key_bip48_p2wsh_transmits_multisig_and_finalizes_at_index_12`.
+    let mut wire = connected(Behaviour {
+        hold_prompts: true,
+        ..Behaviour::default()
+    });
+    let vault = vault_at_index(
+        &wire.device.master,
+        [master_key(2), master_key(3)],
+        &account(),
+        1,
+        2_000_000_000,
+        1,
+    );
+    match wire
+        .host
+        .request_sign_psbt(&vault.psbt, vault.device_fingerprint)
+    {
+        Err(error) => assert!(matches!(
+            trezor_error(Err::<(), _>(error)),
+            TrezorError::InvalidRequest(_)
+        )),
+        Ok(packets) => {
+            wire.to_device.extend(packets);
+            let ran = wire.run();
+            let confirmed = wire.user_confirms();
+            let signing = wire
+                .device
+                .signing
+                .as_ref()
+                .unwrap_or_else(|| panic!("no signing record (run: {ran:?}, confirm: {confirmed:?})"));
+            assert_eq!(signing.outputs.len(), 2);
+            assert!(
+                signing.outputs[1].address_n.is_empty(),
+                "change at index 2,000,000,000 was sent to the Trezor as the vault's own change"
+            );
+        }
+    }
 }
 
 #[test]

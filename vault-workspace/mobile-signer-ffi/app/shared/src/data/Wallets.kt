@@ -16,12 +16,10 @@ import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
-import com.mebit.ffi.signer.VaultSnapshot
+import com.mebit.ffi.signer.WalletBalance
 import com.mebit.ffi.signer.generateSoftwareMultisigKey
 import com.mebit.ffi.signer.hotForgetScanState
 import com.mebit.ffi.signer.restoreSoftwareMultisigKey
-import com.mebit.ffi.signer.vaultHistory
-import com.mebit.ffi.signer.vaultSnapshot
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
 import kotlinx.coroutines.Dispatchers
@@ -99,18 +97,23 @@ internal sealed interface Every {
  */
 class Wallets internal constructor(
     private val shelf: SecureShelf,
-    private val payments: PendingPayments = PendingPayments(null),
+    /** The one-key pay-twice guard file, which the book's Jade and Trezor wallets share ([HardwareWallets]). */
+    internal val payments: PendingPayments = PendingPayments(null),
     private val lastUsed: PlainFile? = null,
     private val forgetBook: () -> Unit = {},
     private val forgetScans: () -> Unit = { hotForgetScanState() },
     private val newKey: (String, KeyNetwork, UInt) -> SoftwareAccountKey = { p, n, a -> generateSoftwareMultisigKey(p, n, a) },
     private val restoreKey: (List<String>, String, KeyNetwork, UInt) -> SoftwareAccountKey = { w, p, n, a -> restoreSoftwareMultisigKey(w, p, n, a) },
     private val newChain: () -> SingleSigWallet = { SingleSigWallet() },
-    private val vaultSnapshotOf: (xpubs: List<String>, m: UByte) -> VaultSnapshot = { x, m -> vaultSnapshot(x, m) },
-    private val vaultHistoryOf: (xpubs: List<String>, m: UByte) -> List<HotTx> = { x, m -> vaultHistory(x, m) },
+    /** The several-key wallets' balance and history reads, each named by its BSMS line 2. */
+    private val vaultCore: DescribedCore = DescribedCore(),
     private val nowSeconds: () -> Long = { Clock.System.now().epochSeconds },
     /** The several-key wallets' pay-twice guards, keyed by [vaultGuardKey], in a file apart from [payments], whose format a vault line would break. */
     internal val vaultPayments: PendingPayments = PendingPayments(null),
+    /** The guard keys of the book's Jade and Trezor wallets ([SavedVaults.guardKeys]), null while the book cannot be judged. */
+    private val bookGuardKeys: () -> List<String>? = { emptyList() },
+    /** The book's Jade and Trezor wallets, whose key and address type no phone wallet may take. */
+    private val bookHardware: () -> List<HardwareWallet> = { emptyList() },
 ) {
     private val saved = mutableMapOf<Place, SavedWallet>()
 
@@ -126,10 +129,24 @@ class Wallets internal constructor(
             place = place,
             onPhone = { fingerprint -> all.any { it.place != place && it.session.fingerprint.equals(fingerprint, ignoreCase = true) } },
             startsLocked = locked,
-            others = { if (unreadMayOpen) null else listed.filter { it.place != place }.map { it.session.fingerprint } },
+            others = { guardKeysBut(place) },
+            hardwareWith = { fingerprint, type -> bookHardware().firstOrNull { it.fingerprint.equals(fingerprint, ignoreCase = true) && it.addressType == type }?.name },
         ),
         newChain(),
     )
+
+    /**
+     * Every pay-twice guard key on this phone: each listed wallet's fingerprint, then the book's wallets' keys, so a damaged guard file
+     * that one wallet's user clears leaves a line for each of the others. Null while one could go unnamed: a place that did not open but
+     * may at the next launch, or a book that cannot be judged.
+     */
+    fun guardKeys(): List<String>? = guardKeysBut(null)
+
+    private fun guardKeysBut(place: Place?): List<String>? {
+        if (unreadMayOpen) return null
+        val book = bookGuardKeys() ?: return null
+        return listed.filter { it.place != place }.map { it.session.fingerprint } + book
+    }
 
     var all: List<OpenWallet> by mutableStateOf(listOf(empty(Place.FIRST, locked = false)))
         private set
@@ -327,7 +344,7 @@ class Wallets internal constructor(
             is UnlockResult.Broken -> return WalletRemoval.NotErased // the copy can never open, so the words live only in memory
             else -> return WalletRemoval.Refused(r)
         }
-        if (!book.handOver(fingerprint, next.session.fingerprint)) return WalletRemoval.NotErased
+        if (!book.handOver(fingerprint, next.session.vaultsOwner() ?: return WalletRemoval.NotErased)) return WalletRemoval.NotErased
         if (!w.session.forgetSavedWallet(oldGuard)) return WalletRemoval.NotErased
         Snapshot.withMutableSnapshot {
             all = all - w
@@ -340,11 +357,17 @@ class Wallets internal constructor(
     fun vaultOwners(): VaultOwners? {
         val owners = all.mapNotNull { it.session.vaultsOwner() }.takeIf { it.isNotEmpty() } ?: return null
         val unknown = unopened.isNotEmpty() || all.any { it.session.words.isNotEmpty() && it.session.saved != SaveState.Saved }
-        return VaultOwners(owners, everyPlaceOpened = !unknown)
+        return VaultOwners(owners, everyPlaceOpened = !unknown, earlier = all.flatMap { it.session.earlierVaultsOwners() })
     }
 
     /** Every wallet's own key, in place order. */
     fun ownKeys(): List<SavedKey> = listed.mapNotNull { it.session.ownKey() }
+
+    /**
+     * The listed wallets, as [HardwareWallets.add] compares a device's key with them. Null while a place that did not open may open at the
+     * next launch, since its wallet could have the device's addresses.
+     */
+    fun phoneWallets(): List<PhoneWallet>? = if (unreadMayOpen) null else listed.map { PhoneWallet(it.session.walletName, it.session.fingerprint, it.session.addressType) }
 
     /** Called when the app returns. Each session repeats its own failed save. */
     fun flushPendingSaves() = all.forEach { it.session.flushPendingSave() }
@@ -355,7 +378,7 @@ class Wallets internal constructor(
      * failure when they were asked and did not come, else the list. Only [readVault] writes one, so it is null beside any balance that is not
      * COMPLETE.
      */
-    private class VaultRead(val snapshot: VaultSnapshot?, val atSeconds: Long, val history: Result<List<HotTx>>? = null) {
+    private class VaultRead(val snapshot: WalletBalance?, val atSeconds: Long, val history: Result<List<HotTx>>? = null) {
         /**
          * Whether this read, while fresh, spares a pass another read. Any read spares a list. A detail is spared by one that asked the history,
          * failed or not, so a failure costs a minute as a failed balance does, and by one whose balance did not complete, which no history can follow.
@@ -430,17 +453,16 @@ class Wallets internal constructor(
         val last = vaultReads[vault.address]
         if (last != null && nowSeconds() - last.atSeconds in 0..BALANCE_FRESH_SECONDS && last.answers(withHistory)) return@synchronized null
         val generation = vaultGeneration
-        val keys = xpubsIn(vault.bsms)
-        val m = vault.m.toUByte()
+        val descriptor = descriptorIn(vault.bsms)
         // A mainnet vault, a malformed BSMS and a lost host all leave the figure unknown, never guessed.
         val snapshot = try {
-            vaultSnapshotOf(keys, m)
+            vaultCore.balance(descriptor, KeyNetwork.TEST)
         } catch (_: Exception) {
             null
         }
         val history = if (withHistory && snapshot?.scan == HotScan.COMPLETE) {
             try {
-                Result.success(vaultHistoryOf(keys, m))
+                Result.success(vaultCore.history(descriptor, KeyNetwork.TEST))
             } catch (e: Exception) {
                 Result.failure(e)
             }

@@ -18,6 +18,10 @@ data class CreatedVault(
     val bsms: String,
     val keyFingerprints: List<String>,
     val hasMockKey: Boolean = false,
+    /** The saved key ids picked at creation, in [keyFingerprints] order, so a signer row names the device the user picked. Empty for a wallet saved before MV2. */
+    val keyIds: List<String> = emptyList(),
+    /** The send in progress, a base64 PSBT, "" for none. Only the several-key send writes it. */
+    val pending: String = "",
 )
 
 /** The vaults in the book and the one the vault screens show (detail, Receive, Send, T20, Wallet Created). The wizard that makes one is [CreateWalletDraft]. */

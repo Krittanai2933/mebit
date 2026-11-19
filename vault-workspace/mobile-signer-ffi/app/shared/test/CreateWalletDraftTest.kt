@@ -1,7 +1,10 @@
 package com.mebit.app.data
 
+import com.mebit.app.feature.vault.samePhraseLines
 import com.mebit.ffi.signer.KeyNetwork
+import com.mebit.ffi.signer.MobileSignerException
 import com.mebit.ffi.signer.SoftwareAccountKey
+import com.mebit.ffi.signer.WalletShape
 import com.mebit.ffi.signer.computeVaultAddressMultisig
 import com.mebit.ffi.signer.generateSoftwareMultisigKey
 import kotlin.test.Test
@@ -18,7 +21,18 @@ class CreateWalletDraftTest {
         "addr-$m-" + xpubs.joinToString("+")
     }
 
-    private fun draft(book: SavedVaults = SavedVaults.memoryOnly(), derive: (List<String>, UByte) -> String = fake) = CreateWalletDraft(book, derive)
+    /** The descriptors wallet_describe was asked to read back. These keys are made up, so it reads any of them. */
+    private val described = mutableListOf<String>()
+    private val describeAny: (String, KeyNetwork) -> WalletShape = { d, _ ->
+        described += d
+        WalletShape(2u, emptyList(), "", 0uL)
+    }
+
+    private fun draft(
+        book: SavedVaults = SavedVaults.memoryOnly(),
+        derive: (List<String>, UByte) -> String = fake,
+        describe: (String, KeyNetwork) -> WalletShape = describeAny,
+    ) = CreateWalletDraft(book, derive, describe)
 
     private fun key(n: Int, verified: Boolean = true, mock: Boolean = false) =
         SavedKey("key_$n", "Key $n", "aaaa000$n", "xpub-$n", "m/48'/1'/0'/2'", KeySourceLabel.Jade, verified, isMock = mock)
@@ -156,7 +170,7 @@ class CreateWalletDraftTest {
     fun createSavesOneWalletNamedByTheBookAndADoubleTapSavesNoSecond() {
         val book = SavedVaults.memoryOnly()
         val draft = draft(book)
-        draft.pick(1, 2, 3)
+        draft.pick(3, 1, 2)
         val plan = draft.ready(keys)!!
         val made = assertNotNull(draft.create(plan))
         assertEquals("vault_1", made.id)
@@ -164,6 +178,7 @@ class CreateWalletDraftTest {
         assertEquals(2 to 3, made.m to made.n)
         assertEquals("addr-2-xpub-1+xpub-2+xpub-3", made.address)
         assertEquals(listOf("aaaa0001", "aaaa0002", "aaaa0003"), made.keyFingerprints)
+        assertEquals(listOf("key_1", "key_2", "key_3"), made.keyIds, "the picked keys, in the fingerprints' order")
         assertEquals(plan.bsms(made.address), made.bsms)
         assertSame(made, draft.create(plan), "the second tap returns the first wallet")
         assertEquals(listOf(made), book.current.vaults)
@@ -197,6 +212,25 @@ class CreateWalletDraftTest {
         assertEquals("vault_3", made.id)
         assertEquals(listOf("Wallet 2", "Wallet 3"), book.current.vaults.map { it.name })
         assertEquals(book.current.vaults.map { it.id }.distinct(), book.current.vaults.map { it.id })
+    }
+
+    @Test
+    fun theNewestWalletsNumberIsNeverGivenAgainNotAfterARestartEither() {
+        val storage = FakeVaultsStorage()
+        fun opened() = SavedVaults(storage, owners = { VaultOwners(listOf(TEST_CHECK), everyPlaceOpened = true) }, deriveAddress = fake).apply { sync() }
+        fun SavedVaults.made(vararg picks: Int): CreatedVault = draft(this).run {
+            pick(*picks)
+            create(ready(keys)!!)!!
+        }
+        val book = opened()
+        book.made(1, 2, 3)
+        val newest = book.made(1, 2, 4)
+        assertTrue(VaultDraft(book).remove(newest.id))
+
+        val next = book.made(1, 2, 5)
+        assertEquals("vault_3" to "Wallet 3", next.id to next.name, "${newest.id} was removed, and its number is never given again")
+        assertTrue(VaultDraft(book).remove(next.id))
+        assertEquals("vault_4", opened().made(1, 3, 4).id, "a new process reads the highest number from the stored book")
     }
 
     @Test
@@ -253,6 +287,53 @@ class CreateWalletDraftTest {
         draft.toggle("key_2", withSecond)
         assertEquals(setOf("key_1", "key_2", "key_3"), assertNotNull(draft.ready(withSecond)).keys.map { it.id }.toSet())
         assertEquals(3, draft.ready(withSecond)!!.keys.size)
+    }
+
+    @Test
+    fun aPickRulesOutTheOtherKeyOfItsPhraseAndSaysWhy() {
+        val jade = SavedKey("key_6", "Jade ของฉัน", "aaaa0006", "xpub-j", "m/48'/1'/0'/2'", KeySourceLabel.Jade, verified = true)
+        val safe7 = jade.copy(id = "key_7", label = "Trezor Safe 7 ของฉัน", fingerprint = "AAAA0006", xpub = "xpub-t", source = KeySourceLabel.TrezorSafe7)
+        val all = listOf(jade, safe7, key(3), key(4))
+        val draft = draft()
+        assertEquals(emptyMap(), draft.blocked(all))
+
+        draft.toggle(jade.id, all)
+        assertEquals(mapOf(safe7.id to SamePhrase(jade, safe7)), draft.blocked(all))
+        assertEquals("Jade ของฉัน กับ Trezor Safe 7 ของฉัน ใช้ชุดคำเดียวกัน เลือกได้ดอกเดียว", draft.blocked(all).getValue(safe7.id).line)
+        assertEquals(listOf("Jade ของฉัน กับ Trezor Safe 7 ของฉัน ใช้ชุดคำเดียวกัน เลือกได้ดอกเดียว"), samePhraseLines(draft.blocked(all)), "the line under the counter")
+        draft.toggle(safe7.id, all)
+        assertEquals(listOf(jade.id), draft.picks, "the greyed key does not tick")
+        draft.toggle("key_3", all)
+        draft.toggle("key_4", all)
+        assertNotNull(draft.ready(all), "one key of each phrase")
+
+        draft.toggle(jade.id, all)
+        assertEquals(emptyMap(), draft.blocked(all), "unticking frees the other key of the phrase")
+        assertEquals(emptyList(), samePhraseLines(draft.blocked(all)), "and takes its line away")
+        draft.toggle(safe7.id, all)
+        assertEquals(listOf("key_3", "key_4", safe7.id), draft.picks)
+    }
+
+    @Test
+    fun noPlanHoldsTwoKeysOfOnePhrase() {
+        val twin = key(1).copy(id = "key_9", xpub = "xpub-9", source = KeySourceLabel.TrezorSafe7)
+        assertNull(ReadyPlan.of(Preset.TwoOfThree, listOf(key(1), twin, key(2))))
+        assertNotNull(ReadyPlan.of(Preset.TwoOfThree, listOf(key(1), key(3), key(2))))
+    }
+
+    @Test
+    fun createReadsTheDescriptorBackFirstAndARefusalSavesNothing() {
+        val book = SavedVaults.memoryOnly()
+        val refusing = draft(book, describe = { _, _ -> throw MobileSignerException.InvalidPsbtJson("descriptor: key 1 is the same key as key 0") })
+        refusing.pick(1, 2, 3)
+        assertNull(refusing.create(refusing.ready(keys)!!))
+        assertEquals(emptyList(), book.current.vaults)
+
+        val reading = draft(book)
+        reading.pick(1, 2, 3)
+        val plan = reading.ready(keys)!!
+        assertNotNull(reading.create(plan))
+        assertEquals(listOf(plan.descriptor), described)
     }
 
     @Test

@@ -28,3 +28,9 @@
 
 # JNA's desktop-only AWT helpers name classes Android does not have.
 -dontwarn java.awt.**
+
+# A release APK leaves out the debug build's fake Jade and Safe 7 and their public test phrase: R8 takes the gate as false, so nothing
+# reaches com.mebit.app.data.FakeDevice and it is removed.
+-assumevalues class com.mebit.app.data.FakeDeviceKt {
+    boolean fakeDeviceAllowed() return false;
+}

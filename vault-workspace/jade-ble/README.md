@@ -61,8 +61,12 @@ cargo run -q -p jade-ble --example jade-hw-test -- info
 cargo run -q -p jade-ble --example jade-hw-test -- xpub --verify-against <phrase-file>
 cargo run -q -p jade-ble --example jade-hw-test -- roundtrip --inputs 16 --out-dir target
 cargo run -q -p jade-ble --example jade-hw-test -- sign --psbt <file> [--out <file>]
+cargo run -q -p jade-ble --example jade-hw-test -- --network testnet4 register [--name <override>] [--other]
+cargo run -q -p jade-ble --example jade-hw-test -- --network testnet4 roundtrip --registered
 cargo run -q -p jade-ble --example jade-hw-test -- --network bitcoin xpub   # global flags go before the command
 ```
+
+`register` registers a fixed test 2-of-3 (the Jade's key plus two public BIP-39 test-vector keys) under the name `mebit{m}of{n}-<hash>`, cut to the Jade's 15-character limit, then reads it back. `--name` tries another name, `--other` registers a different 2-of-3 under the same name. `roundtrip --registered` signs a spend whose change goes to that wallet's own change address, so you can see whether the Jade hides it. Both refuse mainnet and never broadcast. On a Jade Core (firmware 1.0.41, 2026-11-14) a 16-character name was refused with -32602 and a 15-character name registered; the Jade kept a registration the user confirmed after the host's 5-minute wait ran out. The error codes for a declined, taken or full registration are still unverified.
 
 **Test wallet.** Use a test wallet only:
 1. Restore the public phrase `abandon` ×11 + `about` (no passphrase) on the Jade: Begin Setup → Restore Wallet → 12 Words.

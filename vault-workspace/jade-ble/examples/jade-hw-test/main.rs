@@ -22,7 +22,9 @@ use bitcoin::bip32::{DerivationPath, Xpub};
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::{Network, Psbt};
 use clap::{Parser, Subcommand};
-use jade_ble::JadeBle;
+use jade_ble::{JadeBle, JadeBleError};
+use vault_core::error::VaultCoreError;
+use vault_core::hw::jade::{JadeError, Registered, WalletRegistration};
 use vault_core::keys::{
     HwVendor, KeySourceType, ScriptType, VaultKey, account_multisig_xpub_from_mnemonic,
     generate_master_xpriv, generate_seed,
@@ -79,6 +81,21 @@ enum Command {
         /// Where to write the unsigned and signed PSBTs
         #[arg(long)]
         out_dir: Option<PathBuf>,
+        /// Spend from the wallet that `register` registered, with the change going to its own
+        /// change address, to see whether the Jade hides it. Run `register` first.
+        #[arg(long)]
+        registered: bool,
+    },
+    /// Register a fixed test 2-of-3 (the Jade's key plus two public test keys) on the Jade
+    /// under its derived name, and read it back. Test networks only.
+    Register {
+        /// Try this name instead of the derived one, to find the Jade's length limit
+        #[arg(long)]
+        name: Option<String>,
+        /// Register a different test 2-of-3 under the same name, to see what the Jade does with
+        /// a taken name (the app itself would refuse)
+        #[arg(long)]
+        other: bool,
     },
 }
 
@@ -184,7 +201,12 @@ async fn command(
                 None => println!("{signed}"),
             }
         }
-        Command::Roundtrip { inputs, out_dir } => {
+        Command::Register { name, other } => register(jade, network, name, other).await?,
+        Command::Roundtrip {
+            inputs,
+            out_dir,
+            registered,
+        } => {
             if network == Network::Bitcoin {
                 return Err(
                     "roundtrip builds throwaway test transactions: use a test network".into(),
@@ -193,9 +215,37 @@ async fn command(
             unlock(jade).await?;
             let master = jade.xpub(&DerivationPath::master()).await?;
             let account = jade.xpub(&multisig_account_path(network)).await?;
-            let fixture =
-                roundtrip::Fixture::build(network, master.fingerprint(), account, inputs)?;
+            let fixture = if registered {
+                let wallet = registered_wallet(
+                    network,
+                    master.fingerprint(),
+                    account,
+                    roundtrip::REGISTERED_COSIGNERS,
+                )?;
+                if jade.registration(&wallet).await? != Registered::Same {
+                    return Err(
+                        "the test wallet is not registered on this Jade: run `register` first"
+                            .into(),
+                    );
+                }
+                println!("Registered as {}.", wallet.name());
+                roundtrip::Fixture::build_with(
+                    network,
+                    master.fingerprint(),
+                    account,
+                    inputs,
+                    roundtrip::REGISTERED_COSIGNERS,
+                    true,
+                )?
+            } else {
+                roundtrip::Fixture::build(network, master.fingerprint(), account, inputs)?
+            };
             fixture.describe();
+            if registered {
+                println!(
+                    "Look at on the Jade: does the change output show, or is it hidden as the wallet's own?"
+                );
+            }
             if let Some(dir) = &out_dir {
                 std::fs::write(dir.join("unsigned.psbt"), fixture.psbt.to_string())?;
             }
@@ -216,6 +266,92 @@ async fn command(
                 tx.vsize()
             );
         }
+    }
+    Ok(())
+}
+
+fn registered_wallet(
+    network: Network,
+    fingerprint: bitcoin::bip32::Fingerprint,
+    account: Xpub,
+    cosigners: [u8; 2],
+) -> Result<WalletRegistration, Box<dyn Error>> {
+    let descriptor = roundtrip::test_wallet(network, fingerprint, account, cosigners)?;
+    Ok(WalletRegistration::of(&descriptor, network)?)
+}
+
+/// The device check for registering a several-key wallet. UNVERIFIED limits: the output says
+/// what the Jade actually did.
+async fn register(
+    jade: &mut JadeBle,
+    network: Network,
+    name: Option<String>,
+    other: bool,
+) -> Result<(), Box<dyn Error>> {
+    if network == Network::Bitcoin {
+        return Err("register uses throwaway test wallets: use a test network".into());
+    }
+    unlock(jade).await?;
+    let master = jade.xpub(&DerivationPath::master()).await?;
+    let account = jade.xpub(&multisig_account_path(network)).await?;
+    let cosigners = if other {
+        roundtrip::OTHER_COSIGNERS
+    } else {
+        roundtrip::REGISTERED_COSIGNERS
+    };
+    let mut wallet = registered_wallet(network, master.fingerprint(), account, cosigners)?;
+    if let Some(name) = name {
+        wallet = wallet.with_name(name);
+    }
+    println!(
+        "Registered on the Jade now: {:?}",
+        jade.registered_multisigs().await?
+    );
+    println!(
+        "Name to register: {} ({} characters), {}-of-{}, signers {:?}",
+        wallet.name(),
+        wallet.name().len(),
+        wallet.threshold(),
+        wallet.signers().len(),
+        wallet
+            .signers()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    );
+    match jade.registration(&wallet).await {
+        Ok(Registered::Same) => {
+            println!("This wallet is already registered under that name; nothing to do.");
+            return Ok(());
+        }
+        Ok(Registered::Absent) => println!("Nothing registered under that name."),
+        Err(JadeBleError::Jade(VaultCoreError::Jade(JadeError::WalletNameTaken))) if other => {
+            println!(
+                "The name holds ANOTHER wallet. The app would refuse here. Test only: registering anyway to see what the Jade does."
+            );
+        }
+        Err(error) => return Err(error.into()),
+    }
+    println!("Look at on the Jade: the Jade should show the registration. Note:");
+    println!("  - the name it shows, whole or cut (length limit)");
+    println!("  - M-of-N, and whether it lists the three fingerprints");
+    println!("  - any warning, such as a name already in use");
+    println!("Then confirm on the Jade, or decline to test the decline path.");
+    match jade.register(&wallet).await {
+        Ok(()) => println!("Result: registered, and the readback matches this wallet."),
+        Err(error) => {
+            println!("Result: NOT registered. The Jade's reply, raw: {error}");
+            println!("  (debug: {error:?})");
+            return Ok(());
+        }
+    }
+    println!(
+        "Registered on the Jade now: {:?}",
+        jade.registered_multisigs().await?
+    );
+    match jade.registration(&wallet).await? {
+        Registered::Same => println!("Read by name: matches this wallet exactly."),
+        Registered::Absent => println!("Read by name: NOT listed after registering."),
     }
     Ok(())
 }

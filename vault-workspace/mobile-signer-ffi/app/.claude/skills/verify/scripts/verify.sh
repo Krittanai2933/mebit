@@ -160,12 +160,14 @@ cmd_start() {
   adbs uninstall "$PKG" > /dev/null 2>&1 # empty app data, and no signing-key clash with an older debug build
   ( cd "$APP" && ./kotlin run -m androidApp -d "$SERIAL" ) > "$RUN/run.log" 2>&1 \
     || { tail -20 "$RUN/run.log"; fail "kotlin run failed, full log: $RUN/run.log"; }
+  # kotlin run starts the app with no extras, so start it again in test mode: the debug link and the simulator controls show only then.
+  adbs shell am start -S -n "$PKG/.MainActivity" --es MEBIT_TEST_MODE 1 > /dev/null 2>&1
   # The app can be gone or behind the launcher at this point. On a starved guest the launcher finishes starting
   # after the app did, or the framework restarts and takes the app with it. Start it again once, then insist.
   for i in 1 2 3 4 5 6 7 8 9 10; do app_resumed && break; sleep 1; done
   if ! app_resumed; then
     echo "$PKG is not in front, starting it again"
-    adbs shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 > /dev/null 2>&1
+    adbs shell am start -n "$PKG/.MainActivity" --es MEBIT_TEST_MODE 1 > /dev/null 2>&1
     for i in 1 2 3 4 5 6 7 8 9 10; do app_resumed && break; sleep 1; done
     app_resumed || fail "$PKG did not come to the front. Run verify.sh start again. What is in front: verify.sh adb shell dumpsys activity activities"
   fi
@@ -437,12 +439,14 @@ cmd_ios_start() {
   rt=${pick% *}; dt=${pick#* }
   IOS_RUN=$OUT/$(date +%Y%m%d-%H%M%S)-ios; mkdir -p "$IOS_RUN"
   UDID=$(xcrun simctl create "mebit-verify-$(date +%H%M%S)" "$dt" "$rt") || die "simctl create failed for $dt on $rt"
-  printf 'IOS_RUN=%q\nUDID=%q\n' "$IOS_RUN" "$UDID" > "$IOS_STATE"
+  # Test mode (MEBIT_TEST_MODE) shows the debug link and the simulator controls. simctl passes SIMCTL_CHILD_ variables on to the app,
+  # so a relaunch by `xcrun simctl launch` after sourcing this file keeps it too.
+  printf 'IOS_RUN=%q\nUDID=%q\nexport SIMCTL_CHILD_MEBIT_TEST_MODE=1\n' "$IOS_RUN" "$UDID" > "$IOS_STATE"
   echo "simulator $UDID ($dt, $rt) booting"
   xcrun simctl boot "$UDID" && xcrun simctl bootstatus "$UDID" -b > "$IOS_RUN/boot.log" 2>&1 \
     || ios_fail "boot failed, log: $IOS_RUN/boot.log"
   # -p is required: with -d the toolchain refuses to guess between iosArm64 and iosSimulatorArm64.
-  ( cd "$APP" && ./kotlin run -m iosApp -p iosSimulatorArm64 -d "$UDID" ) > "$IOS_RUN/run.log" 2>&1 \
+  ( cd "$APP" && SIMCTL_CHILD_MEBIT_TEST_MODE=1 ./kotlin run -m iosApp -p iosSimulatorArm64 -d "$UDID" ) > "$IOS_RUN/run.log" 2>&1 \
     || { tail -20 "$IOS_RUN/run.log"; ios_fail "kotlin run failed, full log: $IOS_RUN/run.log"; }
   sleep 2 # first frame
   meta "$IOS_RUN/meta.txt" "simulator=$UDID $dt $rt"
