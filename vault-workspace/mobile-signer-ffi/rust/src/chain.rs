@@ -643,7 +643,41 @@ const ALREADY_HELD: [&str; 5] = [
     "already in the utxo set",
 ];
 
-pub(crate) type Answer = Result<ureq::Response, ureq::Error>;
+/// A POST or a lookup as the broadcast reads it, taken out of ureq's result by `answer_of` where the call is made.
+pub(crate) enum Answer {
+    /// A status below 400, with the body, or `None` when it could not be read.
+    Success { status: u16, body: Option<String> },
+    /// A status of 400 or more, which ureq hands over as an error, with the body as `Success` has it and `what`, ureq's
+    /// own words for the exchange (`{url}: status code {status}`), which a refusal's message carries.
+    Failure {
+        status: u16,
+        body: Option<String>,
+        what: String,
+    },
+    /// No status: the connection failed, or a read timed out.
+    Lost,
+}
+
+/// `call`, the result of ureq's `call()` or `send_string()`, as an `Answer`. The body is read here, once.
+pub(crate) fn answer_of(call: Result<ureq::Response, ureq::Error>) -> Answer {
+    match call {
+        Ok(response) => Answer::Success {
+            status: response.status(),
+            body: response.into_string().ok(),
+        },
+        Err(error) => {
+            let what = error.to_string();
+            match error {
+                ureq::Error::Status(status, response) => Answer::Failure {
+                    status,
+                    body: response.into_string().ok(),
+                    what,
+                },
+                ureq::Error::Transport(_) => Answer::Lost,
+            }
+        }
+    }
+}
 
 /// Posts the signed transaction once and returns `txid`, the id computed from it here, when the
 /// explorer shows it took it. A txid the server sends back is never trusted.
@@ -661,21 +695,22 @@ pub(crate) fn broadcast_signed(
     txid: &str,
 ) -> Result<String, MobileSignerError> {
     match post(hex) {
-        Ok(answer) if answer.status() == 200 => {
-            if answer.into_string().is_ok_and(|body| body.trim() == txid) {
+        Answer::Success {
+            status: 200,
+            body: Some(body),
+        } if body.trim() == txid => return Ok(txid.to_string()),
+        Answer::Failure {
+            status: 400..=499,
+            body: Some(reason),
+            what,
+        } => {
+            let reason = reason.to_lowercase();
+            if ALREADY_HELD.iter().any(|held| reason.contains(held)) {
                 return Ok(txid.to_string());
             }
-        }
-        Err(refusal @ ureq::Error::Status(400..=499, _)) => {
-            let error = format!("esplora post: {refusal}");
-            // A reason that cannot be read may be the node saying it already holds the transaction.
-            if let Some(Ok(reason)) = refusal.into_response().map(ureq::Response::into_string) {
-                let reason = reason.to_lowercase();
-                if ALREADY_HELD.iter().any(|held| reason.contains(held)) {
-                    return Ok(txid.to_string());
-                }
-                return Err(MobileSignerError::InvalidPsbtJson(error));
-            }
+            return Err(MobileSignerError::InvalidPsbtJson(format!(
+                "esplora post: {what}"
+            )));
         }
         _ => {}
     }
@@ -683,7 +718,7 @@ pub(crate) fn broadcast_signed(
         if ask > 0 {
             pause();
         }
-        if lookup(txid).is_ok_and(|answer| shows(answer, txid)) {
+        if shows(lookup(txid), txid) {
             return Ok(txid.to_string());
         }
     }
@@ -691,20 +726,18 @@ pub(crate) fn broadcast_signed(
 }
 
 // Only the transaction itself counts as found: a Wi-Fi sign-in page answers 200 to any URL.
-fn shows(answer: ureq::Response, txid: &str) -> bool {
-    answer.status() == 200
-        && answer
-            .into_string()
-            .ok()
-            .and_then(|body| serde_json::from_str::<Value>(&body).ok())
-            .is_some_and(|tx| tx["txid"] == txid)
+fn shows(answer: Answer, txid: &str) -> bool {
+    let Answer::Success {
+        status: 200,
+        body: Some(body),
+    } = answer
+    else {
+        return false;
+    };
+    serde_json::from_str::<Value>(&body).is_ok_and(|tx| tx["txid"] == txid)
 }
 
 /// `broadcast_matching` on `host`. When `host` is the error from `pick_host`, nothing is posted.
-#[expect(
-    clippy::result_large_err,
-    reason = "Answer is ureq's own call() result, so its error stays ureq's"
-)]
 pub(crate) fn broadcast_on(
     host: Result<&str, MobileSignerError>,
     post: &dyn Fn(&str, &str) -> Answer,
@@ -830,19 +863,18 @@ impl Transport for Http {
         )
     }
 
-    #[expect(
-        clippy::result_large_err,
-        reason = "Answer is ureq's own call() result, so its error stays ureq's"
-    )]
     fn broadcast(&self, hex: &str, txid: &str) -> Result<String, MobileSignerError> {
         let post = |base: &str, hex: &str| {
-            AGENT
-                .post(&format!("{base}/tx"))
-                .set("Content-Type", "text/plain")
-                .send_string(hex)
+            answer_of(
+                AGENT
+                    .post(&format!("{base}/tx"))
+                    .set("Content-Type", "text/plain")
+                    .send_string(hex),
+            )
         };
         // Not /tx/{txid}/status: Esplora answers that one 200 for a txid it never saw (blockstream.info, 2026-11-02).
-        let lookup = |base: &str, txid: &str| AGENT.get(&format!("{base}/tx/{txid}")).call();
+        let lookup =
+            |base: &str, txid: &str| answer_of(AGENT.get(&format!("{base}/tx/{txid}")).call());
         let pause = || std::thread::sleep(LOOKUP_PAUSE);
         broadcast_on(self.base(), &post, &lookup, &pause, hex, txid)
     }
