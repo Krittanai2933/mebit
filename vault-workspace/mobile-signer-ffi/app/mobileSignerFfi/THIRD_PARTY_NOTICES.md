@@ -1,6 +1,6 @@
 # Third-party notices
 
-## btleplug 0.13.3
+## btleplug 0.13.5
 
 Its Android Java sources are copied into `src@android/` (`com/nonpolynomial` and `io/github/gedgygedgy`)
 by `scripts/ffi.sh`. Do not edit them: `ffi.sh check` diffs them against the crate. Its licence follows.
@@ -308,7 +308,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## jni-utils-rs
 
-btleplug 0.13.3 carries jni-utils-rs 0.1.1's Java classes (`io/github/gedgygedgy`) and its own licence
+btleplug 0.13.5 carries jni-utils-rs 0.1.1's Java classes (`io/github/gedgygedgy`) and its own licence
 file does not name their authors. The licence of jni-utils-rs follows.
 
 Copyright 2021-2022 Gedgy Gedgy, Kyle Machulis <kyle@nonpolynomial.com>
