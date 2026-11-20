@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -21,6 +20,7 @@ import com.mebit.app.data.KeySourceLabel
 import com.mebit.app.ui.components.DeleteItem
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
+import com.mebit.app.ui.components.rememberFullSheetState
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbWhite
@@ -105,7 +105,7 @@ internal fun removeVaultBody(m: Int, n: Int) = "เหรียญยังอ�
 internal fun ConfirmSheet(tag: String, title: String, body: String, onCancel: () -> Unit, buttons: @Composable ColumnScope.() -> Unit) {
     ModalBottomSheet(
         onDismissRequest = onCancel,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState = rememberFullSheetState(),
         containerColor = MbWhite,
         modifier = Modifier.testTag(tag),
     ) {
