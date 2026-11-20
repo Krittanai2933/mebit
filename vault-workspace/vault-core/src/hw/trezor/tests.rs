@@ -2280,7 +2280,8 @@ fn signing_trace_records_deferred_handoffs_and_complete_exchange() {
             .count(),
         1
     );
-    for pair in trace.frames()[1..trace.frames().len() - 1].chunks_exact(2) {
+    let (pairs, _) = trace.frames()[1..trace.frames().len() - 1].as_chunks::<2>();
+    for pair in pairs {
         assert!(!pair[0].outbound());
         assert_eq!(pair[0].message_type(), 21);
         assert!(pair[1].outbound());
