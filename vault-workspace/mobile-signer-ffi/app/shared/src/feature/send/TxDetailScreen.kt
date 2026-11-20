@@ -31,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,18 +41,18 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.TxDetailLoad
 import com.mebit.app.data.rememberFiatQuote
+import com.mebit.app.plainTextClip
 import com.mebit.app.rememberIsDebugBuild
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_chevron
@@ -73,6 +74,7 @@ import com.mebit.app.ui.theme.MbWhite
 import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.KeyNetwork
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 
 /** How far the navy band runs on behind the top of the status card, which straddles its edge as on the board. */
@@ -102,7 +104,8 @@ fun S8TxDetailScreen(
     }
     val view = txDetailView(tx, load, rememberFiatQuote(quotes), KeyNetwork.TEST)
     val debugBuild = rememberIsDebugBuild()
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
     // The copy button that says it copied, by its tag, one at a time.
     var copied by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(copied) {
@@ -112,7 +115,7 @@ fun S8TxDetailScreen(
         }
     }
     val copy = { tag: String, text: String ->
-        clipboard.setText(AnnotatedString(text))
+        scope.launch { clipboard.setClipEntry(plainTextClip(text)) }
         copied = tag
     }
     var technical by remember { mutableStateOf(false) }

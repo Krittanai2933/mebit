@@ -34,7 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
@@ -67,6 +67,7 @@ import com.mebit.app.data.enterDestination
 import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.data.sendIssue
+import com.mebit.app.plainText
 import com.mebit.app.rememberCameraAvailable
 import com.mebit.app.ui.components.KeyboardDismissBox
 import com.mebit.app.ui.components.MebitScreen
@@ -82,6 +83,7 @@ import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbWhite
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.isValidAddress
@@ -295,7 +297,8 @@ internal fun SendFormFields(
 /** The address field with its chips. The board puts the 32 x 30 scan chip left of วาง; a null [onScan] (no camera) leaves it out. */
 @Composable
 private fun DestinationField(draft: SendDraft, invalid: Boolean, enter: (String) -> Unit, onScan: (() -> Unit)?) {
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
     val shape = RoundedCornerShape(18.dp)
     val ink = if (invalid) MbEyebrow else MbNavyInk
     Row(
@@ -358,7 +361,7 @@ private fun DestinationField(draft: SendDraft, invalid: Boolean, enter: (String)
             modifier = Modifier
                 .clip(CircleShape)
                 .background(MbChip)
-                .clickable(role = Role.Button) { clipboard.getText()?.text?.let(enter) }
+                .clickable(role = Role.Button) { scope.launch { clipboard.getClipEntry()?.plainText()?.let(enter) } }
                 .padding(horizontal = 16.dp, vertical = 6.dp)
                 .testTag("s4_paste"),
         )

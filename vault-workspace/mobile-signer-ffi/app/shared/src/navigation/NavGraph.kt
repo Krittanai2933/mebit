@@ -19,7 +19,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -155,6 +154,7 @@ import com.mebit.app.ui.components.MebitBottomBar
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.bottomBarHeight
 import com.mebit.app.ui.components.coversScreen
+import com.mebit.app.ui.components.rememberFullSheetState
 import com.mebit.app.ui.theme.MbPage
 import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.FoundWallet
@@ -1072,7 +1072,7 @@ internal fun MebitNavHost(
     if (catalogOpen) {
         ModalBottomSheet(
             onDismissRequest = { catalogOpen = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            sheetState = rememberFullSheetState(),
             modifier = Modifier.testTag("route_catalog"),
         ) {
             Text(
