@@ -30,13 +30,12 @@ class CreateWalletTextTest {
     }
 
     @Test
-    fun theReviewHasPenpotsFourRowsWithTheKeyNamesJoined() {
+    fun theReviewHasPenpotsThreeRowsWithTheKeyNamesJoined() {
         assertEquals(
             listOf(
                 "Policy" to "2-of-3 · Native SegWit",
                 "กุญแจที่ใช้" to "iPhone, Jade, Trezor",
                 "กุญแจสำรอง mebit" to "ไม่ใช้",
-                "เงื่อนไขเวลา" to "ไม่มี",
             ),
             reviewRows(Preset.TwoOfThree, listOf("iPhone", "Jade", "Trezor")),
         )
@@ -75,7 +74,7 @@ class CreateWalletTextTest {
     @Test
     fun theWizardRoutesCarryPenpotsStepsAndTitles() {
         val steps = listOf(MovieRoute.Policy, MovieRoute.ChooseKeys, MovieRoute.ScriptType, MovieRoute.Review)
-        steps.forEachIndexed { i, route -> assertEquals("POLICY · ขั้น ${i + 1}/4", route.eyebrow, route.name) }
+        steps.forEachIndexed { i, route -> assertEquals("POLICY · ขั้น ${i + 1} / 4", route.eyebrow, route.name) }
         assertEquals(
             listOf("Wallet นี้ใช้กุญแจแบบไหน", "เลือกกุญแจมาประกอบ", "เลือกรูปแบบ Multisig", "ตรวจก่อนสร้าง"),
             steps.map { it.titleTh },
