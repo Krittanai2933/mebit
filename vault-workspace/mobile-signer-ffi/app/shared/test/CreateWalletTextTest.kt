@@ -45,7 +45,7 @@ class CreateWalletTextTest {
 
     @Test
     fun theCreatedSubtitleShortensTheFirstAddress() {
-        assertEquals("Native SegWit · tb1q…7k2m (address 1)", createdSubtitle("tb1qxyzabcdefghij7k2m"))
+        assertEquals("Native SegWit · tb1q…7k2m (ที่อยู่แรก)", createdSubtitle("tb1qxyzabcdefghij7k2m"))
     }
 
     @Test

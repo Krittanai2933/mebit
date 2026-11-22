@@ -600,8 +600,8 @@ internal fun reviewRows(preset: Preset, keyNames: List<String>): List<Pair<Strin
 
 internal const val DESCRIPTOR_LABEL = "DESCRIPTOR · BIP48 / P2WSH"
 
-/** "Native SegWit · tb1q…7k2m (address 1)": the first address, shortened. */
-internal fun createdSubtitle(address: String): String = "Native SegWit · ${address.take(4)}…${address.takeLast(4)} (address 1)"
+/** "Native SegWit · tb1q…7k2m (ที่อยู่แรก)": the first address, shortened. */
+internal fun createdSubtitle(address: String): String = "Native SegWit · ${address.take(4)}…${address.takeLast(4)} (ที่อยู่แรก)"
 
 /** "Wallet 2" is saved as "Wallet_2.bsms", a name every file system and the FileProvider take. */
 internal fun bsmsFileName(walletName: String): String = safeShareName(walletName) + ".bsms"
