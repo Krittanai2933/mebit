@@ -111,6 +111,8 @@ private enum class ScanStep { Reading, Picking, Failed, Resuming, Done }
  */
 @Composable
 fun QrScanSheet(accepts: (String) -> Boolean, onAddress: (String) -> Unit, onClose: () -> Unit) {
+    // Back closes the sheet as its X does, in place of leaving the app. The failed dialog's own SystemBack, composed later, wins while it shows.
+    SystemBack(onClose)
     var denied by remember { mutableStateOf(false) }
     var step by remember { mutableStateOf(ScanStep.Reading) }
     var torch by remember { mutableStateOf(false) }
@@ -296,6 +298,7 @@ internal fun ScanRoundButton(fill: Color, modifier: Modifier, icon: @Composable 
 /** Penpot 4.4.8. The backdrop swallows taps, so only เข้าใจแล้ว leaves it. */
 @Composable
 private fun ScanFailedDialog(onOk: () -> Unit) {
+    SystemBack(onOk)
     NoticeDialog(
         tag = "scan_failed",
         title = "QR code ไม่ถูกต้อง",

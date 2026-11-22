@@ -15,7 +15,7 @@ import com.mebit.ffi.signer.walletDescribe
 enum class Signing { SingleSig, Multisig }
 
 /**
- * Penpot 3.1's preset chips, the only thresholds the app builds. "กำหนดเอง" is drawn disabled and is no value here, so M above N,
+ * Penpot 3.1's preset chips, the only thresholds the app builds. The third chip (Collaborative, "เร็วๆนี้") is drawn disabled and is no value here, so M above N,
  * M below 1 and an N the core refuses cannot be chosen.
  */
 enum class Preset(val m: Int, val n: Int, val sub: String) {
