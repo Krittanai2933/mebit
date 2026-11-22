@@ -50,6 +50,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.ExportOutcome
+import com.mebit.app.data.bsmsRecordOf
 import com.mebit.app.data.CreateWalletDraft
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.Preset
@@ -515,8 +516,8 @@ fun VaultCreatedScreen(
         Column(Modifier.offset(y = 258.dp).padding(horizontal = 20.dp)) {
             BackupCard(
                 enabled = vault != null,
-                onSave = { vault?.let { export.save(bsmsFileName(it.name), it.bsms) } },
-                onShare = { vault?.let { export.share(bsmsFileName(it.name), it.bsms) } },
+                onSave = { vault?.let { v -> bsmsRecordOf(v)?.let { export.save(bsmsFileName(v.name), it) } ?: run { line = BSMS_EXPORT_FAILED } } },
+                onShare = { vault?.let { v -> bsmsRecordOf(v)?.let { export.share(bsmsFileName(v.name), it) } ?: run { line = BSMS_EXPORT_FAILED } } },
             )
             line?.let {
                 Spacer(modifier = Modifier.height(12.dp))

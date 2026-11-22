@@ -113,6 +113,7 @@ import com.mebit.app.feature.vault.T20VaultActionsScreen
 import com.mebit.app.feature.vault.VaultCreatedScreen
 import com.mebit.app.feature.vault.VaultDetailScreen
 import com.mebit.app.feature.vault.VaultListScreen
+import com.mebit.app.feature.vault.WalletExportScreen
 import com.mebit.app.feature.send.keyDeleteItem
 import com.mebit.app.feature.send.S1HomeSingleSigScreen
 import com.mebit.app.feature.send.S2ReceiveBackupGateScreen
@@ -689,6 +690,7 @@ internal fun MebitNavHost(
                                 }
                             },
                             onCreate = { navigate(MovieRoute.Policy) },
+                            onExport = { navigate(MovieRoute.WalletExport) },
                             onOpenCatalog = openCatalog,
                             hardware = hardware.all.map { w ->
                                 val chain = hardware.chain(w)
@@ -705,8 +707,14 @@ internal fun MebitNavHost(
                         quotes = quotes,
                         onReceive = { navigate(MovieRoute.VaultReceive) },
                         onSend = { startVaultSend(vaultDraft.selectedVault()) },
+                        onExport = { navigate(MovieRoute.WalletExport) },
                         // The Wallet list is a tab, so it opens as the only entry, and a detail a vault send lands on closes to the list.
                         onClose = { navigate(MovieRoute.VaultList) },
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.WalletExport -> WalletExportScreen(
+                        vault = vaultDraft.selectedVault(),
+                        onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
                     MovieRoute.T13UnsupportedModel -> T13UnsupportedModelScreen(

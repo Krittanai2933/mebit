@@ -33,6 +33,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.mebit.app.ExportOutcome
+import com.mebit.app.data.bsmsRecordOf
+import com.mebit.app.ui.components.MenuAction
 import com.mebit.app.Place
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.HardwareWallet
@@ -138,6 +140,7 @@ fun VaultListScreen(
     onCreate: () -> Unit,
     onOpenCatalog: () -> Unit,
     hardware: List<HardwareCard> = emptyList(),
+    onExport: () -> Unit = {},
     onOpenHardware: (HardwareWallet) -> Unit = {},
     onRemoveHardware: (HardwareWallet) -> Unit = {},
 ) {
@@ -222,6 +225,10 @@ fun VaultListScreen(
                     draft.selectVault(vault.id)
                     onOpenDetail()
                 },
+                extra = MenuAction("ส่งออก Wallet", "menu_export_${vault.id}") {
+                    draft.selectVault(vault.id)
+                    onExport()
+                },
             )
             Spacer(modifier = Modifier.height(11.dp))
         }
@@ -281,7 +288,11 @@ private fun RemoveVaultSheet(vault: CreatedVault, onRemove: () -> Unit, onCancel
             is ExportOutcome.Failed -> failed = true
         }
     }
-    val save = { export.save(bsmsFileName(vault.name), vault.bsms) }
+    // The BIP-129 record, not the stored text, so another wallet app can read the file.
+    val record = remember(vault.bsms) { bsmsRecordOf(vault) }
+    val save = {
+        if (record == null) failed = true else export.save(bsmsFileName(vault.name), record)
+    }
     ConfirmSheet(tag = "dialog_remove_vault", title = removeSheetTitle(vault.name), body = removeVaultBody(vault.m, vault.n), onCancel = onCancel) {
         if (exported) {
             SecondaryCta("ส่งออก BSMS แล้ว", "cta_vault_export", save)
@@ -333,6 +344,7 @@ private fun WalletListCard(
     item: DeleteItem,
     onDelete: () -> Unit,
     onClick: () -> Unit,
+    extra: MenuAction? = null,
 ) {
     val shape = RoundedCornerShape(20.dp)
     val ink = if (dark) MbWhite else MbNavyInk
@@ -361,7 +373,7 @@ private fun WalletListCard(
             }
         }
         // The dots end 18 dp inside the card's right edge with their centre 22 dp from its top, level with the kind line.
-        CardDeleteMenu(menuTag, "ลบ Wallet", item, onDark = dark, onDelete = onDelete, modifier = Modifier.align(Alignment.TopEnd).padding(end = 5.dp))
+        CardDeleteMenu(menuTag, "ลบ Wallet", item, onDark = dark, onDelete = onDelete, modifier = Modifier.align(Alignment.TopEnd).padding(end = 5.dp), extra = extra)
     }
 }
 
