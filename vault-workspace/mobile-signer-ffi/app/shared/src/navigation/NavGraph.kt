@@ -450,11 +450,11 @@ internal fun MebitNavHost(
     val openCatalog = { if (debugBuild) catalogOpen = true }
 
     val bar = current.route.bar
-    // A sheet that covers a tab screen, the wallet list's QR scanner, hides the bar too.
+    // A sheet that covers a tab screen, the wallet list's QR scanner, hides the bar and gives the screen its room.
     var barHidden by remember { mutableStateOf(false) }
-    CompositionLocalProvider(LocalDebugLinkLift provides if (bar != null) 22.dp else 0.dp) {
+    CompositionLocalProvider(LocalDebugLinkLift provides if (bar != null && !barHidden) 22.dp else 0.dp) {
         Box(Modifier.fillMaxSize().background(MbPage)) {
-            val inset = if (bar != null) bottomBarHeight() else 0.dp
+            val inset = if (bar != null && !barHidden) bottomBarHeight() else 0.dp
             Box(Modifier.fillMaxSize().padding(bottom = inset).consumeWindowInsets(PaddingValues(bottom = inset))) {
                 // Keyed on the wallet, so a wallet's screens never inherit another wallet's remembered state, such as its retries, its open key details and its pull.
                 key(current.place, current.hardware) { when (current.route) {
