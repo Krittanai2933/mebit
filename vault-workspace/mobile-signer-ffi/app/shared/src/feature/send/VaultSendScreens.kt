@@ -170,7 +170,7 @@ fun VaultSendScreen(
             when (issue) {
                 SendIssue.InvalidAddress -> {
                     Spacer(modifier = Modifier.height(20.dp))
-                    IssuePanel("INVALID ADDRESS", "ที่อยู่ไม่ถูกต้อง — ตรวจตัวอักษรและเครือข่าย (รองรับ Bitcoin เท่านั้น) แล้ววางใหม่")
+                    IssuePanel("INVALID ADDRESS", invalidAddressLine(canScan = cameraAvailable))
                 }
                 SendIssue.BalanceUnavailable -> {
                     Spacer(modifier = Modifier.height(20.dp))
@@ -215,6 +215,9 @@ private fun SignaturesBanner(m: Int, n: Int) {
 
 /** 5.1's banner text. */
 internal fun signaturesLine(m: Int, n: Int): String = "ต้องเซ็น $m จาก $n กุญแจก่อนส่ง"
+
+/** The line beside 5.2's signed count until the payment is ready: any m keys before the first signature (5.2), then how many are left (5.5.x). */
+internal fun signaturesLeftLine(signed: Int, m: Int, needed: Int): String = if (signed == 0) "ใช้กุญแจดอกไหนก็ได้ $m ดอก" else "เหลืออีก $needed ดอก"
 
 /**
  * The ways out of a several-key wallet's guard that no history settled, as [UnconfirmedClearControl] offers a one-key wallet's: post the
@@ -337,7 +340,7 @@ fun CollectSignaturesScreen(
             if (ready) {
                 Text("ครบแล้ว ส่งได้เลย", color = MbSuccess, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, modifier = Modifier.testTag("m2_ready"))
             } else {
-                Text("ใช้กุญแจดอกไหนก็ได้ ${vault.m} ดอก", color = MbSlate, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Text(signaturesLeftLine(signed, vault.m, needed), color = MbSlate, fontSize = 12.sp, fontWeight = FontWeight.Medium)
             }
         }
         Spacer(modifier = Modifier.height(10.dp))
