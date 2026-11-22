@@ -6,8 +6,12 @@ internal const val PART_INTERVAL_MS = 250L
 /** Pure. Penpot 3.8's "ส่วน x / N" for the part at [index] (0-based) of [count]. Null for one part, which shows no counter. */
 internal fun partCounterText(index: Int, count: Int): String? = if (count <= 1) null else "ส่วน ${index + 1} / $count"
 
-/** Pure. One bar per part, true for the part on screen: the orange one, the rest grey. */
-internal fun partBars(index: Int, count: Int): List<Boolean> = List(count) { it == index }
+/** Penpot 3.8's bar for one part: navy once shown, orange while on screen, grey before. */
+internal enum class PartBar { Shown, Current, Ahead }
+
+/** Pure. One bar per part for the part at [index] on screen. */
+internal fun partBars(index: Int, count: Int): List<PartBar> =
+    List(count) { i -> if (i < index) PartBar.Shown else if (i == index) PartBar.Current else PartBar.Ahead }
 
 /** Pure. The part on screen [elapsedMs] after the page opened, cycling the [count] parts every [PART_INTERVAL_MS]. */
 internal fun partIndexAt(elapsedMs: Long, count: Int): Int = if (count <= 1) 0 else ((elapsedMs / PART_INTERVAL_MS) % count).toInt()

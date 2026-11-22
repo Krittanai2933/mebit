@@ -15,8 +15,8 @@ class WalletQrPartsTest {
 
     @Test
     fun oneBarIsOrangeAndTheRestGrey() {
-        assertEquals(listOf(false, true, false, false), partBars(1, 4))
-        assertEquals(List(3) { false }, partBars(-1, 3))
+        assertEquals(listOf(PartBar.Shown, PartBar.Current, PartBar.Ahead, PartBar.Ahead), partBars(1, 4))
+        assertEquals(List(3) { PartBar.Ahead }, partBars(-1, 3))
         assertEquals(emptyList(), partBars(0, 0))
     }
 

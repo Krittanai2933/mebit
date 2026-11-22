@@ -49,6 +49,7 @@ import com.mebit.app.data.bsmsRecordOf
 import com.mebit.app.data.descriptorFileName
 import com.mebit.app.data.descriptorIn
 import com.mebit.app.data.exportPicture
+import com.mebit.app.data.PartBar
 import com.mebit.app.data.partBars
 import com.mebit.app.data.partCounterText
 import com.mebit.app.data.partIndexAt
@@ -203,8 +204,9 @@ fun WalletExportScreen(vault: CreatedVault?, onBack: (() -> Unit)?, onOpenCatalo
                     Text(counter, color = MbNavyInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("export_counter"))
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.testTag("export_bars")) {
-                        partBars(index, count).forEach { on ->
-                            Box(Modifier.size(width = 28.dp, height = 4.dp).clip(RoundedCornerShape(2.dp)).background(if (on) MbBtcOrange else BarGrey))
+                        partBars(index, count).forEach { bar ->
+                            val color = when (bar) { PartBar.Shown -> MbNavy; PartBar.Current -> MbBtcOrange; PartBar.Ahead -> BarGrey }
+                            Box(Modifier.size(width = 28.dp, height = 4.dp).clip(RoundedCornerShape(2.dp)).background(color))
                         }
                     }
                     Spacer(modifier = Modifier.height(10.dp))
