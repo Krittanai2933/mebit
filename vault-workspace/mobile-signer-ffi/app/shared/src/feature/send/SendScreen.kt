@@ -9,9 +9,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -274,7 +276,8 @@ internal fun SendFormFields(
     Spacer(modifier = Modifier.height(20.dp))
     Text("ค่าธรรมเนียมเครือข่าย", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp)
     Spacer(modifier = Modifier.height(10.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    // Every tile takes the tallest one's height, so a font that draws taller lines grows all three alike.
+    Row(modifier = Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         (draft.tiers ?: LiveFeeTiers.DEFAULT).tiles(draft.typicalVsize).forEach { tile ->
             FeeCard(tile, selected = tile.tier == draft.tier, quote, modifier = Modifier.weight(1f)) { entry.chooseTier(tile.tier, spendableSats) }
         }
@@ -501,8 +504,10 @@ private fun FeeCard(tile: FeeTile, selected: Boolean, quote: FiatQuote?, modifie
     val tier = tile.tier
     val shape = RoundedCornerShape(16.dp)
     Column(
+        // Penpot 4.3's tile is 96 high with these gaps. A taller font or larger system text grows it instead of cutting off the sat/vB line.
         modifier = modifier
-            .height(96.dp)
+            .fillMaxHeight()
+            .heightIn(min = 96.dp)
             .clip(shape)
             .background(if (selected) SelectedFee else MbWhite)
             .border(if (selected) 2.dp else 1.dp, if (selected) MbBtcOrange else MbBorder, shape)
@@ -512,12 +517,11 @@ private fun FeeCard(tile: FeeTile, selected: Boolean, quote: FiatQuote?, modifie
     ) {
         Spacer(modifier = Modifier.height(12.dp))
         Text(tier.label, color = MbNavyInk, fontSize = 14.sp, fontWeight = FontWeight.Bold, lineHeight = 19.sp)
-        Spacer(modifier = Modifier.height(1.dp))
         Text(tier.eta, color = MbBody, fontSize = 11.5.sp, fontWeight = FontWeight.Medium, lineHeight = 15.sp)
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(8.dp))
         Text(bahtText(tile.feeSats, quote) ?: "${thousands(tile.feeSats)} sat", color = if (selected) MbEyebrow else MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.Bold, lineHeight = 20.sp)
-        Spacer(modifier = Modifier.height(1.dp))
         Text("${tile.satPerVb} sat/vB", color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, lineHeight = 14.sp)
+        Spacer(modifier = Modifier.height(3.dp))
     }
 }
 
