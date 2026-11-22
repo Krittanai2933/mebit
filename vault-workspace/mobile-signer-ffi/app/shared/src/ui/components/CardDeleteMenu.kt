@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -57,6 +58,9 @@ sealed interface DeleteItem {
     data class Blocked(val reason: String) : DeleteItem
 }
 
+/** An optional item above delete in a card's ⋯ menu, such as a several-key wallet's export (Penpot 1.8.A3). [tag] is its whole test tag. */
+class MenuAction(val label: String, val tag: String, val onClick: () -> Unit)
+
 /** The grey Penpot gives a blocked menu row, which the theme has no token for. */
 private val BlockedInk = Color(0xFFB4BCC8)
 
@@ -67,7 +71,7 @@ private val BlockedInk = Color(0xFFB4BCC8)
  * [onOpen] runs as the menu opens.
  */
 @Composable
-fun CardDeleteMenu(tagSuffix: String, label: String, item: DeleteItem, onDark: Boolean, onDelete: () -> Unit, modifier: Modifier = Modifier, onOpen: () -> Unit = {}) {
+fun CardDeleteMenu(tagSuffix: String, label: String, item: DeleteItem, onDark: Boolean, onDelete: () -> Unit, modifier: Modifier = Modifier, onOpen: () -> Unit = {}, extra: MenuAction? = null) {
     var open by remember { mutableStateOf(false) }
     Box(
         modifier = modifier
@@ -88,7 +92,7 @@ fun CardDeleteMenu(tagSuffix: String, label: String, item: DeleteItem, onDark: B
             // Penpot starts the menu 4 dp under the 32 dp circle, which is 2 dp above the bottom of this target.
             val overlap = with(LocalDensity.current) { 2.dp.roundToPx() }
             Popup(popupPositionProvider = remember(overlap) { UnderMore(overlap) }, onDismissRequest = { open = false }, properties = PopupProperties(focusable = true)) {
-                DeleteMenu(tagSuffix, label, item) {
+                DeleteMenu(tagSuffix, label, item, extra?.let { MenuAction(it.label, it.tag) { open = false; it.onClick() } }) {
                     open = false
                     onDelete()
                 }
@@ -107,22 +111,35 @@ private class UnderMore(private val overlap: Int) : PopupPositionProvider {
 }
 
 @Composable
-private fun DeleteMenu(tagSuffix: String, label: String, item: DeleteItem, onDelete: () -> Unit) {
+private fun DeleteMenu(tagSuffix: String, label: String, item: DeleteItem, extra: MenuAction?, onDelete: () -> Unit) {
     val shape = RoundedCornerShape(14.dp)
     val surface = Modifier.shadow(8.dp, shape).clip(shape).background(MbWhite).border(1.dp, MbBorder, shape)
-    when (item) {
-        DeleteItem.Offered -> Row(
-            modifier = surface.width(196.dp).height(52.dp).clickable(role = Role.Button, onClick = onDelete).testTag("menu_delete_$tagSuffix").padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            ItemLabel(label, MbEyebrow)
+    Column(modifier = surface.width(if (item is DeleteItem.Blocked) 250.dp else 196.dp)) {
+        if (extra != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth().height(52.dp).clickable(role = Role.Button, onClick = extra.onClick).testTag(extra.tag).padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Aligned with the delete label, which follows an 18 dp icon and a 10 dp gap.
+                Spacer(Modifier.width(28.dp))
+                Text(extra.label, color = MbEyebrow, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(MbBorder))
         }
-        is DeleteItem.Blocked -> Column(
-            modifier = surface.width(250.dp).semantics(mergeDescendants = true) {}.testTag("menu_blocked_$tagSuffix").padding(start = 16.dp, end = 16.dp, top = 15.dp, bottom = 16.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) { ItemLabel(label, BlockedInk) }
-            Spacer(Modifier.height(8.dp))
-            Text(item.reason, color = MbBody, fontSize = 12.sp, fontWeight = FontWeight.Light, lineHeight = 16.5.sp)
+        when (item) {
+            DeleteItem.Offered -> Row(
+                modifier = Modifier.fillMaxWidth().height(52.dp).clickable(role = Role.Button, onClick = onDelete).testTag("menu_delete_$tagSuffix").padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ItemLabel(label, MbEyebrow)
+            }
+            is DeleteItem.Blocked -> Column(
+                modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}.testTag("menu_blocked_$tagSuffix").padding(start = 16.dp, end = 16.dp, top = 15.dp, bottom = 16.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) { ItemLabel(label, BlockedInk) }
+                Spacer(Modifier.height(8.dp))
+                Text(item.reason, color = MbBody, fontSize = 12.sp, fontWeight = FontWeight.Light, lineHeight = 16.5.sp)
+            }
         }
     }
 }

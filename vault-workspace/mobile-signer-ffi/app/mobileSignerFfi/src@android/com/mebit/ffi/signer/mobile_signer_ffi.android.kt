@@ -1140,6 +1140,20 @@ internal typealias UniffiVTableCallbackInterfaceSignStepsUniffiByValue = UniffiV
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -1272,16 +1286,28 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_wallet_balance() != 53648.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
+        if (uniffi_mobile_signer_ffi_checksum_func_wallet_bsms_record() != 21965.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
         if (uniffi_mobile_signer_ffi_checksum_func_wallet_describe() != 64410.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
+        if (uniffi_mobile_signer_ffi_checksum_func_wallet_descriptor_text() != 53535.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
         if (uniffi_mobile_signer_ffi_checksum_func_wallet_draft() != 27636.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_wallet_file_read() != 39000.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_wallet_finish() != 27411.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_wallet_history() != 18833.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_wallet_qr_parts() != 36703.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_wallet_review() != 29652.toShort()) {
@@ -1297,6 +1323,9 @@ internal object IntegrityCheckingUniffiLib : Library {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code() != 55814.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_method_qrpartsreader_receive() != 35584.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_method_signsteps_registering() != 33498.toShort()) {
@@ -1321,6 +1350,9 @@ internal object IntegrityCheckingUniffiLib : Library {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_method_walletlink_unlock() != 26656.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_constructor_qrpartsreader_new() != 45911.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_constructor_walletlink_new() != 63717.toShort()) {
@@ -1423,16 +1455,28 @@ internal object IntegrityCheckingUniffiLib : Library {
     external fun uniffi_mobile_signer_ffi_checksum_func_wallet_balance(
     ): Short
     @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_bsms_record(
+    ): Short
+    @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_wallet_describe(
     ): Short
     @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_descriptor_text(
+    ): Short
+    @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_wallet_draft(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_file_read(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_wallet_finish(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_wallet_history(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_qr_parts(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_wallet_review(
@@ -1448,6 +1492,9 @@ internal object IntegrityCheckingUniffiLib : Library {
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_method_qrpartsreader_receive(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_method_signsteps_registering(
@@ -1472,6 +1519,9 @@ internal object IntegrityCheckingUniffiLib : Library {
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_method_walletlink_unlock(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_constructor_qrpartsreader_new(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_constructor_walletlink_new(
@@ -1515,6 +1565,26 @@ internal object UniffiLib : Library {
     external fun uniffi_mobile_signer_ffi_fn_method_pairingcodes_pairing_code(
         `ptr`: Pointer?,
     ): Long
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_clone_qrpartsreader(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Pointer?
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_free_qrpartsreader(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_constructor_qrpartsreader_new(
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Pointer?
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_method_qrpartsreader_receive(
+        `ptr`: Pointer?,
+        `scanned`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_clone_signsteps(
         `ptr`: Pointer?,
@@ -1793,7 +1863,19 @@ internal object UniffiLib : Library {
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_wallet_bsms_record(
+        `descriptor`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_func_wallet_describe(
+        `descriptor`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_wallet_descriptor_text(
         `descriptor`: RustBufferByValue,
         `network`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
@@ -1808,6 +1890,12 @@ internal object UniffiLib : Library {
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_wallet_file_read(
+        `text`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_func_wallet_finish(
         `descriptor`: RustBufferByValue,
         `network`: RustBufferByValue,
@@ -1819,6 +1907,11 @@ internal object UniffiLib : Library {
     external fun uniffi_mobile_signer_ffi_fn_func_wallet_history(
         `descriptor`: RustBufferByValue,
         `network`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_wallet_qr_parts(
+        `text`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     @JvmStatic
@@ -2639,6 +2732,157 @@ internal object uniffiCallbackInterfacePairingCodes {
 
     internal fun register(lib: UniffiLib) {
         lib.uniffi_mobile_signer_ffi_fn_init_callback_vtable_pairingcodes(vtable)
+    }
+}
+
+
+
+/**
+ * Collects the parts of one wallet-file UR. Make a new one to start over.
+ */
+public actual open class QrPartsReader: Disposable, QrPartsReaderInterface {
+
+    public constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiPointerDestroyer(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    public actual constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiPointerDestroyer(null))
+    }
+    public actual constructor() : this(
+        uniffiRustCall { uniffiRustCallStatus ->
+            UniffiLib.uniffi_mobile_signer_ffi_fn_constructor_qrpartsreader_new(
+                uniffiRustCallStatus,
+            )
+        }!!
+    )
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed: kotlinx.atomicfu.AtomicBoolean = kotlinx.atomicfu.atomic(false)
+    private val callCounter: kotlinx.atomicfu.AtomicLong = kotlinx.atomicfu.atomic(1L)
+
+    private val lock = kotlinx.atomicfu.locks.ReentrantLock()
+
+    private fun <T> synchronized(block: () -> T): T {
+        lock.lock()
+        try {
+            return block()
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    actual override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    actual override fun close() {
+        synchronized { this.destroy() }
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.value
+            if (c == 0L) {
+                throw IllegalStateException("${this::class::simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this::class::simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiPointerDestroyer(private val pointer: Pointer?) : Disposable {
+        override fun destroy() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.uniffi_mobile_signer_ffi_fn_free_qrpartsreader(ptr, status)
+                }
+            }
+        }
+    }
+
+    public fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall { status ->
+            UniffiLib.uniffi_mobile_signer_ffi_fn_clone_qrpartsreader(pointer!!, status)
+        }!!
+    }
+
+    
+    public actual override fun `receive`(`scanned`: kotlin.String): QrScanProgress {
+        return FfiConverterTypeQrScanProgress.lift(callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.uniffi_mobile_signer_ffi_fn_method_qrpartsreader_receive(
+                    it,
+                    FfiConverterString.lower(`scanned`),
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+
+    
+    
+    public actual companion object
+    
+}
+
+
+
+
+
+public object FfiConverterTypeQrPartsReader: FfiConverter<QrPartsReader, Pointer> {
+
+    override fun lower(value: QrPartsReader): Pointer {
+        return value.uniffiClonePointer()
+    }
+
+    override fun lift(value: Pointer): QrPartsReader {
+        return QrPartsReader(value)
+    }
+
+    override fun read(buf: ByteBuffer): QrPartsReader {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(buf.getLong().toPointer())
+    }
+
+    override fun allocationSize(value: QrPartsReader): ULong = 8UL
+
+    override fun write(value: QrPartsReader, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(lower(value).toLong())
     }
 }
 
@@ -3688,6 +3932,34 @@ public object FfiConverterTypeWalletBalance: FfiConverterRustBuffer<WalletBalanc
 
 
 
+public object FfiConverterTypeWalletImport: FfiConverterRustBuffer<WalletImport> {
+    override fun read(buf: ByteBuffer): WalletImport {
+        return WalletImport(
+            FfiConverterString.read(buf),
+            FfiConverterTypeWalletShape.read(buf),
+            FfiConverterTypeWalletFileFormat.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: WalletImport): ULong = (
+            FfiConverterString.allocationSize(value.`descriptor`) +
+            FfiConverterTypeWalletShape.allocationSize(value.`shape`) +
+            FfiConverterTypeWalletFileFormat.allocationSize(value.`format`) +
+            FfiConverterOptionalString.allocationSize(value.`statedAddress`)
+    )
+
+    override fun write(value: WalletImport, buf: ByteBuffer) {
+        FfiConverterString.write(value.`descriptor`, buf)
+        FfiConverterTypeWalletShape.write(value.`shape`, buf)
+        FfiConverterTypeWalletFileFormat.write(value.`format`, buf)
+        FfiConverterOptionalString.write(value.`statedAddress`, buf)
+    }
+}
+
+
+
+
 public object FfiConverterTypeWalletInfo: FfiConverterRustBuffer<WalletInfo> {
     override fun read(buf: ByteBuffer): WalletInfo {
         return WalletInfo(
@@ -4079,6 +4351,85 @@ public object FfiConverterTypeMobileSignerError : FfiConverterRustBuffer<MobileS
 
 
 
+public object FfiConverterTypeQrScanProgress : FfiConverterRustBuffer<QrScanProgress>{
+    override fun read(buf: ByteBuffer): QrScanProgress {
+        return when(buf.getInt()) {
+            1 -> QrScanProgress.NotUr
+            2 -> QrScanProgress.Part(
+                FfiConverterUInt.read(buf),
+                FfiConverterUInt.read(buf),
+                )
+            3 -> QrScanProgress.Done(
+                FfiConverterString.read(buf),
+                )
+            4 -> QrScanProgress.Refused(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: QrScanProgress): ULong = when(value) {
+        is QrScanProgress.NotUr -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is QrScanProgress.Part -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterUInt.allocationSize(value.`received`)
+                + FfiConverterUInt.allocationSize(value.`expected`)
+            )
+        }
+        is QrScanProgress.Done -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`text`)
+            )
+        }
+        is QrScanProgress.Refused -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+    }
+
+    override fun write(value: QrScanProgress, buf: ByteBuffer) {
+        when(value) {
+            is QrScanProgress.NotUr -> {
+                buf.putInt(1)
+                Unit
+            }
+            is QrScanProgress.Part -> {
+                buf.putInt(2)
+                FfiConverterUInt.write(value.`received`, buf)
+                FfiConverterUInt.write(value.`expected`, buf)
+                Unit
+            }
+            is QrScanProgress.Done -> {
+                buf.putInt(3)
+                FfiConverterString.write(value.`text`, buf)
+                Unit
+            }
+            is QrScanProgress.Refused -> {
+                buf.putInt(4)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
 public object FfiConverterTypeTxoOwner: FfiConverterRustBuffer<TxoOwner> {
     override fun read(buf: ByteBuffer): TxoOwner = try {
         TxoOwner.values()[buf.getInt() - 1]
@@ -4152,6 +4503,118 @@ public object FfiConverterTypeWalletDetails : FfiConverterRustBuffer<WalletDetai
                 FfiConverterOptionalString.write(value.`deviceId`, buf)
                 FfiConverterOptionalString.write(value.`label`, buf)
                 FfiConverterUShort.write(value.`mtu`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+public object FfiConverterTypeWalletFileFormat: FfiConverterRustBuffer<WalletFileFormat> {
+    override fun read(buf: ByteBuffer): WalletFileFormat = try {
+        WalletFileFormat.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: WalletFileFormat): ULong = 4UL
+
+    override fun write(value: WalletFileFormat, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+public object FfiConverterTypeWalletFileRead : FfiConverterRustBuffer<WalletFileRead>{
+    override fun read(buf: ByteBuffer): WalletFileRead {
+        return when(buf.getInt()) {
+            1 -> WalletFileRead.Read(
+                FfiConverterTypeWalletImport.read(buf),
+                )
+            2 -> WalletFileRead.WrongNetwork
+            3 -> WalletFileRead.Unsupported(
+                FfiConverterString.read(buf),
+                )
+            4 -> WalletFileRead.AddressMismatch(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            5 -> WalletFileRead.Unreadable(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: WalletFileRead): ULong = when(value) {
+        is WalletFileRead.Read -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeWalletImport.allocationSize(value.`wallet`)
+            )
+        }
+        is WalletFileRead.WrongNetwork -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is WalletFileRead.Unsupported -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`found`)
+            )
+        }
+        is WalletFileRead.AddressMismatch -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`stated`)
+                + FfiConverterString.allocationSize(value.`derived`)
+            )
+        }
+        is WalletFileRead.Unreadable -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+    }
+
+    override fun write(value: WalletFileRead, buf: ByteBuffer) {
+        when(value) {
+            is WalletFileRead.Read -> {
+                buf.putInt(1)
+                FfiConverterTypeWalletImport.write(value.`wallet`, buf)
+                Unit
+            }
+            is WalletFileRead.WrongNetwork -> {
+                buf.putInt(2)
+                Unit
+            }
+            is WalletFileRead.Unsupported -> {
+                buf.putInt(3)
+                FfiConverterString.write(value.`found`, buf)
+                Unit
+            }
+            is WalletFileRead.AddressMismatch -> {
+                buf.putInt(4)
+                FfiConverterString.write(value.`stated`, buf)
+                FfiConverterString.write(value.`derived`, buf)
+                Unit
+            }
+            is WalletFileRead.Unreadable -> {
+                buf.putInt(5)
+                FfiConverterString.write(value.`reason`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -5060,6 +5523,20 @@ public actual fun `walletBalance`(`descriptor`: kotlin.String, `network`: KeyNet
 }
 
 /**
+ * The BIP-129 record of a stored-form wallet: header, template with the BIP-129 key suffix, the path restriction line, receive address 0.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `walletBsmsRecord`(`descriptor`: kotlin.String, `network`: KeyNetwork): kotlin.String {
+    return FfiConverterString.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_bsms_record(
+            FfiConverterString.lower(`descriptor`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
  * The keys, how many must sign, receive address 0 and the typical payment size of the wallet `descriptor`
  * describes. Asks nothing of the network.
  */
@@ -5067,6 +5544,20 @@ public actual fun `walletBalance`(`descriptor`: kotlin.String, `network`: KeyNet
 public actual fun `walletDescribe`(`descriptor`: kotlin.String, `network`: KeyNetwork): WalletShape {
     return FfiConverterTypeWalletShape.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_describe(
+            FfiConverterString.lower(`descriptor`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The stored form with the BIP-389 multipath suffix on each key and its BIP-380 checksum.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `walletDescriptorText`(`descriptor`: kotlin.String, `network`: KeyNetwork): kotlin.String {
+    return FfiConverterString.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_descriptor_text(
             FfiConverterString.lower(`descriptor`),
             FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,
@@ -5088,6 +5579,21 @@ public actual fun `walletDraft`(`descriptor`: kotlin.String, `network`: KeyNetwo
             FfiConverterString.lower(`destination`),
             FfiConverterOptionalULong.lower(`amountSats`),
             FfiConverterULong.lower(`feeRateSatVb`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * What a wallet file holds: always an outcome, never an error. Takes a BIP-129 record, the app's older
+ * `.bsms`, or one descriptor line (checksum optional, verified when present), with a key suffix of
+ * none, the BIP-129 double star, the BIP-389 multipath, or the single-chain receive form.
+ */
+public actual fun `walletFileRead`(`text`: kotlin.String, `network`: KeyNetwork): WalletFileRead {
+    return FfiConverterTypeWalletFileRead.lift(uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_file_read(
+            FfiConverterString.lower(`text`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,
         )
     })
@@ -5120,6 +5626,20 @@ public actual fun `walletHistory`(`descriptor`: kotlin.String, `network`: KeyNet
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_history(
             FfiConverterString.lower(`descriptor`),
             FfiConverterTypeKeyNetwork.lower(`network`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The text as `ur:bytes` parts, uppercased so a QR uses its alphanumeric mode. Only the plain
+ * fragments `1..=N` come back, so a screen that cycles them shows an exact "x / N". A text that
+ * fits one fragment is one single-part UR.
+ */
+public actual fun `walletQrParts`(`text`: kotlin.String): List<kotlin.String> {
+    return FfiConverterSequenceString.lift(uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_qr_parts(
+            FfiConverterString.lower(`text`),
             uniffiRustCallStatus,
         )
     })
