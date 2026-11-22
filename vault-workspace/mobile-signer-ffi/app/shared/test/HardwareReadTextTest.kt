@@ -50,7 +50,7 @@ class HardwareReadTextTest {
 
     @Test
     fun theOneKeyStepsSayWhichDeviceTheWalletUses() {
-        assertEquals("POLICY · ขั้น 1/3", SINGLE_SIG_POLICY_EYEBROW, "3.1.1")
+        assertEquals("POLICY · ขั้น 1 / 3", SINGLE_SIG_POLICY_EYEBROW, "3.1.1")
         assertNull(oneKeyNote(null), "3.2.1: this phone has no line")
         assertEquals("Jade จะเป็นกุญแจเดียวของกระเป๋านี้ ทุกครั้งที่ส่งต้องกดยืนยันบน Jade", oneKeyNote(jade), "3.2.2")
         assertEquals("Trezor จะเป็นกุญแจเดียวของกระเป๋านี้ ทุกครั้งที่ส่งต้องกดยืนยันบน Trezor", oneKeyNote(safe7), "3.2.3")
