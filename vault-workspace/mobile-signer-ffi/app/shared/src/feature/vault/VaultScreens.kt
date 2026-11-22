@@ -461,6 +461,8 @@ fun T20VaultActionsScreen(
     onOpenCatalog: () -> Unit,
 ) {
     val vault = draft.selectedVault()
+    // The record a file or QR carries, not the layout the app keeps the wallet in.
+    val record = remember(vault?.bsms) { vault?.let(::bsmsRecordOf) }
     MebitScreen(
         eyebrow = "WALLET ACTIONS",
         title = "การกระทำของ Wallet",
@@ -478,7 +480,7 @@ fun T20VaultActionsScreen(
         InfoCard(
             eyebrow = "BACKUP / EXPORT",
             title = "ส่งออกไฟล์ BSMS",
-            body = vault?.bsms ?: "ยังไม่มี BSMS — สร้าง Wallet ก่อน",
+            body = record ?: "ยังไม่มี BSMS — สร้าง Wallet ก่อน",
             modifier = Modifier.testTag("t20_bsms"),
         )
         Spacer(modifier = Modifier.height(20.dp))
