@@ -479,7 +479,7 @@ private fun ReviewRowsCard(rows: List<String>) {
                     Tick(Modifier.offset(x = 7.dp, y = 8.dp).size(8.dp, 6.dp), MbSuccess)
                 }
                 Spacer(modifier = Modifier.width(12.dp))
-                Text(text, color = MbNavyInk, fontSize = 13.sp, lineHeight = 22.sp)
+                Text(text, color = MbNavy, fontSize = 14.sp, lineHeight = 19.sp)
             }
         }
     }
@@ -496,7 +496,7 @@ private fun FirstAddressCard(address: String) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text("ที่อยู่แรกของ Wallet นี้", color = MbBody, fontSize = 11.sp, fontWeight = FontWeight.Light, lineHeight = 18.sp)
+            Text("ที่อยู่แรกของ Wallet นี้", color = MbBody, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 17.sp)
             Text(
                 buildAnnotatedString {
                     var run = 0
@@ -504,14 +504,14 @@ private fun FirstAddressCard(address: String) {
                         if (i > 0) append(" ")
                         if (group == ADDRESS_GAP) {
                             run = 0
-                            withStyle(SpanStyle(color = MbNavyInk)) { append(group) }
+                            withStyle(SpanStyle(color = MbNavy)) { append(group) }
                         } else {
-                            withStyle(SpanStyle(color = if (run % 2 == 0) MbNavyInk else MbEyebrow)) { append(group) }
+                            withStyle(SpanStyle(color = if (run % 2 == 0) MbNavy else MbEyebrow)) { append(group) }
                             run++
                         }
                     }
                 },
-                fontSize = 15.sp,
+                fontSize = 15.5.sp,
                 fontWeight = FontWeight.SemiBold,
                 lineHeight = 22.sp,
                 modifier = Modifier.testTag("review_address"),
@@ -531,7 +531,7 @@ private fun FirstAddressCard(address: String) {
                 .testTag("cta_review_copy"),
             contentAlignment = Alignment.Center,
         ) {
-            Text(if (copied) "คัดลอกแล้ว" else "คัดลอก", color = MbNavy, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text(if (copied) "คัดลอกแล้ว" else "คัดลอก", color = MbNavy, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
