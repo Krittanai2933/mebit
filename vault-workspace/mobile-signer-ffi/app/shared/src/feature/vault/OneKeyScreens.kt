@@ -28,6 +28,7 @@ import com.mebit.app.data.CreateWalletDraft
 import com.mebit.app.data.HardwareWallet
 import com.mebit.app.data.KeySourceLabel
 import com.mebit.app.data.SavedKey
+import com.mebit.app.data.THIS_PHONE_KEY_NAME
 import com.mebit.app.data.hardwareKind
 import com.mebit.app.data.keyLine
 import com.mebit.app.data.keySourceName
@@ -104,7 +105,7 @@ fun ChooseKeyScreen(
         Text(pickCountLine(1, 1), color = MbNavy, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 20.sp, modifier = Modifier.testTag("choose_count"))
         Spacer(modifier = Modifier.height(19.dp))
         Column(Modifier.selectableGroup()) {
-            PickRow("iPhone ของฉัน", keySourceName(KeySourceLabel.ThisDevice), checked = device == null, tag = "pick_this_phone", radio = true) { draft.deviceKey = null }
+            PickRow(THIS_PHONE_KEY_NAME, keySourceName(KeySourceLabel.ThisDevice), checked = device == null, tag = "pick_this_phone", radio = true) { draft.deviceKey = null }
             keys.forEach { key ->
                 Spacer(modifier = Modifier.height(10.dp))
                 PickRow(key.label, keyLine(key), checked = device?.id == key.id, tag = "pick_${key.id}", radio = true) { draft.deviceKey = key.id }

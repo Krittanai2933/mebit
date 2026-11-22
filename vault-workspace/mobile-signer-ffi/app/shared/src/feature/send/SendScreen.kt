@@ -233,7 +233,7 @@ private fun SendForm(
             when (issue) {
                 SendIssue.InvalidAddress -> {
                     Spacer(modifier = Modifier.height(20.dp))
-                    IssuePanel("INVALID ADDRESS", "ที่อยู่ไม่ถูกต้อง — ตรวจตัวอักษรและเครือข่าย (รองรับ Bitcoin เท่านั้น) แล้ววางใหม่")
+                    IssuePanel("INVALID ADDRESS", invalidAddressLine(canScan = cameraAvailable))
                 }
                 SendIssue.BalanceUnavailable -> {
                     Spacer(modifier = Modifier.height(20.dp))
@@ -331,7 +331,7 @@ private fun DestinationField(draft: SendDraft, invalid: Boolean, enter: (String)
                 decorationBox = { inner ->
                     Box {
                         if (draft.destination.isEmpty()) {
-                            Text("วางที่อยู่ปลายทาง", color = Placeholder, fontSize = 15.5.sp, lineHeight = 20.sp)
+                            Text(if (onScan != null) "กรอกหรือสแกนที่อยู่ปลายทาง" else "กรอกที่อยู่ปลายทาง", color = Placeholder, fontSize = 15.5.sp, lineHeight = 20.sp)
                         }
                         inner()
                     }
@@ -527,6 +527,9 @@ private fun FeeCard(tile: FeeTile, selected: Boolean, quote: FiatQuote?, modifie
         Spacer(modifier = Modifier.height(3.dp))
     }
 }
+
+/** Penpot 5.1.4's line under an address that is not a Bitcoin address. A phone without a camera has no scan button, so scanning is not offered. */
+internal fun invalidAddressLine(canScan: Boolean) = "ที่อยู่ไม่ถูกต้อง — ตรวจตัวอักษรและเครือข่าย (รองรับ Bitcoin เท่านั้น) แล้ว" + if (canScan) "วางหรือสแกนใหม่" else "วางใหม่"
 
 @Composable
 internal fun IssuePanel(label: String, message: String) {

@@ -472,7 +472,8 @@ private fun SeedDropdown(window: SuggestionWindow, onPick: (String) -> Unit, mod
 private fun SeedStatusRow(draft: ImportSeedDraft, pinned: Boolean = false) {
     val problem = when (draft.status) {
         is SeedStatus.InvalidWord -> "ไม่อยู่ในรายการคำ BIP39 · ตรวจการสะกดแล้วลองใหม่"
-        SeedStatus.InvalidChecksum -> "Checksum ไม่ถูกต้อง"
+        // Penpot 1B.4.6's line. Above the keyboard the 24th word is still being typed, so only the verdict shows there.
+        SeedStatus.InvalidChecksum -> if (pinned) "Checksum ไม่ถูกต้อง" else "Checksum ไม่ถูกต้อง · ทุกคำสะกดถูก แต่บางคำหรือลำดับผิด ตรวจทั้ง 24 คำอีกครั้ง"
         else -> null
     }
     val card = RoundedCornerShape(14.dp)
