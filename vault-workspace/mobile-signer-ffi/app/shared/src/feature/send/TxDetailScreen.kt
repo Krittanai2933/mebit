@@ -71,6 +71,7 @@ import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbPage
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
+import com.mebit.app.ui.theme.amountFontFamily
 import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.KeyNetwork
 import kotlinx.coroutines.delay
@@ -295,7 +296,7 @@ private fun Header(view: TxDetailView, walletName: String, onBack: (() -> Unit)?
             Text(view.title, color = MbWhite, fontSize = 15.sp, fontWeight = FontWeight.Medium, lineHeight = 20.sp)
         }
         Spacer(modifier = Modifier.height(8.dp))
-        Text(view.amount, color = MbWhite, fontSize = 34.sp, fontWeight = FontWeight.Bold, lineHeight = 44.sp, modifier = Modifier.testTag("tx_amount"))
+        Text(view.amount, color = MbWhite, fontSize = 34.sp, fontWeight = FontWeight.Bold, fontFamily = amountFontFamily(), lineHeight = 44.sp, modifier = Modifier.testTag("tx_amount"))
         // The room stays when neither line shows, so nothing below moves when the price or the detail arrives.
         Column(modifier = Modifier.height(38.dp)) {
             view.amountNote?.let { Text(it, color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.testTag("tx_amount_note")) }

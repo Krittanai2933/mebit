@@ -55,6 +55,7 @@ import com.mebit.app.resources.mebit_logo
 import com.mebit.app.ui.components.DebugLink
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
+import com.mebit.app.ui.theme.amountFontFamily
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
@@ -201,6 +202,7 @@ private fun Slip(
             color = SlipNavy,
             fontSize = 40.sp,
             fontWeight = FontWeight.Bold,
+            fontFamily = amountFontFamily(),
             lineHeight = 56.sp,
             modifier = Modifier.align(Alignment.TopCenter).offset(y = 202.dp).testTag("send_amount"),
         )

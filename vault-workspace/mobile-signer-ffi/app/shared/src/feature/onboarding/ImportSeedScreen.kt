@@ -105,6 +105,7 @@ import com.mebit.app.ui.theme.MbPage
 import com.mebit.app.ui.theme.MbPick
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbWhite
+import com.mebit.app.ui.theme.amountFontFamily
 import com.mebit.ffi.signer.hotAccountPath
 import org.jetbrains.compose.resources.painterResource
 
@@ -339,7 +340,7 @@ internal fun PassphraseOption(set: Boolean, onOpen: () -> Unit, onClear: () -> U
 // A slot's word starts after 10dp of padding, a 14dp number and a 6dp gap.
 private val WORD_START = 30.dp
 
-// Penpot sets the word at 14.5 in Anuphan. Kanit is wider, and an 8-letter word must not be cut off.
+// Penpot sets the word at 14.5. It stays at 13.5, set when the app drew Kanit, which is wider, until a phone shows an 8-letter word uncut at 14.5.
 private fun wordStyle(ink: Color) = TextStyle(color = ink, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
 
 @Composable
@@ -472,7 +473,8 @@ private fun SeedDropdown(window: SuggestionWindow, onPick: (String) -> Unit, mod
 private fun SeedStatusRow(draft: ImportSeedDraft, pinned: Boolean = false) {
     val problem = when (draft.status) {
         is SeedStatus.InvalidWord -> "ไม่อยู่ในรายการคำ BIP39 · ตรวจการสะกดแล้วลองใหม่"
-        SeedStatus.InvalidChecksum -> "Checksum ไม่ถูกต้อง"
+        // Penpot 1B.4.6's line. Above the keyboard the 24th word is still being typed, so only the verdict shows there.
+        SeedStatus.InvalidChecksum -> if (pinned) "Checksum ไม่ถูกต้อง" else "Checksum ไม่ถูกต้อง · ทุกคำสะกดถูก แต่บางคำหรือลำดับผิด ตรวจทั้ง 24 คำอีกครั้ง"
         else -> null
     }
     val card = RoundedCornerShape(14.dp)
@@ -634,6 +636,7 @@ internal fun FingerprintSheet(session: OnboardingSession, copy: FingerprintCopy,
                     color = MbNavy,
                     fontSize = 34.sp,
                     fontWeight = FontWeight.Bold,
+                    fontFamily = amountFontFamily(),
                     letterSpacing = 2.sp,
                     modifier = Modifier.testTag("fingerprint"),
                 )

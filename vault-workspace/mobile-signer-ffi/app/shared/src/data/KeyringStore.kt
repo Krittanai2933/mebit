@@ -337,6 +337,9 @@ internal fun hardwareName(source: KeySourceLabel): String = when (source) {
     KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")
 }
 
+/** The name Penpot gives the key this phone holds, on onboarding, Home, the wallet cards and Choose Key. One word for iPhone and Android. */
+internal const val THIS_PHONE_KEY_NAME = "มือถือของฉัน"
+
 /** Penpot 2.2's card title for a source, which 2.1 and 3.2 repeat as the start of a key's line. */
 internal fun keySourceName(source: KeySourceLabel): String = when (source) {
     KeySourceLabel.ThisDevice -> "mebit บนเครื่องนี้"

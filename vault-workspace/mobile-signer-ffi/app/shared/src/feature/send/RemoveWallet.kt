@@ -27,25 +27,24 @@ import com.mebit.app.ui.theme.MbWhite
 import com.mebit.ffi.signer.WalletKind
 
 /**
- * Pure. Penpot 2.1.A1 to A3's item for a key. A wallet's own key ([ownWalletName]) goes with its wallet, so its line points there
- * whatever else holds. [usingWallets] names the several-key wallets that use the key, and is null while the book cannot be judged.
+ * Pure. Penpot 2.1.A1 to A4's item for a key. Every wallet that still uses the key is named: its own one-key wallet ([ownWalletName]) first,
+ * then the several-key wallets in [usingWallets], which is null while the book cannot be judged. Penpot 2.1.A2 to A4 are the in-use lines.
  */
-internal fun keyDeleteItem(ownWalletName: String?, usingWallets: List<String>?): DeleteItem = when {
-    ownWalletName != null -> DeleteItem.Blocked("ลบไม่ได้ · เป็นกุญแจของ $ownWalletName · ลบที่หน้า Wallet แทน")
-    usingWallets == null -> DeleteItem.Blocked(BOOK_UNREADABLE_LINE)
-    usingWallets.isNotEmpty() -> DeleteItem.Blocked(inUseLine(usingWallets.joinToString(", ")))
-    else -> DeleteItem.Offered
+internal fun keyDeleteItem(ownWalletName: String?, usingWallets: List<String>?): DeleteItem {
+    if (ownWalletName == null && usingWallets == null) return DeleteItem.Blocked(BOOK_UNREADABLE_LINE)
+    val names = listOfNotNull(ownWalletName) + usingWallets.orEmpty()
+    return if (names.isEmpty()) DeleteItem.Offered else DeleteItem.Blocked(inUseLine(names, "ยังใช้กุญแจนี้อยู่"))
 }
 
 /**
  * Pure. Penpot 1.8.A1 and A2's item for a one-key wallet. Removing needs another wallet to remain, a [saved] wallet, because an unsaved
- * one's words are only in memory, a book that could be read ([usesKey] null), and a key no several-key wallet uses.
+ * one's words are only in memory, a book that could be read ([usingVaults] not null), and a key no several-key wallet uses.
  */
-internal fun walletDeleteItem(listedWallets: Int, saved: Boolean, usesKey: Boolean?, vaultName: String?): DeleteItem = when {
+internal fun walletDeleteItem(listedWallets: Int, saved: Boolean, usingVaults: List<String>?): DeleteItem = when {
     listedWallets < 2 -> DeleteItem.Blocked("ลบไม่ได้ · ต้องมีกระเป๋าอย่างน้อย 1 ใบในเครื่อง")
     !saved -> DeleteItem.Blocked(WALLET_NOT_SAVED_LINE)
-    usesKey == null -> DeleteItem.Blocked(BOOK_UNREADABLE_LINE)
-    usesKey -> DeleteItem.Blocked(inUseLine(vaultName ?: "Wallet"))
+    usingVaults == null -> DeleteItem.Blocked(BOOK_UNREADABLE_LINE)
+    usingVaults.isNotEmpty() -> DeleteItem.Blocked(inUseLine(usingVaults, "ยังใช้กุญแจเดียวกันอยู่"))
     else -> DeleteItem.Offered
 }
 
@@ -70,8 +69,19 @@ private const val WALLET_NOT_SAVED_LINE = "ลบไม่ได้ · กระ
 
 private const val BOOK_UNREADABLE_LINE = "ลบไม่ได้ในตอนนี้ · อ่านรายการ Wallet ไม่ได้"
 
-/** Penpot 4.1.1.3's line for a key a several-key wallet uses, shared by a wallet's removal and the Keyring's delete. */
-private fun inUseLine(walletNames: String) = "ลบไม่ได้ · กุญแจนี้ใช้อยู่ใน $walletNames"
+/**
+ * Pure. Penpot 1.8.A2 and 2.1.A2 to A4's in-use lines, shared by a wallet's removal and the Keyring's delete: the [names] and the [verb],
+ * then what to remove first. Penpot draws one and two names. Three or more extend its pattern.
+ */
+private fun inUseLine(names: List<String>, verb: String): String {
+    val joined = if (names.size == 1) names[0] else names.dropLast(1).joinToString(", ") + " และ " + names.last()
+    val next = when (names.size) {
+        1 -> "ให้${deleteWords(names[0])} ออกก่อน"
+        2 -> "ให้ลบทั้งสอง Wallet ออกก่อน"
+        else -> "ให้ลบทั้ง ${names.size} Wallet ออกก่อน"
+    }
+    return "$joined $verb\nถ้าจะลบ $next"
+}
 
 internal const val REMOVE_FAILED_LINE = "ลบกระเป๋าไม่สำเร็จ ลองอีกครั้ง"
 

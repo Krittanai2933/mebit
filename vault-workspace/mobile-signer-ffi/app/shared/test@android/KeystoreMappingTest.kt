@@ -7,6 +7,7 @@ import java.security.InvalidAlgorithmParameterException
 import java.security.InvalidKeyException
 import java.security.KeyPairGenerator
 import java.nio.ByteBuffer
+import java.io.FileNotFoundException
 import java.security.ProviderException
 import java.security.spec.MGF1ParameterSpec
 import javax.crypto.AEADBadTagException
@@ -331,6 +332,14 @@ class KeystoreMappingTest {
         val noCode: (Throwable) -> Int? = { null }
 
         fun unwrapWith(keys: java.security.KeyPair): (ByteArray) -> ByteArray = { wrapped -> unwrapCipher(keys.private).doFinal(wrapped) }
+    }
+
+    @Test
+    fun aWriteCountsOnlyWhenTheFileHoldsTheNewBytes() {
+        val sealed = byteArrayOf(1, 2, 3)
+        assertTrue(androidWriteLanded(sealed) { byteArrayOf(1, 2, 3) }, "the same bytes read into a new array")
+        assertFalse(androidWriteLanded(sealed) { byteArrayOf(9, 9) }, "the old copy, after a rename that failed")
+        assertFalse(androidWriteLanded(sealed) { throw FileNotFoundException("wallet.2") }, "no file, after a first write whose rename failed")
     }
 }
 

@@ -9,13 +9,10 @@
   },
   "fontGate": {
     "requiredFiles": [
-      "design-reference/fonts/Kanit-Regular.ttf",
-      "design-reference/fonts/Kanit-Medium.ttf",
-      "design-reference/fonts/Kanit-SemiBold.ttf",
-      "design-reference/fonts/Kanit-Bold.ttf",
-      "design-reference/fonts/Kanit-Light.ttf"
+      "design-reference/fonts/NotoSansThai-Variable.ttf",
+      "design-reference/fonts/Montserrat-Bold.ttf"
     ],
-    "rule": "Shipping typeface is Kanit (OFL). Fonts must be present and check_fonts.py exits 0. Pixel-zero vs Penpot FC Vision baselines is not claimed."
+    "rule": "The app ships Noto Sans Thai and Montserrat Bold (OFL), Penpot's own typefaces. Fonts must be present and check_fonts.py exits 0."
   },
   "routes": [
     {"path": "welcome", "boardName": "00 Welcome", "boardId": "bb000499-7ca1-801a-8008-d8fca7267d65"},

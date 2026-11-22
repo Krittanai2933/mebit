@@ -8,25 +8,26 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.mebit.app.resources.Res
-import com.mebit.app.resources.kanit_bold
-import com.mebit.app.resources.kanit_light
-import com.mebit.app.resources.kanit_medium
-import com.mebit.app.resources.kanit_regular
-import com.mebit.app.resources.kanit_semibold
+import com.mebit.app.resources.montserrat_bold
+import com.mebit.app.resources.noto_sans_thai
 import org.jetbrains.compose.resources.Font
 
 /**
- * Kanit (OFL) — shipping typeface (Thai + Latin). Penpot still uses FC Vision;
- * layout/color parity only, not glyph pixel-zero.
+ * Noto Sans Thai (OFL), the typeface of eight of Penpot's ten type styles, for Thai and the Latin beside it. One variable file serves
+ * every weight: each Font sets the file's weight axis from its own weight.
  */
 @Composable
 private fun mebitFontFamily(): FontFamily = FontFamily(
-    Font(Res.font.kanit_light, FontWeight.Light),
-    Font(Res.font.kanit_regular, FontWeight.Normal),
-    Font(Res.font.kanit_medium, FontWeight.Medium),
-    Font(Res.font.kanit_semibold, FontWeight.SemiBold),
-    Font(Res.font.kanit_bold, FontWeight.Bold),
+    Font(Res.font.noto_sans_thai, FontWeight.Light),
+    Font(Res.font.noto_sans_thai, FontWeight.Normal),
+    Font(Res.font.noto_sans_thai, FontWeight.Medium),
+    Font(Res.font.noto_sans_thai, FontWeight.SemiBold),
+    Font(Res.font.noto_sans_thai, FontWeight.Bold),
 )
+
+/** Montserrat Bold (OFL), Penpot's Amount and Balance styles: a screen's large number, such as a balance, an amount or a fingerprint. */
+@Composable
+fun amountFontFamily(): FontFamily = FontFamily(Font(Res.font.montserrat_bold, FontWeight.Bold))
 
 @Composable
 fun mebitTypography(): Typography {

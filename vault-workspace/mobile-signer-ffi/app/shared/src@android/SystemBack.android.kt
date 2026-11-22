@@ -14,5 +14,5 @@ actual fun SystemBack(onBack: () -> Unit) {
 @Composable
 actual fun rememberLeaveApp(): () -> Unit {
     val context = LocalContext.current
-    return remember(context) { { (context as? Activity)?.moveTaskToBack(true); Unit } }
+    return remember(context) { { (context as? Activity)?.moveTaskToBack(true) } }
 }

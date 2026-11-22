@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copy Kanit-*.ttf into Compose font resources when those files exist.
+# Copy the app's fonts from design-reference/fonts into Compose font resources when they exist.
 # Exit 0 when the source directory has none. check_fonts.py remains the font gate.
 set -euo pipefail
 
@@ -24,22 +24,15 @@ SRC="${1:-$REPO/design-reference/fonts}"
 DEST="${2:-$VP/../shared/composeResources/font}"
 mkdir -p "$DEST"
 
-shopt -s nullglob
 copied=0
-for src in "$SRC"/Kanit-*.ttf; do
-  base="$(basename "$src")"
-  # Skip license text if ever named oddly
-  case "$base" in
-    *OFL*) continue ;;
-  esac
-  stem="${base#Kanit-}"
-  stem="${stem%.ttf}"
-  lower="$(printf '%s' "$stem" | tr '[:upper:]' '[:lower:]')"
-  cp "$src" "$DEST/kanit_${lower}.ttf"
-  echo "vendored $base -> kanit_${lower}.ttf"
+for pair in "NotoSansThai-Variable.ttf:noto_sans_thai.ttf" "Montserrat-Bold.ttf:montserrat_bold.ttf"; do
+  src="$SRC/${pair%%:*}"
+  [ -f "$src" ] || continue
+  cp "$src" "$DEST/${pair#*:}"
+  echo "vendored ${pair%%:*} -> ${pair#*:}"
   copied=$((copied + 1))
 done
 
 if [ "$copied" -eq 0 ]; then
-  echo "No Kanit-*.ttf in $SRC."
+  echo "No app fonts in $SRC."
 fi

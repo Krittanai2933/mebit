@@ -274,11 +274,13 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
             try {
                 out.write(envelope)
                 file.finishWrite(out)
-                WriteResult.Written(copy.advance())
             } catch (e: IOException) {
                 file.failWrite(out) // the old file stays, so the copy does not advance
-                WriteResult.Unavailable(Why.Other)
+                return WriteResult.Unavailable(Why.Other)
             }
+            // finishWrite logs a failed sync, close or rename instead of throwing, so only a read-back proves the envelope is in place.
+            if (!androidWriteLanded(envelope) { file.readFully() }) return WriteResult.Unavailable(Why.Other)
+            WriteResult.Written(copy.advance())
         }
 
         /** Deletes this place's file only. The key pair and [phoneKey] stay, because every other place still needs them. */
@@ -442,6 +444,10 @@ internal fun androidWriteRefusal(api: Int, fileExists: Boolean, deviceSecure: Bo
     !deviceSecure -> WriteResult.Unavailable(Why.NoScreenLock)
     else -> null
 }
+
+/** Whether [read] gives back exactly [written]. A file that is missing or cannot be read did not take the write. */
+internal fun androidWriteLanded(written: ByteArray, read: () -> ByteArray): Boolean =
+    try { read().contentEquals(written) } catch (e: IOException) { false }
 
 /** A key generation that threw. Measured: with no screen lock it is InvalidAlgorithmParameterException <- IllegalStateException. */
 internal fun androidGenerationOutcome(t: Throwable): WriteResult =

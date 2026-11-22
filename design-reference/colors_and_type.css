@@ -4,19 +4,13 @@
    ============================================================ */
 
 /* ---- Fonts ----------------------------------------------------
-   Kanit (Cadson Demak, OFL) is bundled for the app. Penpot Organize
-   uses Anuphan; it is referenced separately and is not bundled here.
+   Noto Sans Thai and Montserrat Bold (both OFL) are Penpot Organize's
+   typefaces, and the app bundles them.
 --------------------------------------------------------------- */
-@font-face { font-family:'Kanit'; font-weight:300; font-style:normal;
-  src:url('fonts/Kanit-Light.ttf') format('truetype'); font-display:swap; }
-@font-face { font-family:'Kanit'; font-weight:400; font-style:normal;
-  src:url('fonts/Kanit-Regular.ttf') format('truetype'); font-display:swap; }
-@font-face { font-family:'Kanit'; font-weight:500; font-style:normal;
-  src:url('fonts/Kanit-Medium.ttf') format('truetype'); font-display:swap; }
-@font-face { font-family:'Kanit'; font-weight:600; font-style:normal;
-  src:url('fonts/Kanit-SemiBold.ttf') format('truetype'); font-display:swap; }
-@font-face { font-family:'Kanit'; font-weight:700; font-style:normal;
-  src:url('fonts/Kanit-Bold.ttf') format('truetype'); font-display:swap; }
+@font-face { font-family:'Noto Sans Thai'; font-weight:100 900; font-style:normal;
+  src:url('fonts/NotoSansThai-Variable.ttf') format('truetype'); font-display:swap; }
+@font-face { font-family:'Montserrat'; font-weight:700; font-style:normal;
+  src:url('fonts/Montserrat-Bold.ttf') format('truetype'); font-display:swap; }
 
 :root {
   /* Current Organize screen values captured from the Settings design. */
@@ -29,7 +23,7 @@
   --org-amber: #c2700f;
   --org-amber-soft: #fdefdd;
   --org-radius-card: 24px;
-  --org-font: 'Anuphan', system-ui, sans-serif;
+  --org-font: 'Noto Sans Thai', system-ui, sans-serif;
 
   /* ---------- Dark backgrounds ---------- */
   --mb-green-900:   #06312D;  /* darkest — title / hero slides               */
@@ -70,9 +64,10 @@
   --hairline:       var(--org-border);
   --hairline-dark:  rgba(255,255,255,0.14);
 
-  /* Penpot reference family vs. the font bundled by the app. */
-  --font-penpot:    'Anuphan', system-ui, sans-serif;
-  --font-app:       'Kanit', system-ui, sans-serif;
+  /* Penpot and the app use the same typefaces. Montserrat is for large amounts. */
+  --font-penpot:    'Noto Sans Thai', system-ui, sans-serif;
+  --font-app:       'Noto Sans Thai', system-ui, sans-serif;
+  --font-amount:    'Montserrat', system-ui, sans-serif;
   --font-display:   var(--font-penpot);
   --font-body:      var(--font-penpot);
   --font-label:     var(--font-penpot);

@@ -84,4 +84,17 @@ class SendTextTest {
         assertEquals("—", keptText(3_120_000, null))
         assertEquals("0.0000 BTC", keptText(400_000, 501_128), "a balance read before coins left")
     }
+
+    @Test
+    fun signaturesLeftLineNamesAnyKeysFirstThenTheCountLeft() {
+        assertEquals("ใช้กุญแจดอกไหนก็ได้ 2 ดอก", signaturesLeftLine(signed = 0, m = 2, needed = 2), "board 5.2")
+        assertEquals("เหลืออีก 1 ดอก", signaturesLeftLine(signed = 1, m = 2, needed = 1), "board 5.5.1")
+        assertEquals("เหลืออีก 2 ดอก", signaturesLeftLine(signed = 1, m = 3, needed = 2))
+    }
+
+    @Test
+    fun invalidAddressOffersScanningOnlyWithACamera() {
+        assertEquals("ที่อยู่ไม่ถูกต้อง — ตรวจตัวอักษรและเครือข่าย (รองรับ Bitcoin เท่านั้น) แล้ววางหรือสแกนใหม่", invalidAddressLine(canScan = true))
+        assertEquals("ที่อยู่ไม่ถูกต้อง — ตรวจตัวอักษรและเครือข่าย (รองรับ Bitcoin เท่านั้น) แล้ววางใหม่", invalidAddressLine(canScan = false))
+    }
 }
