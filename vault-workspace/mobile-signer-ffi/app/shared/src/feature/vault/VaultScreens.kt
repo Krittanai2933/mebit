@@ -1,5 +1,6 @@
 package com.mebit.app.feature.vault
 
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -151,6 +152,8 @@ fun VaultListScreen(
     onExport: () -> Unit = {},
     onImportPicked: (FilePick) -> Unit = {},
     onImportScanned: (WalletImport) -> Unit = {},
+    /** True while a sheet covers the whole screen, so the caller hides the tab bar. */
+    onFullScreen: (Boolean) -> Unit = {},
     importProblem: ImportProblem? = null,
     onProblemClear: () -> Unit = {},
     onOpenHardware: (HardwareWallet) -> Unit = {},
@@ -163,6 +166,11 @@ fun VaultListScreen(
     var importing by remember { mutableStateOf(false) }
     var scanning by remember { mutableStateOf(false) }
     val picker = rememberTextFilePicker(onImportPicked)
+    // Penpot 3.9.2's scanner covers the whole screen, the tab bar too.
+    DisposableEffect(scanning) {
+        onFullScreen(scanning)
+        onDispose { onFullScreen(false) }
+    }
     if (scanning) {
         WalletQrScanSheet(
             onWallet = {

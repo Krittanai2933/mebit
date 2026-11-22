@@ -450,6 +450,8 @@ internal fun MebitNavHost(
     val openCatalog = { if (debugBuild) catalogOpen = true }
 
     val bar = current.route.bar
+    // A sheet that covers a tab screen, the wallet list's QR scanner, hides the bar too.
+    var barHidden by remember { mutableStateOf(false) }
     CompositionLocalProvider(LocalDebugLinkLift provides if (bar != null) 22.dp else 0.dp) {
         Box(Modifier.fillMaxSize().background(MbPage)) {
             val inset = if (bar != null) bottomBarHeight() else 0.dp
@@ -729,6 +731,7 @@ internal fun MebitNavHost(
                                     }
                                 }
                             },
+                            onFullScreen = { barHidden = it },
                             onImportScanned = { wallet ->
                                 importLine = null
                                 importing = ImportPending("", wallet)
@@ -1129,7 +1132,7 @@ internal fun MebitNavHost(
                     )
                 } }
             }
-            if (bar != null) {
+            if (bar != null && !barHidden) {
                 MebitBottomBar(
                     selected = bar,
                     onWallets = { navigate(MovieRoute.VaultList) },

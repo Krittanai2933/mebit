@@ -4,8 +4,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -17,6 +19,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -28,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -37,6 +42,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mebit.app.NoticeButton
 import com.mebit.app.NoticeDialog
 import com.mebit.app.PhotoQr
@@ -48,11 +55,14 @@ import com.mebit.app.data.problemOf
 import com.mebit.app.data.scanCounterText
 import com.mebit.app.rememberAppSettingsOpener
 import com.mebit.app.rememberQrPhotoPicker
+import com.mebit.app.rememberTorchAvailable
 import com.mebit.app.resources.Res
+import com.mebit.app.resources.ic_flashlight
 import com.mebit.app.resources.ic_photos
 import com.mebit.app.resources.ic_scan_close
 import com.mebit.app.resources.ic_scan_frame
 import com.mebit.app.ui.components.PrimaryCta
+import com.mebit.app.ui.theme.MbBtcOrange
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.ffi.signer.KeyNetwork
@@ -76,6 +86,9 @@ internal fun WalletQrScanSheet(onWallet: (WalletImport) -> Unit, onClose: () -> 
     var problem by remember { mutableStateOf<ImportProblem?>(null) }
     var denied by remember { mutableStateOf(false) }
     var done by remember { mutableStateOf(false) }
+    var torch by remember { mutableStateOf(false) }
+    val torchAvailable = rememberTorchAvailable()
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { torch = false }
     val openSettings = rememberAppSettingsOpener()
     val readFile = { text: String ->
         val read = runCatching { walletFileRead(text, KeyNetwork.TEST) }.getOrNull()
@@ -111,7 +124,7 @@ internal fun WalletQrScanSheet(onWallet: (WalletImport) -> Unit, onClose: () -> 
             .testTag("screen_vaults/scan"),
     ) {
         if (!denied) {
-            QrCameraView(torch = false, onText = feed, onDenied = { denied = true })
+            QrCameraView(torch = torch, onText = feed, onDenied = { denied = true })
         }
         Box(
             modifier = Modifier
@@ -174,19 +187,40 @@ internal fun WalletQrScanSheet(onWallet: (WalletImport) -> Unit, onClose: () -> 
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
                         text = scanCounterText(received, expected),
-                        color = MbWhite,
+                        color = MbBtcOrange,
                         fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Medium,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.testTag("scan_progress"),
                     )
                 }
             }
-            Box(
+            Row(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding() + 32.dp),
+                    .fillMaxWidth()
+                    .padding(bottom = WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding() + 32.dp)
+                    .padding(horizontal = 28.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
+                if (torchAvailable) {
+                    ScanRoundButton(
+                        fill = if (torch) MbWhite else MbWhite.copy(alpha = 0.12f),
+                        modifier = Modifier
+                            .toggleable(value = torch, role = Role.Switch, onValueChange = { torch = it })
+                            .semantics { contentDescription = "ไฟฉาย" }
+                            .testTag("scan_torch"),
+                    ) {
+                        Image(
+                            painterResource(Res.drawable.ic_flashlight),
+                            contentDescription = null,
+                            modifier = Modifier.size(24.dp),
+                            colorFilter = if (torch) ColorFilter.tint(MbNavyInk) else null,
+                        )
+                    }
+                } else {
+                    Spacer(modifier = Modifier.width(56.dp))
+                }
                 ScanRoundButton(
                     fill = MbWhite.copy(alpha = 0.12f),
                     modifier = Modifier
