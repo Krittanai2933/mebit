@@ -8,3 +8,7 @@ import androidx.compose.runtime.Composable
  */
 @Composable
 expect fun SystemBack(onBack: () -> Unit)
+
+/** Moves the app to the background, as Home does, and leaves its state alone. Android only: iOS has no Back and the result does nothing. */
+@Composable
+expect fun rememberLeaveApp(): () -> Unit

@@ -45,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mebit.app.SystemBack
 import com.mebit.app.rememberTestMode
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBtcOrange
@@ -146,6 +147,8 @@ fun MebitScreen(
 
 @Composable
 fun BackChip(onClick: () -> Unit, dark: Boolean = false, tag: String = "back") {
+    // Android's Back does what the arrow does, only while the arrow is on screen.
+    SystemBack(onClick)
     Box(
         modifier = Modifier
             .size(36.dp)
