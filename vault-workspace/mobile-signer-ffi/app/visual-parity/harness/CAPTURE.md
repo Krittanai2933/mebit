@@ -13,7 +13,7 @@ From `app/visual-parity`:
 ./scripts/capture_status.sh
 ```
 
-The script runs `status.py`, then `check_fonts.py`. Kanit is vendored — fonts should exit 0. The script does not write PNGs.
+The script runs `status.py`, then `check_fonts.py`. The app's fonts are vendored, so it should exit 0. The script does not write PNGs.
 
 ## Amper today
 
@@ -28,10 +28,10 @@ cd vault-workspace/mobile-signer-ffi/app
 
 ## Fonts (done)
 
-1. `Kanit-*.ttf` in `design-reference/fonts/` (+ `Kanit-OFL.txt`).
-2. `./scripts/vendor_fonts.sh` → `shared/composeResources/font/kanit_*.ttf`.
+1. `NotoSansThai-Variable.ttf` and `Montserrat-Bold.ttf` in `design-reference/fonts/` (+ their OFL licences).
+2. `./scripts/vendor_fonts.sh` → `shared/composeResources/font/noto_sans_thai.ttf` and `montserrat_bold.ttf`.
 3. `./scripts/check_fonts.py` exits 0.
-4. `Type.kt` uses `Font(Res.font.kanit_*)`.
+4. `Type.kt` uses `Font(Res.font.noto_sans_thai)` and `Font(Res.font.montserrat_bold)`.
 
 ## Capture next
 

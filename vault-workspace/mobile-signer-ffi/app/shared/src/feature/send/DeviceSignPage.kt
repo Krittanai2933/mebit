@@ -345,7 +345,7 @@ private fun DeviceCard(keyName: String, fingerprint: String, stage: SignStage, f
         Spacer(modifier = Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(keyName, color = MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, lineHeight = 20.sp, maxLines = 1)
-            Text("Bluetooth · fingerprint ${fingerprintGroups(fingerprint)}", color = MbSlate, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 1, modifier = Modifier.testTag("hw_sign_fingerprint"))
+            Text("Bluetooth · ${fingerprintGroups(fingerprint)}", color = MbSlate, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 1, modifier = Modifier.testTag("hw_sign_fingerprint"))
         }
         val (label, ink, fill) = when {
             failedPill != null -> Triple(failedPill, MbEyebrow, MbIconWash)

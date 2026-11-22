@@ -5,15 +5,15 @@ description: Quick reference to the mebit/Mapboss design tokens (colors, type, r
 
 # mebit design tokens
 
-Full screens/flows/product reasoning: `docs/design-notes.md`. Full token file: `design-reference/colors_and_type.css`. There are no logo files in the repo yet (`docs/04-open-items.md` item 102). This skill is just the cheat sheet.
+Full screens/flows/product reasoning: `docs/design-notes.md`. Full token file: `design-reference/colors_and_type.css`. There are no logo files in the repo yet (`docs/04-open-items.md` item 106). This skill is just the cheat sheet.
 
 ## Core palette
 
-The brand palette (Orbit Navy `#002B49`, Mercury Gold `#FFBD59`, and the rest) is in `DESIGN.md`; the CSS variables are in `design-reference/colors_and_type.css`. Take values from those two files, and see `docs/04-open-items.md` items 103 and 104 for where they still disagree with Penpot.
+The brand palette (Orbit Navy `#002B49`, Mercury Gold `#FFBD59`, and the rest) is in `DESIGN.md`; the CSS variables are in `design-reference/colors_and_type.css`. Take values from those two files, and see `docs/04-open-items.md` items 107 and 108 for where they still disagree with Penpot.
 
 ## Type
 
-Shipping typeface is **Kanit** (OFL, Thai + Latin) — `--font-display` / `--font-body` / `--font-label` all resolve to it. Files live in `design-reference/fonts/Kanit-*.ttf`; Compose loads `Res.font.kanit_*`. Penpot historically used FC Vision; do not claim glyph pixel-zero against those boards. Thai carries substance; English is reserved for uppercase signposting labels (e.g. "LOAN DASHBOARD", "LTV").
+The app uses Penpot's typefaces: **Noto Sans Thai** (OFL, Thai with Latin) for text and **Montserrat Bold** for the large Amount and Balance numbers. `--font-display`, `--font-body` and `--font-label` resolve to Noto Sans Thai, and `--font-amount` to Montserrat. The files are in `design-reference/fonts/`. Compose loads `Res.font.noto_sans_thai` through the theme and `Res.font.montserrat_bold` through `amountFontFamily()`. Thai carries substance; English is reserved for uppercase signposting labels (e.g. "LOAN DASHBOARD", "LTV").
 
 ## Radii & shadows
 

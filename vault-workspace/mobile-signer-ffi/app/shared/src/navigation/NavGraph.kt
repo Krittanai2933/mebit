@@ -693,8 +693,7 @@ internal fun MebitNavHost(
                                 val delete = walletDeleteItem(
                                     listedWallets = wallets.listed.size,
                                     saved = w.session.saved == SaveState.Saved,
-                                    usesKey = vaults.usesKey(fingerprint),
-                                    vaultName = vaults.current.vaultsUsing(fingerprint).firstOrNull()?.name,
+                                    usingVaults = if (vaults.judged) vaults.current.vaultsUsing(fingerprint).map { it.name } else null,
                                 )
                                 SpendingCard(w.place, w.session.walletName, w.chain.balanceSats, spendingKnown(w), w.session.backupConfirmed, delete)
                             },

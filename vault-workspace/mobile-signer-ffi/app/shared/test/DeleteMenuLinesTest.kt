@@ -14,42 +14,64 @@ class DeleteMenuLinesTest {
     private val unreadable = DeleteItem.Blocked("ลบไม่ได้ในตอนนี้ · อ่านรายการ Wallet ไม่ได้")
 
     @Test
-    fun aKeyIsOfferedOnlyWhenItIsNoWalletsOwnKeyAndNoSeveralKeyWalletUsesIt() {
+    fun aKeyIsOfferedOnlyWhenNoWalletUsesIt() {
         assertEquals(DeleteItem.Offered, keyDeleteItem(ownWalletName = null, usingWallets = emptyList()))
-        assertEquals(
-            DeleteItem.Blocked("ลบไม่ได้ · กุญแจนี้ใช้อยู่ใน Wallet 1, Wallet ครอบครัว"),
-            keyDeleteItem(ownWalletName = null, usingWallets = listOf("Wallet 1", "Wallet ครอบครัว")),
-            "every several-key wallet that uses it, by name",
-        )
         assertEquals(unreadable, keyDeleteItem(ownWalletName = null, usingWallets = null))
     }
 
     @Test
-    fun aWalletsOwnKeyAlwaysPointsToTheWalletPage() {
-        val own = DeleteItem.Blocked("ลบไม่ได้ · เป็นกุญแจของ กระเป๋าใช้จ่าย · ลบที่หน้า Wallet แทน")
-        assertEquals(own, keyDeleteItem(ownWalletName = "กระเป๋าใช้จ่าย", usingWallets = emptyList()))
-        assertEquals(own, keyDeleteItem(ownWalletName = "กระเป๋าใช้จ่าย", usingWallets = listOf("Wallet ครอบครัว")), "even while a several-key wallet uses it")
-        assertEquals(own, keyDeleteItem(ownWalletName = "กระเป๋าใช้จ่าย", usingWallets = null), "and while the book cannot be judged")
+    fun aKeyNamesTheSeveralKeyWalletThatUsesIt() {
+        assertEquals(
+            DeleteItem.Blocked("Wallet ครอบครัว ยังใช้กุญแจนี้อยู่\nถ้าจะลบ ให้ลบ Wallet ครอบครัว ออกก่อน"),
+            keyDeleteItem(ownWalletName = null, usingWallets = listOf("Wallet ครอบครัว")),
+        )
+    }
+
+    @Test
+    fun aPhonesKeyNamesItsOwnWalletAndTheSeveralKeyWalletThatUseIt() {
+        assertEquals(
+            DeleteItem.Blocked("กระเป๋าใช้จ่าย และ Wallet ครอบครัว ยังใช้กุญแจนี้อยู่\nถ้าจะลบ ให้ลบทั้งสอง Wallet ออกก่อน"),
+            keyDeleteItem(ownWalletName = "กระเป๋าใช้จ่าย", usingWallets = listOf("Wallet ครอบครัว")),
+        )
+    }
+
+    @Test
+    fun aKeyWithOnlyItsOwnWalletNamesThatWalletWhetherOrNotTheBookCanBeJudged() {
+        val own = DeleteItem.Blocked("กระเป๋าใช้จ่าย ยังใช้กุญแจนี้อยู่\nถ้าจะลบ ให้ลบกระเป๋าใช้จ่าย ออกก่อน")
+        assertEquals(own, keyDeleteItem(ownWalletName = "กระเป๋าใช้จ่าย", usingWallets = emptyList()), "a single Thai name joins the verb")
+        assertEquals(own, keyDeleteItem(ownWalletName = "กระเป๋าใช้จ่าย", usingWallets = null), "the book cannot name the rest")
+    }
+
+    @Test
+    fun threeOrMoreWalletsAreJoinedAndCounted() {
+        assertEquals(
+            DeleteItem.Blocked("A, B และ C ยังใช้กุญแจนี้อยู่\nถ้าจะลบ ให้ลบทั้ง 3 Wallet ออกก่อน"),
+            keyDeleteItem(ownWalletName = "A", usingWallets = listOf("B", "C")),
+        )
     }
 
     @Test
     fun aOneKeyWalletIsOfferedOnlyWhenAnotherRemainsItIsSavedTheBookIsReadAndNoVaultUsesItsKey() {
-        assertEquals(DeleteItem.Offered, walletDeleteItem(listedWallets = 2, saved = true, usesKey = false, vaultName = null))
+        assertEquals(DeleteItem.Offered, walletDeleteItem(listedWallets = 2, saved = true, usingVaults = emptyList()))
         assertEquals(
-            DeleteItem.Blocked("ลบไม่ได้ · กุญแจนี้ใช้อยู่ใน Wallet ครอบครัว"),
-            walletDeleteItem(listedWallets = 2, saved = true, usesKey = true, vaultName = "Wallet ครอบครัว"),
+            DeleteItem.Blocked("Wallet ครอบครัว ยังใช้กุญแจเดียวกันอยู่\nถ้าจะลบ ให้ลบ Wallet ครอบครัว ออกก่อน"),
+            walletDeleteItem(listedWallets = 2, saved = true, usingVaults = listOf("Wallet ครอบครัว")),
+        )
+        assertEquals(
+            DeleteItem.Blocked("Wallet 1 และ Wallet 2 ยังใช้กุญแจเดียวกันอยู่\nถ้าจะลบ ให้ลบทั้งสอง Wallet ออกก่อน"),
+            walletDeleteItem(listedWallets = 2, saved = true, usingVaults = listOf("Wallet 1", "Wallet 2")),
         )
         assertEquals(
             DeleteItem.Blocked("ลบไม่ได้ · ต้องมีกระเป๋าอย่างน้อย 1 ใบในเครื่อง"),
-            walletDeleteItem(listedWallets = 1, saved = false, usesKey = true, vaultName = "Wallet ครอบครัว"),
+            walletDeleteItem(listedWallets = 1, saved = false, usingVaults = listOf("Wallet ครอบครัว")),
             "the last wallet says so first, whatever else holds",
         )
         assertEquals(
             DeleteItem.Blocked("ลบไม่ได้ · กระเป๋านี้ยังไม่ได้บันทึกในเครื่อง"),
-            walletDeleteItem(listedWallets = 2, saved = false, usesKey = null, vaultName = null),
+            walletDeleteItem(listedWallets = 2, saved = false, usingVaults = null),
             "its words are only in memory",
         )
-        assertEquals(unreadable, walletDeleteItem(listedWallets = 3, saved = true, usesKey = null, vaultName = null))
+        assertEquals(unreadable, walletDeleteItem(listedWallets = 3, saved = true, usingVaults = null))
     }
 
     @Test

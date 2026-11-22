@@ -48,6 +48,7 @@ import com.mebit.ffi.signer.WalletImport
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.HardwareWallet
 import com.mebit.app.data.SavedVaults
+import com.mebit.app.data.THIS_PHONE_KEY_NAME
 import com.mebit.app.data.VaultDraft
 import com.mebit.app.data.VaultsNotice
 import com.mebit.app.data.OnboardingSession
@@ -214,7 +215,7 @@ fun VaultListScreen(
             WalletListCard(
                 kind = "SINGLE-SIG",
                 name = card.name,
-                detail = "กุญแจเดียว · iPhone ของฉัน",
+                detail = "กุญแจเดียว · $THIS_PHONE_KEY_NAME",
                 balance = cardBalanceText(card.sats, card.known),
                 dark = false,
                 badge = card.backupTag,

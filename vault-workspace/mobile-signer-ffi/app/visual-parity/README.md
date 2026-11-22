@@ -1,7 +1,7 @@
 # Movie Page visual parity
 
-Penpot Movie Page is layout/color source of truth. App ships **Kanit** (OFL);
-Penpot boards use FC Vision — do not claim glyph-level pixel-zero.
+Penpot Movie Page is layout/color source of truth. App ships **Noto Sans Thai** and **Montserrat Bold** (OFL),
+the typefaces of Penpot's typography, so glyphs can match as well.
 
 ## Layout
 
@@ -14,8 +14,8 @@ Penpot boards use FC Vision — do not claim glyph-level pixel-zero.
 | `scripts/crop.py` | Status-bar + home-indicator crop |
 | `scripts/svg_to_baseline.py` | Penpot SVG → cropped baseline |
 | `scripts/diff.py` | Exact RGBA compare (any pixel → exit 1) |
-| `scripts/check_fonts.py` | Kanit gate |
-| `scripts/vendor_fonts.sh` | Copy `Kanit-*.ttf` into `composeResources/font/` |
+| `scripts/check_fonts.py` | App font gate |
+| `scripts/vendor_fonts.sh` | Copy the app's fonts into `composeResources/font/` |
 | `scripts/capture_status.sh` | Run `status.py` and `check_fonts.py` |
 | `scripts/diff.sh` | fonts + `--all` diff |
 
@@ -39,18 +39,18 @@ Same crop for baselines and captures. No mid-migration crop tweaks.
 
 Prefer Android JVM screenshot of each screen at **width 402dp**, height = cropped content (789dp), locked density:
 
-1. Kanit already in `design-reference/fonts/` + `shared/composeResources/font/`
-2. `Type.kt` uses `Res.font.kanit_*`
+1. Noto Sans Thai and Montserrat Bold already in `design-reference/fonts/` + `shared/composeResources/font/`
+2. `Type.kt` uses `Res.font.noto_sans_thai` and `Res.font.montserrat_bold`
 3. Add Paparazzi or Roborazzi module rendering each route composable
 4. Write PNGs into `captures/<route>.png` (same naming as baselines: `/` → `__`)
-5. `./scripts/diff.sh` — expect glyph deltas vs Penpot FC Vision baselines
+5. `./scripts/diff.sh` — baselines drawn before 2026-11-20 used older Penpot typefaces, so expect glyph deltas there
 
 `verify.sh` emulator recipes stay for live smoke only.
 
 ## Font gate
 
 ```bash
-python3 scripts/check_fonts.py   # exit 0 when Kanit TTFs present
+python3 scripts/check_fonts.py   # exit 0 when the app's TTFs are present
 ```
 
 ## Self-check

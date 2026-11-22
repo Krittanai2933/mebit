@@ -35,6 +35,8 @@ import androidx.compose.runtime.setValue
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.SaveState
 import com.mebit.app.data.StartNotice
+import com.mebit.app.data.THIS_PHONE_KEY_NAME
+import com.mebit.app.getPlatform
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.mebit_logo
 import com.mebit.app.ui.components.BackChip
@@ -245,9 +247,9 @@ fun KeyCreatedScreen(
     ) {
         Spacer(modifier = Modifier.height(19.dp))
         KeyCard(
-            monogram = "iOS",
+            monogram = remember { getPlatform().phoneMonogram },
             monogramInk = MbNavy,
-            title = "iPhone ของฉัน",
+            title = THIS_PHONE_KEY_NAME,
             meta = "mebit บนเครื่องนี้ · " + session.fingerprint.chunked(4).joinToString(" ").ifBlank { "—" },
             metaTag = "fingerprint",
             badge = "ยังไม่สำรอง",

@@ -79,6 +79,7 @@ import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
+import com.mebit.app.ui.theme.amountFontFamily
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.isValidAddress
 import kotlinx.coroutines.Dispatchers
@@ -170,7 +171,7 @@ fun VaultSendScreen(
             when (issue) {
                 SendIssue.InvalidAddress -> {
                     Spacer(modifier = Modifier.height(20.dp))
-                    IssuePanel("INVALID ADDRESS", "ที่อยู่ไม่ถูกต้อง — ตรวจตัวอักษรและเครือข่าย (รองรับ Bitcoin เท่านั้น) แล้ววางใหม่")
+                    IssuePanel("INVALID ADDRESS", invalidAddressLine(canScan = cameraAvailable))
                 }
                 SendIssue.BalanceUnavailable -> {
                     Spacer(modifier = Modifier.height(20.dp))
@@ -215,6 +216,9 @@ private fun SignaturesBanner(m: Int, n: Int) {
 
 /** 5.1's banner text. */
 internal fun signaturesLine(m: Int, n: Int): String = "ต้องเซ็น $m จาก $n กุญแจก่อนส่ง"
+
+/** The line beside 5.2's signed count until the payment is ready: any m keys before the first signature (5.2), then how many are left (5.5.x). */
+internal fun signaturesLeftLine(signed: Int, m: Int, needed: Int): String = if (signed == 0) "ใช้กุญแจดอกไหนก็ได้ $m ดอก" else "เหลืออีก $needed ดอก"
 
 /**
  * The ways out of a several-key wallet's guard that no history settled, as [UnconfirmedClearControl] offers a one-key wallet's: post the
@@ -337,7 +341,7 @@ fun CollectSignaturesScreen(
             if (ready) {
                 Text("ครบแล้ว ส่งได้เลย", color = MbSuccess, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, modifier = Modifier.testTag("m2_ready"))
             } else {
-                Text("ใช้กุญแจดอกไหนก็ได้ ${vault.m} ดอก", color = MbSlate, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Text(signaturesLeftLine(signed, vault.m, needed), color = MbSlate, fontSize = 12.sp, fontWeight = FontWeight.Medium)
             }
         }
         Spacer(modifier = Modifier.height(10.dp))
@@ -377,7 +381,7 @@ private fun PaymentCard(payment: VaultPayment, quote: com.mebit.app.data.FiatQuo
     ) {
         Text("ส่ง", color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
         Row(verticalAlignment = Alignment.Bottom) {
-            Text(formatBtcCompact(amount), color = MbWhite, fontSize = 30.sp, fontWeight = FontWeight.Bold, lineHeight = 38.sp, modifier = Modifier.testTag("m2_amount"))
+            Text(formatBtcCompact(amount), color = MbWhite, fontSize = 30.sp, fontWeight = FontWeight.Bold, fontFamily = amountFontFamily(), lineHeight = 38.sp, modifier = Modifier.testTag("m2_amount"))
             Spacer(modifier = Modifier.width(6.dp))
             Text("BTC", color = MbWhite.copy(alpha = 0.8f), fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 5.dp))
             Spacer(modifier = Modifier.weight(1f))

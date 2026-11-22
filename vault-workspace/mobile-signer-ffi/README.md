@@ -166,7 +166,7 @@ The four functions above are synchronous. In Kotlin they are ordinary functions,
 
 ### Bluetooth: Jade and Trezor Safe 7
 
-The crate also exports Bluetooth for two hardware wallets, through the `jade-ble` and `trezor-ble` crates. Rust owns the radio on both platforms (`../../docs/08-multisig-wallet-spec.md` §5.1), on btleplug 0.13.3. Kotlin gets the generated API below. There is no screen and no facade. A removable [probe](#the-hardware-probe) exercises the API.
+The crate also exports Bluetooth for two hardware wallets, through the `jade-ble` and `trezor-ble` crates. Rust owns the radio on both platforms (`../../docs/08-multisig-wallet-spec.md` §5.1), on btleplug 0.13.5, pinned exactly in `rust/Cargo.toml`. Kotlin gets the generated API below. There is no screen and no facade. A removable [probe](#the-hardware-probe) exercises the API.
 
 #### What Kotlin gets
 
