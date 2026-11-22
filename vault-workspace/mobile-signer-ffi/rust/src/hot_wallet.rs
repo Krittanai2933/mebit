@@ -442,22 +442,31 @@ fn sync_scan(
     })
 }
 
-/// The one-key wallet `words` and `passphrase` make, by `synced_by`, with every key derived again. `Account::new` and
-/// `check_network` run before the store or any host hears of the wallet.
-fn synced(
-    source: &dyn ChainSource,
-    words: &[String],
-    passphrase: &str,
-    network: KeyNetwork,
-    address_type: AddressType,
-    clock: &dyn Fn() -> SystemTime,
-    store: &ScanStore,
-) -> Result<Wallet, MobileSignerError> {
-    let account = Account::new(words, passphrase, network_of(network), address_type)?;
-    check_network(network)?;
-    synced_by(source, &account, network, clock, store, |chain, index| {
-        account.key(chain, index)
-    })
+impl OneKeyWallet<'_> {
+    /// This wallet, by `synced_by`, with every key derived again. `Account::new` and `check_network` run before the
+    /// store or any host hears of the wallet.
+    fn synced(
+        &self,
+        source: &dyn ChainSource,
+        clock: &dyn Fn() -> SystemTime,
+        store: &ScanStore,
+    ) -> Result<Wallet, MobileSignerError> {
+        let account = Account::new(
+            self.words,
+            self.passphrase,
+            network_of(self.network),
+            self.address_type,
+        )?;
+        check_network(self.network)?;
+        synced_by(
+            source,
+            &account,
+            self.network,
+            clock,
+            store,
+            |chain, index| account.key(chain, index),
+        )
+    }
 }
 
 /// The wallet `addresses` names, by `sync_scan`, keeping `key` of each index, derived again with no lock held.
@@ -927,15 +936,13 @@ fn snapshot_from(
     clock: &dyn Fn() -> SystemTime,
     store: &ScanStore,
 ) -> Result<HotWalletSnapshot, MobileSignerError> {
-    let wallet = synced(
-        source,
+    let wallet = OneKeyWallet {
         words,
         passphrase,
         network,
         address_type,
-        clock,
-        store,
-    )?;
+    }
+    .synced(source, clock, store)?;
     snapshot_of(source, &wallet, network)
 }
 
@@ -1054,15 +1061,15 @@ fn history_of(
     store: &ScanStore,
 ) -> Result<Vec<HotTx>, MobileSignerError> {
     check_network(network)?;
-    let wallet = complete(synced(
-        source,
-        words,
-        passphrase,
-        network,
-        address_type,
-        clock,
-        store,
-    )?)?;
+    let wallet = complete(
+        OneKeyWallet {
+            words,
+            passphrase,
+            network,
+            address_type,
+        }
+        .synced(source, clock, store)?,
+    )?;
     history_by(source, &wallet)
 }
 
@@ -1454,15 +1461,19 @@ pub fn hot_prepare_send_at_rate(
     amount_sats: u64,
     fee_rate_sat_vb: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
-    Ok(prepared(signed_payment(
+    Ok(prepared(signed_send(
         &EsploraSource(&testnet4()),
-        &mnemonic_words,
-        &passphrase,
-        network,
-        address_type,
-        &destination,
-        amount_sats,
-        fee_rate_sat_vb,
+        OneKeyWallet {
+            words: &mnemonic_words,
+            passphrase: &passphrase,
+            network,
+            address_type,
+        },
+        Payment {
+            destination: &destination,
+            amount: SendAmount::Exact(amount_sats),
+            rate_sat_vb: fee_rate_sat_vb,
+        },
         &SystemTime::now,
         &SCAN_STORE,
     )?))
@@ -1508,14 +1519,19 @@ pub fn hot_prepare_send_all(
     destination: String,
     fee_rate_sat_vb: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
-    Ok(prepared(signed_send_all(
+    Ok(prepared(signed_send(
         &EsploraSource(&testnet4()),
-        &mnemonic_words,
-        &passphrase,
-        network,
-        address_type,
-        &destination,
-        fee_rate_sat_vb,
+        OneKeyWallet {
+            words: &mnemonic_words,
+            passphrase: &passphrase,
+            network,
+            address_type,
+        },
+        Payment {
+            destination: &destination,
+            amount: SendAmount::All,
+            rate_sat_vb: fee_rate_sat_vb,
+        },
         &SystemTime::now,
         &SCAN_STORE,
     )?))
@@ -1551,13 +1567,17 @@ pub fn hot_quote_send(
 ) -> Result<QuotedSend, MobileSignerError> {
     quoted(
         &EsploraSource(&testnet4()),
-        &mnemonic_words,
-        &passphrase,
-        network,
-        address_type,
-        &destination,
-        amount_sats.map_or(SendAmount::All, SendAmount::Exact),
-        fee_rate_sat_vb,
+        OneKeyWallet {
+            words: &mnemonic_words,
+            passphrase: &passphrase,
+            network,
+            address_type,
+        },
+        Payment {
+            destination: &destination,
+            amount: amount_sats.map_or(SendAmount::All, SendAmount::Exact),
+            rate_sat_vb: fee_rate_sat_vb,
+        },
         &SystemTime::now,
         &SCAN_STORE,
     )
@@ -2023,6 +2043,23 @@ pub(crate) enum SendAmount {
     All,
 }
 
+/// A payment as the user asks for it: `amount` to `destination` at `rate_sat_vb`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Payment<'a> {
+    pub(crate) destination: &'a str,
+    pub(crate) amount: SendAmount,
+    pub(crate) rate_sat_vb: u64,
+}
+
+/// The one-key wallet `words` and `passphrase` open on `network`, its coins at `address_type` addresses.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OneKeyWallet<'a> {
+    pub(crate) words: &'a [String],
+    pub(crate) passphrase: &'a str,
+    pub(crate) network: KeyNetwork,
+    pub(crate) address_type: AddressType,
+}
+
 /// What `signed` spends and pays for one payment, decided from one sync and one read of the coin
 /// lists, before any proof or signature. `K` owns each coin: a one-key wallet's key, a several-key
 /// wallet's address, or a described wallet's `script::Derived`.
@@ -2041,12 +2078,15 @@ pub(crate) struct Plan<'c, K = OwnKey> {
 /// rate, then the amount with one coin's fee, which must fit u64. Send all: the rate, then the
 /// destination. `own` is how one of the wallet's coins is spent.
 pub(crate) fn checked(
-    destination: &str,
+    payment: Payment<'_>,
     network: KeyNetwork,
     own: InputWeightPrediction,
-    amount: SendAmount,
-    rate_sat_vb: u64,
 ) -> Result<Address, MobileSignerError> {
+    let Payment {
+        destination,
+        amount,
+        rate_sat_vb,
+    } = payment;
     let SendAmount::Exact(amount_sats) = amount else {
         check_rate(rate_sat_vb)?;
         return destination_on(destination, network);
@@ -2079,37 +2119,27 @@ fn need(
     })
 }
 
-/// What `amount` to `destination` at `rate_sat_vb` spends and pays from the wallet `words` and
-/// `passphrase` open, handed to `finish`: `checked`, then `check_network`, one `synced` (which may
-/// share a sync), one `spendable_coins` and the plan. The only path to a plan, so nothing can decide a
-/// payment the signer would not.
-#[allow(clippy::too_many_arguments)]
+/// What `payment` spends and pays from `wallet`, handed to `finish`: `checked`, then `check_network`, one
+/// `synced` (which may share a sync), one `spendable_coins` and the plan. The only path to a plan, so nothing
+/// can decide a payment the signer would not.
 fn planned<T>(
     source: &dyn ChainSource,
-    words: &[String],
-    passphrase: &str,
-    network: KeyNetwork,
-    address_type: AddressType,
-    destination: &str,
-    amount: SendAmount,
-    rate_sat_vb: u64,
+    wallet: OneKeyWallet<'_>,
+    payment: Payment<'_>,
     clock: &dyn Fn() -> SystemTime,
     store: &ScanStore,
     finish: impl FnOnce(Plan<'_>) -> Result<T, MobileSignerError>,
 ) -> Result<T, MobileSignerError> {
-    let own = address_type.input_weight();
-    let dest = checked(destination, network, own, amount, rate_sat_vb)?;
-    check_network(network)?;
-    let wallet = complete(synced(
-        source,
-        words,
-        passphrase,
-        network,
-        address_type,
-        clock,
-        store,
-    )?)?;
-    plan_from(source, &wallet, own, &dest, amount, rate_sat_vb, finish)
+    let own = wallet.address_type.input_weight();
+    let dest = checked(payment, wallet.network, own)?;
+    check_network(wallet.network)?;
+    let scanned = complete(wallet.synced(source, clock, store)?)?;
+    let Payment {
+        amount,
+        rate_sat_vb,
+        ..
+    } = payment;
+    plan_from(source, &scanned, own, &dest, amount, rate_sat_vb, finish)
 }
 
 /// What `amount` to `dest` at `rate_sat_vb` spends and pays from `wallet`, whose scan is complete and whose
@@ -2308,109 +2338,45 @@ fn signed_plan(source: &dyn ChainSource, plan: Plan<'_>) -> Result<Signed, Mobil
     })
 }
 
-/// A payment from the coins of every used address, each input signed with its own key, any change
-/// paid to the first unused internal (change) address, not yet broadcast, with the fee it pays.
-/// The amount, the rate, the destination and the sum of the amount and the smallest payment's fee
-/// (which must fit u64) are checked before any network call. A fee above the amount is signed,
-/// because the fee is paid on top and the destination still gets the amount. Every refusal is an
-/// error, never a changed payment. The used-address set may come from a sync `synced` shares.
-#[allow(clippy::too_many_arguments)]
-fn signed_payment(
+/// `payment` from the coins of every used address of `wallet`, each input signed with its own key, not yet
+/// broadcast, with the fee it pays. An exact amount puts any change on the first unused internal (change)
+/// address; send all pays the whole balance less the fee in one output and no change. The amount, the rate,
+/// the destination and, for an exact amount, the sum of the amount and the smallest payment's fee (which must
+/// fit u64) are checked before any network call; send all's fee and amount once the coins are known. A fee
+/// above the amount is signed, because the fee is paid on top and the destination still gets the amount.
+/// Every refusal is an error, never a changed payment. The used-address set may come from a sync `synced`
+/// shares.
+fn signed_send(
     source: &dyn ChainSource,
-    words: &[String],
-    passphrase: &str,
-    network: KeyNetwork,
-    address_type: AddressType,
-    destination: &str,
-    amount_sats: u64,
-    rate_sat_vb: u64,
+    wallet: OneKeyWallet<'_>,
+    payment: Payment<'_>,
     clock: &dyn Fn() -> SystemTime,
     store: &ScanStore,
 ) -> Result<Signed, MobileSignerError> {
-    planned(
-        source,
-        words,
-        passphrase,
-        network,
-        address_type,
-        destination,
-        SendAmount::Exact(amount_sats),
-        rate_sat_vb,
-        clock,
-        store,
-        |plan| signed_plan(source, plan),
-    )
-}
-
-/// The whole balance to `destination` in one output and no change: every coin `signed_payment`
-/// would consider, the fee the size of that transaction times the rate, and the amount what is
-/// left, not yet broadcast, with the fee it pays. The rate and the destination are checked before
-/// any network call; the fee and the amount once the coins are known. Every refusal is an error,
-/// never a changed payment.
-#[allow(clippy::too_many_arguments)]
-fn signed_send_all(
-    source: &dyn ChainSource,
-    words: &[String],
-    passphrase: &str,
-    network: KeyNetwork,
-    address_type: AddressType,
-    destination: &str,
-    rate_sat_vb: u64,
-    clock: &dyn Fn() -> SystemTime,
-    store: &ScanStore,
-) -> Result<Signed, MobileSignerError> {
-    planned(
-        source,
-        words,
-        passphrase,
-        network,
-        address_type,
-        destination,
-        SendAmount::All,
-        rate_sat_vb,
-        clock,
-        store,
-        |plan| signed_plan(source, plan),
-    )
+    planned(source, wallet, payment, clock, store, |plan| {
+        signed_plan(source, plan)
+    })
 }
 
 /// The quote's finish: the plan's figures, nothing proven or signed, refused where the signed bytes
 /// would be, past the node's 10,000 sat/vB on the weight `signed` proves the bytes have.
-#[allow(clippy::too_many_arguments)]
 fn quoted(
     source: &dyn ChainSource,
-    words: &[String],
-    passphrase: &str,
-    network: KeyNetwork,
-    address_type: AddressType,
-    destination: &str,
-    amount: SendAmount,
-    rate_sat_vb: u64,
+    wallet: OneKeyWallet<'_>,
+    payment: Payment<'_>,
     clock: &dyn Fn() -> SystemTime,
     store: &ScanStore,
 ) -> Result<QuotedSend, MobileSignerError> {
-    planned(
-        source,
-        words,
-        passphrase,
-        network,
-        address_type,
-        destination,
-        amount,
-        rate_sat_vb,
-        clock,
-        store,
-        |plan| {
-            let vsize = weight_of(&plan.selected, &plan.outputs).to_vbytes_ceil();
-            check_node_rate(plan.fee_sats, vsize).map_err(MobileSignerError::InvalidPsbtJson)?;
-            Ok(QuotedSend {
-                fee_sats: plan.fee_sats,
-                amount_sats: plan.outputs[0].value.to_sat(),
-                dust_change_sats: plan.dust_change_sats,
-                vsize,
-            })
-        },
-    )
+    planned(source, wallet, payment, clock, store, |plan| {
+        let vsize = weight_of(&plan.selected, &plan.outputs).to_vbytes_ceil();
+        check_node_rate(plan.fee_sats, vsize).map_err(MobileSignerError::InvalidPsbtJson)?;
+        Ok(QuotedSend {
+            fee_sats: plan.fee_sats,
+            amount_sats: plan.outputs[0].value.to_sat(),
+            dust_change_sats: plan.dust_change_sats,
+            vsize,
+        })
+    })
 }
 
 /// What replaces a signed payment of unknown outcome. Both spend every coin of that payment, so at most
@@ -2457,10 +2423,12 @@ pub fn hot_prepare_fee_bump(
 ) -> Result<PreparedSend, MobileSignerError> {
     Ok(prepared(signed_replacement(
         &EsploraSource(&testnet4()),
-        &mnemonic_words,
-        &passphrase,
-        network,
-        address_type,
+        OneKeyWallet {
+            words: &mnemonic_words,
+            passphrase: &passphrase,
+            network,
+            address_type,
+        },
         &earlier_hex,
         fee_rate_sat_vb,
         Replacement::FeeBump,
@@ -2486,10 +2454,12 @@ pub fn hot_prepare_cancel(
 ) -> Result<PreparedSend, MobileSignerError> {
     Ok(prepared(signed_replacement(
         &EsploraSource(&testnet4()),
-        &mnemonic_words,
-        &passphrase,
-        network,
-        address_type,
+        OneKeyWallet {
+            words: &mnemonic_words,
+            passphrase: &passphrase,
+            network,
+            address_type,
+        },
         &earlier_hex,
         fee_rate_sat_vb,
         Replacement::Cancel,
@@ -2512,13 +2482,9 @@ thread_local! {
 /// their shape and the rate are checked before any network call, the change, the coins and the earlier
 /// fee after the scan, and the signed transaction once more before it is returned. Every refusal is an
 /// error, never a changed payment.
-#[allow(clippy::too_many_arguments)]
 fn signed_replacement(
     source: &dyn ChainSource,
-    words: &[String],
-    passphrase: &str,
-    network: KeyNetwork,
-    address_type: AddressType,
+    wallet: OneKeyWallet<'_>,
     earlier_hex: &str,
     rate_sat_vb: u64,
     kind: Replacement,
@@ -2541,18 +2507,11 @@ fn signed_replacement(
         return Err(not_ours("it spends a coin twice"));
     }
     check_rate(rate_sat_vb)?;
-    check_network(network)?;
-    let wallet = complete(synced(
-        source,
-        words,
-        passphrase,
-        network,
-        address_type,
-        clock,
-        store,
-    )?)?;
+    check_network(wallet.network)?;
+    let own_spend = wallet.address_type.input_weight();
+    let scanned = complete(wallet.synced(source, clock, store)?)?;
     // Every address of the change chain the scan derived, which is where this wallet puts change.
-    let own: Vec<ScriptBuf> = wallet.keys[Chain::Internal as usize]
+    let own: Vec<ScriptBuf> = scanned.keys[Chain::Internal as usize]
         .iter()
         .map(|key| key.address.script_pubkey())
         .collect();
@@ -2560,7 +2519,7 @@ fn signed_replacement(
     if change.as_ref().is_some_and(|script| !own.contains(script)) {
         return Err(not_ours("its second output is not this wallet's change"));
     }
-    let (spendable, _) = spendable_coins(source, &wallet)?;
+    let (spendable, _) = spendable_coins(source, &scanned)?;
     let mut selected: Vec<(&Utxo, &OwnKey)> = Vec::new();
     for outpoint in &spent {
         let (utxo, owner) = spendable
@@ -2599,7 +2558,6 @@ fn signed_replacement(
     // Rules 3 and 4 ask at least the earlier fee plus the new size at the 1 sat/vB incremental relay
     // rate. The size is the signed size, so the real rate is at least `rate`.
     let fee = |size: u64| (rate * size).max(old_fee.saturating_add(size));
-    let own_spend = address_type.input_weight();
     let fee_for = |inputs: usize, scripts: &[usize]| fee(vsize(&vec![own_spend; inputs], scripts));
     // The least fee the node takes at a size: rules 3 and 4, and rule 6 a whole sat/kvB above the
     // earlier rate, as Bitcoin Core truncates both rates to whole sat/kvB before it compares them.
@@ -2626,7 +2584,7 @@ fn signed_replacement(
     };
     let destination = &earlier.output[0];
     let change =
-        change.unwrap_or_else(|| wallet.next_unused(Chain::Internal).address.script_pubkey());
+        change.unwrap_or_else(|| scanned.next_unused(Chain::Internal).address.script_pubkey());
     let (outputs, have, dust_change_sats) = match kind {
         Replacement::Cancel => (one(selected.len(), total, change)?, total, 0),
         Replacement::FeeBump => {
@@ -2895,10 +2853,6 @@ fn fee_tiers_from(
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::result_large_err,
-    reason = "Answer is ureq's own call() result, so its error stays ureq's"
-)]
 pub(crate) mod tests {
     use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet, VecDeque};
@@ -3694,32 +3648,48 @@ pub(crate) mod tests {
     // The same format with the reason for coins already spent. Not recorded.
     const NODE_REFUSES: &str = "sendrawtransaction RPC error -25: bad-txns-inputs-missingorspent";
 
-    // An answer as ureq hands it over: a status of 400 or more arrives as an error.
-    fn answer(status: u16, body: &str) -> Answer {
-        let response = ureq::Response::new(status, "-", body).unwrap();
-        if status >= 400 {
+    // `response` handed to `read` as ureq's call() hands it over: a status of 400 or more arrives as an error.
+    fn handed_over<T>(
+        response: ureq::Response,
+        read: impl FnOnce(Result<ureq::Response, ureq::Error>) -> T,
+    ) -> T {
+        read(if response.status() >= 400 {
             Err(response.into())
         } else {
             Ok(response)
-        }
+        })
     }
 
-    // What ureq returns when a read times out: a transport error with no status.
-    fn no_answer() -> Answer {
-        Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out").into())
+    fn response(status: u16, body: &str) -> ureq::Response {
+        ureq::Response::new(status, "-", body).unwrap()
     }
 
     // A body announced as 100 bytes that stops after 5, so reading it fails.
+    fn cut_short_response(status: u16) -> ureq::Response {
+        format!("HTTP/1.1 {status} -\r\nContent-Length: 100\r\n\r\nshort")
+            .parse()
+            .unwrap()
+    }
+
+    // What ureq returns when a read times out: a transport error with no status.
+    fn timed_out() -> ureq::Error {
+        std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out").into()
+    }
+
+    fn got(status: u16, body: &str) -> Result<String, GetError> {
+        handed_over(response(status, body), classify)
+    }
+
+    fn answer(status: u16, body: &str) -> Answer {
+        handed_over(response(status, body), answer_of)
+    }
+
+    fn no_answer() -> Answer {
+        answer_of(Err(timed_out()))
+    }
+
     fn cut_short(status: u16) -> Answer {
-        let response: ureq::Response =
-            format!("HTTP/1.1 {status} -\r\nContent-Length: 100\r\n\r\nshort")
-                .parse()
-                .unwrap();
-        if status >= 400 {
-            Err(response.into())
-        } else {
-            Ok(response)
-        }
+        handed_over(cut_short_response(status), answer_of)
     }
 
     // What /tx/{txid} answers for a transaction the explorer holds, cut to the field that is read.
@@ -3823,7 +3793,7 @@ pub(crate) mod tests {
         ];
         for (status, body) in refusals {
             // The text the old http_post gave for the same answer.
-            let before = format!("esplora post: {}", answer(status, body).unwrap_err());
+            let before = format!("esplora post: https://example.com/: status code {status}");
             let run = broadcast(answer(status, body), vec![found()]);
             match &run.result {
                 Err(MobileSignerError::InvalidPsbtJson(text)) => assert_eq!(text, &before),
@@ -3924,7 +3894,13 @@ pub(crate) mod tests {
     #[test]
     fn a_body_that_cannot_be_read_leaves_the_payment_unclear() {
         assert!(
-            cut_short(200).unwrap().into_string().is_err(),
+            matches!(
+                cut_short(200),
+                Answer::Success {
+                    status: 200,
+                    body: None
+                }
+            ),
             "the fixture must not be readable"
         );
         // A 4xx reason that breaks off may have said the node holds the transaction.
@@ -4300,16 +4276,34 @@ pub(crate) mod tests {
 
         /// `send_at` with the change that went into the fee.
         fn payment(&self, to: &str, amount: u64, rate: u64) -> Result<Signed, MobileSignerError> {
-            let words = abandon_about();
-            signed_payment(
+            self.sent(to, SendAmount::Exact(amount), rate)
+        }
+
+        /// This Fake's wallet: the test phrase `words` with no passphrase, on testnet, at its address type.
+        fn wallet<'a>(&self, words: &'a [String]) -> OneKeyWallet<'a> {
+            OneKeyWallet {
+                words,
+                passphrase: "",
+                network: KeyNetwork::Test,
+                address_type: self.address_type,
+            }
+        }
+
+        /// `amount` to `to` at `rate` sat/vB, as `hot_prepare_send_at_rate` and `hot_prepare_send_all` reach it.
+        fn sent(
+            &self,
+            to: &str,
+            amount: SendAmount,
+            rate: u64,
+        ) -> Result<Signed, MobileSignerError> {
+            signed_send(
                 &EsploraSource(&Reads(&|url| self.get(url))),
-                &words,
-                "",
-                KeyNetwork::Test,
-                self.address_type,
-                to,
-                amount,
-                rate,
+                self.wallet(&abandon_about()),
+                Payment {
+                    destination: to,
+                    amount,
+                    rate_sat_vb: rate,
+                },
                 &|| self.now(),
                 &self.store,
             )
@@ -4328,39 +4322,15 @@ pub(crate) mod tests {
         ) -> Result<QuotedSend, MobileSignerError> {
             quoted(
                 &EsploraSource(&Reads(&|url| self.get(url))),
-                &abandon_about(),
-                "",
-                KeyNetwork::Test,
-                self.address_type,
-                to,
-                amount,
-                rate,
+                self.wallet(&abandon_about()),
+                Payment {
+                    destination: to,
+                    amount,
+                    rate_sat_vb: rate,
+                },
                 &|| self.now(),
                 &self.store,
             )
-        }
-
-        /// What the payment `quote` reads signs: `payment`, or `hot_prepare_send_all`'s for send all.
-        fn signed_for(
-            &self,
-            to: &str,
-            amount: SendAmount,
-            rate: u64,
-        ) -> Result<Signed, MobileSignerError> {
-            match amount {
-                SendAmount::Exact(sats) => self.payment(to, sats, rate),
-                SendAmount::All => signed_send_all(
-                    &EsploraSource(&Reads(&|url| self.get(url))),
-                    &abandon_about(),
-                    "",
-                    KeyNetwork::Test,
-                    self.address_type,
-                    to,
-                    rate,
-                    &|| self.now(),
-                    &self.store,
-                ),
-            }
         }
 
         /// The whole balance at `rate` sat/vB, as `hot_prepare_send_all` reaches it, and the fee it pays.
@@ -4369,19 +4339,8 @@ pub(crate) mod tests {
             to: &str,
             rate: u64,
         ) -> Result<(Transaction, u64), MobileSignerError> {
-            let words = abandon_about();
-            signed_send_all(
-                &EsploraSource(&Reads(&|url| self.get(url))),
-                &words,
-                "",
-                KeyNetwork::Test,
-                self.address_type,
-                to,
-                rate,
-                &|| self.now(),
-                &self.store,
-            )
-            .map(|s| (s.tx, s.fee_sats))
+            self.sent(to, SendAmount::All, rate)
+                .map(|s| (s.tx, s.fee_sats))
         }
 
         /// A `kind` replacement of `earlier` at `rate` sat/vB, as `hot_prepare_fee_bump` and
@@ -4414,10 +4373,7 @@ pub(crate) mod tests {
         ) -> Result<Signed, MobileSignerError> {
             signed_replacement(
                 &EsploraSource(&Reads(&|url| self.get(url))),
-                &abandon_about(),
-                "",
-                KeyNetwork::Test,
-                self.address_type,
+                self.wallet(&abandon_about()),
                 hex,
                 rate,
                 kind,
@@ -7293,7 +7249,7 @@ pub(crate) mod tests {
         fake.snapshot("").unwrap();
         assert_eq!(fake.requests(), 54 + 4);
         let hosts = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
-        let lost = get_forgetting(&|| classify(no_answer()), &|_| {}, &hosts, &|| {
+        let lost = get_forgetting(&|| classify(Err(timed_out())), &|_| {}, &hosts, &|| {
             fake.store.mark_stale()
         });
         assert!(lost.is_err());
@@ -7782,11 +7738,11 @@ pub(crate) mod tests {
         let t0 = Instant::now();
         let half = Duration::from_millis(500);
         // classify's raw 429, which only a test that skips the wrapper sees, asked once.
-        let (raw, attempts, _) = retried(vec![classify(answer(429, ""))]);
+        let (raw, attempts, _) = retried(vec![got(429, "")]);
         let raw = raw.unwrap_err();
         assert!(limited(&raw) && attempts == 1);
         assert_eq!(text(raw), "esplora get: HTTP status 429");
-        let outages = (0..3).map(|_| classify(answer(503, ""))).collect();
+        let outages = (0..3).map(|_| got(503, "")).collect();
         assert!(!limited(&retried(outages).0.unwrap_err()));
         // A GET answered 429, and one not made because its host is under that limit. The seconds round up.
         let limits = Limits::default();
@@ -7815,7 +7771,7 @@ pub(crate) mod tests {
         // A probe round in which every host answered 429, one with a 404, and one with a host under a
         // limit beside a host that is down.
         let probed = |status: u16| {
-            let probe = |_: &HostSpec| classify(answer(status, ""));
+            let probe = |_: &HostSpec| got(status, "");
             pick_host(
                 &SPECS,
                 &probe,
@@ -7936,7 +7892,10 @@ pub(crate) mod tests {
         }
         let ok = classified("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
         assert!(matches!(ok, Ok(b) if b == "{}"));
-        assert!(matches!(classify(no_answer()), Err(GetError::TimedOut(_))));
+        assert!(matches!(
+            classify(Err(timed_out())),
+            Err(GetError::TimedOut(_))
+        ));
         // A read limit on a blocking socket, a stalled TLS handshake, reaches ureq's caller as `WouldBlock`.
         let blocked = std::io::Error::new(
             std::io::ErrorKind::WouldBlock,
@@ -7957,7 +7916,7 @@ pub(crate) mod tests {
         // A body cut short is the connection lost mid-answer, not an answer. A body that times out is
         // tested against a socket in `a_body_that_trickles_past_the_request_deadline_is_a_failure_that_forgets_the_host`.
         assert!(matches!(
-            classify(cut_short(200)),
+            handed_over(cut_short_response(200), classify),
             Err(GetError::Unreachable(_))
         ));
     }
@@ -8006,7 +7965,9 @@ pub(crate) mod tests {
             ("a reset", lost as fn() -> Result<String, GetError>),
             ("a refused connection", || classify(Err(refused()))),
             ("a timeout", stalled),
-            ("a body cut short", || classify(cut_short(200))),
+            ("a body cut short", || {
+                handed_over(cut_short_response(200), classify)
+            }),
         ];
         let account = Account::new(
             &abandon_about(),
@@ -8034,7 +7995,7 @@ pub(crate) mod tests {
                 get_forgetting(
                     &|| match attempts.fetch_add(1, SeqCst) {
                         200 => lose(),
-                        _ => classify(answer(200, &fake.get(url).unwrap())),
+                        _ => got(200, &fake.get(url).unwrap()),
                     },
                     &|_| {},
                     &hosts,
@@ -8095,7 +8056,7 @@ pub(crate) mod tests {
     }
 
     fn stalled() -> Result<String, GetError> {
-        classify(no_answer())
+        classify(Err(timed_out()))
     }
 
     #[test]
@@ -8146,11 +8107,7 @@ pub(crate) mod tests {
                 vec![stalled(), Ok("{}".into())],
                 false,
             ),
-            (
-                "a loss, then a 404",
-                vec![lost(), classify(answer(404, ""))],
-                false,
-            ),
+            ("a loss, then a 404", vec![lost(), got(404, "")], false),
             ("a 429", vec![Err(throttled())], false),
             ("a loss, then a 429", vec![lost(), Err(throttled())], false),
             ("three losses", vec![lost(), lost(), lost()], true),
@@ -9173,7 +9130,9 @@ pub(crate) mod tests {
         let scans_kept = |fake: &Fake| !fake.next_snapshot_syncs();
 
         let (cache, fake) = (cached(), scanned());
-        forget_host_if_unreachable(&classify(no_answer()), &cache, &|| fake.store.mark_stale());
+        forget_host_if_unreachable(&classify(Err(timed_out())), &cache, &|| {
+            fake.store.mark_stale()
+        });
         assert_eq!(chosen(&cache), None, "a timeout");
         assert!(!scans_kept(&fake), "a timeout");
 
@@ -9186,32 +9145,28 @@ pub(crate) mod tests {
         assert!(!scans_kept(&fake), "a refused connection");
 
         let (cache, fake) = (cached(), scanned());
-        forget_host_if_unreachable(&classify(answer(500, "")), &cache, &|| {
-            fake.store.mark_stale()
-        });
+        forget_host_if_unreachable(&got(500, ""), &cache, &|| fake.store.mark_stale());
         assert_eq!(chosen(&cache), Some(0), "HTTP 500");
         assert!(scans_kept(&fake), "HTTP 500");
 
         let (cache, fake) = (cached(), scanned());
-        forget_host_if_unreachable(&classify(answer(404, "")), &cache, &|| {
-            fake.store.mark_stale()
-        });
+        forget_host_if_unreachable(&got(404, ""), &cache, &|| fake.store.mark_stale());
         assert_eq!(chosen(&cache), Some(0), "HTTP 404");
         assert!(scans_kept(&fake), "HTTP 404");
 
         let (cache, fake) = (cached(), scanned());
-        forget_host_if_unreachable(
-            &classify(answer(200, "<html>Sign in</html>")),
-            &cache,
-            &|| fake.store.mark_stale(),
-        );
+        forget_host_if_unreachable(&got(200, "<html>Sign in</html>"), &cache, &|| {
+            fake.store.mark_stale()
+        });
         assert_eq!(chosen(&cache), Some(0), "a 200 with a bad body");
         assert!(scans_kept(&fake), "a 200 with a bad body");
 
         let (cache, fake) = (cached(), scanned());
-        forget_host_if_unreachable(&classify(cut_short(200)), &cache, &|| {
-            fake.store.mark_stale()
-        });
+        forget_host_if_unreachable(
+            &handed_over(cut_short_response(200), classify),
+            &cache,
+            &|| fake.store.mark_stale(),
+        );
         assert_eq!(chosen(&cache), None, "a body cut short");
         assert!(!scans_kept(&fake), "a body cut short");
     }
@@ -9223,7 +9178,7 @@ pub(crate) mod tests {
             (HOSTS[1], Ok(TESTNET4_GENESIS)),
         ]);
         let cache = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
-        forget_host_if_unreachable(&classify(no_answer()), &cache, &|| {});
+        forget_host_if_unreachable(&classify(Err(timed_out())), &cache, &|| {});
         assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1);
         assert_eq!(probe.asked(), HOSTS);
     }
@@ -10023,10 +9978,7 @@ pub(crate) mod tests {
             MobileSignerError::InvalidPsbtJson(m) => m,
             other => other.to_string(),
         };
-        match (
-            fake.quote(to, amount, rate),
-            fake.signed_for(to, amount, rate),
-        ) {
+        match (fake.quote(to, amount, rate), fake.sent(to, amount, rate)) {
             (Ok(quote), Ok(signed)) => {
                 let paid = QuotedSend {
                     fee_sats: signed.fee_sats,
@@ -10629,7 +10581,7 @@ pub(crate) mod tests {
         let fake = Fake::new();
         fake.snapshot("").unwrap();
         let get = |_: &str| {
-            get_forgetting(&|| classify(no_answer()), &|_| {}, &hosts, &|| {
+            get_forgetting(&|| classify(Err(timed_out())), &|_| {}, &hosts, &|| {
                 fake.store.mark_stale()
             })
         };
@@ -10664,12 +10616,14 @@ pub(crate) mod tests {
             TESTNET4.0.get(url)
         };
         let start = std::time::Instant::now();
-        let wallet = synced(
+        let wallet = OneKeyWallet {
+            words: &abandon_about(),
+            passphrase: "",
+            network: KeyNetwork::Test,
+            address_type: AddressType::NativeSegwit,
+        }
+        .synced(
             &EsploraSource(&Reads(&counted)),
-            &abandon_about(),
-            "",
-            KeyNetwork::Test,
-            AddressType::NativeSegwit,
             &SystemTime::now,
             &ScanStore::default(),
         )
@@ -11275,8 +11229,8 @@ pub(crate) mod tests {
     fn a_404_for_the_transaction_is_told_apart_from_every_other_failure() {
         let txid = Txid::from_str(&id('1')).unwrap();
         let host = not_found_host();
-        let failed = |answer: Answer| MobileSignerError::from(classify(answer).unwrap_err());
-        let asked = |path: String| failed(AGENT.get(&format!("{host}{path}")).call());
+        let failed = |got: Result<String, GetError>| MobileSignerError::from(got.unwrap_err());
+        let asked = |path: String| failed(classify(AGENT.get(&format!("{host}{path}")).call()));
         assert!(is_not_found(&asked(format!("/tx/{txid}")), &txid));
         assert!(
             !is_not_found(&asked(format!("/tx/{}", id('2'))), &txid),
@@ -11286,16 +11240,19 @@ pub(crate) mod tests {
             !is_not_found(&asked("/blocks/tip/height".into()), &txid),
             "the tip"
         );
-        assert!(!is_not_found(&failed(not_found()), &txid), "not a /tx URL");
+        assert!(
+            !is_not_found(&failed(got(404, "Transaction not found")), &txid),
+            "not a /tx URL"
+        );
         for status in [400, 410, 429, 500, 502] {
-            assert!(
-                !is_not_found(&failed(answer(status, "")), &txid),
-                "{status}"
-            );
+            assert!(!is_not_found(&failed(got(status, "")), &txid), "{status}");
         }
-        assert!(!is_not_found(&failed(no_answer()), &txid));
-        assert!(!is_not_found(&failed(cut_short(200)), &txid));
-        assert!(!is_not_found(&failed(Err(refused())), &txid));
+        assert!(!is_not_found(&failed(classify(Err(timed_out()))), &txid));
+        assert!(!is_not_found(
+            &failed(handed_over(cut_short_response(200), classify)),
+            &txid
+        ));
+        assert!(!is_not_found(&failed(classify(Err(refused()))), &txid));
         // ureq 2.12.1 names the first URL after a redirect (error.rs:214).
         assert!(is_not_found(
             &MobileSignerError::InvalidPsbtJson(format!(
@@ -11475,7 +11432,7 @@ pub(crate) mod tests {
                 base: answers_404,
                 ..*host
             }),
-            _ => classify(no_answer()),
+            _ => classify(Err(timed_out())),
         };
         let chosen = Mutex::new(None);
         let limits = Limits::default();
@@ -12299,27 +12256,36 @@ pub(crate) mod tests {
                     &store,
                 )
                 .map(|_| ()),
-                signed_payment(
+                signed_send(
                     &source,
-                    &words,
-                    "",
-                    KeyNetwork::Test,
-                    AddressType::NativeSegwit,
-                    SOMEONE,
-                    1_000,
-                    1,
+                    OneKeyWallet {
+                        words: &words,
+                        passphrase: "",
+                        network: KeyNetwork::Test,
+                        address_type: AddressType::NativeSegwit,
+                    },
+                    Payment {
+                        destination: SOMEONE,
+                        amount: SendAmount::Exact(1_000),
+                        rate_sat_vb: 1,
+                    },
                     now,
                     &store,
                 )
                 .map(|_| ()),
-                signed_send_all(
+                signed_send(
                     &source,
-                    &words,
-                    "",
-                    KeyNetwork::Test,
-                    AddressType::NativeSegwit,
-                    SOMEONE,
-                    1,
+                    OneKeyWallet {
+                        words: &words,
+                        passphrase: "",
+                        network: KeyNetwork::Test,
+                        address_type: AddressType::NativeSegwit,
+                    },
+                    Payment {
+                        destination: SOMEONE,
+                        amount: SendAmount::All,
+                        rate_sat_vb: 1,
+                    },
                     now,
                     &store,
                 )
@@ -12983,12 +12949,14 @@ pub(crate) mod tests {
         };
         let mut completed = Vec::new();
         for hour in 0..24 {
-            let wallet = synced(
+            let wallet = OneKeyWallet {
+                words: &abandon_about(),
+                passphrase: "",
+                network: KeyNetwork::Test,
+                address_type: AddressType::NativeSegwit,
+            }
+            .synced(
                 &EsploraSource(&Reads(&limited)),
-                &abandon_about(),
-                "",
-                KeyNetwork::Test,
-                AddressType::NativeSegwit,
                 &|| fake.now(),
                 &fake.store,
             )
@@ -13622,9 +13590,11 @@ pub(crate) mod tests {
                 &source,
                 &descriptor,
                 KeyNetwork::Test,
-                SOMEONE,
-                SendAmount::Exact(10_000),
-                2,
+                Payment {
+                    destination: SOMEONE,
+                    amount: SendAmount::Exact(10_000),
+                    rate_sat_vb: 2,
+                },
                 &clock,
                 &fake.store,
             )
@@ -13832,15 +13802,13 @@ pub(crate) mod tests {
         );
 
         let phone = complete(
-            synced(
-                &source,
-                &abandon_about(),
-                "",
-                KeyNetwork::Test,
-                AddressType::NativeSegwit,
-                &|| fake.now(),
-                &fake.store,
-            )
+            OneKeyWallet {
+                words: &abandon_about(),
+                passphrase: "",
+                network: KeyNetwork::Test,
+                address_type: AddressType::NativeSegwit,
+            }
+            .synced(&source, &|| fake.now(), &fake.store)
             .unwrap(),
         )
         .unwrap();
