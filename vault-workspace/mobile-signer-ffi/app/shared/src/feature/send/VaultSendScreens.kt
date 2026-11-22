@@ -577,6 +577,7 @@ fun VaultSentScreen(send: VaultSend?, quotes: QuoteCache, onHome: () -> Unit, on
         rateSatVb = send.draft.rateSatVb,
         destination = sent.payment.destination,
         walletName = send.vault.name,
+        multiKey = true,
         quotes = quotes,
         onHome = onHome,
         onOpenCatalog = onOpenCatalog,

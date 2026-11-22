@@ -455,6 +455,7 @@ fun S6SentScreen(
             rateSatVb = draft.rateSatVb,
             destination = draft.destination,
             walletName = walletName,
+            multiKey = false,
             quotes = quotes,
             onHome = onHome,
             onOpenCatalog = onOpenCatalog,

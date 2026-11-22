@@ -1025,6 +1025,7 @@ internal fun MebitNavHost(
                             rateSatVb = draft.rateSatVb,
                             destination = draft.destination,
                             walletName = w.name,
+                            multiKey = false,
                             quotes = quotes,
                             onHome = { land(stackAfterSlipHome(backStack)) },
                             onOpenCatalog = openCatalog,
