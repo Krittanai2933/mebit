@@ -267,9 +267,15 @@ RustBuffer uniffi_mobile_signer_ffi_fn_func_sign_psbt(RustBuffer psbtJson, RustB
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_balance(RustBuffer descriptor, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
 );
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_bsms_record(RustBuffer descriptor, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
+);
 RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_describe(RustBuffer descriptor, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
 );
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_descriptor_text(RustBuffer descriptor, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
+);
 RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_draft(RustBuffer descriptor, RustBuffer network, RustBuffer destination, RustBuffer amountSats, int64_t feeRateSatVb, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_file_read(RustBuffer text, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_finish(RustBuffer descriptor, RustBuffer network, RustBuffer psbt, RustBuffer unsignedTxid, UniffiRustCallStatus *_Nonnull out_status
 );
@@ -488,10 +494,19 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_sign_psbt(void
 int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_balance(void
     
 );
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_bsms_record(void
+    
+);
 int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_describe(void
     
 );
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_descriptor_text(void
+    
+);
 int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_draft(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_file_read(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_finish(void

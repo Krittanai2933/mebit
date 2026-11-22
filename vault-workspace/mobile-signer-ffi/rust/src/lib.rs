@@ -8,6 +8,7 @@ uniffi::setup_scaffolding!();
 
 mod address_type;
 pub mod ble;
+pub mod bsms;
 mod chain;
 pub mod hot_wallet;
 pub mod price;
@@ -1037,6 +1038,18 @@ mod tests {
             (
                 "func_fetch_btc_thb",
                 price::uniffi_mobile_signer_ffi_checksum_func_fetch_btc_thb(),
+            ),
+            (
+                "func_wallet_file_read",
+                bsms::uniffi_mobile_signer_ffi_checksum_func_wallet_file_read(),
+            ),
+            (
+                "func_wallet_bsms_record",
+                bsms::uniffi_mobile_signer_ffi_checksum_func_wallet_bsms_record(),
+            ),
+            (
+                "func_wallet_descriptor_text",
+                bsms::uniffi_mobile_signer_ffi_checksum_func_wallet_descriptor_text(),
             ),
         ];
         for (name, checksum) in checksums {

@@ -1140,6 +1140,12 @@ internal typealias UniffiVTableCallbackInterfaceSignStepsUniffiByValue = UniffiV
 
 
 
+
+
+
+
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -1272,10 +1278,19 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_wallet_balance() != 53648.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
+        if (uniffi_mobile_signer_ffi_checksum_func_wallet_bsms_record() != 21965.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
         if (uniffi_mobile_signer_ffi_checksum_func_wallet_describe() != 64410.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
+        if (uniffi_mobile_signer_ffi_checksum_func_wallet_descriptor_text() != 53535.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
         if (uniffi_mobile_signer_ffi_checksum_func_wallet_draft() != 27636.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_wallet_file_read() != 39000.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_wallet_finish() != 27411.toShort()) {
@@ -1423,10 +1438,19 @@ internal object IntegrityCheckingUniffiLib : Library {
     external fun uniffi_mobile_signer_ffi_checksum_func_wallet_balance(
     ): Short
     @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_bsms_record(
+    ): Short
+    @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_wallet_describe(
     ): Short
     @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_descriptor_text(
+    ): Short
+    @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_wallet_draft(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_file_read(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_wallet_finish(
@@ -1793,7 +1817,19 @@ internal object UniffiLib : Library {
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_wallet_bsms_record(
+        `descriptor`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_func_wallet_describe(
+        `descriptor`: RustBufferByValue,
+        `network`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_wallet_descriptor_text(
         `descriptor`: RustBufferByValue,
         `network`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
@@ -1805,6 +1841,12 @@ internal object UniffiLib : Library {
         `destination`: RustBufferByValue,
         `amountSats`: RustBufferByValue,
         `feeRateSatVb`: Long,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_wallet_file_read(
+        `text`: RustBufferByValue,
+        `network`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     @JvmStatic
@@ -3688,6 +3730,34 @@ public object FfiConverterTypeWalletBalance: FfiConverterRustBuffer<WalletBalanc
 
 
 
+public object FfiConverterTypeWalletImport: FfiConverterRustBuffer<WalletImport> {
+    override fun read(buf: ByteBuffer): WalletImport {
+        return WalletImport(
+            FfiConverterString.read(buf),
+            FfiConverterTypeWalletShape.read(buf),
+            FfiConverterTypeWalletFileFormat.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: WalletImport): ULong = (
+            FfiConverterString.allocationSize(value.`descriptor`) +
+            FfiConverterTypeWalletShape.allocationSize(value.`shape`) +
+            FfiConverterTypeWalletFileFormat.allocationSize(value.`format`) +
+            FfiConverterOptionalString.allocationSize(value.`statedAddress`)
+    )
+
+    override fun write(value: WalletImport, buf: ByteBuffer) {
+        FfiConverterString.write(value.`descriptor`, buf)
+        FfiConverterTypeWalletShape.write(value.`shape`, buf)
+        FfiConverterTypeWalletFileFormat.write(value.`format`, buf)
+        FfiConverterOptionalString.write(value.`statedAddress`, buf)
+    }
+}
+
+
+
+
 public object FfiConverterTypeWalletInfo: FfiConverterRustBuffer<WalletInfo> {
     override fun read(buf: ByteBuffer): WalletInfo {
         return WalletInfo(
@@ -4152,6 +4222,118 @@ public object FfiConverterTypeWalletDetails : FfiConverterRustBuffer<WalletDetai
                 FfiConverterOptionalString.write(value.`deviceId`, buf)
                 FfiConverterOptionalString.write(value.`label`, buf)
                 FfiConverterUShort.write(value.`mtu`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+public object FfiConverterTypeWalletFileFormat: FfiConverterRustBuffer<WalletFileFormat> {
+    override fun read(buf: ByteBuffer): WalletFileFormat = try {
+        WalletFileFormat.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: WalletFileFormat): ULong = 4UL
+
+    override fun write(value: WalletFileFormat, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+public object FfiConverterTypeWalletFileRead : FfiConverterRustBuffer<WalletFileRead>{
+    override fun read(buf: ByteBuffer): WalletFileRead {
+        return when(buf.getInt()) {
+            1 -> WalletFileRead.Read(
+                FfiConverterTypeWalletImport.read(buf),
+                )
+            2 -> WalletFileRead.WrongNetwork
+            3 -> WalletFileRead.Unsupported(
+                FfiConverterString.read(buf),
+                )
+            4 -> WalletFileRead.AddressMismatch(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            5 -> WalletFileRead.Unreadable(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: WalletFileRead): ULong = when(value) {
+        is WalletFileRead.Read -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeWalletImport.allocationSize(value.`wallet`)
+            )
+        }
+        is WalletFileRead.WrongNetwork -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is WalletFileRead.Unsupported -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`found`)
+            )
+        }
+        is WalletFileRead.AddressMismatch -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`stated`)
+                + FfiConverterString.allocationSize(value.`derived`)
+            )
+        }
+        is WalletFileRead.Unreadable -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+    }
+
+    override fun write(value: WalletFileRead, buf: ByteBuffer) {
+        when(value) {
+            is WalletFileRead.Read -> {
+                buf.putInt(1)
+                FfiConverterTypeWalletImport.write(value.`wallet`, buf)
+                Unit
+            }
+            is WalletFileRead.WrongNetwork -> {
+                buf.putInt(2)
+                Unit
+            }
+            is WalletFileRead.Unsupported -> {
+                buf.putInt(3)
+                FfiConverterString.write(value.`found`, buf)
+                Unit
+            }
+            is WalletFileRead.AddressMismatch -> {
+                buf.putInt(4)
+                FfiConverterString.write(value.`stated`, buf)
+                FfiConverterString.write(value.`derived`, buf)
+                Unit
+            }
+            is WalletFileRead.Unreadable -> {
+                buf.putInt(5)
+                FfiConverterString.write(value.`reason`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -5060,6 +5242,20 @@ public actual fun `walletBalance`(`descriptor`: kotlin.String, `network`: KeyNet
 }
 
 /**
+ * The BIP-129 record of a stored-form wallet: header, template with the BIP-129 key suffix, the path restriction line, receive address 0.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `walletBsmsRecord`(`descriptor`: kotlin.String, `network`: KeyNetwork): kotlin.String {
+    return FfiConverterString.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_bsms_record(
+            FfiConverterString.lower(`descriptor`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
  * The keys, how many must sign, receive address 0 and the typical payment size of the wallet `descriptor`
  * describes. Asks nothing of the network.
  */
@@ -5067,6 +5263,20 @@ public actual fun `walletBalance`(`descriptor`: kotlin.String, `network`: KeyNet
 public actual fun `walletDescribe`(`descriptor`: kotlin.String, `network`: KeyNetwork): WalletShape {
     return FfiConverterTypeWalletShape.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_describe(
+            FfiConverterString.lower(`descriptor`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The stored form with the BIP-389 multipath suffix on each key and its BIP-380 checksum.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `walletDescriptorText`(`descriptor`: kotlin.String, `network`: KeyNetwork): kotlin.String {
+    return FfiConverterString.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_descriptor_text(
             FfiConverterString.lower(`descriptor`),
             FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,
@@ -5088,6 +5298,21 @@ public actual fun `walletDraft`(`descriptor`: kotlin.String, `network`: KeyNetwo
             FfiConverterString.lower(`destination`),
             FfiConverterOptionalULong.lower(`amountSats`),
             FfiConverterULong.lower(`feeRateSatVb`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * What a wallet file holds: always an outcome, never an error. Takes a BIP-129 record, the app's older
+ * `.bsms`, or one descriptor line (checksum optional, verified when present), with a key suffix of
+ * none, the BIP-129 double star, the BIP-389 multipath, or the single-chain receive form.
+ */
+public actual fun `walletFileRead`(`text`: kotlin.String, `network`: KeyNetwork): WalletFileRead {
+    return FfiConverterTypeWalletFileRead.lift(uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_file_read(
+            FfiConverterString.lower(`text`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,
         )
     })

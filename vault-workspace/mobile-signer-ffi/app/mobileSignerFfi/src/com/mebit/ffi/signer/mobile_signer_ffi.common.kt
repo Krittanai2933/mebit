@@ -803,6 +803,24 @@ public data class WalletBalance (
 
 
 
+
+public data class WalletImport (
+    /**
+     * The stored form, as the app's `walletDescriptor` writes it.
+     */
+    var `descriptor`: kotlin.String, 
+    var `shape`: WalletShape, 
+    var `format`: WalletFileFormat, 
+    /**
+     * The first address the file states, if it states one. It matched `shape.first_address`.
+     */
+    var `statedAddress`: kotlin.String?
+) {
+    public companion object
+}
+
+
+
 /**
  * Who answered on a connected link.
  */
@@ -1279,6 +1297,80 @@ public sealed class WalletDetails {
 
 
 
+/**
+ * Where the file came from.
+ */
+
+
+public enum class WalletFileFormat {
+    
+    /**
+     * A BIP-129 record.
+     */
+    BSMS,
+    /**
+     * The `.bsms` this app wrote before it wrote BIP-129 records.
+     */
+    APP_BSMS,
+    /**
+     * One line, a descriptor.
+     */
+    DESCRIPTOR;
+    public companion object
+}
+
+
+
+
+
+
+
+public sealed class WalletFileRead {
+    
+    public data class Read(
+        val `wallet`: WalletImport,
+    ) : WalletFileRead() {
+    }
+    
+    /**
+     * The keys belong to the other network.
+     */
+    
+    public object WrongNetwork : WalletFileRead() 
+    
+    
+    /**
+     * A descriptor of another kind, or one this app does not take: `found` names it.
+     */
+    public data class Unsupported(
+        val `found`: kotlin.String,
+    ) : WalletFileRead() {
+    }
+    
+    /**
+     * The file states a first address its keys do not give. Never import it.
+     */
+    public data class AddressMismatch(
+        val `stated`: kotlin.String,
+        val `derived`: kotlin.String,
+    ) : WalletFileRead() {
+    }
+    
+    /**
+     * Anything else. For logs, in English.
+     */
+    public data class Unreadable(
+        val `reason`: kotlin.String,
+    ) : WalletFileRead() {
+    }
+    
+}
+
+
+
+
+
+
 
 
 public enum class WalletKind {
@@ -1610,11 +1702,23 @@ public expect fun `signPsbt`(`psbtJson`: kotlin.String, `borrowerPubkey`: kotlin
 public expect fun `walletBalance`(`descriptor`: kotlin.String, `network`: KeyNetwork): WalletBalance
 
 /**
+ * The BIP-129 record of a stored-form wallet: header, template with the BIP-129 key suffix, the path restriction line, receive address 0.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `walletBsmsRecord`(`descriptor`: kotlin.String, `network`: KeyNetwork): kotlin.String
+
+/**
  * The keys, how many must sign, receive address 0 and the typical payment size of the wallet `descriptor`
  * describes. Asks nothing of the network.
  */
 @Throws(MobileSignerException::class)
 public expect fun `walletDescribe`(`descriptor`: kotlin.String, `network`: KeyNetwork): WalletShape
+
+/**
+ * The stored form with the BIP-389 multipath suffix on each key and its BIP-380 checksum.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `walletDescriptorText`(`descriptor`: kotlin.String, `network`: KeyNetwork): kotlin.String
 
 /**
  * Scans the wallet `descriptor` describes, plans a payment of `amount_sats`, or of the whole balance when it
@@ -1623,6 +1727,13 @@ public expect fun `walletDescribe`(`descriptor`: kotlin.String, `network`: KeyNe
  */
 @Throws(MobileSignerException::class)
 public expect fun `walletDraft`(`descriptor`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong?, `feeRateSatVb`: kotlin.ULong): SpendReview
+
+/**
+ * What a wallet file holds: always an outcome, never an error. Takes a BIP-129 record, the app's older
+ * `.bsms`, or one descriptor line (checksum optional, verified when present), with a key suffix of
+ * none, the BIP-129 double star, the BIP-389 multipath, or the single-chain receive form.
+ */
+public expect fun `walletFileRead`(`text`: kotlin.String, `network`: KeyNetwork): WalletFileRead
 
 /**
  * The signed transaction for `hot_broadcast`, once `psbt` still pays what `unsigned_txid` named and at least
