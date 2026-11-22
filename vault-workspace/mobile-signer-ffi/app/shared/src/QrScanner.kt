@@ -281,7 +281,7 @@ fun QrScanSheet(accepts: (String) -> Boolean, onAddress: (String) -> Unit, onClo
 }
 
 @Composable
-private fun ScanRoundButton(fill: Color, modifier: Modifier, icon: @Composable () -> Unit) {
+internal fun ScanRoundButton(fill: Color, modifier: Modifier, icon: @Composable () -> Unit) {
     Box(
         modifier = Modifier
             .size(56.dp)

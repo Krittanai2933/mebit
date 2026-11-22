@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.ImportReview
+import com.mebit.app.data.importEyebrow
 import com.mebit.app.feature.send.ConfirmSheet
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
@@ -58,9 +59,9 @@ internal fun AddWalletSheet(onNew: () -> Unit, onImport: () -> Unit, onCancel: (
     }
 }
 
-/** Penpot 3.9.1. The scan row is drawn greyed and does nothing: QR is not built. */
+/** Penpot 3.9.1: pick a file, or scan a QR (Penpot 3.9.2). */
 @Composable
-internal fun ImportWalletSheet(onPick: () -> Unit, onCancel: () -> Unit) {
+internal fun ImportWalletSheet(onPick: () -> Unit, onScan: () -> Unit, onCancel: () -> Unit) {
     ConfirmSheet(
         tag = "dialog_import_wallet",
         title = "นำเข้า Wallet หลายกุญแจ",
@@ -69,7 +70,7 @@ internal fun ImportWalletSheet(onPick: () -> Unit, onCancel: () -> Unit) {
     ) {
         SheetRow("เลือกไฟล์ BSMS/Descriptor", "ไฟล์ .bsms หรือไฟล์ descriptor จากแอปนี้หรือแอปอื่น", "cta_import_pick", onClick = onPick)
         Spacer(modifier = Modifier.height(10.dp))
-        SheetRow("สแกน QR", null, "row_import_scan", enabled = false, badge = "เร็วๆนี้", onClick = {})
+        SheetRow("สแกน QR", "QR ของไฟล์ BSMS หรือ descriptor จากแอปอื่น", "row_import_scan", onClick = onScan)
     }
 }
 
@@ -127,7 +128,7 @@ fun WalletImportScreen(
     }
     val shape = RoundedCornerShape(20.dp)
     MebitScreen(
-        eyebrow = "IMPORT · ไฟล์ $fileName",
+        eyebrow = importEyebrow(fileName),
         title = "ตรวจก่อนนำเข้า",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,

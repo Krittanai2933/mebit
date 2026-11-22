@@ -33,6 +33,9 @@ internal fun alreadyInAppLine(name: String): String = "Wallet นี้อยู
 /** The first address in groups of four characters, as Review shows it for the user to compare. */
 internal fun addressGroups(address: String): String = address.chunked(4).joinToString(" ")
 
+/** Pure. 3.9.3's eyebrow: the file's name, or "IMPORT · QR" for a wallet scanned, which has no file name. */
+internal fun importEyebrow(fileName: String): String = if (fileName.isEmpty()) "IMPORT · QR" else "IMPORT · ไฟล์ $fileName"
+
 /** The readable file Import is reviewing: its name and what the core read. */
 data class ImportPending(val fileName: String, val wallet: WalletImport)
 

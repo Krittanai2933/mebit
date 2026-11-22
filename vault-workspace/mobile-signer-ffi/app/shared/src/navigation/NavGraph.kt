@@ -729,6 +729,11 @@ internal fun MebitNavHost(
                                     }
                                 }
                             },
+                            onImportScanned = { wallet ->
+                                importLine = null
+                                importing = ImportPending("", wallet)
+                                navigate(MovieRoute.WalletImport)
+                            },
                             onOpenCatalog = openCatalog,
                             hardware = hardware.all.map { w ->
                                 val chain = hardware.chain(w)

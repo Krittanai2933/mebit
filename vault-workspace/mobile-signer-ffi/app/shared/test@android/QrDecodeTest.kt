@@ -26,7 +26,7 @@ private fun versionFor(text: String): Int = capacityAtM.indexOfFirst { text.enco
 
 // PURE_BARCODE skips ZXing's finder search, which mistakes data for a finder pattern in about 1 valid symbol in 100.
 // ZXing's own encoder's output fails the same way, and the modules are compared with that encoder below.
-private fun scan(matrix: QrMatrix): Result {
+internal fun scan(matrix: QrMatrix): Result {
     val side = (matrix.size + 2 * QUIET_ZONE) * PIXELS_PER_MODULE
     val pixels = IntArray(side * side) { 0xFFFFFFFF.toInt() }
     for (row in 0 until matrix.size) {

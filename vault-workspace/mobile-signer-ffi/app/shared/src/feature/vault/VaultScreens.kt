@@ -43,6 +43,7 @@ import com.mebit.app.data.bsmsRecordOf
 import com.mebit.app.rememberTextFilePicker
 import com.mebit.app.ui.components.MenuAction
 import com.mebit.app.Place
+import com.mebit.ffi.signer.WalletImport
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.HardwareWallet
 import com.mebit.app.data.SavedVaults
@@ -149,6 +150,7 @@ fun VaultListScreen(
     hardware: List<HardwareCard> = emptyList(),
     onExport: () -> Unit = {},
     onImportPicked: (FilePick) -> Unit = {},
+    onImportScanned: (WalletImport) -> Unit = {},
     importProblem: ImportProblem? = null,
     onProblemClear: () -> Unit = {},
     onOpenHardware: (HardwareWallet) -> Unit = {},
@@ -159,7 +161,18 @@ fun VaultListScreen(
     var removingHardware by remember { mutableStateOf<HardwareWallet?>(null) }
     var adding by remember { mutableStateOf(false) }
     var importing by remember { mutableStateOf(false) }
+    var scanning by remember { mutableStateOf(false) }
     val picker = rememberTextFilePicker(onImportPicked)
+    if (scanning) {
+        WalletQrScanSheet(
+            onWallet = {
+                scanning = false
+                onImportScanned(it)
+            },
+            onClose = { scanning = false },
+        )
+        return
+    }
     MebitScreen(
         eyebrow = null,
         // The title is drawn below so the + shares its row, as on the board.
@@ -267,6 +280,10 @@ fun VaultListScreen(
             onPick = {
                 importing = false
                 picker.pick()
+            },
+            onScan = {
+                importing = false
+                scanning = true
             },
             onCancel = { importing = false },
         )
