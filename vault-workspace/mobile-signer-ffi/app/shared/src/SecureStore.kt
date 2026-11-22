@@ -27,6 +27,7 @@ class Place private constructor(val number: Int) {
 val Place.walletName: String get() = if (this == Place.FIRST) "กระเป๋าใช้จ่าย" else "กระเป๋า $number"
 
 /** Which copy the store holds, as counted by this process. Opaque. Never written to disk, never compared across launches. */
+@ConsistentCopyVisibility
 data class StoreVersion internal constructor(private val n: Long)
 
 /**

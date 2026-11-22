@@ -5,11 +5,11 @@ description: Quick reference to the mebit/Mapboss design tokens (colors, type, r
 
 # mebit design tokens
 
-Full screens/flows/product reasoning: `docs/design-notes.md`. Full token file: `design-reference/colors_and_type.css`. There are no logo files in the repo yet (`docs/04-open-items.md` item 102). This skill is just the cheat sheet.
+Full screens/flows/product reasoning: `docs/design-notes.md`. Full token file: `design-reference/colors_and_type.css`. There are no logo files in the repo yet (`docs/04-open-items.md` item 106). This skill is just the cheat sheet.
 
 ## Core palette
 
-The brand palette (Orbit Navy `#002B49`, Mercury Gold `#FFBD59`, and the rest) is in `DESIGN.md`; the CSS variables are in `design-reference/colors_and_type.css`. Take values from those two files, and see `docs/04-open-items.md` items 103 and 104 for where they still disagree with Penpot.
+The brand palette (Orbit Navy `#002B49`, Mercury Gold `#FFBD59`, and the rest) is in `DESIGN.md`; the CSS variables are in `design-reference/colors_and_type.css`. Take values from those two files, and see `docs/04-open-items.md` items 107 and 108 for where they still disagree with Penpot.
 
 ## Type
 

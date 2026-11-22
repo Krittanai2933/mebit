@@ -3,6 +3,7 @@ package com.mebit.app
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import kotlin.coroutines.resume
+import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.ObjCObjectVar
 import kotlinx.cinterop.alloc
@@ -21,7 +22,7 @@ import platform.LocalAuthentication.LAErrorUserFallback
 import platform.LocalAuthentication.LAPolicyDeviceOwnerAuthentication
 import platform.LocalAuthentication.LAPolicyDeviceOwnerAuthenticationWithBiometrics
 
-@OptIn(ExperimentalForeignApi::class)
+@OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
 private class IosBiometrics : Biometrics {
     override suspend fun authenticate(reason: String, allowPasscode: Boolean): BiometricResult {
         val context = LAContext()
