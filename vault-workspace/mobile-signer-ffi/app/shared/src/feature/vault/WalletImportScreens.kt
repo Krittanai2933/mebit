@@ -22,14 +22,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.sp
 import com.mebit.app.data.ImportReview
 import com.mebit.app.data.importEyebrow
 import com.mebit.app.feature.send.ConfirmSheet
+import com.mebit.app.plainTextClip
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.theme.MbBody
@@ -48,6 +49,7 @@ import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /** Penpot 3.9: what the + on the Wallet list opens. */
 @Composable
@@ -118,7 +120,8 @@ fun WalletImportScreen(
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
     var copied by remember { mutableStateOf(false) }
     LaunchedEffect(copied) {
         if (copied) {
@@ -182,7 +185,7 @@ fun WalletImportScreen(
                     .clip(RoundedCornerShape(14.dp))
                     .background(MbChip)
                     .clickable(role = Role.Button) {
-                        clipboard.setText(AnnotatedString(address))
+                        scope.launch { clipboard.setClipEntry(plainTextClip(address)) }
                         copied = true
                     }
                     .padding(horizontal = 14.dp)
