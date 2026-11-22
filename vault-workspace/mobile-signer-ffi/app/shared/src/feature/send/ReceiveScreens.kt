@@ -24,7 +24,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -42,7 +41,7 @@ import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -66,6 +65,7 @@ import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.imageOfCard
+import com.mebit.app.plainTextClip
 import com.mebit.app.rememberSharer
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_warning
@@ -74,6 +74,7 @@ import com.mebit.app.resources.mebit_logo_dark
 import com.mebit.app.ui.components.BottomActions
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
+import com.mebit.app.ui.components.rememberFullSheetState
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbBtcOrange
@@ -218,7 +219,7 @@ private fun ReceiveLayout(
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
     val sharer = rememberSharer()
     val scope = rememberCoroutineScope()
     val pictureLayer = rememberGraphicsLayer()
@@ -233,7 +234,7 @@ private fun ReceiveLayout(
     }
     val copyLabel = if (copied) "คัดลอกแล้ว" else "คัดลอกที่อยู่"
     val copy = {
-        clipboard.setText(AnnotatedString(address))
+        scope.launch { clipboard.setClipEntry(plainTextClip(address)) }
         copied = true
     }
     val share = { send: suspend () -> Unit ->
@@ -354,7 +355,7 @@ private fun ReceiveLayout(
 private fun ShareChoiceSheet(onDismiss: () -> Unit, onAddress: () -> Unit, onQr: () -> Unit) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState = rememberFullSheetState(),
         containerColor = MbWhite,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
         scrimColor = MbNavyInk.copy(alpha = 0.33f),

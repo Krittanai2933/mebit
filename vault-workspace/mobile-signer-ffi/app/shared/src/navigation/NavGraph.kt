@@ -19,7 +19,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -35,6 +34,8 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mebit.app.BiometricResult
 import com.mebit.app.Pairings
 import com.mebit.app.Place
+import com.mebit.app.SystemBack
+import com.mebit.app.rememberLeaveApp
 import com.mebit.app.data.AppLockState
 import com.mebit.app.data.CreateWalletDraft
 import com.mebit.app.data.DeviceLink
@@ -158,6 +159,7 @@ import com.mebit.app.ui.components.MebitBottomBar
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.bottomBarHeight
 import com.mebit.app.ui.components.coversScreen
+import com.mebit.app.ui.components.rememberFullSheetState
 import com.mebit.app.ui.theme.MbPage
 import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.FoundWallet
@@ -1089,7 +1091,7 @@ internal fun MebitNavHost(
     if (catalogOpen) {
         ModalBottomSheet(
             onDismissRequest = { catalogOpen = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            sheetState = rememberFullSheetState(),
             modifier = Modifier.testTag("route_catalog"),
         ) {
             Text(
@@ -1138,7 +1140,9 @@ internal fun MebitNavHost(
     if (appLock.locked) {
         // A phone the Spending PIN guards unlocks only through the PIN sheet drawn over this cover, never through a check it lacks.
         val pinLock = biometrics.usesPin
-        // Covers everything, swallows taps, and goes away only on Face ID, the device passcode or the PIN.
+        // Covers everything, swallows taps, and goes away only on Face ID, the device passcode or the PIN. Composed after the screens, so this
+        // SystemBack wins over their arrows' and Back sends the app to the background: the lock stays and no screen under it pops.
+        SystemBack(rememberLeaveApp())
         Box(
             modifier = Modifier
                 .fillMaxSize()

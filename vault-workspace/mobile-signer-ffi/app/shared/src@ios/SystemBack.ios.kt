@@ -5,3 +5,6 @@ import androidx.compose.runtime.Composable
 @Composable
 actual fun SystemBack(onBack: () -> Unit) {
 }
+
+@Composable
+actual fun rememberLeaveApp(): () -> Unit = {}

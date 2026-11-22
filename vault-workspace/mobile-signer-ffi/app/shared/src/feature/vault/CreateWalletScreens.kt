@@ -90,7 +90,7 @@ import com.mebit.ffi.signer.KeyNetwork
 internal val BelowPrimary = 38.dp
 
 /** Penpot 3.1.1's eyebrow, for the three steps of a one-key wallet: Policy, Choose Key (3.2.1 to 3.2.3) and the address type. */
-internal const val SINGLE_SIG_POLICY_EYEBROW = "POLICY · ขั้น 1/3"
+internal const val SINGLE_SIG_POLICY_EYEBROW = "POLICY · ขั้น 1 / 3"
 
 /** Penpot 3.1 and 3.1.1. Multisig is selected when the screen opens. Single-sig goes on to Choose Key, and [line] says why a refused start did not. */
 @Composable
@@ -151,8 +151,8 @@ fun PolicyScreen(
                         onClick = { draft.choose(preset) },
                     )
                 }
-                // Penpot draws a custom M / N chip but no screen for it, so it is shown off and is no value.
-                PresetChip(title = "กำหนดเอง", sub = "M / N", selected = false, enabled = false, tag = "preset_custom", onClick = {})
+                // Penpot's third chip (Collaborative) is drawn disabled with only "เร็วๆนี้", so it is shown off and is no value.
+                PresetChip(title = "เร็วๆนี้", sub = null, selected = false, enabled = false, tag = "preset_collaborative", onClick = {})
             }
         }
         line?.let {
@@ -187,7 +187,7 @@ private fun SigningCard(title: String, kind: String, body: String, keys: Int, se
 }
 
 @Composable
-private fun RowScope.PresetChip(title: String, sub: String, selected: Boolean, enabled: Boolean, tag: String, onClick: () -> Unit) {
+private fun RowScope.PresetChip(title: String, sub: String?, selected: Boolean, enabled: Boolean, tag: String, onClick: () -> Unit) {
     val shape = RoundedCornerShape(16.dp)
     val ink = when {
         !enabled -> MbDisabledInk
@@ -209,11 +209,14 @@ private fun RowScope.PresetChip(title: String, sub: String, selected: Boolean, e
             .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
             .testTag(tag),
         horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = if (sub == null) Arrangement.Center else Arrangement.Top,
     ) {
-        Spacer(modifier = Modifier.height(12.dp))
+        if (sub != null) Spacer(modifier = Modifier.height(12.dp))
         Text(title, color = ink, fontSize = 15.5.sp, fontWeight = FontWeight.Bold, lineHeight = 22.sp)
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(sub, color = subInk, fontSize = 9.5.sp, lineHeight = 16.sp)
+        if (sub != null) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(sub, color = subInk, fontSize = 9.5.sp, lineHeight = 16.sp)
+        }
     }
 }
 
@@ -590,12 +593,11 @@ internal fun reviewHeadline(preset: Preset): String = "ต้องใช้ก�
 
 internal fun reviewSpare(preset: Preset): String = "กุญแจหายได้ถึง ${preset.n - preset.m} ใบโดยเงินยังปลอดภัย"
 
-/** Penpot 3.4's four rows. The mebit backup key and the timelock are not built, so their values are fixed. */
+/** Penpot 3.4's three rows. The mebit backup key is not built, so its value is fixed. */
 internal fun reviewRows(preset: Preset, keyNames: List<String>): List<Pair<String, String>> = listOf(
     "Policy" to "${preset.label} · ${MultisigScript.NativeSegwit.label}",
     "กุญแจที่ใช้" to keyNames.joinToString(", "),
     "กุญแจสำรอง mebit" to "ไม่ใช้",
-    "เงื่อนไขเวลา" to "ไม่มี",
 )
 
 internal const val DESCRIPTOR_LABEL = "DESCRIPTOR · BIP48 / P2WSH"
