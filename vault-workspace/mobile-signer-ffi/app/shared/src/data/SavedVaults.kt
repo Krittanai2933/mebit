@@ -240,7 +240,7 @@ class SavedVaults internal constructor(
             VaultBookCodec.Decoded.Newer -> refuse(VaultsHealth.Newer)
             is VaultBookCodec.Decoded.Ok -> when {
                 decoded.owner !in me.fingerprints && decoded.owner !in me.earlier && me.everyPlaceOpened -> {
-                    storage?.delete() // left by a wallet this phone no longer holds
+                    storage.delete() // left by a wallet this phone no longer holds
                     keepMemory()
                 }
                 !addressesMatch(decoded.book) -> refuse(VaultsHealth.Damaged)

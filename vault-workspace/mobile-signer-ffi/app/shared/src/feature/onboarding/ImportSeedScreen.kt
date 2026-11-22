@@ -34,7 +34,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -94,6 +93,7 @@ import com.mebit.app.resources.ic_eye_off
 import com.mebit.app.resources.ic_warning
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
+import com.mebit.app.ui.components.rememberFullSheetState
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbEyebrow
@@ -523,7 +523,7 @@ internal fun PassphraseSheet(
     var reveal by remember { mutableStateOf(false) }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState = rememberFullSheetState(),
         containerColor = MbWhite,
         modifier = Modifier.testTag("sheet_passphrase"),
     ) {
@@ -618,7 +618,7 @@ internal val ImportFingerprintCopy = FingerprintCopy(
 internal fun FingerprintSheet(session: OnboardingSession, copy: FingerprintCopy, onConfirm: () -> Unit, onReject: () -> Unit) {
     ModalBottomSheet(
         onDismissRequest = onReject,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState = rememberFullSheetState(),
         containerColor = MbWhite,
         modifier = Modifier.testTag("sheet_fingerprint"),
     ) {
