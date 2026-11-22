@@ -7292,7 +7292,7 @@ pub(crate) mod tests {
         let fake = three_used();
         fake.snapshot("").unwrap();
         assert_eq!(fake.requests(), 54 + 4);
-        let hosts = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
+        let hosts = Mutex::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
         let lost = get_forgetting(&|| classify(no_answer()), &|_| {}, &hosts, &|| {
             fake.store.mark_stale()
         });
@@ -8028,7 +8028,7 @@ pub(crate) mod tests {
             }
             fake.fund(&at(Chain::External, 149), 60_000, 'a');
             fake.fund(&at(Chain::Internal, 99), 40_000, 'b');
-            let hosts = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
+            let hosts = Mutex::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
             let attempts = AtomicUsize::new(0);
             let esplora = |url: &str| {
                 get_forgetting(
@@ -8076,7 +8076,7 @@ pub(crate) mod tests {
             );
             assert_eq!(
                 chosen(&hosts),
-                Some(0),
+                Some(HOSTS[0]),
                 "{loss}: the host that answered stays"
             );
             let before = fake.requests();
@@ -8157,7 +8157,7 @@ pub(crate) mod tests {
             ("two timeouts", vec![stalled(), stalled()], true),
         ];
         for (case, script, forgotten) in cases {
-            let hosts = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
+            let hosts = Mutex::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
             let fake = Fake::new();
             fake.snapshot("").unwrap();
             let script = Mutex::new(VecDeque::from(script));
@@ -8381,7 +8381,7 @@ pub(crate) mod tests {
     #[test]
     fn a_loss_is_forgotten_once_whatever_the_attempt_wrapper_sees() {
         let through = |script: Vec<Result<String, GetError>>| {
-            let hosts = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
+            let hosts = Mutex::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
             let limits = Limits::default();
             let script = Mutex::new(VecDeque::from(script));
             let attempts = Cell::new(0);
@@ -8410,7 +8410,7 @@ pub(crate) mod tests {
             (attempts.get(), lost_calls.get(), chosen(&hosts))
         };
         assert_eq!(through(vec![lost(), lost(), lost()]), (3, 1, None));
-        assert_eq!(through(vec![lost(), Err(throttled())]), (2, 0, Some(0)));
+        assert_eq!(through(vec![lost(), Err(throttled())]), (2, 0, Some(HOSTS[0])));
     }
 
     const HOSTS: [&str; 2] = ["https://first.example/api", "https://second.example/api"];
@@ -8616,7 +8616,7 @@ pub(crate) mod tests {
             [HOSTS[0], HOSTS[1], HOSTS[0]],
             "exactly one probe brought it back"
         );
-        assert_eq!(chosen(&world.choice), Some(0));
+        assert_eq!(chosen(&world.choice), Some(HOSTS[0]));
     }
 
     #[test]
@@ -8854,9 +8854,9 @@ pub(crate) mod tests {
         }
     }
 
-    fn chosen(cache: &HostChoice) -> Option<usize> {
+    fn chosen(cache: &HostChoice) -> Option<&'static str> {
         match &*cache.lock().unwrap() {
-            Some(HostVerdict::Chosen(index, _)) => Some(*index),
+            Some(HostVerdict::Chosen(base, _)) => Some(*base),
             _ => None,
         }
     }
@@ -8969,7 +8969,7 @@ pub(crate) mod tests {
         let whole = Duration::from_secs(2);
         let agent = agent(CONNECT_TIMEOUT, IO_TIMEOUT, whole);
         let host = dripping_host(Duration::from_secs(1), 10);
-        let cache = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
+        let cache = Mutex::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
         let fake = Fake::new();
         fake.snapshot("").unwrap();
         let start = Instant::now();
@@ -9008,7 +9008,7 @@ pub(crate) mod tests {
         let up = Probe::new(&[(HOSTS[0], Ok(TESTNET4_GENESIS))]);
         let later = t0 + PROBE_FAILURE_TTL;
         assert_eq!(up.pick(later, &cache).unwrap(), 0);
-        assert_eq!(*cache.lock().unwrap(), Some(HostVerdict::Chosen(0, later)));
+        assert_eq!(*cache.lock().unwrap(), Some(HostVerdict::Chosen(HOSTS[0], later)));
         assert_eq!(up.pick(later + Duration::from_secs(1), &cache).unwrap(), 0);
         assert_eq!(up.asked().len(), 1, "the old failure plays no part");
     }
@@ -9065,7 +9065,7 @@ pub(crate) mod tests {
         let now = Instant::now();
         assert_eq!(probe.pick(now, &cache).unwrap(), 0);
         assert_eq!(probe.asked(), vec![HOSTS[0]]);
-        assert_eq!(*cache.lock().unwrap(), Some(HostVerdict::Chosen(0, now)));
+        assert_eq!(*cache.lock().unwrap(), Some(HostVerdict::Chosen(HOSTS[0], now)));
     }
 
     #[test]
@@ -9093,7 +9093,7 @@ pub(crate) mod tests {
             let probe = Probe::new(&[(HOSTS[0], Ok(body)), (HOSTS[1], Ok(TESTNET4_GENESIS))]);
             let cache = Mutex::new(None);
             assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1, "{body:?}");
-            assert_eq!(chosen(&cache), Some(1), "{body:?}");
+            assert_eq!(chosen(&cache), Some(HOSTS[1]), "{body:?}");
         }
     }
 
@@ -9150,13 +9150,13 @@ pub(crate) mod tests {
         let over = t0 + HOST_TRUST;
         assert_eq!(probe.pick(over, &cache).unwrap(), 0);
         assert_eq!(probe.asked().len(), 2, "one probe after the window");
-        assert_eq!(*cache.lock().unwrap(), Some(HostVerdict::Chosen(0, over)));
+        assert_eq!(*cache.lock().unwrap(), Some(HostVerdict::Chosen(HOSTS[0], over)));
     }
 
     #[test]
     fn a_cached_host_is_reused_without_probing_even_when_it_would_now_fail() {
         let probe = Probe::new(&[(HOSTS[1], Err("down"))]);
-        let cache = Mutex::new(Some(HostVerdict::Chosen(1, Instant::now())));
+        let cache = Mutex::new(Some(HostVerdict::Chosen(HOSTS[1], Instant::now())));
         assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1);
         assert!(probe.asked().is_empty());
     }
@@ -9164,7 +9164,7 @@ pub(crate) mod tests {
     #[test]
     fn a_transport_failure_forgets_the_host_and_marks_the_scans_stale_but_a_status_or_a_bad_body_does_not()
      {
-        let cached = || Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
+        let cached = || Mutex::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
         let scanned = || {
             let fake = Fake::new();
             fake.snapshot("").unwrap();
@@ -9189,14 +9189,14 @@ pub(crate) mod tests {
         forget_host_if_unreachable(&classify(answer(500, "")), &cache, &|| {
             fake.store.mark_stale()
         });
-        assert_eq!(chosen(&cache), Some(0), "HTTP 500");
+        assert_eq!(chosen(&cache), Some(HOSTS[0]), "HTTP 500");
         assert!(scans_kept(&fake), "HTTP 500");
 
         let (cache, fake) = (cached(), scanned());
         forget_host_if_unreachable(&classify(answer(404, "")), &cache, &|| {
             fake.store.mark_stale()
         });
-        assert_eq!(chosen(&cache), Some(0), "HTTP 404");
+        assert_eq!(chosen(&cache), Some(HOSTS[0]), "HTTP 404");
         assert!(scans_kept(&fake), "HTTP 404");
 
         let (cache, fake) = (cached(), scanned());
@@ -9205,7 +9205,7 @@ pub(crate) mod tests {
             &cache,
             &|| fake.store.mark_stale(),
         );
-        assert_eq!(chosen(&cache), Some(0), "a 200 with a bad body");
+        assert_eq!(chosen(&cache), Some(HOSTS[0]), "a 200 with a bad body");
         assert!(scans_kept(&fake), "a 200 with a bad body");
 
         let (cache, fake) = (cached(), scanned());
@@ -9222,7 +9222,7 @@ pub(crate) mod tests {
             (HOSTS[0], Err("timed out")),
             (HOSTS[1], Ok(TESTNET4_GENESIS)),
         ]);
-        let cache = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
+        let cache = Mutex::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
         forget_host_if_unreachable(&classify(no_answer()), &cache, &|| {});
         assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1);
         assert_eq!(probe.asked(), HOSTS);
@@ -10625,7 +10625,7 @@ pub(crate) mod tests {
     #[test]
     fn a_transport_failure_while_fetching_fees_forgets_the_host_and_marks_the_scans_stale_and_still_answers()
      {
-        let hosts = Mutex::new(Some(HostVerdict::Chosen(0, Instant::now())));
+        let hosts = Mutex::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
         let fake = Fake::new();
         fake.snapshot("").unwrap();
         let get = |_: &str| {

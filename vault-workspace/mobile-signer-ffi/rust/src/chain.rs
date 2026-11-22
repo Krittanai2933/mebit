@@ -1122,11 +1122,13 @@ pub(crate) fn agent(connect: Duration, io: Duration, whole: Duration) -> ureq::A
 pub(crate) static AGENT: LazyLock<ureq::Agent> =
     LazyLock::new(|| agent(CONNECT_TIMEOUT, IO_TIMEOUT, REQUEST_TIMEOUT));
 
-/// What the last probe round decided: the index into the host list of the host in use and when it
-/// passed the genesis check, or that no host passed, when, and the error that says so.
+/// What the last probe round decided: the host in use, by its base, and when it passed the genesis
+/// check, or that no host passed, when, and the error that says so. A base, not a position in the
+/// list: a pick that began on a list `chain_use_node` then replaced can finish after the swap, and
+/// its verdict must not vouch for whichever host of the new list sits at the same position.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum HostVerdict {
-    Chosen(usize, Instant),
+    Chosen(&'static str, Instant),
     NoneReachable(Instant, String),
 }
 pub(crate) type HostChoice = Mutex<Option<HostVerdict>>;
@@ -1318,16 +1320,24 @@ pub(crate) fn pick_host(
             .iter()
             .any(|end| end.is_some_and(|end| at < end && end <= now))
     };
-    match &*verdict {
-        Some(HostVerdict::Chosen(index, verified))
-            if age(verified) < HOST_TRUST
-                && !skipped.contains(index)
-                && limited(*index).is_none()
-                && !freed_since(*verified, *index) =>
+    // The cached host counts only where this list has it.
+    let cached = match &*verdict {
+        Some(HostVerdict::Chosen(base, verified)) => hosts
+            .iter()
+            .position(|host| host.base == *base)
+            .map(|index| (index, *verified)),
+        _ => None,
+    };
+    match (&*verdict, cached) {
+        (_, Some((index, verified)))
+            if age(&verified) < HOST_TRUST
+                && !skipped.contains(&index)
+                && limited(index).is_none()
+                && !freed_since(verified, index) =>
         {
-            return Ok(*index);
+            return Ok(index);
         }
-        Some(HostVerdict::NoneReachable(at, error))
+        (Some(HostVerdict::NoneReachable(at, error)), _)
             if age(at) < PROBE_FAILURE_TTL && !freed_since(*at, hosts.len()) =>
         {
             return Err(MobileSignerError::InvalidPsbtJson(error.clone()));
@@ -1347,7 +1357,7 @@ pub(crate) fn pick_host(
         }
         match probe(host) {
             Ok(body) if body.trim() == TESTNET4_GENESIS => {
-                *verdict = Some(HostVerdict::Chosen(index, now));
+                *verdict = Some(HostVerdict::Chosen(host.base, now));
                 return Ok(index);
             }
             Ok(body) => {
@@ -1559,14 +1569,49 @@ mod node_choice_tests {
     }
 
     #[test]
+    fn a_host_cached_from_a_replaced_list_never_vouches_for_a_host_of_the_new_one() {
+        let spec = |base| HostSpec {
+            base,
+            operator: Operator::Blockstream,
+        };
+        let old = [spec("https://a.example/api"), spec("https://b.example/api")];
+        let new = [spec("https://c.example/api")];
+        let limits = Limits::default();
+        let cache: HostChoice = Mutex::new(None);
+        let now = Instant::now();
+        // A pick that began on the old list finishes after the swap, leaving its second host cached.
+        let first_down = |host: &HostSpec| -> Result<String, GetError> {
+            if host.base == old[0].base {
+                Err(GetError::Unreachable("down".into()))
+            } else {
+                Ok(TESTNET4_GENESIS.into())
+            }
+        };
+        assert_eq!(pick_host(&old, &first_down, now, &cache, &[], &limits).unwrap(), 1);
+        // The shorter new list is probed: nothing indexes past its end, and its host is not trusted unprobed.
+        let asked = Mutex::new(Vec::new());
+        let probe = |host: &HostSpec| -> Result<String, GetError> {
+            asked.lock().unwrap().push(host.base);
+            Ok(TESTNET4_GENESIS.into())
+        };
+        assert_eq!(pick_host(&new, &probe, now, &cache, &[], &limits).unwrap(), 0);
+        assert_eq!(*asked.lock().unwrap(), [new[0].base]);
+        // A host on both lists keeps the pass it earned, wherever it sits.
+        let mixed = [spec("https://b.example/api"), spec("https://c.example/api")];
+        assert_eq!(pick_host(&mixed, &probe, now, &cache, &[], &limits).unwrap(), 1);
+        assert_eq!(asked.lock().unwrap().len(), 1, "c passed already");
+    }
+
+    #[test]
     fn switching_sets_the_list_and_drops_the_trusted_host() {
         let list: HostList = Mutex::new(&[]);
-        let cache: HostChoice = Mutex::new(Some(HostVerdict::Chosen(1, Instant::now())));
+        let cached = "https://cached.example/api";
+        let cache: HostChoice = Mutex::new(Some(HostVerdict::Chosen(cached, Instant::now())));
         switch_hosts(&NodeChoice::MempoolSpace, &list, &cache).unwrap();
         assert_eq!(list.lock().unwrap()[0].operator, Operator::MempoolSpace);
         assert_eq!(*cache.lock().unwrap(), None);
         // A refused choice changes nothing.
-        *cache.lock().unwrap() = Some(HostVerdict::Chosen(0, Instant::now()));
+        *cache.lock().unwrap() = Some(HostVerdict::Chosen(cached, Instant::now()));
         let bad = NodeChoice::Own {
             base: "http://n.org".into(),
         };
