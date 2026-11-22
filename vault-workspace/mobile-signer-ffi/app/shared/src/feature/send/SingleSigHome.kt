@@ -68,6 +68,7 @@ import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
+import com.mebit.app.data.THIS_PHONE_KEY_NAME
 import com.mebit.app.data.fingerprintGroups
 import com.mebit.app.data.hardwareMonogram
 import com.mebit.app.data.hardwareSource
@@ -154,8 +155,8 @@ internal fun SingleSigHome(
     PolicyCard(
         board = WalletBoard.Home,
         dot = if (session.backupConfirmed) MbSuccess else MbBtcOrange,
-        summary = "กุญแจ: iPhone ของฉัน · " + if (session.backupConfirmed) "สำรองแล้ว" else "ยังไม่สำรอง",
-        keys = listOf(KeyRowText("iPhone ของฉัน", "mebit บนเครื่องนี้ · " + session.fingerprint.chunked(4).joinToString(" ").ifBlank { "—" }, "key_fingerprint")),
+        summary = "กุญแจ: $THIS_PHONE_KEY_NAME · " + if (session.backupConfirmed) "สำรองแล้ว" else "ยังไม่สำรอง",
+        keys = listOf(KeyRowText(THIS_PHONE_KEY_NAME, "mebit บนเครื่องนี้ · " + session.fingerprint.chunked(4).joinToString(" ").ifBlank { "—" }, "key_fingerprint")),
         expanded = keyDetails,
         onToggle = { keyDetails = !keyDetails },
     ) {
