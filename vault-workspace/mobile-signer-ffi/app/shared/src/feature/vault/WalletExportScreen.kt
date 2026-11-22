@@ -213,6 +213,9 @@ fun WalletExportScreen(vault: CreatedVault?, onBack: (() -> Unit)?, onOpenCatalo
                     Text("ให้อีกเครื่องสแกนค้างไว้จนครบทุกส่วน", color = MbBody, fontSize = 12.sp, fontWeight = FontWeight.Light, textAlign = TextAlign.Center, modifier = Modifier.testTag("export_note"))
                 }
             } else {
+                // Penpot 3.8.1 names the form under the QR, in the place the BSMS tab shows its part counter.
+                Text("Descriptor · /<0;1>/*", color = MbNavyInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("export_descriptor_label"))
+                Spacer(modifier = Modifier.height(10.dp))
                 Text("QR เดียวใช้ได้ทั้งรับเงินและเงินทอน (BIP-389)", color = MbBody, fontSize = 12.sp, fontWeight = FontWeight.Light, textAlign = TextAlign.Center, modifier = Modifier.testTag("export_note"))
             }
         }
