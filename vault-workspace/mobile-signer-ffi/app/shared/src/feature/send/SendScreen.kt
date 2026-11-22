@@ -84,6 +84,7 @@ import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbWhite
+import com.mebit.app.ui.theme.amountFontFamily
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -374,7 +375,7 @@ private fun DestinationField(draft: SendDraft, invalid: Boolean, enter: (String)
 @Composable
 private fun AmountCard(known: Boolean, spendableSats: Long, entry: AmountEntry, quote: FiatQuote?, short: Boolean) {
     val shape = RoundedCornerShape(22.dp)
-    val amount = TextStyle(color = MbNavyInk, fontSize = 44.sp, fontWeight = FontWeight.Bold, lineHeight = 56.sp)
+    val amount = TextStyle(color = MbNavyInk, fontSize = 44.sp, fontWeight = FontWeight.Bold, fontFamily = amountFontFamily(), lineHeight = 56.sp)
     val baht = entry.inBaht(quote)
     val text = entry.fieldText(quote)
     Box(
