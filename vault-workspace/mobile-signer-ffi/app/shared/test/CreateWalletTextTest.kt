@@ -22,24 +22,28 @@ class CreateWalletTextTest {
     }
 
     @Test
-    fun theHeadlineAndTheSpareKeysAreComputedFromThePreset() {
-        assertEquals("ต้องใช้กุญแจ 2 ใบจากทั้งหมด 3 ใบ เซ็นร่วมกัน จึงจะใช้จ่ายจาก Wallet นี้ได้", reviewHeadline(Preset.TwoOfThree))
-        assertEquals("ต้องใช้กุญแจ 3 ใบจากทั้งหมด 5 ใบ เซ็นร่วมกัน จึงจะใช้จ่ายจาก Wallet นี้ได้", reviewHeadline(Preset.ThreeOfFive))
-        assertEquals("กุญแจหายได้ถึง 1 ใบโดยเงินยังปลอดภัย", reviewSpare(Preset.TwoOfThree))
-        assertEquals("กุญแจหายได้ถึง 2 ใบโดยเงินยังปลอดภัย", reviewSpare(Preset.ThreeOfFive))
+    fun theReviewLinesNameMNAndTheKeysThatMayBeLost() {
+        assertEquals("Wallet 2 · 2-of-3", reviewTitle("Wallet 2", Preset.TwoOfThree))
+        assertEquals("Native SegWit · testnet · ต้องเซ็น 3 จาก 5 กุญแจ", reviewSub(Preset.ThreeOfFive))
+        assertEquals(
+            listOf(
+                "ต้องใช้กุญแจ 2 จาก 3 ใบเซ็นร่วมกัน",
+                "กุญแจหายได้ถึง 1 ใบ เงินยังปลอดภัย",
+                "กุญแจ: มือถือ, Jade, Trezor",
+                "กุญแจสำรอง mebit: ไม่ใช้",
+            ),
+            reviewRows(Preset.TwoOfThree, listOf("มือถือ", "Jade", "Trezor")),
+        )
+        assertEquals("กุญแจหายได้ถึง 2 ใบ เงินยังปลอดภัย", reviewRows(Preset.ThreeOfFive, emptyList())[1])
     }
 
     @Test
-    fun theReviewHasPenpotsThreeRowsWithTheKeyNamesJoined() {
+    fun theAddressPreviewKeepsTheFirstThreeAndLastTwoGroups() {
         assertEquals(
-            listOf(
-                "Policy" to "2-of-3 · Native SegWit",
-                "กุญแจที่ใช้" to "iPhone, Jade, Trezor",
-                "กุญแจสำรอง mebit" to "ไม่ใช้",
-            ),
-            reviewRows(Preset.TwoOfThree, listOf("iPhone", "Jade", "Trezor")),
+            listOf("tb1q", "8f3k", "2pxa", "…", "9wq7", "7k2m"),
+            addressPreview("tb1q8f3k2pxaqqqqqqqqqqqqqqqqqqqqqqqq9wq77k2m"),
         )
-        assertEquals("3-of-5 · Native SegWit", reviewRows(Preset.ThreeOfFive, emptyList()).first().second)
+        assertEquals(listOf("tb1q", "abcd", "efgh"), addressPreview("tb1qabcdefgh"))
     }
 
     @Test

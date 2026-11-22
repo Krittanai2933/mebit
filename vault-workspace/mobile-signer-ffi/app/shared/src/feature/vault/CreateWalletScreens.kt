@@ -38,13 +38,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -76,6 +82,7 @@ import com.mebit.app.ui.theme.MbChip
 import com.mebit.app.ui.theme.MbDisabledFill
 import com.mebit.app.ui.theme.MbDisabledInk
 import com.mebit.app.ui.theme.MbEyebrow
+import com.mebit.app.ui.theme.MbGreenWash
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbPage
@@ -86,6 +93,7 @@ import com.mebit.app.ui.theme.MbWarmTint
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
+import com.mebit.ffi.signer.walletDescriptorText
 
 /** What Penpot leaves under the primary button on every wizard board, so the button sits at y 732. */
 internal val BelowPrimary = 38.dp
@@ -324,14 +332,14 @@ internal fun samePhraseLines(blocked: Map<String, SamePhrase>): List<String> = b
 
 /** A white check drawn corner to corner of its box: down to the low point a third in, then up to the far corner. */
 @Composable
-internal fun Tick(modifier: Modifier) {
+internal fun Tick(modifier: Modifier, color: Color = MbWhite) {
     Canvas(modifier) {
         val tick = Path().apply {
             moveTo(0f, size.height * 0.5f)
             lineTo(size.width * 0.35f, size.height)
             lineTo(size.width, 0f)
         }
-        drawPath(tick, MbWhite, style = Stroke(width = 2.4.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+        drawPath(tick, color, style = Stroke(width = 2.4.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
     }
 }
 
@@ -387,7 +395,10 @@ fun ScriptTypeScreen(
     }
 }
 
-/** Penpot 3.4, and 3.4.1 while the descriptor is open. Everything shown comes from the draft and the live keys, and nothing here calls the core. */
+/**
+ * Penpot 3.4, and 3.4.1 while the descriptor is open. Everything shown comes from the draft and the live keys. The first address is derived
+ * by [CreateWalletDraft.firstAddress], the call [CreateWalletDraft.create] saves, so 3.5 shows the same one.
+ */
 @Composable
 fun ReviewScreen(
     draft: CreateWalletDraft,
@@ -398,6 +409,9 @@ fun ReviewScreen(
 ) {
     val ready = draft.ready(keys)
     var descriptorOpen by remember { mutableStateOf(false) }
+    val address = remember(ready?.descriptor) { ready?.let { draft.firstAddress(it) } }
+    // The box shows the BIP-389 form with its checksum, for reading only. The stored line stays as it is, and a key the core cannot read falls back to it.
+    val descriptor = remember(ready?.descriptor) { ready?.let { r -> runCatching { walletDescriptorText(r.descriptor, KeyNetwork.TEST) }.getOrDefault(r.descriptor) } }
     MebitScreen(
         eyebrow = MovieRoute.Review.eyebrow,
         title = MovieRoute.Review.titleTh,
@@ -417,35 +431,37 @@ fun ReviewScreen(
         },
     ) {
         Spacer(modifier = Modifier.height(4.dp))
-        SummaryCard(draft.preset)
+        SummaryCard(draft.nextWalletName(), draft.preset)
         Spacer(modifier = Modifier.height(14.dp))
         ReviewRowsCard(reviewRows(draft.preset, ready?.keys.orEmpty().map { it.label }))
-        if (descriptorOpen && ready != null) {
-            Spacer(modifier = Modifier.height(16.dp))
-            DescriptorBox(ready.descriptor)
+        Spacer(modifier = Modifier.height(16.dp))
+        if (descriptorOpen) {
+            descriptor?.let { DescriptorBox(it) }
+        } else {
+            address?.let { FirstAddressCard(it) }
         }
     }
 }
 
 @Composable
-private fun SummaryCard(preset: Preset) {
+private fun SummaryCard(name: String, preset: Preset) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(190.dp)
+            .height(123.dp)
             .clip(RoundedCornerShape(24.dp))
             .background(MbNavy)
             .testTag("review_summary"),
     ) {
         Box(Modifier.offset(x = 22.dp, y = 25.dp).size(8.dp).background(MbBtcOrange, CircleShape))
-        Text("POLICY สรุป", color = MbWhite.copy(alpha = 0.7f), fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, modifier = Modifier.offset(x = 36.dp, y = 20.dp))
-        Text(reviewHeadline(preset), color = MbWhite, fontSize = 18.sp, lineHeight = 26.sp, modifier = Modifier.padding(start = 22.dp, top = 52.dp, end = 22.dp))
-        Text(reviewSpare(preset), color = MbWhite.copy(alpha = 0.6f), fontSize = 11.5.sp, fontWeight = FontWeight.Light, lineHeight = 16.sp, modifier = Modifier.padding(start = 22.dp, top = 138.dp, end = 22.dp))
+        Text("WALLET ที่จะสร้าง", color = MbWhite.copy(alpha = 0.7f), fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, modifier = Modifier.offset(x = 36.dp, y = 20.dp))
+        Text(reviewTitle(name, preset), color = MbWhite, fontSize = 18.sp, lineHeight = 26.sp, modifier = Modifier.padding(start = 22.dp, top = 52.dp, end = 22.dp).testTag("review_title"))
+        Text(reviewSub(preset), color = MbWhite.copy(alpha = 0.6f), fontSize = 11.5.sp, fontWeight = FontWeight.Light, lineHeight = 16.sp, modifier = Modifier.padding(start = 22.dp, top = 90.dp, end = 22.dp).testTag("review_sub"))
     }
 }
 
 @Composable
-private fun ReviewRowsCard(rows: List<Pair<String, String>>) {
+private fun ReviewRowsCard(rows: List<String>) {
     val shape = RoundedCornerShape(24.dp)
     Column(
         modifier = Modifier
@@ -453,15 +469,69 @@ private fun ReviewRowsCard(rows: List<Pair<String, String>>) {
             .clip(shape)
             .background(MbWhite)
             .border(1.dp, MbBorder, shape)
-            .padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 24.dp)
+            .padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 18.dp)
             .testTag("review_rows"),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
-        rows.forEach { (label, value) ->
-            Row(Modifier.fillMaxWidth().heightIn(min = 18.dp)) {
-                Text(label, color = MbSlate, fontSize = 11.5.sp, fontWeight = FontWeight.Light, lineHeight = 18.sp, modifier = Modifier.width(130.dp))
-                Text(value, color = MbNavyInk, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, textAlign = TextAlign.End, modifier = Modifier.weight(1f))
+        rows.forEachIndexed { i, text ->
+            Row(Modifier.fillMaxWidth().testTag("review_row_$i"), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(22.dp).background(MbGreenWash, CircleShape)) {
+                    Tick(Modifier.offset(x = 7.dp, y = 8.dp).size(8.dp, 6.dp), MbSuccess)
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(text, color = MbNavyInk, fontSize = 13.sp, lineHeight = 22.sp)
             }
+        }
+    }
+}
+
+/** Penpot 3.4's card: the first address shortened in groups of four, alternating navy and orange, and the pill that copies the whole of it. */
+@Composable
+private fun FirstAddressCard(address: String) {
+    val shape = RoundedCornerShape(24.dp)
+    val clipboard = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(start = 18.dp, end = 18.dp, top = 14.dp, bottom = 14.dp).testTag("review_address_card"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("ที่อยู่แรกของ Wallet นี้", color = MbBody, fontSize = 11.sp, fontWeight = FontWeight.Light, lineHeight = 18.sp)
+            Text(
+                buildAnnotatedString {
+                    var run = 0
+                    addressPreview(address).forEachIndexed { i, group ->
+                        if (i > 0) append(" ")
+                        if (group == ADDRESS_GAP) {
+                            run = 0
+                            withStyle(SpanStyle(color = MbNavyInk)) { append(group) }
+                        } else {
+                            withStyle(SpanStyle(color = if (run % 2 == 0) MbNavyInk else MbEyebrow)) { append(group) }
+                            run++
+                        }
+                    }
+                },
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 22.sp,
+                modifier = Modifier.testTag("review_address"),
+            )
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Box(
+            modifier = Modifier
+                .height(30.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(MbChip)
+                .clickable(role = Role.Button) {
+                    clipboard.setText(AnnotatedString(address))
+                    copied = true
+                }
+                .padding(horizontal = 14.dp)
+                .testTag("cta_review_copy"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(if (copied) "คัดลอกแล้ว" else "คัดลอก", color = MbNavy, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -590,16 +660,24 @@ internal fun pickCountLine(picked: Int, n: Int): String = "เลือกแล
 
 internal fun duplicateLine(walletName: String): String = "Wallet นี้อยู่ในเครื่องนี้แล้ว · $walletName"
 
-internal fun reviewHeadline(preset: Preset): String = "ต้องใช้กุญแจ ${preset.m} ใบจากทั้งหมด ${preset.n} ใบ เซ็นร่วมกัน จึงจะใช้จ่ายจาก Wallet นี้ได้"
+/** "Wallet 2 · 2-of-3": the navy card's title. */
+internal fun reviewTitle(name: String, preset: Preset): String = "$name · ${preset.label}"
 
-internal fun reviewSpare(preset: Preset): String = "กุญแจหายได้ถึง ${preset.n - preset.m} ใบโดยเงินยังปลอดภัย"
+internal fun reviewSub(preset: Preset): String = "${MultisigScript.NativeSegwit.label} · testnet · ต้องเซ็น ${preset.m} จาก ${preset.n} กุญแจ"
 
-/** Penpot 3.4's three rows. The mebit backup key is not built, so its value is fixed. */
-internal fun reviewRows(preset: Preset, keyNames: List<String>): List<Pair<String, String>> = listOf(
-    "Policy" to "${preset.label} · ${MultisigScript.NativeSegwit.label}",
-    "กุญแจที่ใช้" to keyNames.joinToString(", "),
-    "กุญแจสำรอง mebit" to "ไม่ใช้",
+/** Penpot 3.4's four ticked lines. The mebit backup key is not built, so its line is fixed. */
+internal fun reviewRows(preset: Preset, keyNames: List<String>): List<String> = listOf(
+    "ต้องใช้กุญแจ ${preset.m} จาก ${preset.n} ใบเซ็นร่วมกัน",
+    "กุญแจหายได้ถึง ${preset.n - preset.m} ใบ เงินยังปลอดภัย",
+    "กุญแจ: ${keyNames.joinToString(", ")}",
+    "กุญแจสำรอง mebit: ไม่ใช้",
 )
+
+internal const val ADDRESS_GAP = "…"
+
+/** Pure. The first three and the last two groups of four, with [ADDRESS_GAP] between ("tb1q", "8f3k", "2pxa", "…", "9wq7", "7k2m"). A short address is all of its groups. */
+internal fun addressPreview(address: String): List<String> =
+    if (address.length <= 24) address.chunked(4) else address.take(12).chunked(4) + ADDRESS_GAP + address.takeLast(8).chunked(4)
 
 internal const val DESCRIPTOR_LABEL = "DESCRIPTOR · BIP48 / P2WSH"
 
