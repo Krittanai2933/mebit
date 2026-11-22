@@ -59,11 +59,9 @@ class SendTextTest {
 
     @Test
     fun theSlipGroupsAddressAndTxidAsTheBoard() {
-        assertEquals("bc1q xy2k gdyg jrsq tzq2 n0yr
-f249 3p83 kkfj hx0w lh", groupedLines("bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh", 6))
+        assertEquals("bc1q xy2k gdyg jrsq tzq2 n0yr\nf249 3p83 kkfj hx0w lh", groupedLines("bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh", 6))
         val txid = "e089b6d14c7a9f032e58d1a76bc40f927e3d85a1c6f04b29d8731e6c0a955a2f"
-        assertEquals("e089 b6d1 4c7a 9f03 2e58 d1a7 6bc4 0f92
-7e3d 85a1 c6f0 4b29 d873 1e6c 0a95 5a2f", groupedLines(txid, 8))
+        assertEquals("e089 b6d1 4c7a 9f03 2e58 d1a7 6bc4 0f92\n7e3d 85a1 c6f0 4b29 d873 1e6c 0a95 5a2f", groupedLines(txid, 8))
     }
 
     @Test
