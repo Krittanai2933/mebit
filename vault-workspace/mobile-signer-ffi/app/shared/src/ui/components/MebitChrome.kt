@@ -71,6 +71,7 @@ fun MebitScreen(
     dark: Boolean = false,
     bottom: (@Composable ColumnScope.() -> Unit)? = null,
     headerContent: (@Composable RowScope.() -> Unit)? = null,
+    trailing: (@Composable RowScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val bg = if (dark) MbNavy else MbPage
@@ -106,6 +107,10 @@ fun MebitScreen(
                         letterSpacing = 0.6.sp,
                         modifier = Modifier.testTag("eyebrow"),
                     )
+                }
+                if (trailing != null) {
+                    Spacer(modifier = Modifier.weight(1f))
+                    trailing()
                 }
             }
             Spacer(modifier = Modifier.height(if (title == null) 13.dp else 16.dp))
@@ -175,6 +180,37 @@ fun PlusButton(tag: String, description: String, onClick: () -> Unit, modifier: 
     ) {
         Box(Modifier.size(14.dp, 2.dp).background(MbWhite))
         Box(Modifier.size(2.dp, 14.dp).background(MbWhite))
+    }
+}
+
+/** Penpot 3.6's gear at the top right of a tab's header: a 32 dp touch box around a 22 dp outline gear. A caller's [modifier] sets how far it sits from the screen's right edge. */
+@Composable
+fun SettingsGear(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.size(32.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = "ตั้งค่า" }.testTag("cta_settings"),
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.foundation.Canvas(Modifier.size(22.dp)) {
+            val ink = MbNavyInk
+            val c = center
+            val stroke = 1.8.dp.toPx()
+            drawCircle(ink, radius = size.minDimension * 0.30f, center = c, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+            drawCircle(ink, radius = size.minDimension * 0.11f, center = c, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+            for (i in 0 until 8) {
+                val a = i * (kotlin.math.PI / 4)
+                val dx = kotlin.math.cos(a).toFloat()
+                val dy = kotlin.math.sin(a).toFloat()
+                val r = size.minDimension / 2
+                drawLine(
+                    ink,
+                    androidx.compose.ui.geometry.Offset(c.x + dx * r * 0.74f, c.y + dy * r * 0.74f),
+                    androidx.compose.ui.geometry.Offset(c.x + dx * r * 0.96f, c.y + dy * r * 0.96f),
+                    strokeWidth = stroke * 1.6f,
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                )
+            }
+        }
     }
 }
 

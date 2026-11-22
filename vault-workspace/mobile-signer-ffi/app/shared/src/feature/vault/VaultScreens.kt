@@ -58,6 +58,7 @@ import com.mebit.app.ui.components.DeleteItem
 import com.mebit.app.ui.components.InfoCard
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PlusButton
+import com.mebit.app.ui.components.SettingsGear
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
 import com.mebit.app.ui.theme.MbBody
@@ -137,6 +138,7 @@ fun VaultListScreen(
     onRemoveVault: (CreatedVault) -> Unit,
     onCreate: () -> Unit,
     onOpenCatalog: () -> Unit,
+    onSettings: () -> Unit = {},
     hardware: List<HardwareCard> = emptyList(),
     onOpenHardware: (HardwareWallet) -> Unit = {},
     onRemoveHardware: (HardwareWallet) -> Unit = {},
@@ -154,6 +156,8 @@ fun VaultListScreen(
         headerContent = {
             Image(painterResource(Res.drawable.mebit_logo_dark), contentDescription = "mebit", modifier = Modifier.size(width = 74.dp, height = 19.dp))
         },
+        // Penpot 3.6 puts the gear over the +, so both end 29 dp from the screen's right edge.
+        trailing = { SettingsGear(onSettings, Modifier.padding(end = 9.dp)) },
     ) {
         Spacer(modifier = Modifier.height(3.dp))
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {

@@ -16,6 +16,8 @@ class BottomBarRoutesTest {
         MovieRoute.T15KeyringEmpty to BarTab.Keys,
         MovieRoute.T15UnverifiedFirst to BarTab.Keys,
         MovieRoute.T20VaultActions to BarTab.None,
+        MovieRoute.Settings to BarTab.None,
+        MovieRoute.SettingsNode to BarTab.None,
     )
 
     @Test
