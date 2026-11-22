@@ -188,7 +188,7 @@ Runs so far: 2026-10-01, Safe 7 firmware 2.12.5 with the test phrase, macOS 26.6
 
 ## Known issues
 
-- **btleplug 0.13.3** is pinned for its CoreBluetooth fixes: `discover_services()` hangs, event-thread panics, operations that never resolve (#486–#489), and Android JNI crashes. It also requests MTU 517 on Android.
+- **btleplug 0.13.3 or later** is needed for its CoreBluetooth fixes: `discover_services()` hangs, event-thread panics, operations that never resolve (#486–#489), and Android JNI crashes. It also requests MTU 517 on Android. The app pins 0.13.5 (`mobile-signer-ffi/rust/Cargo.toml`), which also fixes Android notifications lost to a race in btleplug's Java queue (#497).
 - **Device authenticity is not checked.** A fake peripheral claiming to be a `T3W1` passes both model checks, and could hand over its own xpub when a vault is set up. Only Trezor's `AuthenticateDevice` (certificate chains from the device's secure elements) could tell. It is required before real funds, so use the Safe 7 on test networks with the test phrase until then: `docs/04-open-items.md` item 19.
 - **Keep new code in `src/lib.rs`.** `trezor-hw-test` hashes only that file as its evidence of the build (`docs/04-open-items.md` item 32). A scan or connect whose future is dropped stops its scan and disconnects a link that was still coming up, through a `mod cleanup` that also exists in `jade-ble`.
 - **Dropping a call's future midway** leaves the device out of step. The next call says so (`Abandoned`): reconnect.
