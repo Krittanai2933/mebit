@@ -25,7 +25,7 @@ Preconditions:
 
 - Three confirmed keys in the keyring for 2-of-3 (run onboarding + Add Key match, or seed via prior steps). For a thin smoke with empty keys, catalog → POLICY still shows the board.
 
-- **Policy.** Catalog → `id:catalog_vault/policy`, `see id:screen_vault/policy`, `see id:policy_multi`, `see id:preset_2_3`. `tap id:preset_3_5` and Choose Keys then counts to 5. `id:preset_custom` is not clickable. `tap id:policy_single` hides the chips, and `tap id:policy_multi` brings them back. The old `policy_personal` and `cta_policy_decaying` are gone. Shot `mp-policy`.
+- **Policy.** Catalog → `id:catalog_vault/policy`, `see id:screen_vault/policy`, `see id:policy_multi`, `see id:preset_2_3`. `tap id:preset_3_5` and Choose Keys then counts to 5. `id:preset_collaborative` (the disabled เร็วๆนี้ chip) is not clickable. `tap id:policy_single` hides the chips, and `tap id:policy_multi` brings them back. The old `policy_personal` and `cta_policy_decaying` are gone. Shot `mp-policy`.
 - **Choose keys.** `tap id:cta_policy_next`, `see id:screen_vault/choose-keys`, `see id:choose_count` (reads "เลือกแล้ว 0 / 3 ใบ"). `tap id:pick_<key id>` three times: the count reads 3 / 3 and `id:cta_choose_next` turns on. A fourth tap picks nothing. `tap id:cta_choose_add_key` opens Add Key. Shot `mp-choose-keys`.
 - **Same wallet refused.** With a wallet already created from three keys, pick the same three keys in any order: `see id:choose_duplicate` ("Wallet นี้อยู่ในเครื่องนี้แล้ว · " and that wallet's name) and `id:cta_choose_next` is off. Untick one: `gone id:choose_duplicate`.
 - **Script type.** `tap id:cta_choose_next`, `see id:screen_vault/script-type`, `see id:script_native` (selected, "ค่าเริ่มต้น"), `id:script_nested` is greyed and not clickable, `tap id:cta_script_next`.
@@ -43,5 +43,5 @@ Preconditions:
 
 - Review needs N verified keys with real tpubs; HW/mebit mocks mint real software keys labeled as HW.
 - BSMS text is a file-shaped export string until BIP-129 FFI exists.
-- Wallet Created is the only entry on the stack, so there is no back chip, and Android's system Back has no handler on any screen but a several-key wallet's slip (`id:screen_send/m9`), where it does what กลับหน้าหลัก does.
+- Wallet Created is the only entry on the stack, so there is no back chip, and Android's system Back does what the back chip does on every screen that has one, and what กลับหน้าหลัก does on a several-key wallet's slip (`id:screen_send/m9`). On a screen with no chip it leaves the app.
 - The sheet buttons need a real system UI. Check the saved file name ends in `.bsms` on Android's Files picker, which may rename an unknown type.

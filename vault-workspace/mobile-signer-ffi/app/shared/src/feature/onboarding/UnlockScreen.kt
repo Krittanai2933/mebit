@@ -11,7 +11,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -33,6 +32,7 @@ import com.mebit.app.navigation.WalletGateState
 import com.mebit.app.ui.components.BottomActions
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
+import com.mebit.app.ui.components.rememberFullSheetState
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
@@ -214,7 +214,7 @@ internal fun UnlockScreen(gate: WalletGateState) {
 private fun ForgetSheet(newerApp: Boolean, onConfirm: () -> Unit, onCancel: () -> Unit) {
     ModalBottomSheet(
         onDismissRequest = onCancel,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState = rememberFullSheetState(),
         containerColor = MbWhite,
         modifier = Modifier.testTag("dialog_forget"),
     ) {

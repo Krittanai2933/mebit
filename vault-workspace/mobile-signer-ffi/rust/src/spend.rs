@@ -22,9 +22,9 @@ use vault_core::keys::generate_seed;
 
 use crate::chain::{ChainSource, EsploraSource, check_network};
 use crate::hot_wallet::{
-    AddressSource, Chain, MAX_FEE_RATE, MAX_STANDARD_VSIZE, MIN_FEE_RATE, Plan, PreparedSend,
-    SCAN_STORE, SendAmount, Signed, check_node_rate, checked, complete, dust_floor, full_size,
-    mnemonic_from, plan_from, prepared, proven_parents, testnet4, vsize,
+    AddressSource, Chain, MAX_FEE_RATE, MAX_STANDARD_VSIZE, MIN_FEE_RATE, Payment, Plan,
+    PreparedSend, SCAN_STORE, SendAmount, Signed, check_node_rate, checked, complete, dust_floor,
+    full_size, mnemonic_from, plan_from, prepared, proven_parents, testnet4, vsize,
 };
 use crate::scan::GAP;
 use crate::scan_store::ScanStore;
@@ -74,9 +74,11 @@ pub fn wallet_draft(
         &EsploraSource(&testnet4()),
         &descriptor,
         network,
-        &destination,
-        amount_sats.map_or(SendAmount::All, SendAmount::Exact),
-        fee_rate_sat_vb,
+        Payment {
+            destination: &destination,
+            amount: amount_sats.map_or(SendAmount::All, SendAmount::Exact),
+            rate_sat_vb: fee_rate_sat_vb,
+        },
         &SystemTime::now,
         &SCAN_STORE,
     )
@@ -263,23 +265,25 @@ fn not_ours(why: String) -> MobileSignerError {
 
 /// The refusals of a phone payment before any lookup, the scan, the coin lists and the plan, all as the phone
 /// wallet makes them, then the PSBT of that plan, read back by `review` as the answer.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn draft(
     source: &dyn ChainSource,
     descriptor: &str,
     network: KeyNetwork,
-    destination: &str,
-    amount: SendAmount,
-    rate_sat_vb: u64,
+    payment: Payment<'_>,
     clock: &dyn Fn() -> SystemTime,
     store: &ScanStore,
 ) -> Result<SpendReview, MobileSignerError> {
     let wallet = Described::parse(descriptor)?;
     let own = wallet.spend_weight();
-    let dest = checked(destination, network, own, amount, rate_sat_vb)?;
+    let dest = checked(payment, network, own)?;
     check_network(network)?;
     let scanned = complete(wallet.synced(source, network, clock, store)?)?;
     let change = scanned.next_unused(Chain::Internal).index;
+    let Payment {
+        amount,
+        rate_sat_vb,
+        ..
+    } = payment;
     plan_from(source, &scanned, own, &dest, amount, rate_sat_vb, |plan| {
         let read = review(&wallet, &drafted(source, &wallet, &plan, change)?, store)?;
         let planned = SpendOutput {
@@ -851,9 +855,11 @@ pub(crate) mod tests {
             &EsploraSource(&WithMulti(fake)),
             descriptor,
             KeyNetwork::Test,
-            SOMEONE,
-            amount,
-            rate,
+            Payment {
+                destination: SOMEONE,
+                amount,
+                rate_sat_vb: rate,
+            },
             &|| fake.now(),
             &fake.store,
         )
@@ -1844,9 +1850,11 @@ pub(crate) mod tests {
             &EsploraSource(&WithMulti(&fake)),
             &descriptor,
             KeyNetwork::Main,
-            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
-            SendAmount::Exact(30_000),
-            RATE,
+            Payment {
+                destination: "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+                amount: SendAmount::Exact(30_000),
+                rate_sat_vb: RATE,
+            },
             &|| fake.now(),
             &fake.store,
         ));
@@ -2334,9 +2342,11 @@ pub(crate) mod tests {
                 &EsploraSource(&WithMulti(&fake)),
                 &descriptor,
                 KeyNetwork::Test,
-                to,
-                SendAmount::Exact(amount),
-                rate,
+                Payment {
+                    destination: to,
+                    amount: SendAmount::Exact(amount),
+                    rate_sat_vb: rate,
+                },
                 &|| fake.now(),
                 &fake.store,
             )
@@ -3114,9 +3124,11 @@ pub(crate) mod tests {
             &EsploraSource(&WithMulti(&paid.fake)),
             &two_of_three(),
             KeyNetwork::Test,
-            SOMEONE,
-            SendAmount::Exact(amount),
-            rate,
+            Payment {
+                destination: SOMEONE,
+                amount: SendAmount::Exact(amount),
+                rate_sat_vb: rate,
+            },
             &|| paid.fake.now(),
             store,
         )
