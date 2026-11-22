@@ -84,6 +84,7 @@ import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.OptionCard
 import com.mebit.app.ui.components.PhoneMark
 import com.mebit.app.ui.components.PlusButton
+import com.mebit.app.ui.components.SettingsGear
 import com.mebit.app.ui.components.TwoPhonesMark
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
@@ -375,6 +376,7 @@ fun KeyringScreen(
     onAddKey: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
+    onSettings: () -> Unit = {},
 ) {
     val keys = keyringOrder(store.keys)
     val phone = remember { getPlatform().phoneMonogram }
@@ -387,6 +389,8 @@ fun KeyringScreen(
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         tag = "screen_keys/keyring",
+        // Penpot 2.1 puts the gear where 3.6 does, over the +.
+        trailing = { SettingsGear(onSettings, Modifier.padding(end = 9.dp)) },
     ) {
         Spacer(modifier = Modifier.height(3.dp))
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {

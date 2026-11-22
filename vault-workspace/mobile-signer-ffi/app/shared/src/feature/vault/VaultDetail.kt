@@ -1,5 +1,19 @@
 package com.mebit.app.feature.vault
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import com.mebit.app.ui.theme.MbEyebrow
+import com.mebit.app.ui.theme.MbNavyInk
+import com.mebit.app.ui.theme.MbWhite
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.MaterialTheme
@@ -58,6 +72,7 @@ fun VaultDetailScreen(
     quotes: QuoteCache,
     onReceive: () -> Unit,
     onSend: () -> Unit,
+    onExport: () -> Unit,
     onClose: () -> Unit,
     onOpenCatalog: () -> Unit,
 ) {
@@ -101,6 +116,8 @@ fun VaultDetailScreen(
             expanded = keysOpen,
             onToggle = { keysOpen = !keysOpen },
         )
+        Spacer(modifier = Modifier.height(12.dp))
+        ExportRow(onExport)
         // 3.7 puts ธุรกรรม 26 dp under the card and the first row's title 16 dp under its line.
         Spacer(modifier = Modifier.height(26.dp))
         Text("ธุรกรรม", color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 14.sp, modifier = Modifier.testTag("vault_tx_label"))
@@ -114,6 +131,30 @@ fun VaultDetailScreen(
             }
         }
         Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+/** 3.7.1's backup row. The app keeps no export date, so its line says only that the file holds no seed. */
+@Composable
+private fun ExportRow(onClick: () -> Unit) {
+    val shape = RoundedCornerShape(16.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(MbWhite)
+            .border(1.dp, MbBorder, shape)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp)
+            .testTag("cta_vault_export"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("สำรองไฟล์ BSMS", color = MbNavyInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(modifier = Modifier.height(3.dp))
+            Text("ไม่มี seed", color = MbSlate, fontSize = 12.sp, fontWeight = FontWeight.Light)
+        }
+        Text("ส่งออก ›", color = MbEyebrow, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 

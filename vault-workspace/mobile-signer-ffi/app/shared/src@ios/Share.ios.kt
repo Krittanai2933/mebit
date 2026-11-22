@@ -17,10 +17,14 @@ import platform.CoreGraphics.CGRectGetMidY
 import platform.CoreGraphics.CGRectMake
 import platform.Foundation.NSData
 import platform.Foundation.NSFileManager
+import platform.Foundation.NSString
 import platform.Foundation.NSTemporaryDirectory
+import platform.Foundation.NSUTF8StringEncoding
 import platform.Foundation.NSURL
 import platform.Foundation.URLByAppendingPathComponent
+import platform.Foundation.create
 import platform.Foundation.dataWithBytes
+import platform.Foundation.dataWithContentsOfURL
 import platform.Foundation.writeToURL
 import platform.UIKit.UIActivityViewController
 import platform.UIKit.UIApplication
@@ -29,6 +33,7 @@ import platform.UIKit.UIDocumentPickerViewController
 import platform.UIKit.UIImage
 import platform.UIKit.UIViewController
 import platform.UIKit.popoverPresentationController
+import platform.UniformTypeIdentifiers.UTTypeItem
 import platform.darwin.NSObject
 
 @OptIn(ExperimentalForeignApi::class)
@@ -95,6 +100,44 @@ private class ExportPickerDelegate(private val onResult: (ExportOutcome) -> Unit
     override fun documentPicker(controller: UIDocumentPickerViewController, didPickDocumentsAtURLs: List<*>) = onResult(ExportOutcome.Done)
 
     override fun documentPickerWasCancelled(controller: UIDocumentPickerViewController) = onResult(ExportOutcome.Cancelled)
+}
+
+@Composable
+actual fun rememberTextFilePicker(onResult: (FilePick) -> Unit): TextFilePicker {
+    val current by rememberUpdatedState(onResult)
+    // The picker holds its delegate weakly, so this reference keeps it alive.
+    val delegate = remember { OpenPickerDelegate { current(it) } }
+    return remember(delegate) { IosTextFilePicker(delegate) { current(it) } }
+}
+
+private class IosTextFilePicker(private val delegate: OpenPickerDelegate, private val onResult: (FilePick) -> Unit) : TextFilePicker {
+    override fun pick() {
+        val top = topViewController() ?: return onResult(FilePick.Refused("no screen"))
+        // UTTypeItem is any file, so a ".bsms" that iOS knows no type for is still offered. asCopy hands over a copy in the app's own folder, which needs no security scope.
+        val any = UTTypeItem ?: return onResult(FilePick.Refused("no type"))
+        val picker = UIDocumentPickerViewController(forOpeningContentTypes = listOf(any), asCopy = true)
+        picker.allowsMultipleSelection = false
+        picker.delegate = delegate
+        top.presentViewController(picker, animated = true, completion = null)
+    }
+}
+
+private class OpenPickerDelegate(private val onResult: (FilePick) -> Unit) : NSObject(), UIDocumentPickerDelegateProtocol {
+    override fun documentPicker(controller: UIDocumentPickerViewController, didPickDocumentsAtURLs: List<*>) {
+        val url = didPickDocumentsAtURLs.firstOrNull() as? NSURL ?: return onResult(FilePick.Cancelled)
+        onResult(readPicked(url))
+    }
+
+    override fun documentPickerWasCancelled(controller: UIDocumentPickerViewController) = onResult(FilePick.Cancelled)
+}
+
+/** The copy at [url] as text and name, or why it is refused: over [MAX_PICKED_BYTES], not UTF-8, or unreadable. */
+private fun readPicked(url: NSURL): FilePick {
+    val data = NSData.dataWithContentsOfURL(url) ?: return FilePick.Refused("read")
+    if (data.length > MAX_PICKED_BYTES.toULong()) return FilePick.Refused("over $MAX_PICKED_BYTES bytes")
+    // create returns null for bytes that are not UTF-8.
+    val text = NSString.create(data = data, encoding = NSUTF8StringEncoding)?.toString() ?: return FilePick.Refused("not UTF-8")
+    return FilePick.Picked(url.lastPathComponent.orEmpty(), text.removePrefix("\uFEFF"))
 }
 
 /** Writes [text] to `tmp/export/<name>`, replacing an older copy, and returns its URL, or null when it cannot. The URL's last component is the file name the user sees. */

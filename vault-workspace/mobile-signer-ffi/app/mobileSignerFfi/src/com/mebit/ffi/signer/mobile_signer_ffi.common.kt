@@ -159,6 +159,45 @@ public expect open class PairingCodesImpl: Disposable, PairingCodes {
 
 
 /**
+ * Collects the parts of one wallet-file UR. Make a new one to start over.
+ */
+public interface QrPartsReaderInterface {
+    
+    public fun `receive`(`scanned`: kotlin.String): QrScanProgress
+    
+    public companion object
+}
+
+
+/**
+ * Collects the parts of one wallet-file UR. Make a new one to start over.
+ */
+public expect open class QrPartsReader: Disposable, QrPartsReaderInterface {
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    public constructor(noPointer: NoPointer)
+
+    
+    public constructor()
+
+    override fun destroy()
+    override fun close()
+
+    
+    public override fun `receive`(`scanned`: kotlin.String): QrScanProgress
+    
+
+    
+    public companion object
+}
+
+
+
+
+/**
  * Hears where a device signature is as the device reaches each step, so the screen draws what
  * the device shows. Never throw: an exception cannot be mapped.
  */
@@ -638,6 +677,20 @@ public data class JadeRegistration (
 
 
 /**
+ * The host in use for the settings screen, its name only. When none passes the probe, `reachable` is
+ * false and `host` is the first one of the choice.
+ */
+
+public data class NodeStatus (
+    var `host`: kotlin.String, 
+    var `reachable`: kotlin.Boolean
+) {
+    public companion object
+}
+
+
+
+/**
  * A signed payment that has not been posted anywhere.
  */
 
@@ -797,6 +850,24 @@ public data class WalletBalance (
      */
     var `balanceSats`: kotlin.ULong, 
     var `scan`: HotScan
+) {
+    public companion object
+}
+
+
+
+
+public data class WalletImport (
+    /**
+     * The stored form, as the app's `walletDescriptor` writes it.
+     */
+    var `descriptor`: kotlin.String, 
+    var `shape`: WalletShape, 
+    var `format`: WalletFileFormat, 
+    /**
+     * The first address the file states, if it states one. It matched `shape.first_address`.
+     */
+    var `statedAddress`: kotlin.String?
 ) {
     public companion object
 }
@@ -1207,6 +1278,129 @@ public sealed class MobileSignerException(message: String): kotlin.Exception(mes
 
 
 /**
+ * What `chain_check_node` found.
+ */
+
+public sealed class NodeCheck {
+    
+    
+    public object Testnet4 : NodeCheck() 
+    
+    
+    /**
+     * It answered, and its block 0 is another chain's.
+     */
+    
+    public object OtherChain : NodeCheck() 
+    
+    
+    /**
+     * The URL is neither `https://` nor `http://` on a Tailscale address.
+     */
+    
+    public object BadUrl : NodeCheck() 
+    
+    
+    public data class Unreachable(
+        val `reason`: kotlin.String,
+    ) : NodeCheck() {
+    }
+    
+}
+
+
+
+
+
+
+/**
+ * Which hosts the wallet reads from and posts to.
+ */
+
+public sealed class NodeChoice {
+    
+    /**
+     * This build's own node if it has one, then blockstream.info, then mempool.space.
+     */
+    
+    public object Auto : NodeChoice() 
+    
+    
+    /**
+     * blockstream.info alone, with no fallback.
+     */
+    
+    public object Blockstream : NodeChoice() 
+    
+    
+    /**
+     * mempool.space alone, with no fallback.
+     */
+    
+    public object MempoolSpace : NodeChoice() 
+    
+    
+    /**
+     * The user's own Esplora, `base` ending in its `/api` path, alone. Never logged.
+     */
+    public data class Own(
+        val `base`: kotlin.String,
+    ) : NodeChoice() {
+    }
+    
+}
+
+
+
+
+
+
+/**
+ * What one scanned frame did to a `QrPartsReader`.
+ */
+
+public sealed class QrScanProgress {
+    
+    /**
+     * Not a UR: the caller uses the text as the file text.
+     */
+    
+    public object NotUr : QrScanProgress() 
+    
+    
+    /**
+     * A UR part arrived: `received` of `expected` fragments are known.
+     */
+    public data class Part(
+        val `received`: kotlin.UInt,
+        val `expected`: kotlin.UInt,
+    ) : QrScanProgress() {
+    }
+    
+    /**
+     * Every fragment is in.
+     */
+    public data class Done(
+        val `text`: kotlin.String,
+    ) : QrScanProgress() {
+    }
+    
+    /**
+     * A UR of another type, a part of another message, or bytes that are not UTF-8.
+     */
+    public data class Refused(
+        val `reason`: kotlin.String,
+    ) : QrScanProgress() {
+    }
+    
+}
+
+
+
+
+
+
+/**
  * Who owns an output, whether the transaction creates it or an input spends it.
  */
 
@@ -1279,6 +1473,80 @@ public sealed class WalletDetails {
 
 
 
+/**
+ * Where the file came from.
+ */
+
+
+public enum class WalletFileFormat {
+    
+    /**
+     * A BIP-129 record.
+     */
+    BSMS,
+    /**
+     * The `.bsms` this app wrote before it wrote BIP-129 records.
+     */
+    APP_BSMS,
+    /**
+     * One line, a descriptor.
+     */
+    DESCRIPTOR;
+    public companion object
+}
+
+
+
+
+
+
+
+public sealed class WalletFileRead {
+    
+    public data class Read(
+        val `wallet`: WalletImport,
+    ) : WalletFileRead() {
+    }
+    
+    /**
+     * The keys belong to the other network.
+     */
+    
+    public object WrongNetwork : WalletFileRead() 
+    
+    
+    /**
+     * A descriptor of another kind, or one this app does not take: `found` names it.
+     */
+    public data class Unsupported(
+        val `found`: kotlin.String,
+    ) : WalletFileRead() {
+    }
+    
+    /**
+     * The file states a first address its keys do not give. Never import it.
+     */
+    public data class AddressMismatch(
+        val `stated`: kotlin.String,
+        val `derived`: kotlin.String,
+    ) : WalletFileRead() {
+    }
+    
+    /**
+     * Anything else. For logs, in English.
+     */
+    public data class Unreadable(
+        val `reason`: kotlin.String,
+    ) : WalletFileRead() {
+    }
+    
+}
+
+
+
+
+
+
 
 
 public enum class WalletKind {
@@ -1325,6 +1593,23 @@ public expect fun `bip39LastWordCandidates`(`firstWords`: List<kotlin.String>): 
  * An empty prefix gives none.
  */
 public expect fun `bip39Suggest`(`prefix`: kotlin.String, `limit`: kotlin.UInt): List<kotlin.String>
+
+/**
+ * The genesis probe on `base`, for the "ทดสอบ" button. Blocks up to a few seconds.
+ */
+public expect fun `chainCheckNode`(`base`: kotlin.String): NodeCheck
+
+/**
+ * The host the wallet reads from now, probing the list if none is trusted yet. Blocks up to a few
+ * seconds.
+ */
+public expect fun `chainNodeStatus`(): NodeStatus
+
+/**
+ * Chooses the node every later request goes to. Call it before the first one at start-up.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `chainUseNode`(`choice`: NodeChoice)
 
 /**
  * Is `words` a valid BIP-39 English mnemonic, and if not, why? Nothing is retained.
@@ -1610,11 +1895,23 @@ public expect fun `signPsbt`(`psbtJson`: kotlin.String, `borrowerPubkey`: kotlin
 public expect fun `walletBalance`(`descriptor`: kotlin.String, `network`: KeyNetwork): WalletBalance
 
 /**
+ * The BIP-129 record of a stored-form wallet: header, template with the BIP-129 key suffix, the path restriction line, receive address 0.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `walletBsmsRecord`(`descriptor`: kotlin.String, `network`: KeyNetwork): kotlin.String
+
+/**
  * The keys, how many must sign, receive address 0 and the typical payment size of the wallet `descriptor`
  * describes. Asks nothing of the network.
  */
 @Throws(MobileSignerException::class)
 public expect fun `walletDescribe`(`descriptor`: kotlin.String, `network`: KeyNetwork): WalletShape
+
+/**
+ * The stored form with the BIP-389 multipath suffix on each key and its BIP-380 checksum.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `walletDescriptorText`(`descriptor`: kotlin.String, `network`: KeyNetwork): kotlin.String
 
 /**
  * Scans the wallet `descriptor` describes, plans a payment of `amount_sats`, or of the whole balance when it
@@ -1623,6 +1920,13 @@ public expect fun `walletDescribe`(`descriptor`: kotlin.String, `network`: KeyNe
  */
 @Throws(MobileSignerException::class)
 public expect fun `walletDraft`(`descriptor`: kotlin.String, `network`: KeyNetwork, `destination`: kotlin.String, `amountSats`: kotlin.ULong?, `feeRateSatVb`: kotlin.ULong): SpendReview
+
+/**
+ * What a wallet file holds: always an outcome, never an error. Takes a BIP-129 record, the app's older
+ * `.bsms`, or one descriptor line (checksum optional, verified when present), with a key suffix of
+ * none, the BIP-129 double star, the BIP-389 multipath, or the single-chain receive form.
+ */
+public expect fun `walletFileRead`(`text`: kotlin.String, `network`: KeyNetwork): WalletFileRead
 
 /**
  * The signed transaction for `hot_broadcast`, once `psbt` still pays what `unsigned_txid` named and at least
@@ -1637,6 +1941,13 @@ public expect fun `walletFinish`(`descriptor`: kotlin.String, `network`: KeyNetw
  */
 @Throws(MobileSignerException::class)
 public expect fun `walletHistory`(`descriptor`: kotlin.String, `network`: KeyNetwork): List<HotTx>
+
+/**
+ * The text as `ur:bytes` parts, uppercased so a QR uses its alphanumeric mode. Only the plain
+ * fragments `1..=N` come back, so a screen that cycles them shows an exact "x / N". A text that
+ * fits one fragment is one single-part UR.
+ */
+public expect fun `walletQrParts`(`text`: kotlin.String): List<kotlin.String>
 
 /**
  * What `psbt` pays and which keys of the wallet `descriptor` describes have signed it, once it is a payment

@@ -147,6 +147,18 @@ enum class MovieRoute(
         "รับ · ส่ง",
         BarTab.Wallets,
     ),
+    WalletExport(
+        "vaults/export",
+        "EXPORT",
+        "ส่งออก Wallet",
+        "BSMS · Descriptor",
+    ),
+    WalletImport(
+        "vaults/import",
+        "IMPORT",
+        "ตรวจก่อนนำเข้า",
+        "ไฟล์ BSMS หรือ descriptor",
+    ),
     T13UnsupportedModel(
         "critical/t13",
         "UNSUPPORTED MODEL",
@@ -406,6 +418,20 @@ enum class MovieRoute(
         "รายละเอียดธุรกรรม",
         "สถานะ · ค่าธรรมเนียม · TXID",
         hardware = true,
+    ),
+    Settings(
+        "settings",
+        "PREFERENCES · MEBIT",
+        "ตั้งค่า",
+        "เลือกเครือข่ายและโหนดที่แอปใช้เชื่อมต่อ",
+        BarTab.None,
+    ),
+    SettingsNode(
+        "settings/node",
+        "SETTINGS · NODE",
+        "โหนด",
+        "แอปดึงยอดและส่งธุรกรรมผ่านโหนดที่เลือก",
+        BarTab.None,
     ),
     ;
 

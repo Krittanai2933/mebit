@@ -63,6 +63,30 @@ interface TextFileExport {
 @Composable
 expect fun rememberTextFileExport(onResult: (ExportOutcome) -> Unit): TextFileExport
 
+/** The largest file [TextFilePicker] reads, in bytes. A wallet file is a few hundred bytes. */
+const val MAX_PICKED_BYTES = 64 * 1024
+
+/** How one open-file dialog ended. */
+sealed interface FilePick {
+    /** [name] is the file's name as the system shows it, and [text] its UTF-8 content. */
+    data class Picked(val name: String, val text: String) : FilePick
+
+    /** The user closed the dialog without choosing. The screen says nothing. */
+    data object Cancelled : FilePick
+
+    /** The file was chosen and could not be read: over [MAX_PICKED_BYTES], not UTF-8, or unreadable. [reason] is for logs. */
+    data class Refused(val reason: String) : FilePick
+}
+
+/** Opens one small text file through the system file picker. Get one from [rememberTextFilePicker]. */
+interface TextFilePicker {
+    fun pick()
+}
+
+/** [onResult] runs on the main thread once per [TextFilePicker.pick]. Composable because Android's picker needs an activity-result launcher made in composition. */
+@Composable
+expect fun rememberTextFilePicker(onResult: (FilePick) -> Unit): TextFilePicker
+
 /** This bitmap as PNG bytes. Throws [IllegalStateException] when the platform encoder fails. */
 expect fun ImageBitmap.encodePng(): ByteArray
 

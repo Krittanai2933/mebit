@@ -5,6 +5,7 @@ import androidx.compose.runtime.remember
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mebit.app.Place
+import com.mebit.app.data.NodeSettings
 import com.mebit.app.data.PendingPayments
 import com.mebit.app.data.SavedVaults
 import com.mebit.app.data.Wallets
@@ -26,6 +27,8 @@ fun WalletGate() {
     // Before any screen asks the core about a wallet, so its first sync after a restart reads the scan file.
     val scanDir = rememberScanStateDir()
     remember(scanDir) { scanDir?.let(::hotUseStateDir) }
+    // Also before any chain read: the node the user chose in Settings is in force from the first request.
+    val nodeSettings = remember(scanDir) { NodeSettings(scanDir?.let { plainFile("$it/node-choice") }).also { it.restore() } }
     val storage = rememberVaultsStorage()
     val shelf = rememberSecureShelf()
     val pairings = rememberPairings()
@@ -65,8 +68,8 @@ fun WalletGate() {
     }
 
     when (val boot = gate.boot) {
-        Boot.Onboarding -> MebitNavHost(wallets, Stop(MovieRoute.start, Place.FIRST), gate.notice, vaults, pairings)
-        is Boot.Open -> MebitNavHost(wallets, Stop(boot.route, boot.place), vaults = vaults, pairings = pairings)
+        Boot.Onboarding -> MebitNavHost(wallets, Stop(MovieRoute.start, Place.FIRST), gate.notice, vaults, pairings, nodeSettings)
+        is Boot.Open -> MebitNavHost(wallets, Stop(boot.route, boot.place), vaults = vaults, pairings = pairings, nodeSettings = nodeSettings)
         Boot.Locked, is Boot.Broken -> UnlockScreen(gate)
     }
 }
