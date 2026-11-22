@@ -17,8 +17,14 @@ import qrcode.raw.MaskPattern
 import qrcode.raw.QRCodeDataType
 import qrcode.raw.QRCodeProcessor
 
-/** The largest version [encodeQr] makes. Version 10 holds 213 bytes at error correction level M. */
+/** The largest version [encodeQr] makes unless the caller allows more. Version 10 holds 213 bytes at error correction level M. */
 private const val MAX_VERSION = 10
+
+/** The largest version the standard has. Wallet files ride in codes of this size. */
+internal const val LARGEST_VERSION = 40
+
+/** The characters QR's alphanumeric mode holds, which the UR parts are written in. */
+private val alphanumericChars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:".toSet()
 
 private const val QUIET_ZONE_MODULES = 4
 
@@ -41,16 +47,18 @@ class QrMatrix(val size: Int, private val modules: BooleanArray) {
 /**
  * [text] as a QR symbol: byte mode on its UTF-8 bytes, error correction level M, the smallest version that fits,
  * and the mask the standard's penalty rules score lowest. Throws [IllegalArgumentException] when the text needs
- * more than version 10 (213 bytes) or holds a NUL character.
+ * more than version [maxVersion] (10 holds 213 bytes) or holds a NUL character. With [alphanumeric] a text of only
+ * `0-9 A-Z space $ % * + - . / :` takes alphanumeric mode, 5.5 bits a character, which an uppercased UR needs to stay small.
  */
-fun encodeQr(text: String): QrMatrix {
+fun encodeQr(text: String, maxVersion: Int = MAX_VERSION, alphanumeric: Boolean = false): QrMatrix {
     // shortcut: no NUL characters, the library's Reed-Solomon step never ends on a block of only zero bytes, upgrade when it is fixed.
     require('\u0000' !in text) { "The text holds a NUL character, which the QR encoder cannot take" }
-    val version = QRCodeProcessor.infoDensityForDataAndECL(text, ErrorCorrectionLevel.MEDIUM, QRCodeDataType.DEFAULT)
-    require(version <= MAX_VERSION) {
-        "The text takes ${text.encodeToByteArray().size} bytes, more than a version $MAX_VERSION QR code holds at level M"
+    val dataType = if (alphanumeric && text.isNotEmpty() && text.all { it in alphanumericChars }) QRCodeDataType.UPPER_ALPHA_NUM else QRCodeDataType.DEFAULT
+    val version = QRCodeProcessor.infoDensityForDataAndECL(text, ErrorCorrectionLevel.MEDIUM, dataType)
+    require(version <= maxVersion) {
+        "The text takes ${text.encodeToByteArray().size} bytes, more than a version $maxVersion QR code holds at level M"
     }
-    val processor = QRCodeProcessor(text, ErrorCorrectionLevel.MEDIUM, QRCodeDataType.DEFAULT)
+    val processor = QRCodeProcessor(text, ErrorCorrectionLevel.MEDIUM, dataType)
     val size = 17 + 4 * version
     // The library only draws the mask it is given (mask 0 by default), so the choice is made here.
     val candidates = MaskPattern.entries.map { mask ->
@@ -129,16 +137,17 @@ internal fun DrawScope.drawQr(matrix: QrMatrix, dark: Color, light: Color) {
 
 /**
  * [text] as a QR code in the largest centred square of its space. Draws nothing when [encodeQr] throws, so the
- * caller decides what to show instead. Most scanners need [dark] to be darker than [light].
+ * caller decides what to show instead. Most scanners need [dark] to be darker than [light]. [maxVersion] and
+ * [alphanumeric] are [encodeQr]'s.
  */
 @Composable
-fun QrCode(text: String, modifier: Modifier = Modifier, dark: Color = MbNavyInk, light: Color = MbWhite) {
-    val matrix = remember(text) {
-        try {
-            encodeQr(text)
-        } catch (_: Exception) {
-            null
-        }
-    } ?: return
+fun QrCode(text: String, modifier: Modifier = Modifier, dark: Color = MbNavyInk, light: Color = MbWhite, maxVersion: Int = MAX_VERSION, alphanumeric: Boolean = false) {
+    val matrix = remember(text, maxVersion, alphanumeric) { runCatching { encodeQr(text, maxVersion, alphanumeric) }.getOrNull() } ?: return
+    QrCode(matrix, modifier, dark, light)
+}
+
+/** An already encoded [matrix] in the largest centred square of its space, for a screen that cycles several. */
+@Composable
+fun QrCode(matrix: QrMatrix, modifier: Modifier = Modifier, dark: Color = MbNavyInk, light: Color = MbWhite) {
     Canvas(modifier) { drawQr(matrix, dark, light) }
 }

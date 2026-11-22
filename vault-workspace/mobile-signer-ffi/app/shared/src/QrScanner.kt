@@ -8,6 +8,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -282,7 +283,7 @@ fun QrScanSheet(accepts: (String) -> Boolean, onAddress: (String) -> Unit, onClo
 }
 
 @Composable
-private fun ScanRoundButton(fill: Color, modifier: Modifier, icon: @Composable () -> Unit) {
+internal fun ScanRoundButton(fill: Color, modifier: Modifier, icon: @Composable () -> Unit) {
     Box(
         modifier = Modifier
             .size(56.dp)
@@ -298,12 +299,24 @@ private fun ScanRoundButton(fill: Color, modifier: Modifier, icon: @Composable (
 @Composable
 private fun ScanFailedDialog(onOk: () -> Unit) {
     SystemBack(onOk)
+    NoticeDialog(
+        tag = "scan_failed",
+        title = "QR code ไม่ถูกต้อง",
+        body = "QR นี้ไม่ใช่ที่อยู่ Bitcoin ที่รองรับ\nโปรดใช้ QR ของที่อยู่ Bitcoin\nแล้วลองสแกนอีกครั้ง",
+    ) {
+        NoticeButton("เข้าใจแล้ว", "scan_failed_ok", filled = true, onClick = onOk)
+    }
+}
+
+/** The 4.4.8 dialog with its own words: a warning mark, [title], [body] and [buttons]. The backdrop swallows taps. Import's refusals use it too. */
+@Composable
+internal fun NoticeDialog(tag: String, title: String, body: String, buttons: @Composable ColumnScope.() -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.62f))
             .pointerInput(Unit) { detectTapGestures { } }
-            .testTag("scan_failed"),
+            .testTag(tag),
         contentAlignment = Alignment.Center,
     ) {
         Column(
@@ -320,36 +333,44 @@ private fun ScanFailedDialog(onOk: () -> Unit) {
                 }
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
-                    text = "QR code ไม่ถูกต้อง",
+                    text = title,
                     color = MbNavyInk,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold,
                     lineHeight = 21.6.sp,
+                    modifier = Modifier.testTag("$tag/title"),
                 )
             }
             Spacer(modifier = Modifier.height(16.dp))
             Box(modifier = Modifier.fillMaxWidth().heightIn(min = 60.dp), contentAlignment = Alignment.CenterStart) {
                 Text(
-                    text = "QR นี้ไม่ใช่ที่อยู่ Bitcoin ที่รองรับ\nโปรดใช้ QR ของที่อยู่ Bitcoin\nแล้วลองสแกนอีกครั้ง",
+                    text = body,
                     color = MbBody,
                     fontSize = 13.5.sp,
                     fontWeight = FontWeight.Light,
                     lineHeight = 16.2.sp,
+                    modifier = Modifier.testTag("$tag/body"),
                 )
             }
             Spacer(modifier = Modifier.height(20.dp))
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(MbNavy)
-                    .clickable(role = Role.Button, onClick = onOk)
-                    .testTag("scan_failed_ok"),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("เข้าใจแล้ว", color = MbWhite, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
-            }
+            buttons()
         }
+    }
+}
+
+/** A 48 dp pill of the dialog: navy when [filled], else white text on the dialog. */
+@Composable
+internal fun NoticeButton(label: String, tag: String, filled: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (filled) MbNavy else MbWhite)
+            .clickable(role = Role.Button, onClick = onClick)
+            .testTag(tag),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = if (filled) MbWhite else MbNavy, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
     }
 }

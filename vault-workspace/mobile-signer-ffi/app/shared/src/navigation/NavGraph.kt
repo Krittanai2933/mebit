@@ -53,7 +53,17 @@ import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.hardwareKind
 import com.mebit.app.data.oneKeyChoices
 import com.mebit.app.data.OwnerCheck
+import com.mebit.app.FilePick
 import com.mebit.app.data.CreatedVault
+import com.mebit.app.data.ImportPending
+import com.mebit.app.data.ImportProblem
+import com.mebit.app.data.ImportSaved
+import com.mebit.app.data.UNREADABLE_FILE
+import com.mebit.app.data.VaultsHealth
+import com.mebit.app.data.alreadyInAppLine
+import com.mebit.app.data.importReview
+import com.mebit.app.data.problemOf
+import com.mebit.app.data.vaultsNoticeText
 import com.mebit.app.data.Replacement
 import com.mebit.app.data.SaveState
 import com.mebit.app.data.SavedVaults
@@ -117,6 +127,8 @@ import com.mebit.app.feature.vault.T20VaultActionsScreen
 import com.mebit.app.feature.vault.VaultCreatedScreen
 import com.mebit.app.feature.vault.VaultDetailScreen
 import com.mebit.app.feature.vault.VaultListScreen
+import com.mebit.app.feature.vault.WalletExportScreen
+import com.mebit.app.feature.vault.WalletImportScreen
 import com.mebit.app.feature.send.keyDeleteItem
 import com.mebit.app.feature.send.S1HomeSingleSigScreen
 import com.mebit.app.feature.send.S2ReceiveBackupGateScreen
@@ -162,6 +174,9 @@ import com.mebit.app.ui.components.coversScreen
 import com.mebit.app.ui.components.rememberFullSheetState
 import com.mebit.app.ui.theme.MbPage
 import com.mebit.ffi.signer.HotTx
+import com.mebit.ffi.signer.KeyNetwork
+import com.mebit.ffi.signer.WalletFileRead
+import com.mebit.ffi.signer.walletFileRead
 import com.mebit.ffi.signer.FoundWallet
 import com.mebit.ffi.signer.HwAccountKey
 import com.mebit.ffi.signer.WalletKind
@@ -228,6 +243,10 @@ internal fun MebitNavHost(
     val scope = rememberCoroutineScope()
     var addLine by remember { mutableStateOf<String?>(null) }
     var removeLine by remember { mutableStateOf<String?>(null) }
+    // The file Import is reviewing, and the refusal the Wallet list shows for a file it cannot take. Memory only.
+    var importing by remember { mutableStateOf<ImportPending?>(null) }
+    var importProblem by remember { mutableStateOf<ImportProblem?>(null) }
+    var importLine by remember { mutableStateOf<String?>(null) }
     // Starts as Keyring so the debug catalog can open Verify Key without passing Key Source.
     var keyFlow by remember { mutableStateOf(KeyFlow.Keyring) }
     var verifyRetryRoute by remember { mutableStateOf(MovieRoute.HardwareWallet) }
@@ -242,6 +261,8 @@ internal fun MebitNavHost(
     LaunchedEffect(current) {
         addLine = null
         removeLine = null
+        importProblem = null
+        importLine = null
     }
     // Keyed on words too, so a wallet added in this run is noted once its key exists.
     LaunchedEffect(current.place, session.words.isNotEmpty()) { if (session.words.isNotEmpty()) wallets.noteUsed(current.place) }
@@ -435,9 +456,11 @@ internal fun MebitNavHost(
     val openCatalog = { if (debugBuild) catalogOpen = true }
 
     val bar = current.route.bar
-    CompositionLocalProvider(LocalDebugLinkLift provides if (bar != null) 22.dp else 0.dp) {
+    // A sheet that covers a tab screen, the wallet list's QR scanner, hides the bar and gives the screen its room.
+    var barHidden by remember { mutableStateOf(false) }
+    CompositionLocalProvider(LocalDebugLinkLift provides if (bar != null && !barHidden) 22.dp else 0.dp) {
         Box(Modifier.fillMaxSize().background(MbPage)) {
-            val inset = if (bar != null) bottomBarHeight() else 0.dp
+            val inset = if (bar != null && !barHidden) bottomBarHeight() else 0.dp
             Box(Modifier.fillMaxSize().padding(bottom = inset).consumeWindowInsets(PaddingValues(bottom = inset))) {
                 // Keyed on the wallet, so a wallet's screens never inherit another wallet's remembered state, such as its retries, its open key details and its pull.
                 key(current.place, current.hardware) { when (current.route) {
@@ -706,6 +729,31 @@ internal fun MebitNavHost(
                                 }
                             },
                             onCreate = { navigate(MovieRoute.Policy) },
+                            onExport = { navigate(MovieRoute.WalletExport) },
+                            importProblem = importProblem,
+                            onProblemClear = { importProblem = null },
+                            onImportPicked = { pick ->
+                                when (pick) {
+                                    FilePick.Cancelled -> Unit
+                                    is FilePick.Refused -> importProblem = UNREADABLE_FILE
+                                    is FilePick.Picked -> scope.launch {
+                                        val read = withContext(Dispatchers.Default) { runCatching { walletFileRead(pick.text, KeyNetwork.TEST) }.getOrNull() }
+                                        if (read is WalletFileRead.Read) {
+                                            importLine = null
+                                            importing = ImportPending(pick.name, read.wallet)
+                                            navigate(MovieRoute.WalletImport)
+                                        } else {
+                                            importProblem = read?.let(::problemOf) ?: UNREADABLE_FILE
+                                        }
+                                    }
+                                }
+                            },
+                            onFullScreen = { barHidden = it },
+                            onImportScanned = { wallet ->
+                                importLine = null
+                                importing = ImportPending("", wallet)
+                                navigate(MovieRoute.WalletImport)
+                            },
                             onOpenCatalog = openCatalog,
                             onSettings = { navigate(MovieRoute.Settings) },
                             hardware = hardware.all.map { w ->
@@ -723,10 +771,37 @@ internal fun MebitNavHost(
                         quotes = quotes,
                         onReceive = { navigate(MovieRoute.VaultReceive) },
                         onSend = { startVaultSend(vaultDraft.selectedVault()) },
+                        onExport = { navigate(MovieRoute.WalletExport) },
                         // The Wallet list is a tab, so it opens as the only entry, and a detail a vault send lands on closes to the list.
                         onClose = { navigate(MovieRoute.VaultList) },
                         onOpenCatalog = openCatalog,
                     )
+                    MovieRoute.WalletExport -> WalletExportScreen(
+                        vault = vaultDraft.selectedVault(),
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.WalletImport -> importing?.let { pending ->
+                        WalletImportScreen(
+                            fileName = pending.fileName,
+                            review = importReview(pending.wallet, createDraft.importName(pending.fileName), keyring.keys),
+                            address = pending.wallet.shape.firstAddress,
+                            line = importLine,
+                            onImport = {
+                                when (val saved = createDraft.import(pending.wallet, pending.fileName, keyring.keys)) {
+                                    is ImportSaved.Added -> {
+                                        vaultDraft.noteCreated(saved.vault)
+                                        importing = null
+                                        land(stackAfterCreate(backStack))
+                                    }
+                                    is ImportSaved.Duplicate -> importLine = alreadyInAppLine(saved.name)
+                                    ImportSaved.NotSaved -> importLine = vaultsNoticeText(VaultsHealth.SaveFailed)
+                                }
+                            },
+                            onBack = onBack,
+                            onOpenCatalog = openCatalog,
+                        )
+                    } ?: NoWallet(current.route, onBack, openCatalog)
                     MovieRoute.T13UnsupportedModel -> T13UnsupportedModelScreen(
                         model = unsupportedModel,
                         onBack = onBack,
@@ -1075,7 +1150,7 @@ internal fun MebitNavHost(
                     )
                 } }
             }
-            if (bar != null) {
+            if (bar != null && !barHidden) {
                 MebitBottomBar(
                     selected = bar,
                     onWallets = { navigate(MovieRoute.VaultList) },

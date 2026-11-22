@@ -1,5 +1,6 @@
 package com.mebit.app.feature.vault
 
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -32,8 +33,18 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.mebit.app.ExportOutcome
+import com.mebit.app.FilePick
+import com.mebit.app.NoticeButton
+import com.mebit.app.NoticeDialog
+import com.mebit.app.data.ImportProblem
+import com.mebit.app.data.bsmsRecordOf
+import com.mebit.app.rememberTextFilePicker
+import com.mebit.app.ui.components.MenuAction
 import com.mebit.app.Place
+import com.mebit.ffi.signer.WalletImport
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.HardwareWallet
 import com.mebit.app.data.SavedVaults
@@ -141,12 +152,38 @@ fun VaultListScreen(
     onOpenCatalog: () -> Unit,
     onSettings: () -> Unit = {},
     hardware: List<HardwareCard> = emptyList(),
+    onExport: () -> Unit = {},
+    onImportPicked: (FilePick) -> Unit = {},
+    onImportScanned: (WalletImport) -> Unit = {},
+    /** True while a sheet covers the whole screen, so the caller hides the tab bar. */
+    onFullScreen: (Boolean) -> Unit = {},
+    importProblem: ImportProblem? = null,
+    onProblemClear: () -> Unit = {},
     onOpenHardware: (HardwareWallet) -> Unit = {},
     onRemoveHardware: (HardwareWallet) -> Unit = {},
 ) {
     var removing by remember { mutableStateOf<SpendingCard?>(null) }
     var removingVault by remember { mutableStateOf<CreatedVault?>(null) }
     var removingHardware by remember { mutableStateOf<HardwareWallet?>(null) }
+    var adding by remember { mutableStateOf(false) }
+    var importing by remember { mutableStateOf(false) }
+    var scanning by remember { mutableStateOf(false) }
+    val picker = rememberTextFilePicker(onImportPicked)
+    // Penpot 3.9.2's scanner covers the whole screen, the tab bar too.
+    DisposableEffect(scanning) {
+        onFullScreen(scanning)
+        onDispose { onFullScreen(false) }
+    }
+    if (scanning) {
+        WalletQrScanSheet(
+            onWallet = {
+                scanning = false
+                onImportScanned(it)
+            },
+            onClose = { scanning = false },
+        )
+        return
+    }
     MebitScreen(
         eyebrow = null,
         // The title is drawn below so the + shares its row, as on the board.
@@ -164,7 +201,7 @@ fun VaultListScreen(
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text(MovieRoute.VaultList.titleTh, color = MbNavyInk, fontSize = 28.sp, fontWeight = FontWeight.Medium, lineHeight = 34.sp, modifier = Modifier.weight(1f).testTag("title"))
             // Penpot 1.8 puts the + 29 dp from the screen's right edge, so 9 dp past the screen's own padding.
-            PlusButton("cta_vaults_add", "สร้าง Wallet", onCreate, Modifier.padding(end = 9.dp))
+            PlusButton("cta_vaults_add", "เพิ่ม Wallet", { adding = true }, Modifier.padding(end = 9.dp))
         }
         listTotal(spending, vaults, vaultSats, walletUnopened = unopenedNotice != null, hardware = hardware)?.let { TotalLine(it) }
         Spacer(modifier = Modifier.height(16.dp))
@@ -227,11 +264,53 @@ fun VaultListScreen(
                     draft.selectVault(vault.id)
                     onOpenDetail()
                 },
+                extra = MenuAction("ส่งออก Wallet", "menu_export_${vault.id}") {
+                    draft.selectVault(vault.id)
+                    onExport()
+                },
             )
             Spacer(modifier = Modifier.height(11.dp))
         }
         if (spending.isEmpty() && hardware.isEmpty() && draft.created.isEmpty()) {
             Text("ยังไม่มี Wallet", modifier = Modifier.testTag("vaults_empty"))
+        }
+    }
+    if (adding) {
+        AddWalletSheet(
+            onNew = {
+                adding = false
+                onCreate()
+            },
+            onImport = {
+                adding = false
+                importing = true
+            },
+            onCancel = { adding = false },
+        )
+    }
+    if (importing) {
+        ImportWalletSheet(
+            onPick = {
+                importing = false
+                picker.pick()
+            },
+            onScan = {
+                importing = false
+                scanning = true
+            },
+            onCancel = { importing = false },
+        )
+    }
+    importProblem?.let { problem ->
+        Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)) {
+            NoticeDialog(tag = "import_problem", title = problem.title, body = problem.body) {
+                NoticeButton("เลือกไฟล์ใหม่", "import_problem_again", filled = true) {
+                    onProblemClear()
+                    picker.pick()
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                NoticeButton("เข้าใจแล้ว", "import_problem_ok", filled = false, onClick = onProblemClear)
+            }
         }
     }
     removingHardware?.let { wallet ->
@@ -286,7 +365,11 @@ private fun RemoveVaultSheet(vault: CreatedVault, onRemove: () -> Unit, onCancel
             is ExportOutcome.Failed -> failed = true
         }
     }
-    val save = { export.save(bsmsFileName(vault.name), vault.bsms) }
+    // The BIP-129 record, not the stored text, so another wallet app can read the file.
+    val record = remember(vault.bsms) { bsmsRecordOf(vault) }
+    val save = {
+        if (record == null) failed = true else export.save(bsmsFileName(vault.name), record)
+    }
     ConfirmSheet(tag = "dialog_remove_vault", title = removeSheetTitle(vault.name), body = removeVaultBody(vault.m, vault.n), onCancel = onCancel) {
         if (exported) {
             SecondaryCta("ส่งออก BSMS แล้ว", "cta_vault_export", save)
@@ -338,6 +421,7 @@ private fun WalletListCard(
     item: DeleteItem,
     onDelete: () -> Unit,
     onClick: () -> Unit,
+    extra: MenuAction? = null,
 ) {
     val shape = RoundedCornerShape(20.dp)
     val ink = if (dark) MbWhite else MbNavyInk
@@ -366,7 +450,7 @@ private fun WalletListCard(
             }
         }
         // The dots end 18 dp inside the card's right edge with their centre 22 dp from its top, level with the kind line.
-        CardDeleteMenu(menuTag, "ลบ Wallet", item, onDark = dark, onDelete = onDelete, modifier = Modifier.align(Alignment.TopEnd).padding(end = 5.dp))
+        CardDeleteMenu(menuTag, "ลบ Wallet", item, onDark = dark, onDelete = onDelete, modifier = Modifier.align(Alignment.TopEnd).padding(end = 5.dp), extra = extra)
     }
 }
 

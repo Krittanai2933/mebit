@@ -7,6 +7,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
+import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
@@ -21,6 +22,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.FileProvider
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 
 private class AndroidSharer(private val context: Context) : Sharer {
     override fun text(text: String) = startChooser(
@@ -116,6 +119,57 @@ private fun writeText(context: Context, uri: Uri, text: String): String? = try {
 } catch (e: Exception) {
     e.message ?: "write"
 }
+
+@Composable
+actual fun rememberTextFilePicker(onResult: (FilePick) -> Unit): TextFilePicker {
+    val context = LocalContext.current
+    val current by rememberUpdatedState(onResult)
+    val dialog = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        current(if (uri == null) FilePick.Cancelled else readPicked(context, uri))
+    }
+    return remember(dialog) {
+        object : TextFilePicker {
+            override fun pick() {
+                try {
+                    dialog.launch(arrayOf("*/*"))
+                } catch (e: Exception) {
+                    current(FilePick.Refused(e.message ?: "no dialog"))
+                }
+            }
+        }
+    }
+}
+
+/** The file at [uri] as text and name, or why it is refused. Reads at most [MAX_PICKED_BYTES] + 1 bytes, so a huge file is never held. */
+private fun readPicked(context: Context, uri: Uri): FilePick = try {
+    val bytes = ByteArray(MAX_PICKED_BYTES + 1)
+    var size = 0
+    checkNotNull(context.contentResolver.openInputStream(uri)) { "no stream" }.use { input ->
+        while (size < bytes.size) {
+            val n = input.read(bytes, size, bytes.size - size)
+            if (n < 0) break
+            size += n
+        }
+    }
+    if (size > MAX_PICKED_BYTES) {
+        FilePick.Refused("over $MAX_PICKED_BYTES bytes")
+    } else {
+        val text = Charsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes, 0, size))
+            .toString()
+            .removePrefix("\uFEFF")
+        FilePick.Picked(displayName(context, uri), text)
+    }
+} catch (e: Exception) {
+    FilePick.Refused(e.message ?: "read")
+}
+
+private fun displayName(context: Context, uri: Uri): String =
+    context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+        if (c.moveToFirst()) c.getString(0) else null
+    } ?: uri.lastPathSegment.orEmpty()
 
 actual fun ImageBitmap.encodePng(): ByteArray {
     val bitmap = asAndroidBitmap()

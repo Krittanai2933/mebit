@@ -147,6 +147,18 @@ enum class MovieRoute(
         "รับ · ส่ง",
         BarTab.Wallets,
     ),
+    WalletExport(
+        "vaults/export",
+        "EXPORT",
+        "ส่งออก Wallet",
+        "BSMS · Descriptor",
+    ),
+    WalletImport(
+        "vaults/import",
+        "IMPORT",
+        "ตรวจก่อนนำเข้า",
+        "ไฟล์ BSMS หรือ descriptor",
+    ),
     T13UnsupportedModel(
         "critical/t13",
         "UNSUPPORTED MODEL",

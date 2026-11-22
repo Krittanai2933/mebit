@@ -8,10 +8,12 @@ uniffi::setup_scaffolding!();
 
 mod address_type;
 pub mod ble;
+pub mod bsms;
 mod chain;
 pub mod hot_wallet;
 pub mod price;
 mod proof;
+pub mod qr_parts;
 mod scan;
 mod scan_store;
 pub mod script;
@@ -1037,6 +1039,30 @@ mod tests {
             (
                 "func_fetch_btc_thb",
                 price::uniffi_mobile_signer_ffi_checksum_func_fetch_btc_thb(),
+            ),
+            (
+                "func_wallet_file_read",
+                bsms::uniffi_mobile_signer_ffi_checksum_func_wallet_file_read(),
+            ),
+            (
+                "func_wallet_bsms_record",
+                bsms::uniffi_mobile_signer_ffi_checksum_func_wallet_bsms_record(),
+            ),
+            (
+                "func_wallet_descriptor_text",
+                bsms::uniffi_mobile_signer_ffi_checksum_func_wallet_descriptor_text(),
+            ),
+            (
+                "func_wallet_qr_parts",
+                qr_parts::uniffi_mobile_signer_ffi_checksum_func_wallet_qr_parts(),
+            ),
+            (
+                "constructor_qrpartsreader_new",
+                qr_parts::uniffi_mobile_signer_ffi_checksum_constructor_qrpartsreader_new(),
+            ),
+            (
+                "method_qrpartsreader_receive",
+                qr_parts::uniffi_mobile_signer_ffi_checksum_method_qrpartsreader_receive(),
             ),
             (
                 "func_chain_use_node",

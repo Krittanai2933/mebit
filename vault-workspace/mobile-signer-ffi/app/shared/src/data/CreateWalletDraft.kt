@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
+import com.mebit.ffi.signer.WalletImport
 import com.mebit.ffi.signer.WalletShape
 import com.mebit.ffi.signer.computeVaultAddressMultisig
 import com.mebit.ffi.signer.walletDescribe
@@ -49,6 +50,15 @@ class ReadyPlan private constructor(val preset: Preset, val keys: List<SavedKey>
             return if (keys.size == preset.n && keys.all { it.verified } && phrases.size == keys.size) ReadyPlan(preset, keys) else null
         }
     }
+}
+
+/** How [CreateWalletDraft.import] ended. */
+sealed interface ImportSaved {
+    data class Added(val vault: CreatedVault) : ImportSaved
+    data class Duplicate(val name: String) : ImportSaved
+
+    /** The wallet is in this run's book but the write failed, so the next sync tries again. */
+    data object NotSaved : ImportSaved
 }
 
 /** A confirmed key that a pick rules out: [blocked] comes from the phrase of [picked], since both have one master fingerprint. */
@@ -149,11 +159,46 @@ class CreateWalletDraft(
             hasMockKey = ready.keys.any { it.isMock },
             keyIds = ready.keys.map { it.id },
         )
+        return add(vault, name = null).also { made = it }
+    }
+
+    /** The one way a wallet enters the book: id "vault_<n>", n one past the highest number the book ever gave, and [name] or "Wallet <n>". */
+    private fun add(vault: CreatedVault, name: String?): CreatedVault {
         book.edit { b ->
             val number = nextNumber(b.lastVaultNumber, b.vaults.map { it.id }, "vault_")
-            b.copy(vaults = b.vaults + vault.copy(id = "vault_$number", name = "Wallet $number"), lastVaultNumber = number)
+            b.copy(vaults = b.vaults + vault.copy(id = "vault_$number", name = name ?: "Wallet $number"), lastVaultNumber = number)
         }
-        return book.current.vaults.last().also { made = it }
+        return book.current.vaults.last()
+    }
+
+    /** The name an import of [fileName] gets: the file's own, else "Wallet <number>" as [create] names one. */
+    fun importName(fileName: String): String =
+        walletNameFromFile(fileName).ifEmpty { "Wallet ${nextNumber(book.current.lastVaultNumber, book.current.vaults.map { it.id }, "vault_")}" }
+
+    /**
+     * Saves a wallet read from a file, through the same [add] as [create]. A wallet of the same threshold and the same keys already in the
+     * book, in any order because wsh(sortedmulti) sorts them, saves nothing. [keys] are the keyring: each key of the file takes the id of
+     * the keyring key with its fingerprint and xpub, or "".
+     */
+    fun import(wallet: WalletImport, fileName: String, keys: List<SavedKey>): ImportSaved {
+        val m = wallet.shape.needed.toInt()
+        val xpubs = wallet.shape.keys.map { it.xpub }.sorted()
+        book.current.vaults.firstOrNull { it.m == m && xpubsIn(it.bsms).sorted() == xpubs }?.let { return ImportSaved.Duplicate(it.name) }
+        val matches = keyringMatches(wallet, keys)
+        val vault = CreatedVault(
+            id = "",
+            name = "",
+            m = m,
+            n = wallet.shape.keys.size,
+            policy = CustodyPolicy.PersonalCustody,
+            address = wallet.shape.firstAddress,
+            bsms = importedBsms(wallet),
+            keyFingerprints = wallet.shape.keys.map { it.fingerprint },
+            hasMockKey = matches.any { it?.isMock == true },
+            keyIds = matches.map { it?.id.orEmpty() },
+        )
+        val added = add(vault, walletNameFromFile(fileName).ifEmpty { null })
+        return if (book.health == VaultsHealth.SaveFailed) ImportSaved.NotSaved else ImportSaved.Added(added)
     }
 }
 

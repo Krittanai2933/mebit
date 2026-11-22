@@ -22,6 +22,8 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
 async-trait = "0.1"
 ureq = { version = "2", default-features = false, features = ["tls"] }
+# Uniform Resources (MIT, github.com/dspicher/ur-rs): animated QR parts of a wallet file. Pinned exactly because Cargo.lock is git-ignored (open item 18).
+ur = "=0.5.2"
 
 # Bluetooth only where btleplug has a backend we ship. Linux would need libdbus, so it keeps
 # building the default members without it; its exports answer Unsupported (src/ble.rs).
