@@ -5,6 +5,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,7 +13,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -23,7 +23,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,15 +36,19 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.FiatQuote
@@ -48,15 +57,18 @@ import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.formatThaiDateTime
 import com.mebit.app.imageOfCard
+import com.mebit.app.plainTextClip
 import com.mebit.app.rememberSharer
 import com.mebit.app.resources.Res
-import com.mebit.app.resources.ic_tick_white
+import com.mebit.app.resources.ic_wallet_row
 import com.mebit.app.resources.mebit_logo
 import com.mebit.app.ui.components.DebugLink
-import com.mebit.app.ui.theme.MbSuccess
+import com.mebit.app.ui.theme.MbBtcOrange
+import com.mebit.app.ui.theme.MbChip
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.app.ui.theme.amountFontFamily
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 
@@ -64,11 +76,12 @@ internal val SlipPage = Color(0xFFEFF4FA)
 internal val SlipNavy = Color(0xFF073453)
 internal val SlipMuted = Color(0xFF687E90)
 private val SlipFiat = Color(0xFF56748A)
+private val SlipArrow = Color(0xFF8A9CAA)
 private val SlipHairline = Color(0xFFEDF2F6)
 
 /**
- * Penpot 4.6 Sent · slip, which 5.9 draws alike for a several-key wallet: the card of [txid] from [walletName] to [destination], its date
- * line (only once [sentAtSeconds] is set, after a send in this run) and baht line (only with a price), the "แชร์สลิป" button that shares the
+ * Penpot 4.6 Sent · slip, which 5.9 draws alike for a several-key wallet ([multiKey]): the card of [txid] from [walletName] to the whole
+ * [destination], its date line (only once [sentAtSeconds] is set, after a send in this run) and baht line (only with a price), the "แชร์สลิป" button that shares the
  * card as a picture, and the link home. The tags are S6's on both screens, which [tag] tells apart.
  */
 @Composable
@@ -81,6 +94,7 @@ fun SentSlip(
     rateSatVb: Long,
     destination: String,
     walletName: String,
+    multiKey: Boolean,
     quotes: QuoteCache,
     onHome: () -> Unit,
     onOpenCatalog: () -> Unit,
@@ -90,36 +104,64 @@ fun SentSlip(
     val frame = rememberGraphicsLayer()
     val sharer = rememberSharer()
     val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboard.current
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1_500)
+            copied = false
+        }
+    }
     Box(modifier = Modifier.fillMaxSize().background(SlipPage).testTag(tag)) {
         Column(
             // Scrolls so the share button and the link home cannot fall off a screen shorter than the card plus both buttons (open item 48).
             // The bottom padding is the debug link's height (about 24 dp of Thai text at 11 sp) plus 8 dp, so the link home sits clear of it when the column ends at the screen bottom.
             modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(top = 54.dp, bottom = 32.dp),
         ) {
-            Slip(txid, sentAtSeconds, amountSats, feeSats, rateSatVb, destination, quote, walletName, card)
+            Slip(txid, sentAtSeconds, amountSats, feeSats, rateSatVb, destination, quote, walletName, multiKey, card)
             Spacer(modifier = Modifier.height(14.dp))
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(SlipNavy)
-                    .clickable(role = Role.Button) {
-                        scope.launch {
-                            // shortcut: a share that fails does nothing, because the board has no error for it and a crash right after a payment is worse. Add one when it does.
-                            try {
-                                val name = if (txid.isEmpty()) "mebit-slip" else "mebit-slip-" + txid.take(8)
-                                sharer.imageOfCard(card, frame, SlipPage, name)
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (_: Exception) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(54.dp)
+                        .clip(CircleShape)
+                        .background(SlipNavy)
+                        .clickable(role = Role.Button) {
+                            if (txid.isNotEmpty()) {
+                                scope.launch { clipboard.setClipEntry(plainTextClip(txid)) }
+                                copied = true
                             }
                         }
-                    }
-                    .testTag("cta_s6_share"),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("แชร์สลิป", color = MbWhite, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
+                        .testTag("cta_slip_copy_txid"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(if (copied) "คัดลอกแล้ว" else "คัดลอก TXID", color = MbWhite, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(54.dp)
+                        .clip(CircleShape)
+                        .background(MbWhite)
+                        .border(1.5.dp, SlipNavy, CircleShape)
+                        .clickable(role = Role.Button) {
+                            scope.launch {
+                                // shortcut: a share that fails does nothing, because the board has no error for it and a crash right after a payment is worse. Add one when it does.
+                                try {
+                                    val name = if (txid.isEmpty()) "mebit-slip" else "mebit-slip-" + txid.take(8)
+                                    sharer.imageOfCard(card, frame, SlipPage, name)
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (_: Exception) {
+                                }
+                            }
+                        }
+                        .testTag("cta_s6_share"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("แชร์สลิป", color = SlipNavy, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
+                }
             }
             Spacer(modifier = Modifier.height(9.dp))
             Box(
@@ -143,13 +185,13 @@ private fun Slip(
     destination: String,
     quote: FiatQuote?,
     walletName: String,
+    multiKey: Boolean,
     layer: GraphicsLayer,
 ) {
     val shape = RoundedCornerShape(24.dp)
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(592.dp)
             .shadow(14.dp, shape, clip = false)
             // Recorded between the shadow and the clip: the picture keeps the rounded corners and leaves the shadow out.
             .drawWithContent {
@@ -159,125 +201,117 @@ private fun Slip(
             .clip(shape)
             .background(MbWhite),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().height(100.dp).background(SlipNavy).padding(horizontal = 24.dp).padding(bottom = 36.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Image(painterResource(Res.drawable.mebit_logo), contentDescription = "mebit", modifier = Modifier.size(width = 92.dp, height = 24.dp))
-            Spacer(modifier = Modifier.weight(1f))
-            Text("สลิปส่ง Bitcoin", color = Color(0xFFDCEAF4), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        Column(modifier = Modifier.fillMaxWidth().background(SlipNavy).padding(horizontal = 24.dp).padding(top = 20.dp, bottom = 16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Image(painterResource(Res.drawable.mebit_logo), contentDescription = "mebit", modifier = Modifier.size(width = 92.dp, height = 24.dp))
+                Spacer(modifier = Modifier.weight(1f))
+                Text("สลิปส่ง Bitcoin", color = Color(0xFFDCEAF4), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("ส่งสำเร็จ", color = MbWhite, fontSize = 20.sp, fontWeight = FontWeight.Bold, lineHeight = 24.sp)
+            if (sentAtSeconds > 0) {
+                Text(formatThaiDateTime(sentAtSeconds), color = Color(0xFFDCEAF4), fontSize = 13.sp, fontWeight = FontWeight.Medium, lineHeight = 16.sp, modifier = Modifier.padding(top = 4.dp).testTag("slip_date"))
+            }
         }
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .offset(y = 70.dp)
-                .size(60.dp)
-                .background(MbSuccess, CircleShape)
-                .border(5.dp, MbWhite, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Image(painterResource(Res.drawable.ic_tick_white), contentDescription = null, modifier = Modifier.size(34.dp))
-        }
-        Text(
-            text = "ส่งสำเร็จ",
-            color = SlipNavy,
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold,
-            lineHeight = 27.sp,
-            modifier = Modifier.align(Alignment.TopCenter).offset(y = 143.dp),
-        )
-        if (sentAtSeconds > 0) {
+        Column(modifier = Modifier.padding(horizontal = 24.dp).padding(top = 20.dp, bottom = 16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(44.dp).background(MbChip, CircleShape), contentAlignment = Alignment.Center) {
+                    Image(
+                        painterResource(Res.drawable.ic_wallet_row),
+                        contentDescription = null,
+                        colorFilter = ColorFilter.tint(SlipNavy),
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Column {
+                    Text(walletName, color = SlipNavy, fontSize = 17.sp, fontWeight = FontWeight.Bold, lineHeight = 21.sp, modifier = Modifier.testTag("slip_from"))
+                    Text(if (multiKey) "mebit · กระเป๋าหลายกุญแจ" else "mebit · กระเป๋า 1 กุญแจ", color = SlipMuted, fontSize = 13.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 5.dp))
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Canvas(Modifier.padding(start = 15.dp).size(width = 14.dp, height = 21.dp)) {
+                val stroke = 2.dp.toPx()
+                val tip = Offset(size.width / 2, size.height)
+                drawLine(SlipArrow, Offset(size.width / 2, 0f), tip, stroke, StrokeCap.Round)
+                drawLine(SlipArrow, Offset(0f, size.height - size.width / 2), tip, stroke, StrokeCap.Round)
+                drawLine(SlipArrow, Offset(size.width, size.height - size.width / 2), tip, stroke, StrokeCap.Round)
+            }
+            Spacer(modifier = Modifier.height(17.dp))
+            Row {
+                Box(Modifier.size(44.dp).background(MbBtcOrange, CircleShape), contentAlignment = Alignment.Center) {
+                    Text("₿", color = MbWhite, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Column {
+                    Text("ที่อยู่ Bitcoin", color = SlipNavy, fontSize = 17.sp, fontWeight = FontWeight.Bold, lineHeight = 21.sp)
+                    addressTypeLine(destination)?.let {
+                        Text(it, color = SlipMuted, fontSize = 13.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 5.dp).testTag("slip_address_type"))
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(groupedLines(destination, 6), color = SlipNavy, fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 15.sp, modifier = Modifier.testTag("slip_to"))
+                }
+            }
+            SlipHairline()
+            Row(verticalAlignment = Alignment.Top) {
+                Text("จำนวน:", color = SlipMuted, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, lineHeight = 19.sp, modifier = Modifier.padding(top = 9.dp))
+                Spacer(modifier = Modifier.weight(1f))
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = buildAnnotatedString {
+                            append(formatBtcCompact(amountSats))
+                            withStyle(SpanStyle(fontSize = 15.sp)) { append(" BTC") }
+                        },
+                        color = SlipNavy,
+                        fontSize = 30.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = amountFontFamily(),
+                        lineHeight = 36.sp,
+                        modifier = Modifier.testTag("send_amount"),
+                    )
+                    fiatLine(amountSats, quote)?.let {
+                        Text(it, color = SlipFiat, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, modifier = Modifier.testTag("slip_fiat"))
+                    }
+                }
+            }
+            SlipHairline()
+            // The fee the signed transaction pays, at the rate the user chose. PreparedSend carries no size, so the rate is the chosen one, not fee over size.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("ค่าธรรมเนียม:", color = SlipMuted, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, lineHeight = 19.sp)
+                Spacer(modifier = Modifier.weight(1f))
+                Text(slipFeeText(feeSats, quote), color = SlipNavy, fontSize = 14.sp, fontWeight = FontWeight.Bold, lineHeight = 19.sp, modifier = Modifier.testTag("slip_fee"))
+                Text("  ·  $rateSatVb sat/vB", color = SlipMuted, fontSize = 12.sp, lineHeight = 19.sp)
+            }
+            SlipHairline()
+            Row(verticalAlignment = Alignment.Top) {
+                Text("TXID:", color = SlipMuted, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, lineHeight = 19.sp)
+                Spacer(modifier = Modifier.weight(1f))
+                Text(
+                    groupedLines(txid.ifEmpty { "—" }, 8),
+                    color = SlipNavy,
+                    fontSize = 11.5.sp,
+                    lineHeight = 16.sp,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.testTag("s6_txid"),
+                )
+            }
+            SlipHairline()
             Text(
-                text = formatThaiDateTime(sentAtSeconds),
+                text = "ตรวจสอบได้บน blockchain · ออกโดย mebit",
                 color = SlipMuted,
-                fontSize = 12.5.sp,
+                fontSize = 11.5.sp,
                 fontWeight = FontWeight.Medium,
-                lineHeight = 17.sp,
+                lineHeight = 16.sp,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().offset(y = 172.dp).testTag("slip_date"),
+                modifier = Modifier.fillMaxWidth(),
             )
         }
-        Text(
-            text = formatBtcCompact(amountSats) + " BTC",
-            color = SlipNavy,
-            fontSize = 40.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = amountFontFamily(),
-            lineHeight = 56.sp,
-            modifier = Modifier.align(Alignment.TopCenter).offset(y = 202.dp).testTag("send_amount"),
-        )
-        fiatLine(amountSats, quote)?.let {
-            Text(
-                text = it,
-                color = SlipFiat,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                lineHeight = 20.sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().offset(y = 255.dp).testTag("slip_fiat"),
-            )
-        }
-        Canvas(modifier = Modifier.offset(x = 24.dp, y = 297.dp).width(306.dp).height(2.dp)) {
-            drawLine(
-                color = Color(0xFFD6E1E9),
-                start = Offset(0f, 1f),
-                end = Offset(size.width, 1f),
-                strokeWidth = 1.5.dp.toPx(),
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(10.dp.toPx(), 9.6.dp.toPx())),
-            )
-        }
-        SlipRow("จาก", walletName, top = 320.dp)
-        SlipHairline(354.dp)
-        SlipRow("ถึง", shorten(destination, "…"), top = 360.dp, tag = "slip_to")
-        SlipHairline(394.dp)
-        // The fee the signed transaction pays, at the rate the user chose. PreparedSend carries no size, so the rate is the chosen one, not fee over size.
-        SlipRow("ค่าธรรมเนียม", slipFeeText(feeSats, rateSatVb, quote), top = 400.dp)
-        SlipHairline(434.dp)
-        Text("สถานะ", color = SlipMuted, fontSize = 13.5.sp, lineHeight = 19.sp, modifier = Modifier.offset(x = 24.dp, y = 440.dp))
-        Row(
-            modifier = Modifier
-                .offset(x = 207.dp, y = 439.dp)
-                .width(130.dp)
-                .height(28.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(Color(0xFFEDF4FA))
-                .padding(horizontal = 9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.size(6.dp).background(Color(0xFFE8BB33), CircleShape))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("รอยืนยันในบล็อก", color = SlipNavy, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 19.sp)
-        }
-        SlipHairline(474.dp)
-        SlipRow("TXID", txid.ifEmpty { "—" }.let { shorten(it, "...") }, top = 480.dp, tag = "s6_txid")
-        SlipHairline(532.dp)
-        Text(
-            text = "ตรวจสอบได้บน blockchain · ออกโดย mebit",
-            color = SlipMuted,
-            fontSize = 11.5.sp,
-            fontWeight = FontWeight.Medium,
-            lineHeight = 16.sp,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth().offset(y = 550.dp),
-        )
     }
 }
 
 @Composable
-private fun SlipRow(label: String, value: String, top: Dp, tag: String? = null) {
-    Row(
-        modifier = Modifier.fillMaxWidth().offset(y = top).padding(horizontal = 24.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Text(label, color = SlipMuted, fontSize = 13.5.sp, lineHeight = 19.sp)
-        Spacer(modifier = Modifier.weight(1f))
-        Text(value, color = SlipNavy, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, lineHeight = 19.sp, modifier = if (tag != null) Modifier.testTag(tag) else Modifier)
-    }
-}
-
-@Composable
-private fun SlipHairline(top: Dp) {
-    Box(modifier = Modifier.offset(x = 24.dp, y = top).fillMaxWidth().padding(end = 48.dp).height(1.dp).background(SlipHairline))
+private fun SlipHairline() {
+    Box(modifier = Modifier.padding(vertical = 14.dp).fillMaxWidth().height(1.dp).background(SlipHairline))
 }
 
 /** "tb1qw5…jzsx": first four, last four. Short strings stay whole. */
