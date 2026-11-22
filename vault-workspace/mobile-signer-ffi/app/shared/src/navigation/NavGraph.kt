@@ -35,6 +35,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mebit.app.BiometricResult
 import com.mebit.app.Pairings
 import com.mebit.app.Place
+import com.mebit.app.SystemBack
 import com.mebit.app.data.AppLockState
 import com.mebit.app.data.CreateWalletDraft
 import com.mebit.app.data.DeviceLink
@@ -1121,7 +1122,9 @@ internal fun MebitNavHost(
     if (appLock.locked) {
         // A phone the Spending PIN guards unlocks only through the PIN sheet drawn over this cover, never through a check it lacks.
         val pinLock = biometrics.usesPin
-        // Covers everything, swallows taps, and goes away only on Face ID, the device passcode or the PIN.
+        // Covers everything, swallows taps, and goes away only on Face ID, the device passcode or the PIN. Composed after the screens, so this
+        // no-op SystemBack wins over their arrows' and Back neither skips the lock nor pops a screen under it.
+        SystemBack {}
         Box(
             modifier = Modifier
                 .fillMaxSize()

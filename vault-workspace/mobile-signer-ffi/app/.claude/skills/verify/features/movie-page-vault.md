@@ -43,5 +43,5 @@ Preconditions:
 
 - Review needs N verified keys with real tpubs; HW/mebit mocks mint real software keys labeled as HW.
 - BSMS text is a file-shaped export string until BIP-129 FFI exists.
-- Wallet Created is the only entry on the stack, so there is no back chip, and Android's system Back has no handler on any screen but a several-key wallet's slip (`id:screen_send/m9`), where it does what กลับหน้าหลัก does.
+- Wallet Created is the only entry on the stack, so there is no back chip, and Android's system Back does what the back chip does on every screen that has one, and what กลับหน้าหลัก does on a several-key wallet's slip (`id:screen_send/m9`). On a screen with no chip it leaves the app.
 - The sheet buttons need a real system UI. Check the saved file name ends in `.bsms` on Android's Files picker, which may rename an unknown type.
