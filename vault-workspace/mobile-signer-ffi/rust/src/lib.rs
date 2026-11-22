@@ -1064,6 +1064,18 @@ mod tests {
                 "method_qrpartsreader_receive",
                 qr_parts::uniffi_mobile_signer_ffi_checksum_method_qrpartsreader_receive(),
             ),
+            (
+                "func_chain_use_node",
+                chain::uniffi_mobile_signer_ffi_checksum_func_chain_use_node(),
+            ),
+            (
+                "func_chain_check_node",
+                chain::uniffi_mobile_signer_ffi_checksum_func_chain_check_node(),
+            ),
+            (
+                "func_chain_node_status",
+                chain::uniffi_mobile_signer_ffi_checksum_func_chain_node_status(),
+            ),
         ];
         for (name, checksum) in checksums {
             let check =

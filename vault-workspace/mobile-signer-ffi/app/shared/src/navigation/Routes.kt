@@ -419,6 +419,20 @@ enum class MovieRoute(
         "สถานะ · ค่าธรรมเนียม · TXID",
         hardware = true,
     ),
+    Settings(
+        "settings",
+        "PREFERENCES · MEBIT",
+        "ตั้งค่า",
+        "เลือกเครือข่ายและโหนดที่แอปใช้เชื่อมต่อ",
+        BarTab.None,
+    ),
+    SettingsNode(
+        "settings/node",
+        "SETTINGS · NODE",
+        "โหนด",
+        "แอปดึงยอดและส่งธุรกรรมผ่านโหนดที่เลือก",
+        BarTab.None,
+    ),
     ;
 
     companion object {

@@ -677,6 +677,20 @@ public data class JadeRegistration (
 
 
 /**
+ * The host in use for the settings screen, its name only. When none passes the probe, `reachable` is
+ * false and `host` is the first one of the choice.
+ */
+
+public data class NodeStatus (
+    var `host`: kotlin.String, 
+    var `reachable`: kotlin.Boolean
+) {
+    public companion object
+}
+
+
+
+/**
  * A signed payment that has not been posted anywhere.
  */
 
@@ -1264,6 +1278,84 @@ public sealed class MobileSignerException(message: String): kotlin.Exception(mes
 
 
 /**
+ * What `chain_check_node` found.
+ */
+
+public sealed class NodeCheck {
+    
+    
+    public object Testnet4 : NodeCheck() 
+    
+    
+    /**
+     * It answered, and its block 0 is another chain's.
+     */
+    
+    public object OtherChain : NodeCheck() 
+    
+    
+    /**
+     * The URL is neither `https://` nor `http://` on a Tailscale address.
+     */
+    
+    public object BadUrl : NodeCheck() 
+    
+    
+    public data class Unreachable(
+        val `reason`: kotlin.String,
+    ) : NodeCheck() {
+    }
+    
+}
+
+
+
+
+
+
+/**
+ * Which hosts the wallet reads from and posts to.
+ */
+
+public sealed class NodeChoice {
+    
+    /**
+     * This build's own node if it has one, then blockstream.info, then mempool.space.
+     */
+    
+    public object Auto : NodeChoice() 
+    
+    
+    /**
+     * blockstream.info alone, with no fallback.
+     */
+    
+    public object Blockstream : NodeChoice() 
+    
+    
+    /**
+     * mempool.space alone, with no fallback.
+     */
+    
+    public object MempoolSpace : NodeChoice() 
+    
+    
+    /**
+     * The user's own Esplora, `base` ending in its `/api` path, alone. Never logged.
+     */
+    public data class Own(
+        val `base`: kotlin.String,
+    ) : NodeChoice() {
+    }
+    
+}
+
+
+
+
+
+
+/**
  * What one scanned frame did to a `QrPartsReader`.
  */
 
@@ -1501,6 +1593,23 @@ public expect fun `bip39LastWordCandidates`(`firstWords`: List<kotlin.String>): 
  * An empty prefix gives none.
  */
 public expect fun `bip39Suggest`(`prefix`: kotlin.String, `limit`: kotlin.UInt): List<kotlin.String>
+
+/**
+ * The genesis probe on `base`, for the "ทดสอบ" button. Blocks up to a few seconds.
+ */
+public expect fun `chainCheckNode`(`base`: kotlin.String): NodeCheck
+
+/**
+ * The host the wallet reads from now, probing the list if none is trusted yet. Blocks up to a few
+ * seconds.
+ */
+public expect fun `chainNodeStatus`(): NodeStatus
+
+/**
+ * Chooses the node every later request goes to. Call it before the first one at start-up.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `chainUseNode`(`choice`: NodeChoice)
 
 /**
  * Is `words` a valid BIP-39 English mnemonic, and if not, why? Nothing is retained.

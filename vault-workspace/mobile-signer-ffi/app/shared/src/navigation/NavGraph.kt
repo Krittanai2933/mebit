@@ -88,6 +88,9 @@ import com.mebit.app.feature.keys.AddKeyScreen
 import com.mebit.app.feature.keys.DeviceRead
 import com.mebit.app.feature.keys.HardwareWalletScreen
 import com.mebit.app.feature.keys.KeyringScreen
+import com.mebit.app.feature.settings.NodeScreen
+import com.mebit.app.feature.settings.SettingsScreen
+import com.mebit.app.data.NodeSettings
 import com.mebit.app.feature.keys.PairMebitOtherScreen
 import com.mebit.app.feature.keys.T13UnsupportedModelScreen
 import com.mebit.app.feature.keys.T14VerifyMismatchScreen
@@ -200,6 +203,7 @@ internal fun MebitNavHost(
     startNotice: StartNotice? = null,
     vaults: SavedVaults = remember { SavedVaults.memoryOnly() },
     pairings: Pairings? = null,
+    nodeSettings: NodeSettings = remember { NodeSettings(null) },
 ) {
     val backStack = remember { mutableStateListOf(start) }
     val current = backStack.last()
@@ -580,6 +584,18 @@ internal fun MebitNavHost(
                         onAddKey = { navigate(MovieRoute.AddKey) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
+                        onSettings = { navigate(MovieRoute.Settings) },
+                    )
+                    MovieRoute.Settings -> SettingsScreen(
+                        node = nodeSettings,
+                        onOpenNode = { navigate(MovieRoute.SettingsNode) },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.SettingsNode -> NodeScreen(
+                        node = nodeSettings,
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
                     )
                     MovieRoute.Policy -> PolicyScreen(
                         draft = createDraft,
@@ -739,6 +755,7 @@ internal fun MebitNavHost(
                                 navigate(MovieRoute.WalletImport)
                             },
                             onOpenCatalog = openCatalog,
+                            onSettings = { navigate(MovieRoute.Settings) },
                             hardware = hardware.all.map { w ->
                                 val chain = hardware.chain(w)
                                 HardwareCard(w, hardwareKeyName(w, keyring.keys), chain.balanceSats, chain.balanceKnown, hardwareDeleteItem(vaults.saving))
