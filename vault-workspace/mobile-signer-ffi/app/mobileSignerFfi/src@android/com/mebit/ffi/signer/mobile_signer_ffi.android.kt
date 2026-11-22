@@ -1140,6 +1140,12 @@ internal typealias UniffiVTableCallbackInterfaceSignStepsUniffiByValue = UniffiV
 
 
 
+
+
+
+
+
+
 @Synchronized
 private fun findLibraryName(componentName: String): String {
     val libOverride = System.getProperty("uniffi.component.$componentName.libraryOverride")
@@ -1183,6 +1189,15 @@ internal object IntegrityCheckingUniffiLib : Library {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_bip39_suggest() != 42278.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_chain_check_node() != 15987.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_chain_node_status() != 18039.toShort()) {
+            throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+        }
+        if (uniffi_mobile_signer_ffi_checksum_func_chain_use_node() != 55117.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_check_mnemonic() != 19347.toShort()) {
@@ -1334,6 +1349,15 @@ internal object IntegrityCheckingUniffiLib : Library {
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_bip39_suggest(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_chain_check_node(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_chain_node_status(
+    ): Short
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_checksum_func_chain_use_node(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_check_mnemonic(
@@ -1594,6 +1618,20 @@ internal object UniffiLib : Library {
         `limit`: Int,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_chain_check_node(
+        `base`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_chain_node_status(
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue
+    @JvmStatic
+    external fun uniffi_mobile_signer_ffi_fn_func_chain_use_node(
+        `choice`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_fn_func_check_mnemonic(
         `words`: RustBufferByValue,
@@ -3517,6 +3555,28 @@ public object FfiConverterTypeJadeRegistration: FfiConverterRustBuffer<JadeRegis
 
 
 
+public object FfiConverterTypeNodeStatus: FfiConverterRustBuffer<NodeStatus> {
+    override fun read(buf: ByteBuffer): NodeStatus {
+        return NodeStatus(
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: NodeStatus): ULong = (
+            FfiConverterString.allocationSize(value.`host`) +
+            FfiConverterBoolean.allocationSize(value.`reachable`)
+    )
+
+    override fun write(value: NodeStatus, buf: ByteBuffer) {
+        FfiConverterString.write(value.`host`, buf)
+        FfiConverterBoolean.write(value.`reachable`, buf)
+    }
+}
+
+
+
+
 public object FfiConverterTypePreparedSend: FfiConverterRustBuffer<PreparedSend> {
     override fun read(buf: ByteBuffer): PreparedSend {
         return PreparedSend(
@@ -4079,6 +4139,142 @@ public object FfiConverterTypeMobileSignerError : FfiConverterRustBuffer<MobileS
 
 
 
+public object FfiConverterTypeNodeCheck : FfiConverterRustBuffer<NodeCheck>{
+    override fun read(buf: ByteBuffer): NodeCheck {
+        return when(buf.getInt()) {
+            1 -> NodeCheck.Testnet4
+            2 -> NodeCheck.OtherChain
+            3 -> NodeCheck.BadUrl
+            4 -> NodeCheck.Unreachable(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: NodeCheck): ULong = when(value) {
+        is NodeCheck.Testnet4 -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is NodeCheck.OtherChain -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is NodeCheck.BadUrl -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is NodeCheck.Unreachable -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+    }
+
+    override fun write(value: NodeCheck, buf: ByteBuffer) {
+        when(value) {
+            is NodeCheck.Testnet4 -> {
+                buf.putInt(1)
+                Unit
+            }
+            is NodeCheck.OtherChain -> {
+                buf.putInt(2)
+                Unit
+            }
+            is NodeCheck.BadUrl -> {
+                buf.putInt(3)
+                Unit
+            }
+            is NodeCheck.Unreachable -> {
+                buf.putInt(4)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+public object FfiConverterTypeNodeChoice : FfiConverterRustBuffer<NodeChoice>{
+    override fun read(buf: ByteBuffer): NodeChoice {
+        return when(buf.getInt()) {
+            1 -> NodeChoice.Auto
+            2 -> NodeChoice.Blockstream
+            3 -> NodeChoice.MempoolSpace
+            4 -> NodeChoice.Own(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: NodeChoice): ULong = when(value) {
+        is NodeChoice.Auto -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is NodeChoice.Blockstream -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is NodeChoice.MempoolSpace -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is NodeChoice.Own -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`base`)
+            )
+        }
+    }
+
+    override fun write(value: NodeChoice, buf: ByteBuffer) {
+        when(value) {
+            is NodeChoice.Auto -> {
+                buf.putInt(1)
+                Unit
+            }
+            is NodeChoice.Blockstream -> {
+                buf.putInt(2)
+                Unit
+            }
+            is NodeChoice.MempoolSpace -> {
+                buf.putInt(3)
+                Unit
+            }
+            is NodeChoice.Own -> {
+                buf.putInt(4)
+                FfiConverterString.write(value.`base`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
 public object FfiConverterTypeTxoOwner: FfiConverterRustBuffer<TxoOwner> {
     override fun read(buf: ByteBuffer): TxoOwner = try {
         TxoOwner.values()[buf.getInt() - 1]
@@ -4510,6 +4706,43 @@ public actual fun `bip39Suggest`(`prefix`: kotlin.String, `limit`: kotlin.UInt):
             uniffiRustCallStatus,
         )
     })
+}
+
+/**
+ * The genesis probe on `base`, for the "ทดสอบ" button. Blocks up to a few seconds.
+ */
+public actual fun `chainCheckNode`(`base`: kotlin.String): NodeCheck {
+    return FfiConverterTypeNodeCheck.lift(uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_chain_check_node(
+            FfiConverterString.lower(`base`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The host the wallet reads from now, probing the list if none is trusted yet. Blocks up to a few
+ * seconds.
+ */
+public actual fun `chainNodeStatus`(): NodeStatus {
+    return FfiConverterTypeNodeStatus.lift(uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_chain_node_status(
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * Chooses the node every later request goes to. Call it before the first one at start-up.
+ */
+@Throws(MobileSignerException::class)
+public actual fun `chainUseNode`(`choice`: NodeChoice) {
+    uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_chain_use_node(
+            FfiConverterTypeNodeChoice.lower(`choice`),
+            uniffiRustCallStatus,
+        )
+    }
 }
 
 /**

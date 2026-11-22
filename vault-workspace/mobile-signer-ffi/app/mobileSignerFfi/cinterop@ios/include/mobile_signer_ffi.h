@@ -206,6 +206,13 @@ RustBuffer uniffi_mobile_signer_ffi_fn_func_bip39_last_word_candidates(RustBuffe
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_bip39_suggest(RustBuffer prefix, int32_t limit, UniffiRustCallStatus *_Nonnull out_status
 );
+RustBuffer uniffi_mobile_signer_ffi_fn_func_chain_check_node(RustBuffer base, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_chain_node_status(UniffiRustCallStatus *_Nonnull out_status
+    
+);
+void uniffi_mobile_signer_ffi_fn_func_chain_use_node(RustBuffer choice, UniffiRustCallStatus *_Nonnull out_status
+);
 RustBuffer uniffi_mobile_signer_ffi_fn_func_check_mnemonic(RustBuffer words, UniffiRustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_compute_vault_address(RustBuffer borrowerPubkey, RustBuffer platformPubkey, RustBuffer lenderPubkey, UniffiRustCallStatus *_Nonnull out_status
@@ -399,6 +406,15 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_bip39_last_word_candidates(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_func_bip39_suggest(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_chain_check_node(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_chain_node_status(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_chain_use_node(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_func_check_mnemonic(void

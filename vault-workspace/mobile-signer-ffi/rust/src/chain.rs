@@ -793,7 +793,7 @@ impl Http {
     /// The host to read from, probing the list when none is cached, never one this source skipped.
     fn host(&self) -> Result<&'static HostSpec, MobileSignerError> {
         let skipped = self.skips().skipped.clone();
-        let hosts = &*ESPLORA_TESTNET4_HOSTS;
+        let hosts = current_hosts();
         let index = pick_host(
             hosts,
             &probe_genesis,
@@ -855,7 +855,7 @@ impl Transport for Http {
             }
             skips.skipped.clone()
         };
-        let hosts = &*ESPLORA_TESTNET4_HOSTS;
+        let hosts = current_hosts();
         pick_host(
             hosts,
             &probe_genesis,
@@ -918,11 +918,157 @@ pub(crate) const PUBLIC_TESTNET4_HOSTS: [HostSpec; 2] = [
         operator: Operator::MempoolSpace,
     },
 ];
-/// Testnet4 hosts in the order they are tried: this build's private node first, because it has no
-/// request limit, then the public hosts. Passing the genesis check does not make a host honest about
-/// balances, which every host here is trusted with alike. Only a proof moves a scan, see `crate::scan`.
-pub(crate) static ESPLORA_TESTNET4_HOSTS: LazyLock<Vec<HostSpec>> =
-    LazyLock::new(|| hosts_with(OWN_NODE));
+/// The hosts in use, in the order they are tried. Auto until `chain_use_node` says otherwise. A choice
+/// is leaked once so the hosts stay `'static` like the public ones: it happens only when the user picks
+/// a node. Passing the genesis check does not make a host honest about balances, which every host here
+/// is trusted with alike. Only a proof moves a scan, see `crate::scan`.
+type HostList = Mutex<&'static [HostSpec]>;
+static ESPLORA_TESTNET4_HOSTS: LazyLock<HostList> =
+    LazyLock::new(|| Mutex::new(Box::leak(hosts_with(OWN_NODE).into_boxed_slice())));
+
+pub(crate) fn current_hosts() -> &'static [HostSpec] {
+    *ESPLORA_TESTNET4_HOSTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Which hosts the wallet reads from and posts to.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum NodeChoice {
+    /// This build's own node if it has one, then blockstream.info, then mempool.space.
+    Auto,
+    /// blockstream.info alone, with no fallback.
+    Blockstream,
+    /// mempool.space alone, with no fallback.
+    MempoolSpace,
+    /// The user's own Esplora, `base` ending in its `/api` path, alone. Never logged.
+    Own { base: String },
+}
+
+/// What `chain_check_node` found.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum NodeCheck {
+    Testnet4,
+    /// It answered, and its block 0 is another chain's.
+    OtherChain,
+    /// The URL is neither `https://` nor `http://` on a Tailscale address.
+    BadUrl,
+    Unreachable {
+        reason: String,
+    },
+}
+
+/// The host in use for the settings screen, its name only. When none passes the probe, `reachable` is
+/// false and `host` is the first one of the choice.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct NodeStatus {
+    pub host: String,
+    pub reachable: bool,
+}
+
+/// `https://` always. Cleartext `http://` only for a Tailscale address, 100.64.0.0/10 or a `*.ts.net`
+/// name, which the tunnel already encrypts. Returns the URL without a trailing `/`.
+pub(crate) fn own_node_url(base: &str) -> Result<String, MobileSignerError> {
+    let bad = || MobileSignerError::Network("the node URL is not allowed".into());
+    let base = base.trim().trim_end_matches('/');
+    let (tls, rest) = match base.strip_prefix("https://") {
+        Some(rest) => (true, rest),
+        None => (false, base.strip_prefix("http://").ok_or_else(bad)?),
+    };
+    let authority = rest.split('/').next().unwrap_or_default();
+    let host = authority.split(':').next().unwrap_or_default();
+    let clean = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-');
+    if host.is_empty() || !host.chars().all(clean) || rest.contains(['?', '#', '@', ' ', '\\']) {
+        return Err(bad());
+    }
+    let tailscale = host.ends_with(".ts.net")
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.octets()[0] == 100 && ip.octets()[1] & 0xc0 == 0x40);
+    if tls || tailscale {
+        Ok(base.to_string())
+    } else {
+        Err(bad())
+    }
+}
+
+fn host_name(base: &str) -> String {
+    let rest = base.split("://").nth(1).unwrap_or(base);
+    rest.split(['/', ':']).next().unwrap_or(rest).to_string()
+}
+
+/// The host list a choice stands for. Every host still passes the genesis probe before use.
+pub(crate) fn hosts_for(choice: &NodeChoice) -> Result<Vec<HostSpec>, MobileSignerError> {
+    Ok(match choice {
+        NodeChoice::Auto => hosts_with(OWN_NODE),
+        NodeChoice::Blockstream => vec![PUBLIC_TESTNET4_HOSTS[0]],
+        NodeChoice::MempoolSpace => vec![PUBLIC_TESTNET4_HOSTS[1]],
+        NodeChoice::Own { base } => vec![HostSpec {
+            base: Box::leak(own_node_url(base)?.into_boxed_str()),
+            operator: Operator::Mebit,
+        }],
+    })
+}
+
+/// Sets `list` to `choice` and drops the trusted host in `cache`, so the next request probes the new list.
+pub(crate) fn switch_hosts(
+    choice: &NodeChoice,
+    list: &HostList,
+    cache: &HostChoice,
+) -> Result<(), MobileSignerError> {
+    let hosts: &'static [HostSpec] = Box::leak(hosts_for(choice)?.into_boxed_slice());
+    *list.lock().unwrap_or_else(|p| p.into_inner()) = hosts;
+    *cache.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    Ok(())
+}
+
+/// Chooses the node every later request goes to. Call it before the first one at start-up.
+#[uniffi::export]
+pub fn chain_use_node(choice: NodeChoice) -> Result<(), MobileSignerError> {
+    switch_hosts(&choice, &ESPLORA_TESTNET4_HOSTS, &CHOSEN_HOST)
+}
+
+/// The genesis probe on `base`, for the "ทดสอบ" button. Blocks up to a few seconds.
+#[uniffi::export]
+pub fn chain_check_node(base: String) -> NodeCheck {
+    let Ok(hosts) = hosts_for(&NodeChoice::Own { base }) else {
+        return NodeCheck::BadUrl;
+    };
+    match probe_genesis(&hosts[0]) {
+        Ok(body) if body.trim() == TESTNET4_GENESIS => NodeCheck::Testnet4,
+        Ok(_) => NodeCheck::OtherChain,
+        // Short fixed words: the failure's own text names the URL.
+        Err(failure) => NodeCheck::Unreachable {
+            reason: match failure {
+                GetError::TimedOut(_) => "timed out",
+                GetError::Unreachable(_) => "no connection",
+                GetError::Throttled { .. } => "request limit",
+                GetError::Retryable { .. } | GetError::Fatal(_) => "unusable answer",
+            }
+            .into(),
+        },
+    }
+}
+
+/// The host the wallet reads from now, probing the list if none is trusted yet. Blocks up to a few
+/// seconds.
+#[uniffi::export]
+pub fn chain_node_status() -> NodeStatus {
+    let hosts = current_hosts();
+    let picked = pick_host(
+        hosts,
+        &probe_genesis,
+        Instant::now(),
+        &CHOSEN_HOST,
+        &[],
+        &LIMITS,
+    );
+    let index = picked.as_ref().copied().unwrap_or(0);
+    NodeStatus {
+        host: host_name(hosts[index].base),
+        reachable: picked.is_ok(),
+    }
+}
 
 /// The hosts of a build whose private node is `own`. Cleartext `http://` is acceptable for a private
 /// host, which Tailscale already encrypts, and for no other.
@@ -1349,4 +1495,83 @@ pub(crate) fn get_forgetting(
     let got = get_with_retry(call, sleep);
     forget_host_if_unreachable(&got, hosts, lost);
     Ok(got?)
+}
+
+#[cfg(test)]
+mod node_choice_tests {
+    use super::*;
+
+    fn bases(choice: &NodeChoice) -> Vec<&'static str> {
+        hosts_for(choice).unwrap().iter().map(|h| h.base).collect()
+    }
+
+    #[test]
+    fn own_url_allows_https_and_http_only_on_tailscale() {
+        for ok in [
+            "https://node.example.org/testnet4/api",
+            "https://node.example.org:3000/api/",
+            "http://100.64.0.1:3002/api",
+            "http://100.127.255.254/api",
+            "http://box.tail1234.ts.net/api",
+        ] {
+            assert!(own_node_url(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "http://node.example.org/api",
+            "http://100.63.0.1/api",
+            "http://100.128.0.1/api",
+            "http://192.168.1.2/api",
+            "http://evilts.net/api",
+            "ftp://node.example.org",
+            "https://",
+            "https://user@node.example.org/api",
+            "https://node.example.org/api?x=1",
+            "node.example.org",
+            "",
+        ] {
+            assert!(own_node_url(bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            own_node_url(" https://a.org/api/ ").unwrap(),
+            "https://a.org/api"
+        );
+    }
+
+    #[test]
+    fn a_choice_maps_to_its_host_list_with_no_fallback_for_one_node() {
+        assert_eq!(hosts_for(&NodeChoice::Auto).unwrap(), hosts_with(OWN_NODE));
+        assert_eq!(bases(&NodeChoice::Blockstream), [ESPLORA_TESTNET4]);
+        assert_eq!(
+            bases(&NodeChoice::MempoolSpace),
+            ["https://mempool.space/testnet4/api"]
+        );
+        let own = NodeChoice::Own {
+            base: "https://n.example.org/api/".into(),
+        };
+        assert_eq!(bases(&own), ["https://n.example.org/api"]);
+        assert_eq!(hosts_for(&own).unwrap()[0].operator, Operator::Mebit);
+        assert!(
+            hosts_for(&NodeChoice::Own {
+                base: "http://n.org".into()
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn switching_sets_the_list_and_drops_the_trusted_host() {
+        let list: HostList = Mutex::new(&[]);
+        let cache: HostChoice = Mutex::new(Some(HostVerdict::Chosen(1, Instant::now())));
+        switch_hosts(&NodeChoice::MempoolSpace, &list, &cache).unwrap();
+        assert_eq!(list.lock().unwrap()[0].operator, Operator::MempoolSpace);
+        assert_eq!(*cache.lock().unwrap(), None);
+        // A refused choice changes nothing.
+        *cache.lock().unwrap() = Some(HostVerdict::Chosen(0, Instant::now()));
+        let bad = NodeChoice::Own {
+            base: "http://n.org".into(),
+        };
+        assert!(switch_hosts(&bad, &list, &cache).is_err());
+        assert_eq!(list.lock().unwrap().len(), 1);
+        assert!(cache.lock().unwrap().is_some());
+    }
 }

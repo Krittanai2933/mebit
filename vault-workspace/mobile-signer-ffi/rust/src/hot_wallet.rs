@@ -9258,7 +9258,7 @@ pub(crate) mod tests {
     #[test]
     fn a_private_node_goes_before_the_public_hosts_which_are_blockstream_then_mempool_over_tls() {
         assert_eq!(ESPLORA_TESTNET4, "https://blockstream.info/testnet4/api");
-        assert_eq!(*ESPLORA_TESTNET4_HOSTS, hosts_with(OWN_NODE));
+        assert_eq!(current_hosts(), hosts_with(OWN_NODE));
         let public: Vec<&str> = hosts_with(None).iter().map(|h| h.base).collect();
         assert_eq!(
             public,
