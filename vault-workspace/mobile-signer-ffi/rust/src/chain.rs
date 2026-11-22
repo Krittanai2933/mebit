@@ -1619,18 +1619,27 @@ mod node_choice_tests {
                 Ok(TESTNET4_GENESIS.into())
             }
         };
-        assert_eq!(pick_host(&old, &first_down, now, &cache, &[], &limits).unwrap(), 1);
+        assert_eq!(
+            pick_host(&old, &first_down, now, &cache, &[], &limits).unwrap(),
+            1
+        );
         // The shorter new list is probed: nothing indexes past its end, and its host is not trusted unprobed.
         let asked = Mutex::new(Vec::new());
         let probe = |host: &HostSpec| -> Result<String, GetError> {
             asked.lock().unwrap().push(host.base);
             Ok(TESTNET4_GENESIS.into())
         };
-        assert_eq!(pick_host(&new, &probe, now, &cache, &[], &limits).unwrap(), 0);
+        assert_eq!(
+            pick_host(&new, &probe, now, &cache, &[], &limits).unwrap(),
+            0
+        );
         assert_eq!(*asked.lock().unwrap(), [new[0].base]);
         // A host on both lists keeps the pass it earned, wherever it sits.
         let mixed = [spec("https://b.example/api"), spec("https://c.example/api")];
-        assert_eq!(pick_host(&mixed, &probe, now, &cache, &[], &limits).unwrap(), 1);
+        assert_eq!(
+            pick_host(&mixed, &probe, now, &cache, &[], &limits).unwrap(),
+            1
+        );
         assert_eq!(asked.lock().unwrap().len(), 1, "c passed already");
     }
 

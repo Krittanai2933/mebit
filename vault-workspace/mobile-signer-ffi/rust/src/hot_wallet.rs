@@ -8367,7 +8367,10 @@ pub(crate) mod tests {
             (attempts.get(), lost_calls.get(), chosen(&hosts))
         };
         assert_eq!(through(vec![lost(), lost(), lost()]), (3, 1, None));
-        assert_eq!(through(vec![lost(), Err(throttled())]), (2, 0, Some(HOSTS[0])));
+        assert_eq!(
+            through(vec![lost(), Err(throttled())]),
+            (2, 0, Some(HOSTS[0]))
+        );
     }
 
     const HOSTS: [&str; 2] = ["https://first.example/api", "https://second.example/api"];
@@ -8965,7 +8968,10 @@ pub(crate) mod tests {
         let up = Probe::new(&[(HOSTS[0], Ok(TESTNET4_GENESIS))]);
         let later = t0 + PROBE_FAILURE_TTL;
         assert_eq!(up.pick(later, &cache).unwrap(), 0);
-        assert_eq!(*cache.lock().unwrap(), Some(HostVerdict::Chosen(HOSTS[0], later)));
+        assert_eq!(
+            *cache.lock().unwrap(),
+            Some(HostVerdict::Chosen(HOSTS[0], later))
+        );
         assert_eq!(up.pick(later + Duration::from_secs(1), &cache).unwrap(), 0);
         assert_eq!(up.asked().len(), 1, "the old failure plays no part");
     }
@@ -9022,7 +9028,10 @@ pub(crate) mod tests {
         let now = Instant::now();
         assert_eq!(probe.pick(now, &cache).unwrap(), 0);
         assert_eq!(probe.asked(), vec![HOSTS[0]]);
-        assert_eq!(*cache.lock().unwrap(), Some(HostVerdict::Chosen(HOSTS[0], now)));
+        assert_eq!(
+            *cache.lock().unwrap(),
+            Some(HostVerdict::Chosen(HOSTS[0], now))
+        );
     }
 
     #[test]
@@ -9107,7 +9116,10 @@ pub(crate) mod tests {
         let over = t0 + HOST_TRUST;
         assert_eq!(probe.pick(over, &cache).unwrap(), 0);
         assert_eq!(probe.asked().len(), 2, "one probe after the window");
-        assert_eq!(*cache.lock().unwrap(), Some(HostVerdict::Chosen(HOSTS[0], over)));
+        assert_eq!(
+            *cache.lock().unwrap(),
+            Some(HostVerdict::Chosen(HOSTS[0], over))
+        );
     }
 
     #[test]
