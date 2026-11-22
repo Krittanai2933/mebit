@@ -79,6 +79,7 @@ import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
+import com.mebit.app.ui.theme.amountFontFamily
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.isValidAddress
 import kotlinx.coroutines.Dispatchers
@@ -377,7 +378,7 @@ private fun PaymentCard(payment: VaultPayment, quote: com.mebit.app.data.FiatQuo
     ) {
         Text("ส่ง", color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
         Row(verticalAlignment = Alignment.Bottom) {
-            Text(formatBtcCompact(amount), color = MbWhite, fontSize = 30.sp, fontWeight = FontWeight.Bold, lineHeight = 38.sp, modifier = Modifier.testTag("m2_amount"))
+            Text(formatBtcCompact(amount), color = MbWhite, fontSize = 30.sp, fontWeight = FontWeight.Bold, fontFamily = amountFontFamily(), lineHeight = 38.sp, modifier = Modifier.testTag("m2_amount"))
             Spacer(modifier = Modifier.width(6.dp))
             Text("BTC", color = MbWhite.copy(alpha = 0.8f), fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 5.dp))
             Spacer(modifier = Modifier.weight(1f))

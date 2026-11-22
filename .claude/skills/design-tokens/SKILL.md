@@ -13,7 +13,7 @@ The brand palette (Orbit Navy `#002B49`, Mercury Gold `#FFBD59`, and the rest) i
 
 ## Type
 
-Shipping typeface is **Kanit** (OFL, Thai + Latin) — `--font-display` / `--font-body` / `--font-label` all resolve to it. Files live in `design-reference/fonts/Kanit-*.ttf`; Compose loads `Res.font.kanit_*`. Penpot historically used FC Vision; do not claim glyph pixel-zero against those boards. Thai carries substance; English is reserved for uppercase signposting labels (e.g. "LOAN DASHBOARD", "LTV").
+The app uses Penpot's typefaces: **Noto Sans Thai** (OFL, Thai with Latin) for text and **Montserrat Bold** for the large Amount and Balance numbers. `--font-display`, `--font-body` and `--font-label` resolve to Noto Sans Thai, and `--font-amount` to Montserrat. The files are in `design-reference/fonts/`. Compose loads `Res.font.noto_sans_thai` through the theme and `Res.font.montserrat_bold` through `amountFontFamily()`. Thai carries substance; English is reserved for uppercase signposting labels (e.g. "LOAN DASHBOARD", "LTV").
 
 ## Radii & shadows
 

@@ -32,6 +32,7 @@ import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.data.FeeQuestion
 import com.mebit.app.data.feeQuestion
 import com.mebit.app.data.rememberFiatQuote
+import com.mebit.app.ui.theme.amountFontFamily
 import com.mebit.ffi.signer.PreparedSend
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
@@ -377,7 +378,7 @@ private fun SendSummary(amountSats: Long, sendAll: Boolean, estimate: Boolean, d
         }
         Text(label, color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
         Row(verticalAlignment = Alignment.Bottom) {
-            Text((if (estimate) "≈ " else "") + formatBtcCompact(amountSats), color = MbWhite, fontSize = 38.sp, fontWeight = FontWeight.Bold, lineHeight = 50.sp, modifier = Modifier.testTag("send_amount"))
+            Text((if (estimate) "≈ " else "") + formatBtcCompact(amountSats), color = MbWhite, fontSize = 38.sp, fontWeight = FontWeight.Bold, fontFamily = amountFontFamily(), lineHeight = 50.sp, modifier = Modifier.testTag("send_amount"))
             Spacer(modifier = Modifier.width(8.dp))
             Text("BTC", color = MbWhite.copy(alpha = 0.8f), fontSize = 15.sp, fontWeight = FontWeight.Bold, lineHeight = 20.sp, modifier = Modifier.padding(bottom = 5.dp))
         }

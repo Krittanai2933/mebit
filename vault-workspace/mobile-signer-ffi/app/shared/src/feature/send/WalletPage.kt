@@ -60,6 +60,7 @@ import com.mebit.app.ui.theme.MbPage
 import com.mebit.app.ui.theme.MbProgress
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbWhite
+import com.mebit.app.ui.theme.amountFontFamily
 import org.jetbrains.compose.resources.painterResource
 
 private val FiatGold = Color(0xFFEEB42A)
@@ -171,6 +172,7 @@ internal fun WalletHero(
             color = MbWhite,
             fontSize = 38.sp,
             fontWeight = FontWeight.Bold,
+            fontFamily = amountFontFamily(),
             lineHeight = 50.sp,
             modifier = Modifier.testTag(balanceTag),
         )

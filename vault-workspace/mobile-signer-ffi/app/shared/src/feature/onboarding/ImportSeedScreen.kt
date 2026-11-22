@@ -105,6 +105,7 @@ import com.mebit.app.ui.theme.MbPage
 import com.mebit.app.ui.theme.MbPick
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbWhite
+import com.mebit.app.ui.theme.amountFontFamily
 import com.mebit.ffi.signer.hotAccountPath
 import org.jetbrains.compose.resources.painterResource
 
@@ -339,7 +340,7 @@ internal fun PassphraseOption(set: Boolean, onOpen: () -> Unit, onClear: () -> U
 // A slot's word starts after 10dp of padding, a 14dp number and a 6dp gap.
 private val WORD_START = 30.dp
 
-// Penpot sets the word at 14.5 in Anuphan. Kanit is wider, and an 8-letter word must not be cut off.
+// Penpot sets the word at 14.5. It stays at 13.5, set when the app drew Kanit, which is wider, until a phone shows an 8-letter word uncut at 14.5.
 private fun wordStyle(ink: Color) = TextStyle(color = ink, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
 
 @Composable
@@ -634,6 +635,7 @@ internal fun FingerprintSheet(session: OnboardingSession, copy: FingerprintCopy,
                     color = MbNavy,
                     fontSize = 34.sp,
                     fontWeight = FontWeight.Bold,
+                    fontFamily = amountFontFamily(),
                     letterSpacing = 2.sp,
                     modifier = Modifier.testTag("fingerprint"),
                 )
