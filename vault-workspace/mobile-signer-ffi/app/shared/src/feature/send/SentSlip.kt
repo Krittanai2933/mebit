@@ -41,10 +41,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -58,6 +57,7 @@ import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.formatThaiDateTime
 import com.mebit.app.imageOfCard
+import com.mebit.app.plainTextClip
 import com.mebit.app.rememberSharer
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_wallet_row
@@ -104,7 +104,7 @@ fun SentSlip(
     val frame = rememberGraphicsLayer()
     val sharer = rememberSharer()
     val scope = rememberCoroutineScope()
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
     var copied by remember { mutableStateOf(false) }
     LaunchedEffect(copied) {
         if (copied) {
@@ -129,7 +129,7 @@ fun SentSlip(
                         .background(SlipNavy)
                         .clickable(role = Role.Button) {
                             if (txid.isNotEmpty()) {
-                                clipboard.setText(AnnotatedString(txid))
+                                scope.launch { clipboard.setClipEntry(plainTextClip(txid)) }
                                 copied = true
                             }
                         }
