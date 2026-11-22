@@ -1428,6 +1428,14 @@ internal val UniffiVTableCallbackInterfaceSignStepsUniffiByValue.`uniffiFree`: U
 
 
 
+
+
+
+
+
+
+
+
 internal object UniffiLib {
     init {
             uniffiCallbackInterfacePairingCodes.register(this)
@@ -1461,6 +1469,34 @@ internal object UniffiLib {
         `ptr`: Pointer?,
     ): Long = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_method_pairingcodes_pairing_code(
         `ptr`,
+    )
+    fun uniffi_mobile_signer_ffi_fn_clone_qrpartsreader(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Pointer? = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_clone_qrpartsreader(
+        `ptr`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_free_qrpartsreader(
+        `ptr`: Pointer?,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Unit = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_free_qrpartsreader(
+        `ptr`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_constructor_qrpartsreader_new(
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): Pointer? = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_constructor_qrpartsreader_new(
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_method_qrpartsreader_receive(
+        `ptr`: Pointer?,
+        `scanned`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_method_qrpartsreader_receive(
+        `ptr`,
+        `scanned`,
+        uniffiCallStatus,
     )
     fun uniffi_mobile_signer_ffi_fn_clone_signsteps(
         `ptr`: Pointer?,
@@ -1952,6 +1988,13 @@ internal object UniffiLib {
     ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_wallet_history(
         `descriptor`,
         `network`,
+        uniffiCallStatus,
+    )
+    fun uniffi_mobile_signer_ffi_fn_func_wallet_qr_parts(
+        `text`: RustBufferByValue,
+        uniffiCallStatus: UniffiRustCallStatus,
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_wallet_qr_parts(
+        `text`,
         uniffiCallStatus,
     )
     fun uniffi_mobile_signer_ffi_fn_func_wallet_review(
@@ -2484,6 +2527,9 @@ internal object UniffiLib {
     fun uniffi_mobile_signer_ffi_checksum_func_wallet_history(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_wallet_history(
     )
+    fun uniffi_mobile_signer_ffi_checksum_func_wallet_qr_parts(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_wallet_qr_parts(
+    )
     fun uniffi_mobile_signer_ffi_checksum_func_wallet_review(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_wallet_review(
     )
@@ -2498,6 +2544,9 @@ internal object UniffiLib {
     )
     fun uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(
+    )
+    fun uniffi_mobile_signer_ffi_checksum_method_qrpartsreader_receive(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_method_qrpartsreader_receive(
     )
     fun uniffi_mobile_signer_ffi_checksum_method_signsteps_registering(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_method_signsteps_registering(
@@ -2522,6 +2571,9 @@ internal object UniffiLib {
     )
     fun uniffi_mobile_signer_ffi_checksum_method_walletlink_unlock(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_method_walletlink_unlock(
+    )
+    fun uniffi_mobile_signer_ffi_checksum_constructor_qrpartsreader_new(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_constructor_qrpartsreader_new(
     )
     fun uniffi_mobile_signer_ffi_checksum_constructor_walletlink_new(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_constructor_walletlink_new(
@@ -3046,6 +3098,157 @@ internal object uniffiCallbackInterfacePairingCodes {
 
     internal fun register(lib: UniffiLib) {
         lib.uniffi_mobile_signer_ffi_fn_init_callback_vtable_pairingcodes(vtable)
+    }
+}
+
+
+
+/**
+ * Collects the parts of one wallet-file UR. Make a new one to start over.
+ */
+public actual open class QrPartsReader: Disposable, QrPartsReaderInterface {
+
+    public constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiPointerDestroyer(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    public actual constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiPointerDestroyer(null))
+    }
+    public actual constructor() : this(
+        uniffiRustCall { uniffiRustCallStatus ->
+            UniffiLib.uniffi_mobile_signer_ffi_fn_constructor_qrpartsreader_new(
+                uniffiRustCallStatus,
+            )
+        }!!
+    )
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed: kotlinx.atomicfu.AtomicBoolean = kotlinx.atomicfu.atomic(false)
+    private val callCounter: kotlinx.atomicfu.AtomicLong = kotlinx.atomicfu.atomic(1L)
+
+    private val lock = kotlinx.atomicfu.locks.ReentrantLock()
+
+    private fun <T> synchronized(block: () -> T): T {
+        lock.lock()
+        try {
+            return block()
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    actual override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    actual override fun close() {
+        synchronized { this.destroy() }
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.value
+            if (c == 0L) {
+                throw IllegalStateException("${this::class::simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this::class::simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiPointerDestroyer(private val pointer: Pointer?) : Disposable {
+        override fun destroy() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.uniffi_mobile_signer_ffi_fn_free_qrpartsreader(ptr, status)
+                }
+            }
+        }
+    }
+
+    public fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall { status ->
+            UniffiLib.uniffi_mobile_signer_ffi_fn_clone_qrpartsreader(pointer!!, status)
+        }!!
+    }
+
+    
+    public actual override fun `receive`(`scanned`: kotlin.String): QrScanProgress {
+        return FfiConverterTypeQrScanProgress.lift(callWithPointer {
+            uniffiRustCall { uniffiRustCallStatus ->
+                UniffiLib.uniffi_mobile_signer_ffi_fn_method_qrpartsreader_receive(
+                    it,
+                    FfiConverterString.lower(`scanned`),
+                    uniffiRustCallStatus,
+                )
+            }
+        })
+    }
+
+
+    
+    
+    public actual companion object
+    
+}
+
+
+
+
+
+public object FfiConverterTypeQrPartsReader: FfiConverter<QrPartsReader, Pointer> {
+
+    override fun lower(value: QrPartsReader): Pointer {
+        return value.uniffiClonePointer()
+    }
+
+    override fun lift(value: Pointer): QrPartsReader {
+        return QrPartsReader(value)
+    }
+
+    override fun read(buf: ByteBuffer): QrPartsReader {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(buf.getLong().toPointer())
+    }
+
+    override fun allocationSize(value: QrPartsReader): ULong = 8UL
+
+    override fun write(value: QrPartsReader, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(lower(value).toLong())
     }
 }
 
@@ -4532,6 +4735,85 @@ public object FfiConverterTypeMobileSignerError : FfiConverterRustBuffer<MobileS
 
 
 
+public object FfiConverterTypeQrScanProgress : FfiConverterRustBuffer<QrScanProgress>{
+    override fun read(buf: ByteBuffer): QrScanProgress {
+        return when(buf.getInt()) {
+            1 -> QrScanProgress.NotUr
+            2 -> QrScanProgress.Part(
+                FfiConverterUInt.read(buf),
+                FfiConverterUInt.read(buf),
+                )
+            3 -> QrScanProgress.Done(
+                FfiConverterString.read(buf),
+                )
+            4 -> QrScanProgress.Refused(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: QrScanProgress): ULong = when(value) {
+        is QrScanProgress.NotUr -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is QrScanProgress.Part -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterUInt.allocationSize(value.`received`)
+                + FfiConverterUInt.allocationSize(value.`expected`)
+            )
+        }
+        is QrScanProgress.Done -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`text`)
+            )
+        }
+        is QrScanProgress.Refused -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+    }
+
+    override fun write(value: QrScanProgress, buf: ByteBuffer) {
+        when(value) {
+            is QrScanProgress.NotUr -> {
+                buf.putInt(1)
+                Unit
+            }
+            is QrScanProgress.Part -> {
+                buf.putInt(2)
+                FfiConverterUInt.write(value.`received`, buf)
+                FfiConverterUInt.write(value.`expected`, buf)
+                Unit
+            }
+            is QrScanProgress.Done -> {
+                buf.putInt(3)
+                FfiConverterString.write(value.`text`, buf)
+                Unit
+            }
+            is QrScanProgress.Refused -> {
+                buf.putInt(4)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
 public object FfiConverterTypeTxoOwner: FfiConverterRustBuffer<TxoOwner> {
     override fun read(buf: ByteBuffer): TxoOwner = try {
         TxoOwner.values()[buf.getInt() - 1]
@@ -5728,6 +6010,20 @@ public actual fun `walletHistory`(`descriptor`: kotlin.String, `network`: KeyNet
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_history(
             FfiConverterString.lower(`descriptor`),
             FfiConverterTypeKeyNetwork.lower(`network`),
+            uniffiRustCallStatus,
+        )
+    })
+}
+
+/**
+ * The text as `ur:bytes` parts, uppercased so a QR uses its alphanumeric mode. Only the plain
+ * fragments `1..=N` come back, so a screen that cycles them shows an exact "x / N". A text that
+ * fits one fragment is one single-part UR.
+ */
+public actual fun `walletQrParts`(`text`: kotlin.String): List<kotlin.String> {
+    return FfiConverterSequenceString.lift(uniffiRustCall { uniffiRustCallStatus ->
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_qr_parts(
+            FfiConverterString.lower(`text`),
             uniffiRustCallStatus,
         )
     })

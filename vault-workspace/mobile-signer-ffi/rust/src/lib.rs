@@ -13,6 +13,7 @@ mod chain;
 pub mod hot_wallet;
 pub mod price;
 mod proof;
+pub mod qr_parts;
 mod scan;
 mod scan_store;
 pub mod script;
@@ -1050,6 +1051,18 @@ mod tests {
             (
                 "func_wallet_descriptor_text",
                 bsms::uniffi_mobile_signer_ffi_checksum_func_wallet_descriptor_text(),
+            ),
+            (
+                "func_wallet_qr_parts",
+                qr_parts::uniffi_mobile_signer_ffi_checksum_func_wallet_qr_parts(),
+            ),
+            (
+                "constructor_qrpartsreader_new",
+                qr_parts::uniffi_mobile_signer_ffi_checksum_constructor_qrpartsreader_new(),
+            ),
+            (
+                "method_qrpartsreader_receive",
+                qr_parts::uniffi_mobile_signer_ffi_checksum_method_qrpartsreader_receive(),
             ),
         ];
         for (name, checksum) in checksums {

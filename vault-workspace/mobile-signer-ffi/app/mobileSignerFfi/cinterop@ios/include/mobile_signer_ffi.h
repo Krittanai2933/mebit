@@ -174,6 +174,15 @@ void uniffi_mobile_signer_ffi_fn_init_callback_vtable_pairingcodes(UniffiVTableC
 );
 int64_t uniffi_mobile_signer_ffi_fn_method_pairingcodes_pairing_code(void * ptr
 );
+void * uniffi_mobile_signer_ffi_fn_clone_qrpartsreader(void * ptr, UniffiRustCallStatus *_Nonnull out_status
+);
+void uniffi_mobile_signer_ffi_fn_free_qrpartsreader(void * ptr, UniffiRustCallStatus *_Nonnull out_status
+);
+void * uniffi_mobile_signer_ffi_fn_constructor_qrpartsreader_new(UniffiRustCallStatus *_Nonnull out_status
+    
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_method_qrpartsreader_receive(void * ptr, RustBuffer scanned, UniffiRustCallStatus *_Nonnull out_status
+);
 void * uniffi_mobile_signer_ffi_fn_clone_signsteps(void * ptr, UniffiRustCallStatus *_Nonnull out_status
 );
 void uniffi_mobile_signer_ffi_fn_free_signsteps(void * ptr, UniffiRustCallStatus *_Nonnull out_status
@@ -280,6 +289,8 @@ RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_file_read(RustBuffer text, Ru
 RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_finish(RustBuffer descriptor, RustBuffer network, RustBuffer psbt, RustBuffer unsignedTxid, UniffiRustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_history(RustBuffer descriptor, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_qr_parts(RustBuffer text, UniffiRustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_review(RustBuffer descriptor, RustBuffer network, RustBuffer psbt, UniffiRustCallStatus *_Nonnull out_status
 );
@@ -515,6 +526,9 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_finish(void
 int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_history(void
     
 );
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_qr_parts(void
+    
+);
 int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_review(void
     
 );
@@ -528,6 +542,9 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_tx_detail(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_method_pairingcodes_pairing_code(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_method_qrpartsreader_receive(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_method_signsteps_registering(void
@@ -552,6 +569,9 @@ int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_sign_wallet_psbt(voi
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_method_walletlink_unlock(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_constructor_qrpartsreader_new(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_constructor_walletlink_new(void

@@ -159,6 +159,45 @@ public expect open class PairingCodesImpl: Disposable, PairingCodes {
 
 
 /**
+ * Collects the parts of one wallet-file UR. Make a new one to start over.
+ */
+public interface QrPartsReaderInterface {
+    
+    public fun `receive`(`scanned`: kotlin.String): QrScanProgress
+    
+    public companion object
+}
+
+
+/**
+ * Collects the parts of one wallet-file UR. Make a new one to start over.
+ */
+public expect open class QrPartsReader: Disposable, QrPartsReaderInterface {
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    public constructor(noPointer: NoPointer)
+
+    
+    public constructor()
+
+    override fun destroy()
+    override fun close()
+
+    
+    public override fun `receive`(`scanned`: kotlin.String): QrScanProgress
+    
+
+    
+    public companion object
+}
+
+
+
+
+/**
  * Hears where a device signature is as the device reaches each step, so the screen draws what
  * the device shows. Never throw: an exception cannot be mapped.
  */
@@ -1225,6 +1264,51 @@ public sealed class MobileSignerException(message: String): kotlin.Exception(mes
 
 
 /**
+ * What one scanned frame did to a `QrPartsReader`.
+ */
+
+public sealed class QrScanProgress {
+    
+    /**
+     * Not a UR: the caller uses the text as the file text.
+     */
+    
+    public object NotUr : QrScanProgress() 
+    
+    
+    /**
+     * A UR part arrived: `received` of `expected` fragments are known.
+     */
+    public data class Part(
+        val `received`: kotlin.UInt,
+        val `expected`: kotlin.UInt,
+    ) : QrScanProgress() {
+    }
+    
+    /**
+     * Every fragment is in.
+     */
+    public data class Done(
+        val `text`: kotlin.String,
+    ) : QrScanProgress() {
+    }
+    
+    /**
+     * A UR of another type, a part of another message, or bytes that are not UTF-8.
+     */
+    public data class Refused(
+        val `reason`: kotlin.String,
+    ) : QrScanProgress() {
+    }
+    
+}
+
+
+
+
+
+
+/**
  * Who owns an output, whether the transaction creates it or an input spends it.
  */
 
@@ -1748,6 +1832,13 @@ public expect fun `walletFinish`(`descriptor`: kotlin.String, `network`: KeyNetw
  */
 @Throws(MobileSignerException::class)
 public expect fun `walletHistory`(`descriptor`: kotlin.String, `network`: KeyNetwork): List<HotTx>
+
+/**
+ * The text as `ur:bytes` parts, uppercased so a QR uses its alphanumeric mode. Only the plain
+ * fragments `1..=N` come back, so a screen that cycles them shows an exact "x / N". A text that
+ * fits one fragment is one single-part UR.
+ */
+public expect fun `walletQrParts`(`text`: kotlin.String): List<kotlin.String>
 
 /**
  * What `psbt` pays and which keys of the wallet `descriptor` describes have signed it, once it is a payment
