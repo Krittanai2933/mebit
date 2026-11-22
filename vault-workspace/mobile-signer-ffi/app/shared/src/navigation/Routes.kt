@@ -409,7 +409,7 @@ enum class MovieRoute(
     ),
     Settings(
         "settings",
-        "SETTINGS",
+        "PREFERENCES · MEBIT",
         "ตั้งค่า",
         "เลือกเครือข่ายและโหนดที่แอปใช้เชื่อมต่อ",
         BarTab.None,
