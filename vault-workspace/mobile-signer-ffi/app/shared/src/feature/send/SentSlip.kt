@@ -1,5 +1,6 @@
 package com.mebit.app.feature.send
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -26,15 +27,17 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
@@ -42,8 +45,11 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.FiatQuote
@@ -54,7 +60,6 @@ import com.mebit.app.formatThaiDateTime
 import com.mebit.app.imageOfCard
 import com.mebit.app.rememberSharer
 import com.mebit.app.resources.Res
-import com.mebit.app.resources.ic_vault_row
 import com.mebit.app.resources.ic_wallet_row
 import com.mebit.app.resources.mebit_logo
 import com.mebit.app.ui.components.DebugLink
@@ -71,6 +76,7 @@ internal val SlipPage = Color(0xFFEFF4FA)
 internal val SlipNavy = Color(0xFF073453)
 internal val SlipMuted = Color(0xFF687E90)
 private val SlipFiat = Color(0xFF56748A)
+private val SlipArrow = Color(0xFF8A9CAA)
 private val SlipHairline = Color(0xFFEDF2F6)
 
 /**
@@ -195,23 +201,23 @@ private fun Slip(
             .clip(shape)
             .background(MbWhite),
     ) {
-        Column(modifier = Modifier.fillMaxWidth().background(SlipNavy).padding(horizontal = 24.dp).padding(top = 20.dp, bottom = 20.dp)) {
+        Column(modifier = Modifier.fillMaxWidth().background(SlipNavy).padding(horizontal = 24.dp).padding(top = 20.dp, bottom = 16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Image(painterResource(Res.drawable.mebit_logo), contentDescription = "mebit", modifier = Modifier.size(width = 92.dp, height = 24.dp))
                 Spacer(modifier = Modifier.weight(1f))
                 Text("สลิปส่ง Bitcoin", color = Color(0xFFDCEAF4), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }
-            Spacer(modifier = Modifier.height(14.dp))
-            Text("ส่งสำเร็จ", color = MbWhite, fontSize = 20.sp, fontWeight = FontWeight.Bold, lineHeight = 27.sp)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("ส่งสำเร็จ", color = MbWhite, fontSize = 20.sp, fontWeight = FontWeight.Bold, lineHeight = 24.sp)
             if (sentAtSeconds > 0) {
-                Text(formatThaiDateTime(sentAtSeconds), color = Color(0xFFDCEAF4), fontSize = 12.5.sp, fontWeight = FontWeight.Medium, lineHeight = 17.sp, modifier = Modifier.testTag("slip_date"))
+                Text(formatThaiDateTime(sentAtSeconds), color = Color(0xFFDCEAF4), fontSize = 13.sp, fontWeight = FontWeight.Medium, lineHeight = 16.sp, modifier = Modifier.padding(top = 4.dp).testTag("slip_date"))
             }
         }
         Column(modifier = Modifier.padding(horizontal = 24.dp).padding(top = 20.dp, bottom = 16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(44.dp).background(MbChip, CircleShape), contentAlignment = Alignment.Center) {
                     Image(
-                        painterResource(if (multiKey) Res.drawable.ic_vault_row else Res.drawable.ic_wallet_row),
+                        painterResource(Res.drawable.ic_wallet_row),
                         contentDescription = null,
                         colorFilter = ColorFilter.tint(SlipNavy),
                         modifier = Modifier.size(20.dp),
@@ -219,39 +225,48 @@ private fun Slip(
                 }
                 Spacer(modifier = Modifier.width(14.dp))
                 Column {
-                    Text(walletName, color = SlipNavy, fontSize = 16.sp, fontWeight = FontWeight.Bold, lineHeight = 22.sp, modifier = Modifier.testTag("slip_from"))
-                    Text(if (multiKey) "mebit · กระเป๋าหลายกุญแจ" else "mebit · กระเป๋า 1 กุญแจ", color = SlipMuted, fontSize = 12.5.sp, lineHeight = 17.sp)
+                    Text(walletName, color = SlipNavy, fontSize = 17.sp, fontWeight = FontWeight.Bold, lineHeight = 21.sp, modifier = Modifier.testTag("slip_from"))
+                    Text(if (multiKey) "mebit · กระเป๋าหลายกุญแจ" else "mebit · กระเป๋า 1 กุญแจ", color = SlipMuted, fontSize = 13.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 5.dp))
                 }
             }
-            Spacer(modifier = Modifier.height(6.dp))
-            Text("↓", color = SlipMuted, fontSize = 18.sp, modifier = Modifier.padding(start = 15.dp))
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+            Canvas(Modifier.padding(start = 15.dp).size(width = 14.dp, height = 21.dp)) {
+                val stroke = 2.dp.toPx()
+                val tip = Offset(size.width / 2, size.height)
+                drawLine(SlipArrow, Offset(size.width / 2, 0f), tip, stroke, StrokeCap.Round)
+                drawLine(SlipArrow, Offset(0f, size.height - size.width / 2), tip, stroke, StrokeCap.Round)
+                drawLine(SlipArrow, Offset(size.width, size.height - size.width / 2), tip, stroke, StrokeCap.Round)
+            }
+            Spacer(modifier = Modifier.height(17.dp))
             Row {
                 Box(Modifier.size(44.dp).background(MbBtcOrange, CircleShape), contentAlignment = Alignment.Center) {
                     Text("₿", color = MbWhite, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 }
                 Spacer(modifier = Modifier.width(14.dp))
                 Column {
-                    Text("ที่อยู่ Bitcoin", color = SlipNavy, fontSize = 16.sp, fontWeight = FontWeight.Bold, lineHeight = 22.sp)
+                    Text("ที่อยู่ Bitcoin", color = SlipNavy, fontSize = 17.sp, fontWeight = FontWeight.Bold, lineHeight = 21.sp)
                     addressTypeLine(destination)?.let {
-                        Text(it, color = SlipMuted, fontSize = 12.5.sp, lineHeight = 17.sp, modifier = Modifier.testTag("slip_address_type"))
+                        Text(it, color = SlipMuted, fontSize = 13.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 5.dp).testTag("slip_address_type"))
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(groupedLines(destination, 6), color = SlipNavy, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.testTag("slip_to"))
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(groupedLines(destination, 6), color = SlipNavy, fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 15.sp, modifier = Modifier.testTag("slip_to"))
                 }
             }
             SlipHairline()
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("จำนวน:", color = SlipMuted, fontSize = 13.5.sp, lineHeight = 19.sp)
+            Row(verticalAlignment = Alignment.Top) {
+                Text("จำนวน:", color = SlipMuted, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, lineHeight = 19.sp, modifier = Modifier.padding(top = 9.dp))
                 Spacer(modifier = Modifier.weight(1f))
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        text = formatBtcCompact(amountSats) + " BTC",
+                        text = buildAnnotatedString {
+                            append(formatBtcCompact(amountSats))
+                            withStyle(SpanStyle(fontSize = 15.sp)) { append(" BTC") }
+                        },
                         color = SlipNavy,
-                        fontSize = 32.sp,
+                        fontSize = 30.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = amountFontFamily(),
-                        lineHeight = 44.sp,
+                        lineHeight = 36.sp,
                         modifier = Modifier.testTag("send_amount"),
                     )
                     fiatLine(amountSats, quote)?.let {
@@ -262,14 +277,14 @@ private fun Slip(
             SlipHairline()
             // The fee the signed transaction pays, at the rate the user chose. PreparedSend carries no size, so the rate is the chosen one, not fee over size.
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("ค่าธรรมเนียม:", color = SlipMuted, fontSize = 13.5.sp, lineHeight = 19.sp)
+                Text("ค่าธรรมเนียม:", color = SlipMuted, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, lineHeight = 19.sp)
                 Spacer(modifier = Modifier.weight(1f))
                 Text(slipFeeText(feeSats, quote), color = SlipNavy, fontSize = 14.sp, fontWeight = FontWeight.Bold, lineHeight = 19.sp, modifier = Modifier.testTag("slip_fee"))
                 Text("  ·  $rateSatVb sat/vB", color = SlipMuted, fontSize = 12.sp, lineHeight = 19.sp)
             }
             SlipHairline()
             Row(verticalAlignment = Alignment.Top) {
-                Text("TXID:", color = SlipMuted, fontSize = 13.5.sp, lineHeight = 19.sp)
+                Text("TXID:", color = SlipMuted, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, lineHeight = 19.sp)
                 Spacer(modifier = Modifier.weight(1f))
                 Text(
                     groupedLines(txid.ifEmpty { "—" }, 8),
