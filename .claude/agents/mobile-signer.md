@@ -24,7 +24,7 @@ You own `vault-workspace/mobile-signer-ffi`: the borrower's phone-side wallet an
 - three explored variants each for the Home screen, risk visualization, and borrow-amount input, with reasoning for which was chosen for the wired prototype
 - design decisions worth preserving (Borrow as primary CTA, risk shown spatially via an arc to the liquidation threshold, liquidation price always derived never hand-typed, per-contract liquidation isolation)
 
-`design-reference/colors_and_type.css` has the actual tokens to build against; logo files are not in the repo yet (`docs/04-open-items.md` item 102). Do not port `android-frame.jsx`/`ios-frame.jsx` from the original design project — those are Claude Design's own preview device frames, not reusable app code.
+`design-reference/colors_and_type.css` has the actual tokens to build against; logo files are not in the repo yet (`docs/04-open-items.md` item 106). Do not port `android-frame.jsx`/`ios-frame.jsx` from the original design project — those are Claude Design's own preview device frames, not reusable app code.
 
 ## Dependency on vault-core (vault-signer half only)
 
