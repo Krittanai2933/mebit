@@ -32,7 +32,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,7 +43,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.SpanStyle
@@ -69,7 +67,7 @@ import com.mebit.app.feature.onboarding.AddressTypeRows
 import com.mebit.app.feature.onboarding.DEFAULT_BADGE
 import com.mebit.app.feature.onboarding.RadioRow
 import com.mebit.app.navigation.MovieRoute
-import com.mebit.app.plainTextClip
+import com.mebit.app.rememberCopier
 import com.mebit.app.rememberTextFileExport
 import com.mebit.app.safeShareName
 import com.mebit.app.ui.components.DebugLink
@@ -95,7 +93,6 @@ import com.mebit.app.ui.theme.MbWhite
 import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.walletDescriptorText
-import kotlinx.coroutines.launch
 
 /** What Penpot leaves under the primary button on every wizard board, so the button sits at y 732. */
 internal val BelowPrimary = 38.dp
@@ -491,9 +488,7 @@ private fun ReviewRowsCard(rows: List<String>) {
 @Composable
 private fun FirstAddressCard(address: String) {
     val shape = RoundedCornerShape(24.dp)
-    val clipboard = LocalClipboard.current
-    val scope = rememberCoroutineScope()
-    var copied by remember { mutableStateOf(false) }
+    val copier = rememberCopier()
     Row(
         modifier = Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(start = 18.dp, end = 18.dp, top = 14.dp, bottom = 14.dp).testTag("review_address_card"),
         verticalAlignment = Alignment.CenterVertically,
@@ -526,15 +521,12 @@ private fun FirstAddressCard(address: String) {
                 .height(30.dp)
                 .clip(RoundedCornerShape(14.dp))
                 .background(MbChip)
-                .clickable(role = Role.Button) {
-                    scope.launch { clipboard.setClipEntry(plainTextClip(address)) }
-                    copied = true
-                }
+                .clickable(role = Role.Button) { copier.copy(address) }
                 .padding(horizontal = 14.dp)
                 .testTag("cta_review_copy"),
             contentAlignment = Alignment.Center,
         ) {
-            Text(if (copied) "คัดลอกแล้ว" else "คัดลอก", color = MbNavy, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+            Text(if (copier.copied == address) "คัดลอกแล้ว" else "คัดลอก", color = MbNavy, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }

@@ -23,12 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,7 +36,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
-import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.SpanStyle
@@ -57,7 +51,7 @@ import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.formatThaiDateTime
 import com.mebit.app.imageOfCard
-import com.mebit.app.plainTextClip
+import com.mebit.app.rememberCopier
 import com.mebit.app.rememberSharer
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_wallet_row
@@ -68,7 +62,6 @@ import com.mebit.app.ui.theme.MbChip
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.app.ui.theme.amountFontFamily
 import kotlin.coroutines.cancellation.CancellationException
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 
@@ -104,14 +97,7 @@ fun SentSlip(
     val frame = rememberGraphicsLayer()
     val sharer = rememberSharer()
     val scope = rememberCoroutineScope()
-    val clipboard = LocalClipboard.current
-    var copied by remember { mutableStateOf(false) }
-    LaunchedEffect(copied) {
-        if (copied) {
-            delay(1_500)
-            copied = false
-        }
-    }
+    val copier = rememberCopier()
     Box(modifier = Modifier.fillMaxSize().background(SlipPage).testTag(tag)) {
         Column(
             // Scrolls so the share button and the link home cannot fall off a screen shorter than the card plus both buttons (open item 48).
@@ -128,15 +114,12 @@ fun SentSlip(
                         .clip(CircleShape)
                         .background(SlipNavy)
                         .clickable(role = Role.Button) {
-                            if (txid.isNotEmpty()) {
-                                scope.launch { clipboard.setClipEntry(plainTextClip(txid)) }
-                                copied = true
-                            }
+                            if (txid.isNotEmpty()) copier.copy(txid)
                         }
                         .testTag("cta_slip_copy_txid"),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(if (copied) "คัดลอกแล้ว" else "คัดลอก TXID", color = MbWhite, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
+                    Text(if (copier.copied == txid) "คัดลอกแล้ว" else "คัดลอก TXID", color = MbWhite, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
                 }
                 Box(
                     modifier = Modifier

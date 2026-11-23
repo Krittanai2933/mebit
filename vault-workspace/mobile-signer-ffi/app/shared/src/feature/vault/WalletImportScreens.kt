@@ -18,16 +18,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
@@ -37,7 +30,7 @@ import androidx.compose.ui.unit.sp
 import com.mebit.app.data.ImportReview
 import com.mebit.app.data.importEyebrow
 import com.mebit.app.feature.send.ConfirmSheet
-import com.mebit.app.plainTextClip
+import com.mebit.app.rememberCopier
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.theme.MbBody
@@ -48,8 +41,6 @@ import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 /** Penpot 3.9: what the + on the Wallet list opens. */
 @Composable
@@ -120,15 +111,7 @@ fun WalletImportScreen(
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
-    val clipboard = LocalClipboard.current
-    val scope = rememberCoroutineScope()
-    var copied by remember { mutableStateOf(false) }
-    LaunchedEffect(copied) {
-        if (copied) {
-            delay(1_500)
-            copied = false
-        }
-    }
+    val copier = rememberCopier()
     val shape = RoundedCornerShape(20.dp)
     MebitScreen(
         eyebrow = importEyebrow(fileName),
@@ -184,15 +167,12 @@ fun WalletImportScreen(
                     .height(30.dp)
                     .clip(RoundedCornerShape(14.dp))
                     .background(MbChip)
-                    .clickable(role = Role.Button) {
-                        scope.launch { clipboard.setClipEntry(plainTextClip(address)) }
-                        copied = true
-                    }
+                    .clickable(role = Role.Button) { copier.copy(address) }
                     .padding(horizontal = 14.dp)
                     .testTag("cta_import_copy"),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(if (copied) "คัดลอกแล้ว" else "คัดลอก", color = MbNavy, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text(if (copier.copied == address) "คัดลอกแล้ว" else "คัดลอก", color = MbNavy, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }
         }
         Spacer(modifier = Modifier.height(16.dp))
