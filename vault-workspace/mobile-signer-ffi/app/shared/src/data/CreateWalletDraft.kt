@@ -132,6 +132,12 @@ class CreateWalletDraft(
         return ReadyPlan.of(preset, keys.filter { it.verified && it.id in live }.distinctBy { it.id })
     }
 
+    /** The receive address at index 0 that [create] saves and 3.5 shows, derived by the same call, or null when the core refuses the keys. */
+    fun firstAddress(ready: ReadyPlan): String? = runCatching { derive(ready.keys.map { it.xpub }, ready.preset.m.toUByte()) }.getOrNull()
+
+    /** The name [create] gives the next wallet, so Review can show it before it exists. */
+    fun nextWalletName(): String = "Wallet ${nextNumber(book.current.lastVaultNumber, book.current.vaults.map { it.id }, "vault_")}"
+
     /**
      * Saves this draft's wallet once and returns it. A second call, such as a double tap on "สร้าง Wallet", returns the same vault and
      * writes nothing. Null, with nothing saved, when the core refuses the keys (a duplicate key, for one), or wallet_describe refuses the
