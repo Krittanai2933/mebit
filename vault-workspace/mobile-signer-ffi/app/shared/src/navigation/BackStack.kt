@@ -5,14 +5,28 @@ import com.mebit.app.data.OnboardingSession
 
 /**
  * Pure. The Back stack after [stop] opens. A bar tab ([MovieRoute.tab], the Wallet list and the Keyring) becomes the only entry however it
- * was opened, so it never shows a back chip and nothing of a finished flow stays under it. Any other screen goes on top, once.
- * Returns [stack] itself when nothing changes, else a new list. [stack] is never empty.
+ * was opened, so it never shows a back chip and nothing of a finished flow stays under it. The รับ / ส่ง switch's other side takes the
+ * place of the screen it switches from ([SwitchSides]), so Back leaves the pair, however often it switched, instead of replaying each
+ * switch. Any other screen goes on top, once. Returns [stack] itself when nothing changes, else a new list. [stack] is never empty.
  */
 internal fun stackAfterOpen(stack: List<Stop>, stop: Stop): List<Stop> = when {
     stop.route.tab -> listOf(stop)
     stack.last() == stop -> stack
+    switches(stack.last(), stop) -> stack.dropLast(1) + stop
     else -> stack + stop
 }
+
+/** The two sides of each รับ / ส่ง switch: a chooser's, and a phone, hardware or several-key wallet's Receive (or its backup gate) and Send. */
+private val SwitchSides = listOf(
+    setOf(MovieRoute.ChooseWalletReceive, MovieRoute.ChooseWalletSend),
+    setOf(MovieRoute.S2ReceiveBackupGate, MovieRoute.S3Receive, MovieRoute.S4Send),
+    setOf(MovieRoute.HardwareReceive, MovieRoute.HardwareSend),
+    setOf(MovieRoute.VaultReceive, MovieRoute.M1SendVault),
+)
+
+/** Whether [to] is the other side of [from]'s switch, of the same wallet. Opening another wallet's Receive or Send stays a push. */
+private fun switches(from: Stop, to: Stop): Boolean =
+    from.place == to.place && from.hardware == to.hardware && SwitchSides.any { from.route in it && to.route in it }
 
 /**
  * Pure. The Stop a plain open of [route] from [top] makes: a hardware wallet's screen ([MovieRoute.hardware]) stays on the wallet [top]
@@ -26,23 +40,26 @@ internal fun stopFor(top: Stop, route: MovieRoute, place: Place = top.place): St
  */
 internal fun stackAfterHardwareCreate(stack: List<Stop>, id: String): List<Stop> = listOf(Stop(MovieRoute.HardwareCreated, stack.last().place, id))
 
-/** The screens of one hardware payment, from the form to the device, which the slip takes the place of once the payment is out. */
-private val HardwarePaymentRoutes = setOf(MovieRoute.HardwareSend, MovieRoute.HardwareReview, MovieRoute.HardwareSign)
+/** The screens of one payment, from the form to the signature, by the slip that takes their place once the payment is out. */
+private val PaymentScreens = mapOf(
+    MovieRoute.S6SentSlip to setOf(MovieRoute.S4Send, MovieRoute.S5ReviewSign),
+    MovieRoute.HardwareSent to setOf(MovieRoute.HardwareSend, MovieRoute.HardwareReview, MovieRoute.HardwareSign),
+)
 
 /**
- * Pure. The slip 4.6 of the hardware wallet on top of [stack], once its payment is out. Send, Review and Sign leave, so Back from the slip
- * lands where the payment began, Home or a chooser, and never on a screen that could sign the same payment again.
+ * Pure. The [slip] 4.6 of the phone or hardware wallet on top of [stack], once its payment is out. The payment's screens leave, so Back
+ * from the slip lands where the payment began, Home or a chooser, and never on a screen that could sign the same payment again.
  */
-internal fun stackAfterHardwareSent(stack: List<Stop>): List<Stop> {
+internal fun stackAfterSent(stack: List<Stop>, slip: MovieRoute): List<Stop> {
     val top = stack.last()
-    val kept = stack.dropLastWhile { it.route in HardwarePaymentRoutes }.ifEmpty { listOf(Stop(MovieRoute.VaultList, top.place)) }
-    return kept + Stop(MovieRoute.HardwareSent, top.place, top.hardware)
+    val kept = stack.dropLastWhile { it.route in PaymentScreens.getValue(slip) }.ifEmpty { listOf(Stop(MovieRoute.VaultList, top.place)) }
+    return kept + stopFor(top, slip)
 }
 
-/** Pure. The slip's way home: Back when its wallet's Home is right under it, else that Home on top, as the phone wallet's slip opens Home. */
-internal fun stackAfterSlipHome(stack: List<Stop>): List<Stop> {
-    val home = stopFor(stack.last(), MovieRoute.HardwareHome)
-    return if (stack.getOrNull(stack.lastIndex - 1) == home) stack.dropLast(1) else stackAfterOpen(stack, home)
+/** Pure. The slip's way to its wallet's [home]: Back when that Home is right under it, else that Home on top. */
+internal fun stackAfterSlipHome(stack: List<Stop>, home: MovieRoute): List<Stop> {
+    val stop = stopFor(stack.last(), home)
+    return if (stack.getOrNull(stack.lastIndex - 1) == stop) stack.dropLast(1) else stackAfterOpen(stack, stop)
 }
 
 /**

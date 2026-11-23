@@ -192,17 +192,53 @@ class BackStackTest {
             assertEquals(stacks[i - 1], stacks[i].dropLast(1), "Back from ${stacks[i].last().route.name}")
             assertEquals("hw_1", stacks[i].last().hardware)
         }
-        val sent = stackAfterHardwareSent(stacks.last())
+        val sent = stackAfterSent(stacks.last(), MovieRoute.HardwareSent)
         assertEquals(home + Stop(MovieRoute.HardwareSent, p1, "hw_1"), sent, "Back from the slip is Home, never a screen that could sign again")
-        assertEquals(home, stackAfterSlipHome(sent), "the slip's way home is Back to the Home under it")
+        assertEquals(home, stackAfterSlipHome(sent, MovieRoute.HardwareHome), "the slip's way home is Back to the Home under it")
 
         val chooser = stops(p1, MovieRoute.VaultList, MovieRoute.ChooseWalletSend)
         val fromChooser = stackAfterOpen(chooser, Stop(MovieRoute.HardwareSend, p1, "hw_1"))
-        val sentFromChooser = stackAfterHardwareSent(walk(fromChooser, MovieRoute.HardwareReview, MovieRoute.HardwareSign).last())
+        val sentFromChooser = stackAfterSent(walk(fromChooser, MovieRoute.HardwareReview, MovieRoute.HardwareSign).last(), MovieRoute.HardwareSent)
         assertEquals(chooser + Stop(MovieRoute.HardwareSent, p1, "hw_1"), sentFromChooser)
-        assertEquals(sentFromChooser + Stop(MovieRoute.HardwareHome, p1, "hw_1"), stackAfterSlipHome(sentFromChooser), "with no Home under it the slip opens one")
+        assertEquals(sentFromChooser + Stop(MovieRoute.HardwareHome, p1, "hw_1"), stackAfterSlipHome(sentFromChooser, MovieRoute.HardwareHome), "with no Home under it the slip opens one")
         val signAlone = listOf(Stop(MovieRoute.HardwareSign, p1, "hw_1"))
-        assertEquals(listOf(Stop(MovieRoute.VaultList, p1), Stop(MovieRoute.HardwareSent, p1, "hw_1")), stackAfterHardwareSent(signAlone), "the catalog's Sign alone")
+        assertEquals(listOf(Stop(MovieRoute.VaultList, p1), Stop(MovieRoute.HardwareSent, p1, "hw_1")), stackAfterSent(signAlone, MovieRoute.HardwareSent), "the catalog's Sign alone")
+    }
+
+    @Test
+    fun theReceiveSendSwitchTakesThePlaceOfTheScreenItSwitchesFromSoBackLeavesThePair() {
+        val pairs = listOf(
+            MovieRoute.S3Receive to MovieRoute.S4Send,
+            MovieRoute.S2ReceiveBackupGate to MovieRoute.S4Send,
+            MovieRoute.VaultReceive to MovieRoute.M1SendVault,
+            MovieRoute.ChooseWalletReceive to MovieRoute.ChooseWalletSend,
+        )
+        for ((receive, send) in pairs) {
+            val under = stops(p1, MovieRoute.VaultList, MovieRoute.S1HomeSingleSig)
+            val switched = walk(under, receive, send, receive, send, receive)
+            assertEquals(under + Stop(receive, p1), switched.last(), "${receive.name}: four switches leave one screen over where it opened")
+            assertEquals(under, switched.last().dropLast(1), "${receive.name}: one Back leaves the pair")
+        }
+        val hw = stackAfterOpen(stops(p1, MovieRoute.VaultList), Stop(MovieRoute.HardwareHome, p1, "hw_1"))
+        val hwSend = stackAfterOpen(stackAfterOpen(hw, Stop(MovieRoute.HardwareReceive, p1, "hw_1")), Stop(MovieRoute.HardwareSend, p1, "hw_1"))
+        assertEquals(hw + Stop(MovieRoute.HardwareSend, p1, "hw_1"), hwSend, "a hardware wallet's switch too")
+        val otherWallet = stackAfterOpen(hwSend, Stop(MovieRoute.HardwareReceive, p1, "hw_2"))
+        assertEquals(hwSend + Stop(MovieRoute.HardwareReceive, p1, "hw_2"), otherWallet, "another wallet's Receive is a push")
+        val otherPlace = stackAfterOpen(stops(p1, MovieRoute.S3Receive), Stop(MovieRoute.S4Send, p2))
+        assertEquals(stops(p1, MovieRoute.S3Receive) + Stop(MovieRoute.S4Send, p2), otherPlace, "another phone wallet's Send is a push")
+    }
+
+    @Test
+    fun aPhoneWalletPaymentsSlipTakesThePlaceOfItsScreensAndItsWayHomeIsBack() {
+        val home = stops(p1, MovieRoute.VaultList, MovieRoute.S1HomeSingleSig)
+        val sent = stackAfterSent(walk(home, MovieRoute.S4Send, MovieRoute.S5ReviewSign).last(), MovieRoute.S6SentSlip)
+        assertEquals(home + Stop(MovieRoute.S6SentSlip, p1), sent, "Back from the slip is Home, never the review of a paid payment")
+        assertEquals(home, stackAfterSlipHome(sent, MovieRoute.S1HomeSingleSig), "the slip's way home is Back to the Home under it")
+        val viaReceive = walk(home, MovieRoute.S3Receive, MovieRoute.S4Send, MovieRoute.S5ReviewSign).last()
+        assertEquals(sent, stackAfterSent(viaReceive, MovieRoute.S6SentSlip), "a switch from Receive leaves no Receive under the slip")
+        val chooser = stops(p1, MovieRoute.VaultList, MovieRoute.ChooseWalletSend)
+        val sentFromChooser = stackAfterSent(walk(chooser, MovieRoute.S4Send, MovieRoute.S5ReviewSign).last(), MovieRoute.S6SentSlip)
+        assertEquals(chooser + Stop(MovieRoute.S6SentSlip, p1), sentFromChooser, "Back from a slip begun on the chooser is the chooser")
     }
 
     @Test
