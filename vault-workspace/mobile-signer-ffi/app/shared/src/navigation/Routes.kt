@@ -301,6 +301,12 @@ enum class MovieRoute(
         "ตรวจสอบบนอุปกรณ์",
         "กดยืนยันบนอุปกรณ์",
     ),
+    M3SignOnPhone(
+        "send/m3-phone",
+        "SIGN",
+        "ตรวจสอบบนอุปกรณ์",
+        "เซ็นด้วยมือถือเครื่องนี้",
+    ),
     M8ReviewVault(
         "send/m8",
         "READY TO BROADCAST",

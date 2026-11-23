@@ -186,6 +186,8 @@ import kotlinx.coroutines.IO
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.mebit.app.feature.send.shownHistory
+import com.mebit.app.feature.send.PhoneSample
+import com.mebit.app.feature.send.SignOnPhoneScreen
 
 private val ImplementedRoutes = MovieRoute.entries.toSet()
 
@@ -232,6 +234,8 @@ internal fun MebitNavHost(
     var vaultSend by remember { mutableStateOf<VaultSend?>(null) }
     // The device row 5.2 opened 5.3.2 or 5.3.3 for, and the debug catalog's sample state of those screens, which shows none of a send.
     var deviceSigner by remember { mutableStateOf<KeySigner.Device?>(null) }
+    var phoneSigner by remember { mutableStateOf<KeySigner.Phone?>(null) }
+    var phoneSample by remember { mutableStateOf<PhoneSample?>(null) }
     var deviceSample by remember { mutableStateOf<DeviceSample?>(null) }
     // Import Seed's words and passphrase. They outlive the detour to Address Type and back, and a fresh draft replaces them once
     // the import goes on to the lock step or the user leaves Import Seed by its back chip. Memory only: never rememberSaveable,
@@ -997,8 +1001,11 @@ internal fun MebitNavHost(
                         signers = vaultSend?.let { keySigners(it.vault, wallets.listed.map { w -> w.session }, keyring.keys) }.orEmpty(),
                         keyring = keyring.keys,
                         quotes = quotes,
-                        // The owner check of the wallet in use, once per signature, as S5 asks before it signs.
-                        confirmSign = { appLock.confirm(biometrics, session.appLockEnabled, "ยืนยันการเซ็นส่งเงิน") },
+                        onSignOnPhone = { phone ->
+                            phoneSample = null
+                            phoneSigner = phone
+                            navigate(MovieRoute.M3SignOnPhone)
+                        },
                         onSignOnDevice = { device ->
                             deviceSample = null
                             deviceSigner = device
@@ -1015,6 +1022,17 @@ internal fun MebitNavHost(
                         nearest = { kind -> hardware.nearest(kind) },
                         pairingKept = hardware.link::keeps,
                         sample = deviceSample,
+                        onContinue = { goBack() },
+                        onBack = onBack,
+                        onOpenCatalog = openCatalog,
+                    )
+                    MovieRoute.M3SignOnPhone -> SignOnPhoneScreen(
+                        send = vaultSend,
+                        signer = phoneSigner,
+                        keyring = keyring.keys,
+                        // The owner check of the wallet in use, once per signature, as S5 asks before it signs.
+                        confirmSign = { appLock.confirm(biometrics, session.appLockEnabled, "ยืนยันการเซ็นส่งเงิน") },
+                        sample = phoneSample,
                         onContinue = { goBack() },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -1217,10 +1235,27 @@ internal fun MebitNavHost(
                             .clickable {
                                 catalogOpen = false
                                 deviceSample = null
+                                phoneSample = null
                                 navigate(route)
                             }
                             .padding(horizontal = 24.dp, vertical = 12.dp)
                             .testTag("catalog_" + route.path),
+                    )
+                }
+                // The states of 5.3.1, 5.4.1 and 5.3.1.1 with the boards' sample data, so each can be set beside its board with no payment.
+                items(PhoneSample.entries, key = { "sample_" + it.tag }) { sample ->
+                    Text(
+                        text = "SIGN SAMPLE · " + sample.label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                catalogOpen = false
+                                phoneSample = sample
+                                navigate(MovieRoute.M3SignOnPhone)
+                            }
+                            .padding(horizontal = 24.dp, vertical = 12.dp)
+                            .testTag("catalog_sign_" + sample.tag),
                     )
                 }
                 // The states of 5.3.2 to 5.7.3 with the boards' sample data, so each can be set beside its board with no device.

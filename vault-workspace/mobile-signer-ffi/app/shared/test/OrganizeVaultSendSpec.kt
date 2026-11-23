@@ -224,7 +224,7 @@ class OrganizeVaultSendSpec {
             if (send.readyToBroadcast() && distinct() < m) note("readyToBroadcast() at ${distinct()} distinct fingerprints of $m")
         }
 
-        /** 5.2's เซ็น on key [key]'s row, by its kind: this phone's with the owner check passing, or the device of that key, alone in range. A throw is a refusal. */
+        /** 5.2's เซ็น on key [key]'s row, by its kind: this phone's through Sign on iPhone with the owner check passing, or the device of that key, alone in range. A throw is a refusal. */
         private suspend fun tap(key: Int) {
             if (keys[key] == "IPHONE") {
                 send.sign(phone(key)) { true }
@@ -265,12 +265,12 @@ class OrganizeVaultSendSpec {
         data object Prepare : Step("Prepare")
 
         /**
-         * 5.2's เซ็น on key [key]'s row, by its kind: [VaultSend.sign] with the owner check passing, or [VaultSend.signOnDevice] on that
+         * 5.2's เซ็น on key [key]'s row, by its kind: [VaultSend.sign] with the owner check passing, as Sign on iPhone runs it, or [VaultSend.signOnDevice] on that
          * key's device. Rust answers the held payment with that key's signature added.
          */
         data class Sign(val key: Int) : Step("Sign($key)")
 
-        /** 5.2's เซ็น on key 0's row, this phone's, with the owner check failing. Rust must not hear of it. */
+        /** 5.2's เซ็น on key 0's row, this phone's, with the owner check failing on Sign on iPhone. Rust must not hear of it. */
         data object SignRefused : Step("SignRefused")
 
         /** 5.2's เซ็น on the last key's row, a device's when the wallet has one, Rust answering that key on a payment of another txid. */
