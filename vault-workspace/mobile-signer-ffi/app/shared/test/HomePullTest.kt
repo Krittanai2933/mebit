@@ -15,22 +15,17 @@ class HomePullTest {
     }
 
     @Test
-    fun aRunningRefreshShowsTheSpinnerOverAnArmedPullAndTheLink() {
-        assertEquals(TxHeaderEnd.Refreshing, txHeaderEnd(refreshing = true, armed = true, hasMore = true))
+    fun aRunningRefreshShowsTheSpinnerEvenWithThePullStillArmed() {
+        assertEquals(TxStatus.Refreshing, txStatus(refreshing = true, armed = true))
     }
 
     @Test
-    fun anArmedPullShowsTheTextInPlaceOfTheLink() {
-        assertEquals(TxHeaderEnd.Armed, txHeaderEnd(refreshing = false, armed = true, hasMore = true))
+    fun anArmedPullShowsTheTextAlone() {
+        assertEquals(TxStatus.Armed, txStatus(refreshing = false, armed = true))
     }
 
     @Test
-    fun theLinkShowsWhenThereIsMoreHistoryAndNoPull() {
-        assertEquals(TxHeaderEnd.SeeAll, txHeaderEnd(refreshing = false, armed = false, hasMore = true))
-    }
-
-    @Test
-    fun theHeaderEndsEmptyWhenNothingApplies() {
-        assertEquals(TxHeaderEnd.None, txHeaderEnd(refreshing = false, armed = false, hasMore = false))
+    fun noPullShowsNoStatus() {
+        assertEquals(TxStatus.None, txStatus(refreshing = false, armed = false))
     }
 }
