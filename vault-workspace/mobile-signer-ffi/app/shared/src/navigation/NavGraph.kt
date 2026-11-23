@@ -420,9 +420,10 @@ internal fun MebitNavHost(
         }
     }
 
-    // Once onboarding is over the words open past the Spending PIN where it guards the session, and as before elsewhere.
-    fun openWords() {
-        scope.launch { if (biometrics.guardWords("ดู 24 คำสำรอง")) navigate(MovieRoute.BackupWords) }
+    // Once onboarding is over the words open past the Spending PIN where it guards the session, and as before elsewhere. They are the
+    // words of the wallet at [place]: the one in use, or the one whose key the Keyring's ⋯ backs up.
+    fun openWords(place: Place = backStack.last().place) {
+        scope.launch { if (biometrics.guardWords("ดู 24 คำสำรอง")) navigate(MovieRoute.BackupWords, place) }
     }
 
     val openTx: (HotTx) -> Unit = { tx ->
@@ -581,6 +582,8 @@ internal fun MebitNavHost(
                                 usingWallets = if (vaults.judged) vaults.current.vaultsUsing(key.fingerprint).map { it.name } else null,
                             )
                         },
+                        // Only while the backup is unconfirmed: once it is, no screen shows the words again.
+                        backup = { key -> if (key.verified) null else wallets.listed.firstOrNull { it.session.ownKey()?.id == key.id }?.let { w -> { openWords(w.place) } } },
                         onAddKey = { navigate(MovieRoute.AddKey) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,

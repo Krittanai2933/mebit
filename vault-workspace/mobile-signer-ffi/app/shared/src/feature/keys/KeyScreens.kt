@@ -45,6 +45,7 @@ import com.mebit.app.resources.ic_jade_mark
 import com.mebit.app.resources.ic_mebit_mark
 import com.mebit.app.resources.ic_trezor_mark
 import com.mebit.app.resources.mebit_logo_dark
+import com.mebit.app.ui.components.MenuAction
 import com.mebit.app.ui.components.TotalLine
 import com.mebit.app.ui.theme.MbAmberInk
 import com.mebit.app.ui.theme.MbBody
@@ -373,12 +374,14 @@ fun VerifyKeyScreen(
 
 /**
  * Penpot 2.1, in 6.2's order and subtitle while a key is unconfirmed. 6.2's two buttons and its "ไปที่ Wallet" text are not built.
- * Each key's ⋯ holds [deleteItem]'s item, and an offered delete asks first (2.1.9).
+ * Each key's ⋯ holds [deleteItem]'s item, and an offered delete asks first (2.1.9). A key whose 24 words are on this phone and whose
+ * backup is unconfirmed also gets [backup]'s "สำรองกุญแจ 24 คำ" above it, an item no board draws yet.
  */
 @Composable
 fun KeyringScreen(
     store: KeyringStore,
     deleteItem: (SavedKey) -> DeleteItem,
+    backup: (SavedKey) -> (() -> Unit)? = { null },
     onAddKey: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
@@ -416,7 +419,7 @@ fun KeyringScreen(
             Spacer(modifier = Modifier.height(12.dp))
         }
         keys.forEach { key ->
-            KeyCard(key, deleteItem(key), onOpen = { deleteFailed = false }) { deleting = key }
+            KeyCard(key, deleteItem(key), backup(key), onOpen = { deleteFailed = false }) { deleting = key }
             Spacer(modifier = Modifier.height(10.dp))
         }
     }
@@ -445,7 +448,7 @@ internal fun KeyLogo(source: KeySourceLabel, height: Dp) {
  * sibling, not its child, so it stays an element of its own on both platforms.
  */
 @Composable
-private fun KeyCard(key: SavedKey, item: DeleteItem, onOpen: () -> Unit, onDelete: () -> Unit) {
+private fun KeyCard(key: SavedKey, item: DeleteItem, onBackup: (() -> Unit)?, onOpen: () -> Unit, onDelete: () -> Unit) {
     val shape = RoundedCornerShape(20.dp)
     Box(
         modifier = Modifier
@@ -472,7 +475,16 @@ private fun KeyCard(key: SavedKey, item: DeleteItem, onOpen: () -> Unit, onDelet
             }
         }
         // The dots end 18 dp inside the card's right edge, centred in their 44 dp target.
-        CardDeleteMenu(key.id, "ลบกุญแจ", item, onDark = false, onDelete = onDelete, modifier = Modifier.align(Alignment.CenterEnd).padding(end = 5.dp), onOpen = onOpen)
+        CardDeleteMenu(
+            key.id,
+            "ลบกุญแจ",
+            item,
+            onDark = false,
+            onDelete = onDelete,
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 5.dp),
+            onOpen = onOpen,
+            extra = onBackup?.let { MenuAction("สำรองกุญแจ 24 คำ", "menu_backup_${key.id}", it) },
+        )
     }
 }
 
