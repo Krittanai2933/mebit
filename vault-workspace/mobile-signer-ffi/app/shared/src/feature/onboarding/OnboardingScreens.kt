@@ -237,7 +237,7 @@ fun KeyCreatedScreen(
     onOpenCatalog: () -> Unit,
 ) {
     MebitScreen(
-        eyebrow = "NEW WALLET · ขั้น 1 / 3",
+        eyebrow = "NEW WALLET · ขั้น 1 / 4",
         title = "สร้างกุญแจแล้ว",
         // The key exists now, so there is nothing to go back to.
         onBack = null,
@@ -368,7 +368,7 @@ fun BackupWordsScreen(
     val offerPassphrase = session.inFirstSetup && !session.imported
     var sheetOpen by remember { mutableStateOf(false) }
     MebitScreen(
-        eyebrow = "BACKUP · ขั้น 2 / 3",
+        eyebrow = "BACKUP · ขั้น 2 / 4",
         title = "จด 24 คำนี้ลงกระดาษ",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
@@ -525,7 +525,7 @@ fun VerifyWordsScreen(
     val picks = remember(quiz) { mutableStateListOf<String?>().apply { repeat(quiz.size) { add(null) } } }
     var wrong by remember { mutableStateOf(false) }
     MebitScreen(
-        eyebrow = "BACKUP · ขั้น 2 / 3",
+        eyebrow = "BACKUP · ขั้น 2 / 4",
         title = "ยืนยันว่าจดถูก",
         subtitle = "ดูจากกระดาษที่จดไว้ แล้วเลือกคำให้ตรงกับเลขลำดับ",
         onBack = onBack,

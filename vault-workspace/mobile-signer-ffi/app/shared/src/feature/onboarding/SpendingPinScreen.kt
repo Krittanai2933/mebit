@@ -94,7 +94,7 @@ fun SpendingPinScreen(
     val entry = remember(session) { PinEntry(session.pin, change = true) }
     val creating = !session.imported
     MebitScreen(
-        eyebrow = if (creating) "SECURITY · ขั้น 3 / 3" else null,
+        eyebrow = if (creating) "SECURITY · ขั้น 4 / 4" else null,
         title = stepTitle(entry.step, checkTitle = "เปลี่ยน PIN"),
         subtitle = "กันคนอื่นหยิบเครื่องคุณไปเปิดแอปหรือส่งเงิน",
         onBack = if (creating) null else onBack,
