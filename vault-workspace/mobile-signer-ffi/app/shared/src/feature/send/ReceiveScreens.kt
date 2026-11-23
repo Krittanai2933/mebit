@@ -13,8 +13,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -62,7 +60,6 @@ import com.mebit.app.data.HomeSource
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SingleSigWallet
-import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.imageOfCard
 import com.mebit.app.rememberCopier
 import com.mebit.app.rememberSharer
@@ -78,7 +75,6 @@ import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbBtcOrange
 import com.mebit.app.ui.theme.MbEyebrow
-import com.mebit.app.ui.theme.MbGold
 import com.mebit.app.ui.theme.MbIconWash
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
@@ -153,13 +149,12 @@ fun S2ReceiveBackupGateScreen(
 }
 
 /**
- * Penpot 4.3 Receive. The address is the first one the chain has not used, so it changes after money arrives at it,
- * and the board's line about a fresh address shows only for a live wallet (C6, see open item 60). Left out: the logo
- * over the QR (it would cover data modules, and each one spends error correction), and QR and share for the demo
- * wallet (money sent to its made-up address is lost). A real key whose balance could not be fetched keeps them,
- * because its address is derived from the key offline and is index 0, which the wallet still sees and spends. With
- * no address at all, copy is off too. แชร์ opens Penpot's "4.3 Share Choice" sheet: the address as text, or the board
- * "4.3 Share QR" as a picture (QR and address, no fresh-address note), so a friend can scan it and check the address by eye.
+ * Penpot 4.9 Receive. The address is the first one the chain has not used, so it changes after money arrives at it (C6, see
+ * open item 60). It sits on the board's branded card ([ReceiveCard]). Left out: the logo over the QR (it would cover data
+ * modules, and each one spends error correction), and QR and share for the demo wallet (money sent to its made-up address is
+ * lost). A real key whose balance could not be fetched keeps them, because its address is derived from the key offline and is
+ * index 0, which the wallet still sees and spends. With no address at all, copy is off too. แชร์ opens Penpot's "4.3 Share
+ * Choice" sheet: the address as text, or the same card as a picture (4.9.2), so a friend can scan it and check the address by eye.
  */
 @Composable
 fun S3ReceiveScreen(
@@ -174,7 +169,6 @@ fun S3ReceiveScreen(
     tag = tag,
     address = wallet.receiveAddress,
     addressIsReal = wallet.addressIsReal,
-    freshNote = wallet.mode == WalletMode.Live,
     onSend = onSend,
     onBack = onBack,
     onOpenCatalog = onOpenCatalog,
@@ -199,7 +193,6 @@ fun VaultReceiveScreen(
         tag = "screen_vaults/receive",
         address = vault.address,
         addressIsReal = !vault.hasMockKey,
-        freshNote = false,
         onSend = onSend,
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
@@ -212,7 +205,6 @@ private fun ReceiveLayout(
     tag: String,
     address: String,
     addressIsReal: Boolean,
-    freshNote: Boolean,
     onSend: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
@@ -274,40 +266,13 @@ private fun ReceiveLayout(
         },
     ) {
         ReceiveSendSwitch(sendSelected = false, onReceive = {}, onSend = onSend)
-        Spacer(modifier = Modifier.height(20.dp))
-        val card = RoundedCornerShape(24.dp)
-        val cardLook = Modifier
-            .shadow(4.dp, card, clip = false)
-            .clip(card)
-            .background(MbWhite)
-            .border(1.dp, MbBorder, card)
+        Spacer(modifier = Modifier.height(16.dp))
         if (addressIsReal) {
-            Column(
-                modifier = Modifier.fillMaxWidth().heightIn(min = 335.dp).then(cardLook).padding(horizontal = 32.dp, vertical = 24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                QrCode(
-                    text = address,
-                    modifier = Modifier.size(196.dp).semantics { contentDescription = "QR ของที่อยู่รับเงิน" }.testTag("ss_receive_qr"),
-                    dark = MbNavy,
-                )
-                Spacer(modifier = Modifier.height(18.8.dp))
-                ReceiveAddress(address)
-                if (freshNote) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = "ที่อยู่ใหม่ทุกครั้งเพื่อความเป็นส่วนตัว ที่อยู่เก่ายังรับได้",
-                        color = MbBody,
-                        fontSize = 11.5.sp,
-                        lineHeight = 15.sp,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.testTag("receive_fresh_note"),
-                    )
-                }
-            }
+            ReceiveCard(address, Modifier.fillMaxWidth())
         } else {
+            val card = RoundedCornerShape(24.dp)
             Box(
-                modifier = Modifier.fillMaxWidth().then(cardLook).padding(horizontal = 32.dp, vertical = 28.dp),
+                modifier = Modifier.fillMaxWidth().shadow(4.dp, card, clip = false).clip(card).background(MbWhite).border(1.dp, MbBorder, card).padding(horizontal = 32.dp, vertical = 28.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 ReceiveAddress(address)
@@ -405,28 +370,16 @@ private fun ReceiveAddress(address: String) {
 }
 
 /**
- * Penpot "4.3 Share QR · picture": the card [Sharer.imageOfCard] shares, laid out at the board's 354 dp. It takes no space and is
- * only recorded into [layer], never drawn to the screen, so the screen's own card and fresh-address note stay as they are.
+ * Penpot 4.9's receive card: the navy band with the mebit logo, the Bitcoin badge, the QR, the call to scan, the whole address and
+ * the network footer, with the board's sizes for its 362 dp width. 4.9.2 shares the same card as a picture ([SharePicture]).
  */
 @Composable
-private fun SharePicture(address: String, layer: GraphicsLayer) {
-    Column(
-        modifier = Modifier
-            .layout { measurable, constraints ->
-                val width = 354.dp.roundToPx()
-                val placeable = measurable.measure(Constraints(minWidth = width, maxWidth = width))
-                layout(0, 0) { placeable.place(0, 0) }
-            }
-            .drawWithContent { layer.record { this@drawWithContent.drawContent() } }
-            .clearAndSetSemantics {}
-            .clip(RoundedCornerShape(24.dp))
-            .background(MbWhite),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(modifier = Modifier.fillMaxWidth().height(84.dp).background(SlipNavy), contentAlignment = Alignment.Center) {
+private fun ReceiveCard(address: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier.clip(RoundedCornerShape(24.dp)).background(MbWhite), horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(modifier = Modifier.fillMaxWidth().height(64.dp).background(SlipNavy), contentAlignment = Alignment.Center) {
             Image(painterResource(Res.drawable.mebit_logo), contentDescription = null, modifier = Modifier.size(width = 129.dp, height = 34.dp))
         }
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
         Row(
             modifier = Modifier.height(28.dp).background(SharePictureBadge, RoundedCornerShape(14.dp)).padding(start = 8.dp, end = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -437,7 +390,13 @@ private fun SharePicture(address: String, layer: GraphicsLayer) {
             Spacer(modifier = Modifier.width(6.dp))
             Text("Bitcoin", color = SlipNavy, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
-        QrCode(address, Modifier.size(256.dp), dark = MbNavy)
+        Spacer(modifier = Modifier.height(16.dp))
+        QrCode(
+            text = address,
+            modifier = Modifier.size(160.dp).semantics { contentDescription = "QR ของที่อยู่รับเงิน" }.testTag("ss_receive_qr"),
+            dark = MbNavy,
+        )
+        Spacer(modifier = Modifier.height(16.dp))
         Text(
             text = "สแกน QR เพื่อส่ง Bitcoin",
             color = AddressGoldInk,
@@ -453,15 +412,35 @@ private fun SharePicture(address: String, layer: GraphicsLayer) {
             fontWeight = FontWeight.SemiBold,
             lineHeight = 22.4.sp,
             textAlign = TextAlign.Center,
-            modifier = Modifier.padding(horizontal = 24.dp),
+            modifier = Modifier.padding(horizontal = 28.dp).testTag("ss_receive_address"),
         )
-        Spacer(modifier = Modifier.height(20.dp))
-        Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(MbGold))
-        Row(modifier = Modifier.fillMaxWidth().height(56.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+        Spacer(modifier = Modifier.height(18.dp))
+        Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(MbNavy))
+        Row(modifier = Modifier.fillMaxWidth().height(54.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(Res.drawable.mebit_logo_dark), contentDescription = null, modifier = Modifier.size(width = 69.dp, height = 18.dp))
             Spacer(modifier = Modifier.width(10.dp))
             Text("Bitcoin network only | รับเฉพาะเครือข่าย Bitcoin", color = SlipMuted, fontSize = 11.5.sp, fontWeight = FontWeight.Medium, lineHeight = 15.5.sp)
         }
+    }
+}
+
+/**
+ * Penpot 4.9.2's picture, the card [Sharer.imageOfCard] shares: [ReceiveCard] at the board's 362 dp. It takes no space and is only
+ * recorded into [layer], never drawn to the screen.
+ */
+@Composable
+private fun SharePicture(address: String, layer: GraphicsLayer) {
+    Box(
+        modifier = Modifier
+            .layout { measurable, _ ->
+                val width = 362.dp.roundToPx()
+                val placeable = measurable.measure(Constraints(minWidth = width, maxWidth = width))
+                layout(0, 0) { placeable.place(0, 0) }
+            }
+            .drawWithContent { layer.record { this@drawWithContent.drawContent() } }
+            .clearAndSetSemantics {},
+    ) {
+        ReceiveCard(address, Modifier.fillMaxWidth())
     }
 }
 
