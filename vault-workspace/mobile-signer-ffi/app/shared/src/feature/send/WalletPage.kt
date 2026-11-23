@@ -249,7 +249,7 @@ internal fun PolicyCard(
     keys: List<KeyRowText>,
     expanded: Boolean,
     onToggle: () -> Unit,
-    footer: @Composable ColumnScope.() -> Unit = {},
+    footer: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val card = RoundedCornerShape(16.dp)
     Column(modifier = Modifier.fillMaxWidth().clip(card).background(MbWhite).border(1.dp, MbBorder, card).testTag("key_status")) {
@@ -274,7 +274,8 @@ internal fun PolicyCard(
         }
         if (expanded) {
             Box(modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth().height(1.dp).background(MbBorder))
-            Column(modifier = Modifier.padding(top = board.keyListTop, bottom = board.keyListBottom)) {
+            // A footer's divider sits 8 dp under the last key, as 3.7.1 draws the backup row's.
+            Column(modifier = Modifier.padding(top = board.keyListTop, bottom = if (footer == null) board.keyListBottom else 8.dp)) {
                 keys.forEachIndexed { i, key ->
                     Row(
                         modifier = Modifier.fillMaxWidth().height(board.keyRowHeight).padding(start = 22.dp, end = 22.dp, bottom = board.keyRowBottom),
@@ -298,7 +299,7 @@ internal fun PolicyCard(
                     }
                 }
             }
-            footer()
+            footer?.invoke(this)
         }
     }
 }
