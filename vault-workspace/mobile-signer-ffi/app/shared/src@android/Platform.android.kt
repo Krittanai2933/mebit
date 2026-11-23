@@ -11,7 +11,6 @@ import androidx.compose.ui.platform.LocalContext
 class AndroidPlatform : Platform {
     override val name: String = "Android ${Build.VERSION.SDK_INT}"
     override val biometricName: String? = null
-    override val phoneMonogram: String = "AND"
 }
 
 actual fun getPlatform(): Platform = AndroidPlatform()

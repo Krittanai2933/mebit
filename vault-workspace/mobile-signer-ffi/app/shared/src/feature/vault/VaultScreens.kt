@@ -9,7 +9,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -42,8 +41,10 @@ import com.mebit.app.NoticeDialog
 import com.mebit.app.data.ImportProblem
 import com.mebit.app.data.bsmsRecordOf
 import com.mebit.app.rememberTextFilePicker
+import com.mebit.app.resources.ic_export
 import com.mebit.app.ui.components.MenuAction
 import com.mebit.app.Place
+import com.mebit.app.ui.components.TotalLine
 import com.mebit.ffi.signer.WalletImport
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.HardwareWallet
@@ -73,7 +74,6 @@ import com.mebit.app.ui.components.PlusButton
 import com.mebit.app.ui.components.SettingsGear
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
-import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbBtcOrange
 import com.mebit.app.ui.theme.MbEyebrow
@@ -203,7 +203,7 @@ fun VaultListScreen(
             // Penpot 1.8 puts the + 29 dp from the screen's right edge, so 9 dp past the screen's own padding.
             PlusButton("cta_vaults_add", "เพิ่ม Wallet", { adding = true }, Modifier.padding(end = 9.dp))
         }
-        listTotal(spending, vaults, vaultSats, walletUnopened = unopenedNotice != null, hardware = hardware)?.let { TotalLine(it) }
+        listTotal(spending, vaults, vaultSats, walletUnopened = unopenedNotice != null, hardware = hardware)?.let { TotalLine(it, "vaults_total") }
         Spacer(modifier = Modifier.height(16.dp))
         VaultsNotice(vaults)
         unopenedNotice?.let {
@@ -264,10 +264,15 @@ fun VaultListScreen(
                     draft.selectVault(vault.id)
                     onOpenDetail()
                 },
-                extra = MenuAction("ส่งออก Wallet", "menu_export_${vault.id}") {
-                    draft.selectVault(vault.id)
-                    onExport()
-                },
+                extra = MenuAction(
+                    "ส่งออก Wallet",
+                    "menu_export_${vault.id}",
+                    onClick = {
+                        draft.selectVault(vault.id)
+                        onExport()
+                    },
+                    icon = Res.drawable.ic_export,
+                ),
             )
             Spacer(modifier = Modifier.height(11.dp))
         }
@@ -391,15 +396,6 @@ private fun RemoveVaultSheet(vault: CreatedVault, onRemove: () -> Unit, onCancel
         ) {
             Text("ยกเลิก", color = MbNavy, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
         }
-    }
-}
-
-/** "รวมทั้งหมด" in Light 13.5 MbBody, then [total] in SemiBold 14.5 MbNavyInk. */
-@Composable
-private fun TotalLine(total: String) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp).testTag("vaults_total")) {
-        Text("รวมทั้งหมด", color = MbBody, fontSize = 13.5.sp, fontWeight = FontWeight.Light)
-        Text(total, color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 

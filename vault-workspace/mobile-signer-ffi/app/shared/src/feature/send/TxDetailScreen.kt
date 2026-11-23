@@ -31,7 +31,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,7 +40,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -52,7 +50,7 @@ import androidx.compose.ui.unit.sp
 import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.TxDetailLoad
 import com.mebit.app.data.rememberFiatQuote
-import com.mebit.app.plainTextClip
+import com.mebit.app.rememberCopier
 import com.mebit.app.rememberIsDebugBuild
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_chevron
@@ -74,8 +72,6 @@ import com.mebit.app.ui.theme.MbWhite
 import com.mebit.app.ui.theme.amountFontFamily
 import com.mebit.ffi.signer.HotTx
 import com.mebit.ffi.signer.KeyNetwork
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 
 /** How far the navy band runs on behind the top of the status card, which straddles its edge as on the board. */
@@ -105,20 +101,7 @@ fun S8TxDetailScreen(
     }
     val view = txDetailView(tx, load, rememberFiatQuote(quotes), KeyNetwork.TEST)
     val debugBuild = rememberIsDebugBuild()
-    val clipboard = LocalClipboard.current
-    val scope = rememberCoroutineScope()
-    // The copy button that says it copied, by its tag, one at a time.
-    var copied by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(copied) {
-        if (copied != null) {
-            delay(1_500)
-            copied = null
-        }
-    }
-    val copy = { tag: String, text: String ->
-        scope.launch { clipboard.setClipEntry(plainTextClip(text)) }
-        copied = tag
-    }
+    val copier = rememberCopier()
     var technical by remember { mutableStateOf(false) }
     Box(modifier = Modifier.fillMaxSize().background(MbPage).testTag(tag)) {
         Column(
@@ -176,7 +159,7 @@ fun S8TxDetailScreen(
                                     modifier = Modifier.weight(1f).testTag("tx_address_$i"),
                                 )
                                 Spacer(modifier = Modifier.width(12.dp))
-                                CopyChip(copied == "cta_s8_copy_address_$i", "cta_s8_copy_address_$i") { copy("cta_s8_copy_address_$i", address) }
+                                CopyChip(copier.copied == address, "cta_s8_copy_address_$i") { copier.copy(address) }
                             }
                         }
                     }
@@ -204,7 +187,7 @@ fun S8TxDetailScreen(
             DetailCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(modifier = Modifier.weight(1f)) { Label("รหัสธุรกรรม (TXID)") }
-                    CopyChip(copied == "cta_s8_copy_txid", "cta_s8_copy_txid") { copy("cta_s8_copy_txid", view.txid) }
+                    CopyChip(copier.copied == view.txid, "cta_s8_copy_txid") { copier.copy(view.txid) }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(view.txid.chunked(8).joinToString(" "), color = MbNavyInk, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, lineHeight = 20.sp, modifier = Modifier.testTag("tx_txid"))

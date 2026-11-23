@@ -7,7 +7,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,7 +25,6 @@ import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -43,12 +41,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -70,15 +66,12 @@ import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.data.THIS_PHONE_KEY_NAME
 import com.mebit.app.data.fingerprintGroups
-import com.mebit.app.data.hardwareMonogram
 import com.mebit.app.data.hardwareSource
 import com.mebit.app.data.keySourceName
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.feature.onboarding.AddressTypeRows
 import com.mebit.app.feature.onboarding.NotSavedNotice
 import com.mebit.app.rememberIsDebugBuild
-import com.mebit.app.resources.Res
-import com.mebit.app.resources.ic_chevron
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbChip
@@ -94,7 +87,6 @@ import com.mebit.ffi.signer.HotTx
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import org.jetbrains.compose.resources.painterResource
 
 // Four and a half rows at the 67 dp pitch, so a fifth row peeks out to show the box scrolls.
 private val TxListMaxHeight = 301.5.dp
@@ -114,12 +106,11 @@ fun S1HomeSingleSigScreen(
     quotes: QuoteCache,
     onReceive: () -> Unit,
     onSend: () -> Unit,
-    onVault: () -> Unit,
     onHistory: () -> Unit,
     onOpenTx: (HotTx) -> Unit,
     onOpenCatalog: () -> Unit,
     onChangePin: (() -> Unit)? = null,
-) = SingleSigHome(wallet, session, quotes, onReceive, onSend, onVault, onHistory, onOpenTx, onOpenCatalog, tag = "screen_send/s1", onChangePin = onChangePin)
+) = SingleSigHome(wallet, session, quotes, onReceive, onSend, onHistory, onOpenTx, onOpenCatalog, tag = "screen_send/s1", onChangePin = onChangePin)
 
 /** The phone wallet's home, so the backup gate can show it dimmed behind its sheet under a tag of its own. */
 @Composable
@@ -129,7 +120,6 @@ internal fun SingleSigHome(
     quotes: QuoteCache,
     onReceive: () -> Unit,
     onSend: () -> Unit,
-    onVault: () -> Unit,
     onHistory: () -> Unit,
     onOpenTx: (HotTx) -> Unit,
     onOpenCatalog: () -> Unit,
@@ -172,8 +162,6 @@ internal fun SingleSigHome(
             )
         }
     }
-    Spacer(modifier = Modifier.height(14.dp))
-    UpgradeCard(onVault)
     NotSavedNotice(session, Modifier.padding(top = 12.dp))
 }
 
@@ -220,7 +208,7 @@ fun HardwareHomeScreen(
                     keyName,
                     "${keySourceName(source)} · ${AddressTypeRows.first { it.type == hw.addressType }.label} · ${fingerprintGroups(hw.fingerprint)}",
                     "key_fingerprint",
-                    badge = hardwareMonogram(source),
+                    logo = source,
                 ),
             ),
             expanded = keyDetails,
@@ -524,30 +512,3 @@ private fun TxArrow(down: Boolean, color: Color) {
     }
 }
 
-@Composable
-private fun UpgradeCard(onClick: () -> Unit) {
-    val card = RoundedCornerShape(18.dp)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(70.dp)
-            .clip(card)
-            .background(MbIconWash)
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = 18.dp)
-            .testTag("cta_s1_vault"),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp), modifier = Modifier.width(46.dp)) {
-            Box(Modifier.size(8.dp).background(MbBtcOrange, CircleShape))
-            Box(Modifier.size(8.dp).background(MbBtcOrange, CircleShape))
-            Box(Modifier.size(8.dp).border(1.5.dp, MbEyebrow, CircleShape))
-        }
-        Spacer(modifier = Modifier.width(14.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text("ยกระดับเป็น Wallet หลายกุญแจ", color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.Bold, lineHeight = 19.sp)
-            Text("เพิ่ม Jade หรือ Trezor · ย้ายเหรียญให้ในครั้งเดียว", color = MbEyebrow, fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 15.sp)
-        }
-        Image(painterResource(Res.drawable.ic_chevron), contentDescription = null, modifier = Modifier.size(width = 6.dp, height = 12.dp), colorFilter = ColorFilter.tint(MbEyebrow))
-    }
-}

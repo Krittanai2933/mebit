@@ -852,7 +852,6 @@ internal fun MebitNavHost(
                         quotes = quotes,
                         onReceive = { openReceive(WalletChoice.Spending(current.place)) },
                         onSend = { openSend(WalletChoice.Spending(current.place)) },
-                        onVault = { navigate(MovieRoute.Keyring) },
                         onHistory = { navigate(MovieRoute.S7History) },
                         onOpenTx = openTx,
                         onOpenCatalog = openCatalog,
@@ -910,7 +909,7 @@ internal fun MebitNavHost(
                         confirm = { appLock.confirm(biometrics, session.appLockEnabled, "ยืนยันการเซ็นส่งเงิน") },
                         confirmRepost = confirmRepost,
                         confirmReplacement = confirmReplacement,
-                        onSigned = { navigate(MovieRoute.S6SentSlip) },
+                        onSigned = { land(stackAfterSent(backStack, MovieRoute.S6SentSlip)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
@@ -920,7 +919,7 @@ internal fun MebitNavHost(
                         quotes = quotes,
                         walletName = session.walletName,
                         variant = "default",
-                        onHome = { navigate(MovieRoute.S1HomeSingleSig) },
+                        onHome = { land(stackAfterSlipHome(backStack, MovieRoute.S1HomeSingleSig)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
@@ -930,7 +929,7 @@ internal fun MebitNavHost(
                         quotes = quotes,
                         walletName = session.walletName,
                         variant = "slip",
-                        onHome = { navigate(MovieRoute.S1HomeSingleSig) },
+                        onHome = { land(stackAfterSlipHome(backStack, MovieRoute.S1HomeSingleSig)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
@@ -940,7 +939,7 @@ internal fun MebitNavHost(
                         quotes = quotes,
                         walletName = session.walletName,
                         variant = "block",
-                        onHome = { navigate(MovieRoute.S1HomeSingleSig) },
+                        onHome = { land(stackAfterSlipHome(backStack, MovieRoute.S1HomeSingleSig)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
@@ -950,7 +949,7 @@ internal fun MebitNavHost(
                         quotes = quotes,
                         walletName = session.walletName,
                         variant = "poster",
-                        onHome = { navigate(MovieRoute.S1HomeSingleSig) },
+                        onHome = { land(stackAfterSlipHome(backStack, MovieRoute.S1HomeSingleSig)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
@@ -1046,7 +1045,7 @@ internal fun MebitNavHost(
                                 }
                             },
                             onChoose = { if (send) openSend(it) else openReceive(it) },
-                            onSwitch = { backStack[backStack.lastIndex] = current.copy(route = if (send) MovieRoute.ChooseWalletReceive else MovieRoute.ChooseWalletSend) },
+                            onSwitch = { navigate(if (send) MovieRoute.ChooseWalletReceive else MovieRoute.ChooseWalletSend) },
                             onBack = onBack,
                             onOpenCatalog = openCatalog,
                         )
@@ -1103,7 +1102,7 @@ internal fun MebitNavHost(
                             pairingKept = remember(w) { hardware.link.keeps(w.fingerprint) },
                             draft = hardware.sendDraft(w),
                             confirmRepost = confirmRepost,
-                            onSent = { land(stackAfterHardwareSent(backStack)) },
+                            onSent = { land(stackAfterSent(backStack, MovieRoute.HardwareSent)) },
                             onBack = onBack,
                             onOpenCatalog = openCatalog,
                         )
@@ -1122,7 +1121,7 @@ internal fun MebitNavHost(
                             walletName = w.name,
                             multiKey = false,
                             quotes = quotes,
-                            onHome = { land(stackAfterSlipHome(backStack)) },
+                            onHome = { land(stackAfterSlipHome(backStack, MovieRoute.HardwareHome)) },
                             onOpenCatalog = openCatalog,
                         )
                     } ?: NoWallet(current.route, onBack, openCatalog)

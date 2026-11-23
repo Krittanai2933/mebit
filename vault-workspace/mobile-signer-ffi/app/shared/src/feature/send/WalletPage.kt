@@ -46,6 +46,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.SystemBack
+import com.mebit.app.data.KeySourceLabel
+import com.mebit.app.feature.keys.KeyLogo
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_close
 import com.mebit.app.resources.mebit_logo
@@ -90,10 +92,10 @@ internal enum class WalletBoard(
 }
 
 /**
- * One numbered key of a policy card: its [name] over its [line], the line tagged [lineTag] for the verify recipes. [badge] takes the
- * number's place in the key's circle, as a hardware wallet's 4.1.5.1 draws its device's monogram there.
+ * One numbered key of a policy card: its [name] over its [line], the line tagged [lineTag] for the verify recipes. A hardware [logo]
+ * takes the number's place in the key's circle, as on a hardware wallet's 4.1.5.1.
  */
-internal data class KeyRowText(val name: String, val line: String, val lineTag: String, val badge: String? = null)
+internal data class KeyRowText(val name: String, val line: String, val lineTag: String, val logo: KeySourceLabel? = null)
 
 /**
  * The page under 4.1 and 3.7: the page ground tagged [tag], the navy block 350 dp tall that scrolls away with the content, [board]'s ring on
@@ -279,8 +281,7 @@ internal fun PolicyCard(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(modifier = Modifier.size(28.dp).background(board.keyBadge, CircleShape), contentAlignment = Alignment.Center) {
-                            val badge = key.badge ?: "${i + 1}"
-                            Text(badge, color = MbNavyInk, fontSize = if (badge.length > 2) 10.sp else 13.sp, fontWeight = FontWeight.SemiBold)
+                            if (key.logo != null) KeyLogo(key.logo, 15.dp) else Text("${i + 1}", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {

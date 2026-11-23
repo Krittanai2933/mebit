@@ -32,11 +32,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.mebit.app.data.KeySourceLabel
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.SaveState
 import com.mebit.app.data.StartNotice
 import com.mebit.app.data.THIS_PHONE_KEY_NAME
-import com.mebit.app.getPlatform
+import com.mebit.app.feature.keys.KeyLogo
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.mebit_logo
 import com.mebit.app.ui.components.BackChip
@@ -236,7 +237,7 @@ fun KeyCreatedScreen(
     onOpenCatalog: () -> Unit,
 ) {
     MebitScreen(
-        eyebrow = "NEW WALLET · ขั้น 1 / 3",
+        eyebrow = "NEW WALLET · ขั้น 1 / 4",
         title = "สร้างกุญแจแล้ว",
         // The key exists now, so there is nothing to go back to.
         onBack = null,
@@ -247,8 +248,6 @@ fun KeyCreatedScreen(
     ) {
         Spacer(modifier = Modifier.height(19.dp))
         KeyCard(
-            monogram = remember { getPlatform().phoneMonogram },
-            monogramInk = MbNavy,
             title = THIS_PHONE_KEY_NAME,
             meta = "mebit บนเครื่องนี้ · " + session.fingerprint.chunked(4).joinToString(" ").ifBlank { "—" },
             metaTag = "fingerprint",
@@ -277,11 +276,9 @@ private fun DeleteWarning(session: OnboardingSession, tag: String) {
     )
 }
 
-/** Penpot 1.3 key card: monogram tile, name, one meta line and a status pill. */
+/** Penpot 1.3 key card: the mebit mark's tile, name, one meta line and a status pill. */
 @Composable
 private fun KeyCard(
-    monogram: String,
-    monogramInk: Color,
     title: String,
     meta: String,
     metaTag: String,
@@ -305,7 +302,7 @@ private fun KeyCard(
             modifier = Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).background(MbIconWash),
             contentAlignment = Alignment.Center,
         ) {
-            Text(monogram, color = monogramInk, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            KeyLogo(KeySourceLabel.ThisDevice, 24.dp)
         }
         Spacer(modifier = Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f).padding(bottom = 4.dp)) {
@@ -371,7 +368,7 @@ fun BackupWordsScreen(
     val offerPassphrase = session.inFirstSetup && !session.imported
     var sheetOpen by remember { mutableStateOf(false) }
     MebitScreen(
-        eyebrow = "BACKUP · ขั้น 2 / 3",
+        eyebrow = "BACKUP · ขั้น 2 / 4",
         title = "จด 24 คำนี้ลงกระดาษ",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
@@ -528,7 +525,7 @@ fun VerifyWordsScreen(
     val picks = remember(quiz) { mutableStateListOf<String?>().apply { repeat(quiz.size) { add(null) } } }
     var wrong by remember { mutableStateOf(false) }
     MebitScreen(
-        eyebrow = "BACKUP · ขั้น 2 / 3",
+        eyebrow = "BACKUP · ขั้น 2 / 4",
         title = "ยืนยันว่าจดถูก",
         subtitle = "ดูจากกระดาษที่จดไว้ แล้วเลือกคำให้ตรงกับเลขลำดับ",
         onBack = onBack,

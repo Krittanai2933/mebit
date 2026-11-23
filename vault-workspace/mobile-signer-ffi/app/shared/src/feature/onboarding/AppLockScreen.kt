@@ -124,10 +124,10 @@ fun AppLockScreen(
     }
 
     val passcodeOnly = failed && attemptsLeft <= 0
-    // Boards 1.3.1 and 1.6 count the create flow's steps and have no back chip. An import has neither.
+    // Boards 1.3.2 and 1.7 count the create flow's steps and have no back chip. An import has neither.
     val creating = enable && !session.imported
     MebitScreen(
-        eyebrow = if (!creating) null else if (failed) words.failedEyebrow else "SECURITY · ขั้น 3 / 3",
+        eyebrow = if (!creating) null else if (failed) words.failedEyebrow else "SECURITY · ขั้น 4 / 4",
         title = when {
             failed -> words.failedTitle
             enable -> words.enableTitle

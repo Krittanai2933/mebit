@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penpot Organize > 2.2 Add Key > mebit mark: the cream disc in its navy rim, the ring and the three strokes, as exported. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="23.6dp"
+    android:viewportWidth="24"
+    android:viewportHeight="23.6">
+    <path
+        android:pathData="M0.22,11.779a11.78,11.559 0,1 0,23.56 0a11.78,11.559 0,1 0,-23.56 0Z"
+        android:fillColor="#FDEFDD"
+        android:strokeColor="#042C49"
+        android:strokeWidth="0.44"/>
+    <path
+        android:pathData="M11.981,22.188C6.133,22.177 1.385,17.5 1.395,11.76C1.406,6.021 6.172,1.359 12.02,1.37C17.867,1.383 22.615,6.06 22.604,11.8C22.594,17.539 17.828,22.2 11.981,22.188ZM12.019,1.621C6.311,1.61 1.66,6.159 1.65,11.761C1.64,17.362 6.274,21.927 11.981,21.938C17.688,21.949 22.339,17.399 22.35,11.798C22.36,6.195 17.726,1.632 12.019,1.621Z"
+        android:fillColor="#042C49"/>
+    <path
+        android:pathData="M11.622,14.899L18.956,10.654C18.041,12.686 17.304,14.044 15.033,15.341L9.249,18.592C9.439,17.107 10.308,15.757 11.622,14.899Z"
+        android:fillColor="#042C49"/>
+    <path
+        android:pathData="M12.326,11.321L20.523,6.668C19.609,8.696 18.813,10.042 16.542,11.34L9.931,15.091C10.121,13.607 11.011,12.177 12.326,11.321Z"
+        android:fillColor="#042C49"/>
+    <path
+        android:pathData="M7.53,19.382L7.51,13.988C7.383,11.982 8.389,9.958 10.223,8.729L22.224,1.878C21.699,4.365 20.883,5.559 18.669,7.026L11.736,10.967C10.335,11.898 9.437,13.382 9.315,14.971C9.315,14.971 9.147,18.416 7.53,19.383Z"
+        android:fillColor="#042C49"/>
+</vector>

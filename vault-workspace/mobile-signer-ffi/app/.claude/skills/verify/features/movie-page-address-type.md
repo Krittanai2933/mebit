@@ -10,7 +10,7 @@ wallet.
 ## Sub-features
 
 - `mp-type-screen` shows four rows (Legacy BIP44, Nested SegWit BIP49, Native SegWit BIP84, Taproot BIP86) with Native
-  SegWit selected and its "ค่าเริ่มต้น" badge, the eyebrow NEW WALLET or IMPORT WALLET · ADDRESS TYPE, and each row's
+  SegWit selected and its "ค่าเริ่มต้น" badge, the eyebrow NEW WALLET · ADDRESS TYPE · ขั้น 3 / 4 or IMPORT WALLET · ADDRESS TYPE, and each row's
   address prefixes for the session's network (testnet `m หรือ n`, `2`, `tb1q`, `tb1p`; mainnet `1`, `3`, `bc1q`, `bc1p`).
 - `mp-type-create` follows Verify Words, either ทำทีหลัง on Key Created or Backup Words, and goes on to App Lock. For a
   new key with a passphrase whose words were verified, ต่อไป first shows the fingerprint to write down (Penpot 1.5.4),

@@ -49,7 +49,7 @@ class AddressTypeScreenTest {
 
     @Test
     fun theEyebrowNamesTheFlow() {
-        assertEquals("NEW WALLET · ADDRESS TYPE", addressTypeEyebrow(imported = false))
+        assertEquals("NEW WALLET · ADDRESS TYPE · ขั้น 3 / 4", addressTypeEyebrow(imported = false))
         assertEquals("IMPORT WALLET · ADDRESS TYPE", addressTypeEyebrow(imported = true))
     }
 

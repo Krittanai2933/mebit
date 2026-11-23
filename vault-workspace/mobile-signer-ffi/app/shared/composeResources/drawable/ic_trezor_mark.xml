@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penpot Organize > Logos · preview (Trezor & Jade) > Brand / Hardware wallet / Trezor mark, its one path as exported. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="17dp"
+    android:height="24.355dp"
+    android:viewportWidth="17"
+    android:viewportHeight="24.355">
+    <path
+        android:pathData="M14.52,5.652C14.52,2.563 11.805,0 8.5,0C5.193,0 2.478,2.564 2.478,5.651L2.478,7.458L0,7.458L0,20.451L8.498,24.355L17,20.452L17,7.516L14.522,7.516L14.521,5.651ZM5.547,5.652C5.547,4.195 6.847,3.03 8.5,3.03C10.152,3.03 11.45,4.195 11.45,5.652L11.45,7.458L5.548,7.458L5.548,5.652ZM13.576,18.354L8.497,20.686L3.42,18.356L3.42,10.547L13.575,10.547L13.575,18.354Z"
+        android:fillColor="#000000"/>
+</vector>
