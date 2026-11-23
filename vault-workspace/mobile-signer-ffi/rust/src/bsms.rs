@@ -56,6 +56,11 @@ pub enum WalletFileRead {
 const FORMS: [&str; 4] = ["", "/**", "/<0;1>/*", "/0/*"];
 const RECORD_HEADER: &str = "BSMS 1.0";
 const PATHS: &str = "/0/*,/1/*";
+const NO_PATHS: &str = "No path restrictions";
+// Nunchuk's own record ends each key with a bare `/*`, says "No path restrictions", and states the first address of
+// the receive chain `/0/*`, which is how Nunchuk reads every form back. Read only from such a record, and only when
+// its stated address agrees.
+const NUNCHUK_FORM: &str = "/*";
 
 fn unreadable(reason: impl Into<String>) -> WalletFileRead {
     WalletFileRead::Unreadable {
@@ -127,7 +132,8 @@ fn kind_of(text: &str) -> Option<&'static str> {
 fn read_descriptor(
     line: &str,
     network: KeyNetwork,
-) -> Result<(String, WalletShape), WalletFileRead> {
+    nunchuk: bool,
+) -> Result<(String, WalletShape, String), WalletFileRead> {
     let line = line.trim();
     if line.contains('#') && verify_checksum(line).is_err() {
         return Err(unreadable("the descriptor's checksum does not verify"));
@@ -144,7 +150,7 @@ fn read_descriptor(
     }
     let mut forms = Vec::new();
     let (stored, keys) = rewrite_keys(body, |old| {
-        if !FORMS.contains(&old) {
+        if !FORMS.contains(&old) && !(nunchuk && old == NUNCHUK_FORM) {
             return Err(WalletFileRead::Unsupported {
                 found: format!("key suffix {old}"),
             });
@@ -160,6 +166,7 @@ fn read_descriptor(
             found: "mixed key suffixes".into(),
         });
     }
+    let form = forms.first().cloned().unwrap_or_default();
     let wrong = match network {
         KeyNetwork::Test => "xpub",
         KeyNetwork::Main => "tpub",
@@ -170,7 +177,7 @@ fn read_descriptor(
         return Err(WalletFileRead::WrongNetwork);
     }
     match wallet_describe(stored.clone(), network) {
-        Ok(shape) => Ok((stored, shape)),
+        Ok(shape) => Ok((stored, shape, form)),
         // shortcut: script.rs words its refusals as text, so these three are told apart by their wording.
         Err(e) => {
             let why = e.to_string();
@@ -209,7 +216,7 @@ fn read(text: &str, network: KeyNetwork) -> Result<WalletImport, WalletFileRead>
     let (descriptor_line, format, stated) = match lines.as_slice() {
         [] | [""] => return Err(unreadable("the file is empty")),
         [header, descriptor, rest @ ..] if *header == RECORD_HEADER => match rest {
-            [paths, ..] if *paths == PATHS || *paths == "No path restrictions" => (
+            [paths, ..] if *paths == PATHS || *paths == NO_PATHS => (
                 *descriptor,
                 WalletFileFormat::Bsms,
                 rest.get(1).map(|a| a.to_string()),
@@ -231,10 +238,19 @@ fn read(text: &str, network: KeyNetwork) -> Result<WalletImport, WalletFileRead>
             None => return Err(unreadable("no descriptor line")),
         },
     };
-    let (descriptor, shape) = read_descriptor(descriptor_line, network)?;
+    let nunchuk =
+        format == WalletFileFormat::Bsms && lines.get(2) == Some(&NO_PATHS) && stated.is_some();
+    let (descriptor, shape, form) = read_descriptor(descriptor_line, network, nunchuk)?;
     if let Some(stated) = &stated
         && !stated.eq_ignore_ascii_case(&shape.first_address)
     {
+        if form == NUNCHUK_FORM {
+            // Read as Nunchuk means it, the keys give another first address: perhaps a single-chain wallet, which
+            // the app cannot hold, so it is refused without calling the file changed.
+            return Err(WalletFileRead::Unsupported {
+                found: format!("key suffix {NUNCHUK_FORM}"),
+            });
+        }
         return Err(WalletFileRead::AddressMismatch {
             stated: stated.clone(),
             derived: shape.first_address,
@@ -598,5 +614,90 @@ mod tests {
     fn writing_a_bad_descriptor_is_an_error() {
         assert!(wallet_bsms_record("nonsense".into(), NET).is_err());
         assert!(wallet_descriptor_text(one_key(AddressType::Taproot), NET).is_err());
+    }
+
+    /// BIP-129's two account-key descriptor records, moved to testnet: each xpub re-encoded as a tpub with the same
+    /// key data, each origin's coin step 0' made 1', and each address re-encoded with `tb`, keeping its witness
+    /// program. The scripts, and the first addresses the BIP's authors derived, are unchanged. Sparrow's import tests
+    /// use the first.
+    const BIP129_RECORDS: [&str; 2] = [
+        "BSMS 1.0\nwsh(sortedmulti(2,[1cf0bf7e/48'/1'/0'/2']tpubDFhkmwn45kTEXtFQN3NiD1W2c71uL6CAyfVkDmtZPKRWWPTrp7TShPMvTxrPhk75buVH2Ly532LweXJvreYjDoVgkPeKtaUQPV8fSYktrZy/**,[4fc1dd4a/48'/1'/0'/2']tpubDF2Dsq4WaPX4kqSPgycidoGDadKWsRPmwPnwhfsXsJzfZzbYDnWP9nB5iFpSaRuSS6SJUFV9PTR3CfNAGWk6fj3BUAEdyomaTdo9eS1YJmz/**))\n/0/*,/1/*\ntb1qrgc6p3kylfztu06ysl752gwwuekhvtfh9vr7zg43jvu60mutamcsmdrgra",
+        "BSMS 1.0\nwsh(sortedmulti(2,[b7868815/48'/1'/0'/2']tpubDFXiNumzKR1mHYZkQcb4Dd8fGqDCDMxaVabcpy6QHnWTzNxhGpQT8VfFBJrzN8fVSFzJ6d4fBZ6Uiiu17mDnktPBkHFp2wUTtAf9HZk6Wkw/**,[eedff89a/48'/1'/0'/2']tpubDF4wSbcLWcTcvvomRXARcdf6GpDoQZGu4sRqzoxiY93X3Ed9VtqRzvd9mGGNLcjoEBhSzgpYNCWcU67RHEr4EqbjecXmXBX566JGetusNio/**))\n/0/*,/1/*\ntb1qhs4u273g4azq7kqqpe6vh5wfhasfmrq7nheyzsnq77humd7rwtkq2q6jvx",
+    ];
+    /// BIP-129's record of two plain public keys, also moved to testnet: one address, not a wallet of account keys.
+    const BIP129_PLAIN_KEYS: &str = "BSMS 1.0\nwsh(sortedmulti(1,[59865f44/48'/1'/0'/2']026d15412460ba0d881c21837bb999233896085a9ed4e5445bd637c10e579768ba,[b7044ca6/48'/1'/0'/2']030baf0497ab406ff50cb48b4013abac8a0338758d2fd54cd934927afa57cc2062))#rzx9dffd\nNo path restrictions\ntb1quqy523xu3l8che3s8vja8n33qtg0uyugr9l5z092s3wa50p8t7rqnj5npx";
+
+    #[test]
+    fn what_we_write_is_bip129s_own_records_word_for_word() {
+        for record in BIP129_RECORDS {
+            let read = read_ok(record);
+            assert_eq!(read.format, WalletFileFormat::Bsms);
+            assert_eq!(wallet_bsms_record(read.descriptor, NET).unwrap(), record);
+        }
+    }
+
+    #[test]
+    fn bip129s_records_the_app_cannot_hold_are_refused_not_misread() {
+        assert!(!matches!(
+            wallet_file_read(BIP129_PLAIN_KEYS.into(), NET),
+            WalletFileRead::Read { .. }
+        ));
+        // BIP-129's nested record, a kind the app does not hold, as BIP-129 gives it.
+        let nested = "BSMS 1.0\nsh(wsh(multi(2,[793cc70b/48'/0'/0'/1']xpub6ErVmcYYHmavsMgxEcTZyzN5sqth1ZyRpFNJC26ij1wYGC2SBKYrgt9yariSbn7HLRoZUvhUhmPfsRTPrdhhGFscpPZzmch6UTdmRP1aZUj/**,[b3118e52/48'/0'/0'/1']xpub6Du5Jn6eYZE96ccmAc1ZTFPzdnzrvqfG4mpamDun2qZYKywoiQJMCbS3kWWMr6U3XW6s125RLsaPABWgv2yA749ieaMe67FxkTjMsbcxCch/**,[842bd2ed/48'/0'/0'/1']xpub6Ex81KopPkEt9hJiWHabYy8LNsSR4A7sUQoFBk9dR8XxHrr4p9HrYWN3NCf5uwfopHnQkCG7FYnZMztKbtRtbh6tzZC4xtHPbmVVxRSN7ic/**)))\n/0/*,/1/*\n3GzMtFXahiu4TpGNGFc4bHMvAcvz5vVQrT";
+        assert!(matches!(
+            wallet_file_read(nested.into(), KeyNetwork::Main),
+            WalletFileRead::Unsupported { .. }
+        ));
+    }
+
+    #[test]
+    fn a_record_whose_address_is_in_capitals_reads() {
+        // Sparrow's multisig-4.bsms: a BIP-129 record with its address in capitals, as a QR code may carry it.
+        let (head, address) = BIP129_RECORDS[0].rsplit_once('\n').unwrap();
+        read_ok(&format!("{head}\n{}", address.to_uppercase()));
+    }
+
+    fn with_checksum(text: &str) -> String {
+        let mut engine = miniscript::descriptor::checksum::Engine::new();
+        engine.input(text).unwrap();
+        format!("{text}#{}", engine.checksum())
+    }
+
+    #[test]
+    fn nunchuks_own_record_reads_as_the_wallet_nunchuk_means() {
+        // As Nunchuk's GetDescriptorRecord writes a multisig wallet: bare `/*` keys, a checksum, no path
+        // restrictions, and the first address of the receive chain.
+        let stored = two_of_three();
+        let first = address(&stored);
+        let record = format!(
+            "BSMS 1.0\n{}\nNo path restrictions\n{first}",
+            with_checksum(&with(&stored, "/*"))
+        );
+        let got = read_ok(&record);
+        assert_eq!(got.descriptor, stored);
+        assert_eq!(got.format, WalletFileFormat::Bsms);
+        assert_eq!(got.stated_address, Some(first));
+    }
+
+    #[test]
+    fn a_bare_star_reads_only_from_a_nunchuk_style_record_whose_address_agrees() {
+        let stored = two_of_three();
+        let first = address(&stored);
+        let star = with(&stored, "/*");
+        let other = address(&multisig(2, &[0, 1]));
+        for text in [
+            format!("BSMS 1.0\n{star}\nNo path restrictions\n{other}"),
+            format!("BSMS 1.0\n{star}\nNo path restrictions"),
+            format!("BSMS 1.0\n{star}\n/0/*,/1/*\n{first}"),
+            star.clone(),
+        ] {
+            assert!(
+                matches!(
+                    wallet_file_read(text.clone(), NET),
+                    WalletFileRead::Unsupported { .. }
+                ),
+                "{text}"
+            );
+        }
     }
 }
