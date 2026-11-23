@@ -62,6 +62,7 @@ import com.mebit.ffi.signer.NodeStatus
 import com.mebit.ffi.signer.chainCheckNode
 import com.mebit.ffi.signer.chainNodeStatus
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
