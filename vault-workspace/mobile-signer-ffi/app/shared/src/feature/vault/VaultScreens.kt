@@ -41,6 +41,7 @@ import com.mebit.app.NoticeDialog
 import com.mebit.app.data.ImportProblem
 import com.mebit.app.data.bsmsRecordOf
 import com.mebit.app.rememberTextFilePicker
+import com.mebit.app.resources.ic_export
 import com.mebit.app.ui.components.MenuAction
 import com.mebit.app.Place
 import com.mebit.app.ui.components.TotalLine
@@ -263,10 +264,15 @@ fun VaultListScreen(
                     draft.selectVault(vault.id)
                     onOpenDetail()
                 },
-                extra = MenuAction("ส่งออก Wallet", "menu_export_${vault.id}") {
-                    draft.selectVault(vault.id)
-                    onExport()
-                },
+                extra = MenuAction(
+                    "ส่งออก Wallet",
+                    "menu_export_${vault.id}",
+                    onClick = {
+                        draft.selectVault(vault.id)
+                        onExport()
+                    },
+                    icon = Res.drawable.ic_export,
+                ),
             )
             Spacer(modifier = Modifier.height(11.dp))
         }
