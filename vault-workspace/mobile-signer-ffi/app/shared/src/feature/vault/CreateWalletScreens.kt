@@ -444,18 +444,23 @@ fun ReviewScreen(
 
 @Composable
 private fun SummaryCard(name: String, preset: Preset) {
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(123.dp)
             .clip(RoundedCornerShape(24.dp))
             .background(MbNavy)
+            .padding(start = 22.dp, top = 20.dp, end = 22.dp, bottom = 17.dp)
             .testTag("review_summary"),
     ) {
-        Box(Modifier.offset(x = 22.dp, y = 25.dp).size(8.dp).background(MbBtcOrange, CircleShape))
-        Text("WALLET ที่จะสร้าง", color = MbWhite.copy(alpha = 0.7f), fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, modifier = Modifier.offset(x = 36.dp, y = 20.dp))
-        Text(reviewTitle(name, preset), color = MbWhite, fontSize = 18.sp, lineHeight = 26.sp, modifier = Modifier.padding(start = 22.dp, top = 52.dp, end = 22.dp).testTag("review_title"))
-        Text(reviewSub(preset), color = MbWhite.copy(alpha = 0.6f), fontSize = 11.5.sp, fontWeight = FontWeight.Light, lineHeight = 16.sp, modifier = Modifier.padding(start = 22.dp, top = 90.dp, end = 22.dp).testTag("review_sub"))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(8.dp).background(MbBtcOrange, CircleShape))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("WALLET ที่จะสร้าง", color = MbWhite.copy(alpha = 0.7f), fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp)
+        }
+        Spacer(modifier = Modifier.height(14.dp))
+        Text(reviewTitle(name, preset), color = MbWhite, fontSize = 18.sp, lineHeight = 26.sp, modifier = Modifier.testTag("review_title"))
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(reviewSub(preset), color = MbWhite.copy(alpha = 0.6f), fontSize = 11.5.sp, fontWeight = FontWeight.Light, lineHeight = 16.sp, modifier = Modifier.testTag("review_sub"))
     }
 }
 
