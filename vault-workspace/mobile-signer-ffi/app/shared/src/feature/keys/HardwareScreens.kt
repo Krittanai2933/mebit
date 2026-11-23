@@ -58,7 +58,6 @@ import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.SavedKey
 import com.mebit.app.data.ScanProblem
 import com.mebit.app.data.hardwareKind
-import com.mebit.app.data.hardwareMonogram
 import com.mebit.app.data.hardwareSource
 import com.mebit.app.data.oneKeyPath
 import com.mebit.app.feature.onboarding.AddressTypeRows
@@ -254,7 +253,7 @@ fun HardwareWalletScreen(
             DeviceList {
                 when {
                     bluetoothOff -> DeviceRow(
-                        monogram = null,
+                        icon = { BluetoothGlyph(MbNavy, 1.8.dp, 8.dp, 14.dp) },
                         title = "Bluetooth ปิดอยู่",
                         sub = "แตะ เปิด เพื่อค้นหาอุปกรณ์",
                         action = "เปิด",
@@ -265,7 +264,7 @@ fun HardwareWalletScreen(
                     found.isNotEmpty() -> found.forEach { wallet ->
                         val reaching = connecting == wallet && wallet.kind == WalletKind.TREZOR_SAFE7
                         DeviceRow(
-                            monogram = hardwareMonogram(hardwareSource(wallet.kind)),
+                            icon = { KeyLogo(hardwareSource(wallet.kind), 18.dp) },
                             title = wallet.name,
                             sub = if (reaching && card != null) safe7RowLine(card) else "พบใกล้ ๆ",
                             action = if (reaching) "ยกเลิก" else "เชื่อม",
@@ -375,7 +374,13 @@ fun T13UnsupportedModelScreen(
             )
             DeviceList {
                 DeviceRow(
-                    monogram = if (model?.startsWith("Trezor") == true) hardwareMonogram(KeySourceLabel.TrezorSafe7) else "?",
+                    icon = {
+                        if (model?.startsWith("Trezor") == true) {
+                            KeyLogo(KeySourceLabel.TrezorSafe7, 18.dp)
+                        } else {
+                            Text("?", color = MbEyebrow, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    },
                     title = name,
                     sub = "ไม่รองรับ",
                     action = "ปิด",
@@ -562,10 +567,10 @@ private fun DeviceList(rows: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxWidth().heightIn(min = 52.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = rows)
 }
 
-/** A null [monogram] draws the Bluetooth rune in its place. */
+/** [icon] fills the row's 32 dp tile: the Bluetooth rune, a device's logo, or a ? for a model mebit does not support. */
 @Composable
 private fun DeviceRow(
-    monogram: String?,
+    icon: @Composable () -> Unit,
     title: String,
     sub: String,
     action: String,
@@ -578,13 +583,7 @@ private fun DeviceRow(
         Modifier.fillMaxWidth().height(52.dp).clip(shape).background(DeviceRowFill).border(1.5.dp, MbBtcOrange, shape).padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(32.dp).background(MbIconWash, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
-            if (monogram != null) {
-                Text(monogram, color = MbEyebrow, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            } else {
-                BluetoothGlyph(MbNavy, 1.8.dp, 8.dp, 14.dp)
-            }
-        }
+        Box(Modifier.size(32.dp).background(MbIconWash, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) { icon() }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(title, color = MbNavyInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.4.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)

@@ -1,6 +1,7 @@
 package com.mebit.app.ui.components
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -50,7 +51,10 @@ import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbChip
 import com.mebit.app.ui.theme.MbEyebrow
+import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbWhite
+import org.jetbrains.compose.resources.DrawableResource
+import org.jetbrains.compose.resources.painterResource
 
 /** A card's ⋯ menu holds one delete item: live, or greyed with the reason it cannot run. */
 sealed interface DeleteItem {
@@ -58,8 +62,12 @@ sealed interface DeleteItem {
     data class Blocked(val reason: String) : DeleteItem
 }
 
-/** An optional item above delete in a card's ⋯ menu, such as a several-key wallet's export (Penpot 1.8.A3). [tag] is its whole test tag. */
-class MenuAction(val label: String, val tag: String, val onClick: () -> Unit)
+/**
+ * An optional item above delete in a card's ⋯ menu, such as a several-key wallet's export (Penpot 1.8.A3). [tag] is its whole test tag.
+ * [icon] sits where delete's trash does; without one the label still lines up with delete's. It comes last, so a call that names only
+ * the first three stays valid.
+ */
+class MenuAction(val label: String, val tag: String, val onClick: () -> Unit, val icon: DrawableResource? = null)
 
 /** The grey Penpot gives a blocked menu row, which the theme has no token for. */
 private val BlockedInk = Color(0xFFB4BCC8)
@@ -92,7 +100,7 @@ fun CardDeleteMenu(tagSuffix: String, label: String, item: DeleteItem, onDark: B
             // Penpot starts the menu 4 dp under the 32 dp circle, which is 2 dp above the bottom of this target.
             val overlap = with(LocalDensity.current) { 2.dp.roundToPx() }
             Popup(popupPositionProvider = remember(overlap) { UnderMore(overlap) }, onDismissRequest = { open = false }, properties = PopupProperties(focusable = true)) {
-                DeleteMenu(tagSuffix, label, item, extra?.let { MenuAction(it.label, it.tag) { open = false; it.onClick() } }) {
+                DeleteMenu(tagSuffix, label, item, extra?.let { MenuAction(it.label, it.tag, onClick = { open = false; it.onClick() }, icon = it.icon) }) {
                     open = false
                     onDelete()
                 }
@@ -120,9 +128,14 @@ private fun DeleteMenu(tagSuffix: String, label: String, item: DeleteItem, extra
                 modifier = Modifier.fillMaxWidth().height(52.dp).clickable(role = Role.Button, onClick = extra.onClick).testTag(extra.tag).padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Aligned with the delete label, which follows an 18 dp icon and a 10 dp gap.
-                Spacer(Modifier.width(28.dp))
-                Text(extra.label, color = MbEyebrow, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                // Aligned with the delete label, which follows an 18 dp icon and a 10 dp gap. Navy, as Penpot 1.8.A3 draws ส่งออก Wallet: only delete is orange.
+                if (extra.icon != null) {
+                    Image(painterResource(extra.icon), contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(10.dp))
+                } else {
+                    Spacer(Modifier.width(28.dp))
+                }
+                Text(extra.label, color = MbNavy, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(MbBorder))
         }

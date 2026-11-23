@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penpot Organize > 1.8.A3 > Icon · export: the up arrow beside ส่งออก Wallet, a 2.4 navy stroke with round ends, placed in its 18 box as drawn. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="18dp"
+    android:height="18dp"
+    android:viewportWidth="18"
+    android:viewportHeight="18">
+    <path
+        android:pathData="M6.75,12L6.75,1.5M2.25,6L6.75,1.5L11.25,6"
+        android:strokeColor="#042C49"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+</vector>

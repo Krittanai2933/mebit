@@ -1,5 +1,6 @@
 package com.mebit.app.ui.components
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -47,6 +49,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.SystemBack
 import com.mebit.app.rememberTestMode
+import com.mebit.app.resources.Res
+import com.mebit.app.resources.ic_settings
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBtcOrange
 import com.mebit.app.ui.theme.MbChip
@@ -59,6 +63,7 @@ import com.mebit.app.ui.theme.MbPage
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.app.ui.theme.MbIconWash
+import org.jetbrains.compose.resources.painterResource
 
 /** Penpot Movie Page light scaffold (Add Key / Key Source / Vault Created). */
 @Composable
@@ -194,26 +199,7 @@ fun SettingsGear(onClick: () -> Unit, modifier: Modifier = Modifier) {
             .semantics { contentDescription = "ตั้งค่า" }.testTag("cta_settings"),
         contentAlignment = Alignment.Center,
     ) {
-        androidx.compose.foundation.Canvas(Modifier.size(22.dp)) {
-            val ink = MbNavyInk
-            val c = center
-            val stroke = 1.8.dp.toPx()
-            drawCircle(ink, radius = size.minDimension * 0.30f, center = c, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
-            drawCircle(ink, radius = size.minDimension * 0.11f, center = c, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
-            for (i in 0 until 8) {
-                val a = i * (kotlin.math.PI / 4)
-                val dx = kotlin.math.cos(a).toFloat()
-                val dy = kotlin.math.sin(a).toFloat()
-                val r = size.minDimension / 2
-                drawLine(
-                    ink,
-                    androidx.compose.ui.geometry.Offset(c.x + dx * r * 0.74f, c.y + dy * r * 0.74f),
-                    androidx.compose.ui.geometry.Offset(c.x + dx * r * 0.96f, c.y + dy * r * 0.96f),
-                    strokeWidth = stroke * 1.6f,
-                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                )
-            }
-        }
+        Image(painterResource(Res.drawable.ic_settings), contentDescription = null, modifier = Modifier.size(24.dp))
     }
 }
 
@@ -229,6 +215,16 @@ fun TwoPhonesMark() = Box(Modifier.size(44.dp)) {
     Box(Modifier.offset(12.dp, 14.dp).size(8.dp, 15.dp).border(2.dp, MbNavy, RoundedCornerShape(2.dp)))
     Box(Modifier.offset(24.dp, 14.dp).size(8.dp, 15.dp).border(2.dp, MbNavy, RoundedCornerShape(2.dp)))
     Box(Modifier.offset(21.dp, 19.5.dp).size(2.dp, 4.dp).background(MbBtcOrange))
+}
+
+/** "รวมทั้งหมด" in Light 13.5 MbBody, then [total] in SemiBold 14.5 MbNavyInk: the line under the title on Penpot 3.6 and 2.1. */
+@Composable
+fun TotalLine(total: String, tag: String) {
+    // Penpot starts the total 82 dp after the label's start, past its 80 dp box.
+    Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp).testTag(tag)) {
+        Text("รวมทั้งหมด", color = MbBody, fontSize = 13.5.sp, fontWeight = FontWeight.Light, modifier = Modifier.widthIn(min = 80.dp))
+        Text(total, color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
+    }
 }
 
 /** Penpot's mark for a hardware wallet: a device outline with an orange light. */

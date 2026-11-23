@@ -44,5 +44,5 @@ Preconditions:
 - The 60-second lock is in memory and starts unlocked. A cold start with a saved wallet opens the unlock screen first, see [wallet restart](./wallet-restart.md). Android does the same from API 30 with a screen lock.
 - Leaving the app with `simctl launch` of another app leaves a "‹ Settings" breadcrumb in the status bar. That is the simulator, not the app.
 - `devicectl device capture screenshot` shows the whole screen, system sheets included, and does not wake the app. It is the only safe way to look while a sheet is up.
-- After a key was created, App Lock shows the eyebrow "SECURITY · ขั้น 3 / 3" and no back chip (boards 1.3.1 and 1.6); after an import it shows neither. The failed state adds "SECURITY · Face ID ไม่ผ่าน" in the create flow (boards 1.3.1.1 and 1.6.1), which has only been checked by reading the code.
+- After a key was created, App Lock shows the eyebrow "SECURITY · ขั้น 4 / 4" and no back chip (boards 1.3.2 and 1.7); after an import it shows neither. The failed state adds "SECURITY · Face ID ไม่ผ่าน" in the create flow, which no board draws now and has only been checked by reading the code.
 - On a simulator the app's failed state cannot be reached even with idb: five `pearl.nomatch` answers, each followed by an idb tap on iOS's Try Face ID Again, left the system sheet up and the app never reported a result.

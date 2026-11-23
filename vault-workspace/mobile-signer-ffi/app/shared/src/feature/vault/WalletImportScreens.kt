@@ -48,7 +48,7 @@ internal fun AddWalletSheet(onNew: () -> Unit, onImport: () -> Unit, onCancel: (
     ConfirmSheet(tag = "dialog_add_wallet", title = "เพิ่ม Wallet", body = "สร้างใหม่ หรือเปิด Wallet หลายกุญแจที่มีอยู่แล้ว", onCancel = onCancel) {
         SheetRow("สร้าง Wallet ใหม่", "เลือกนโยบายและกุญแจ", "cta_add_new", onClick = onNew)
         Spacer(modifier = Modifier.height(10.dp))
-        SheetRow("นำเข้า Wallet หลายกุญแจ", "จากไฟล์ BSMS หรือ descriptor", "cta_add_import", onClick = onImport)
+        SheetRow("นำเข้า Wallet หลายกุญแจ", "จากไฟล์ BSMS, QR หรือ descriptor", "cta_add_import", onClick = onImport)
     }
 }
 
@@ -63,7 +63,7 @@ internal fun ImportWalletSheet(onPick: () -> Unit, onScan: () -> Unit, onCancel:
     ) {
         SheetRow("เลือกไฟล์ BSMS/Descriptor", "ไฟล์ .bsms หรือไฟล์ descriptor จากแอปนี้หรือแอปอื่น", "cta_import_pick", onClick = onPick)
         Spacer(modifier = Modifier.height(10.dp))
-        SheetRow("สแกน QR", "QR ของไฟล์ BSMS หรือ descriptor จากแอปอื่น", "row_import_scan", onClick = onScan)
+        SheetRow("สแกน QR", "BSMS หรือ descriptor ภาพเดียวหรือหลายส่วน", "row_import_scan", onClick = onScan)
     }
 }
 

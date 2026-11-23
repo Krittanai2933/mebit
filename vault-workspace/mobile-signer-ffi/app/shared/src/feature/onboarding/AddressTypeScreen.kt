@@ -71,8 +71,8 @@ internal val AddressTypeRows = listOf(
     AddressTypeRow(AddressType.TAPROOT, "Taproot", "BIP86", "bc1p", "tb1p"),
 )
 
-/** Penpot 1.5.1's eyebrow, by the flow that reached the screen. */
-internal fun addressTypeEyebrow(imported: Boolean) = if (imported) "IMPORT WALLET · ADDRESS TYPE" else "NEW WALLET · ADDRESS TYPE"
+/** Penpot 1.6's eyebrow, by the flow that reached the screen. Only the create flow counts its steps. */
+internal fun addressTypeEyebrow(imported: Boolean) = if (imported) "IMPORT WALLET · ADDRESS TYPE" else "NEW WALLET · ADDRESS TYPE · ขั้น 3 / 4"
 
 /**
  * Whether "ต่อไป" shows the new key's fingerprint to write down (1.5.4): a Create with a passphrase whose words were verified since that

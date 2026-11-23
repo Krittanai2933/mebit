@@ -849,7 +849,6 @@ internal fun MebitNavHost(
                         quotes = quotes,
                         onReceive = { openReceive(WalletChoice.Spending(current.place)) },
                         onSend = { openSend(WalletChoice.Spending(current.place)) },
-                        onVault = { navigate(MovieRoute.Keyring) },
                         onHistory = { navigate(MovieRoute.S7History) },
                         onOpenTx = openTx,
                         onOpenCatalog = openCatalog,
