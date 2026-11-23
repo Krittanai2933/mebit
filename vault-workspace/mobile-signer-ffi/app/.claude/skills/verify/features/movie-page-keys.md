@@ -12,7 +12,7 @@ A user opens Add Key from the keyring's +, picks one of four cards, confirms a k
 
 ## How to get to it (user POV)
 
-- Catalog → ADD KEY, or the Keys tab → the + on the title row (`id:cta_keyring_add`). Home's upgrade card (`id:cta_s1_vault`) opens the keyring too.
+- Catalog → ADD KEY, or the Keys tab → the + on the title row (`id:cta_keyring_add`).
 - Hardware → จำลองรุ่นอื่น (Unsupported) → T13.
 - Confirm Key → ไม่ตรง · กลับไปเชื่อมต่อ (ไม่บันทึก) → back to the connect screen, or to the pairing screen for a key from another mebit. T14 opens only from the catalog row VERIFY KEY · Fingerprint ไม่ตรง.
 
