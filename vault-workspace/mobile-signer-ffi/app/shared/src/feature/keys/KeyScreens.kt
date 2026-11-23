@@ -450,9 +450,10 @@ private fun KeyCard(key: SavedKey, phone: String, item: DeleteItem, onOpen: () -
             Text(keyLine(key), color = MbSlate, fontSize = 11.sp, fontWeight = FontWeight.Light, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(start = 66.dp, top = 31.dp, end = 132.dp))
             Box(
                 modifier = Modifier.align(Alignment.TopEnd).padding(end = 46.dp, top = 19.dp).size(width = 72.dp, height = 24.dp).clip(CircleShape).background(if (key.verified) MbGreenWash else MbIconWash),
-                contentAlignment = Alignment.CenterStart,
+                // Centred, as Penpot 2.1 draws both labels.
+                contentAlignment = Alignment.Center,
             ) {
-                Text(keyBadge(key.verified), color = if (key.verified) MbSuccess else MbAmberInk, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 10.dp))
+                Text(keyBadge(key.verified), color = if (key.verified) MbSuccess else MbAmberInk, fontSize = 10.5.sp, fontWeight = FontWeight.Medium)
             }
         }
         // The dots end 18 dp inside the card's right edge, centred in their 44 dp target.
