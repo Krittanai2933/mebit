@@ -41,7 +41,6 @@ import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -65,7 +64,7 @@ import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.imageOfCard
-import com.mebit.app.plainTextClip
+import com.mebit.app.rememberCopier
 import com.mebit.app.rememberSharer
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_warning
@@ -86,7 +85,6 @@ import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbPage
 import com.mebit.app.ui.theme.MbWhite
 import kotlin.coroutines.cancellation.CancellationException
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 
@@ -219,24 +217,14 @@ private fun ReceiveLayout(
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
-    val clipboard = LocalClipboard.current
     val sharer = rememberSharer()
     val scope = rememberCoroutineScope()
     val pictureLayer = rememberGraphicsLayer()
     val frame = rememberGraphicsLayer()
     var choosing by remember { mutableStateOf(false) }
-    var copied by remember { mutableStateOf(false) }
-    LaunchedEffect(copied) {
-        if (copied) {
-            delay(1_500)
-            copied = false
-        }
-    }
-    val copyLabel = if (copied) "คัดลอกแล้ว" else "คัดลอกที่อยู่"
-    val copy = {
-        scope.launch { clipboard.setClipEntry(plainTextClip(address)) }
-        copied = true
-    }
+    val copier = rememberCopier()
+    val copyLabel = if (copier.copied == address) "คัดลอกแล้ว" else "คัดลอกที่อยู่"
+    val copy = { copier.copy(address) }
     val share = { send: suspend () -> Unit ->
         choosing = false
         scope.launch {

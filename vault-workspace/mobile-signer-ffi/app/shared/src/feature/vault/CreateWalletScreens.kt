@@ -32,7 +32,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,7 +43,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.SpanStyle
@@ -69,7 +67,7 @@ import com.mebit.app.feature.onboarding.AddressTypeRows
 import com.mebit.app.feature.onboarding.DEFAULT_BADGE
 import com.mebit.app.feature.onboarding.RadioRow
 import com.mebit.app.navigation.MovieRoute
-import com.mebit.app.plainTextClip
+import com.mebit.app.rememberCopier
 import com.mebit.app.rememberTextFileExport
 import com.mebit.app.safeShareName
 import com.mebit.app.ui.components.DebugLink
@@ -95,7 +93,6 @@ import com.mebit.app.ui.theme.MbWhite
 import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.walletDescriptorText
-import kotlinx.coroutines.launch
 
 /** What Penpot leaves under the primary button on every wizard board, so the button sits at y 732. */
 internal val BelowPrimary = 38.dp
@@ -412,8 +409,8 @@ fun ReviewScreen(
     val ready = draft.ready(keys)
     var descriptorOpen by remember { mutableStateOf(false) }
     val address = remember(ready?.descriptor) { ready?.let { draft.firstAddress(it) } }
-    // The box shows the BIP-389 form with its checksum, for reading only. The stored line stays as it is, and a key the core cannot read falls back to it.
-    val descriptor = remember(ready?.descriptor) { ready?.let { r -> runCatching { walletDescriptorText(r.descriptor, KeyNetwork.TEST) }.getOrDefault(r.descriptor) } }
+    // The box shows the BIP-389 form with its checksum, for reading only. The stored line stays as it is.
+    val descriptor = remember(ready?.descriptor) { ready?.let { r -> runCatching { walletDescriptorText(r.descriptor, KeyNetwork.TEST) }.getOrNull() } }
     MebitScreen(
         eyebrow = MovieRoute.Review.eyebrow,
         title = MovieRoute.Review.titleTh,
@@ -438,7 +435,7 @@ fun ReviewScreen(
         ReviewRowsCard(reviewRows(draft.preset, ready?.keys.orEmpty().map { it.label }))
         Spacer(modifier = Modifier.height(16.dp))
         if (descriptorOpen) {
-            descriptor?.let { DescriptorBox(it) }
+            if (ready != null) DescriptorBox(descriptor)
         } else {
             address?.let { FirstAddressCard(it) }
         }
@@ -447,18 +444,23 @@ fun ReviewScreen(
 
 @Composable
 private fun SummaryCard(name: String, preset: Preset) {
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(123.dp)
             .clip(RoundedCornerShape(24.dp))
             .background(MbNavy)
+            .padding(start = 22.dp, top = 20.dp, end = 22.dp, bottom = 17.dp)
             .testTag("review_summary"),
     ) {
-        Box(Modifier.offset(x = 22.dp, y = 25.dp).size(8.dp).background(MbBtcOrange, CircleShape))
-        Text("WALLET ที่จะสร้าง", color = MbWhite.copy(alpha = 0.7f), fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, modifier = Modifier.offset(x = 36.dp, y = 20.dp))
-        Text(reviewTitle(name, preset), color = MbWhite, fontSize = 18.sp, lineHeight = 26.sp, modifier = Modifier.padding(start = 22.dp, top = 52.dp, end = 22.dp).testTag("review_title"))
-        Text(reviewSub(preset), color = MbWhite.copy(alpha = 0.6f), fontSize = 11.5.sp, fontWeight = FontWeight.Light, lineHeight = 16.sp, modifier = Modifier.padding(start = 22.dp, top = 90.dp, end = 22.dp).testTag("review_sub"))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(8.dp).background(MbBtcOrange, CircleShape))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("WALLET ที่จะสร้าง", color = MbWhite.copy(alpha = 0.7f), fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp)
+        }
+        Spacer(modifier = Modifier.height(14.dp))
+        Text(reviewTitle(name, preset), color = MbWhite, fontSize = 18.sp, lineHeight = 26.sp, modifier = Modifier.testTag("review_title"))
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(reviewSub(preset), color = MbWhite.copy(alpha = 0.6f), fontSize = 11.5.sp, fontWeight = FontWeight.Light, lineHeight = 16.sp, modifier = Modifier.testTag("review_sub"))
     }
 }
 
@@ -491,9 +493,7 @@ private fun ReviewRowsCard(rows: List<String>) {
 @Composable
 private fun FirstAddressCard(address: String) {
     val shape = RoundedCornerShape(24.dp)
-    val clipboard = LocalClipboard.current
-    val scope = rememberCoroutineScope()
-    var copied by remember { mutableStateOf(false) }
+    val copier = rememberCopier()
     Row(
         modifier = Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(start = 18.dp, end = 18.dp, top = 14.dp, bottom = 14.dp).testTag("review_address_card"),
         verticalAlignment = Alignment.CenterVertically,
@@ -526,22 +526,22 @@ private fun FirstAddressCard(address: String) {
                 .height(30.dp)
                 .clip(RoundedCornerShape(14.dp))
                 .background(MbChip)
-                .clickable(role = Role.Button) {
-                    scope.launch { clipboard.setClipEntry(plainTextClip(address)) }
-                    copied = true
-                }
+                .clickable(role = Role.Button) { copier.copy(address) }
                 .padding(horizontal = 14.dp)
                 .testTag("cta_review_copy"),
             contentAlignment = Alignment.Center,
         ) {
-            Text(if (copied) "คัดลอกแล้ว" else "คัดลอก", color = MbNavy, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+            Text(if (copier.copied == address) "คัดลอกแล้ว" else "คัดลอก", color = MbNavy, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
 
-/** Penpot 3.4.1's box. [descriptor] is one unbroken string that wraps where the box ends, and the box grows with it. */
+/**
+ * Penpot 3.4.1's box. [descriptor] is one unbroken string that wraps where the box ends, and the box grows with it. Null when the core refused
+ * a key, and the box then says so rather than show the stored line, which has no key suffix and no checksum.
+ */
 @Composable
-private fun DescriptorBox(descriptor: String) {
+private fun DescriptorBox(descriptor: String?) {
     val shape = RoundedCornerShape(16.dp)
     Column(
         modifier = Modifier
@@ -555,7 +555,11 @@ private fun DescriptorBox(descriptor: String) {
     ) {
         Text(DESCRIPTOR_LABEL, color = MbSlate, fontSize = 9.5.sp, fontWeight = FontWeight.Light, lineHeight = 18.sp)
         Spacer(modifier = Modifier.height(8.dp))
-        Text(descriptor, color = MbNavyInk, fontSize = 12.sp, lineHeight = 16.2.sp)
+        if (descriptor != null) {
+            Text(descriptor, color = MbNavyInk, fontSize = 12.sp, lineHeight = 16.2.sp)
+        } else {
+            Text("มีกุญแจที่ mebit อ่านไม่ได้ จึงแสดง descriptor ไม่ได้", color = MbBody, fontSize = 12.sp, lineHeight = 16.2.sp, modifier = Modifier.testTag("review_descriptor_refused"))
+        }
     }
 }
 
