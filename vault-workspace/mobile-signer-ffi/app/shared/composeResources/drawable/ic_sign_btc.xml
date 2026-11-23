@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penpot 5.3.2's bitcoin mark in the address's orange circle: the white tilted B and its four serifs, from the board's own paths. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="14.826dp"
+    android:height="26.343dp"
+    android:viewportWidth="14.826"
+    android:viewportHeight="26.343">
+    <path
+        android:pathData="M4.49,5.002L10.494,6.498C16.497,7.998,15,14.002,11.498,13.838C15.335,15.502,13.672,22.17,7.001,20.51L0.997,19.01ZM6.493,8.338L5.828,11.006L9.163,11.838C11.831,12.502,12.497,9.834,9.828,9.17ZM5.162,13.674L4.33,17.01L7.666,17.842C11.001,18.67,11.833,15.338,8.497,14.506Z"
+        android:fillColor="#FFFFFF"
+        android:fillType="evenOdd"/>
+    <path
+        android:pathData="M7.823,2.998L7.158,5.67M11.826,3.998L11.161,6.666M3.665,19.678L3,22.346M7.668,20.674L7.003,23.342"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.4"/>
+</vector>
