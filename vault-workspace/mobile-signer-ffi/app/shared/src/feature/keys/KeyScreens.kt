@@ -1,6 +1,7 @@
 package com.mebit.app.feature.keys
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -16,6 +17,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -37,10 +39,11 @@ import com.mebit.app.data.fingerprintGroups
 import com.mebit.app.data.hardwareName
 import com.mebit.app.data.keyBadge
 import com.mebit.app.data.keyLine
-import com.mebit.app.data.keyMonogram
 import com.mebit.app.data.keyringOrder
-import com.mebit.app.getPlatform
 import com.mebit.app.resources.Res
+import com.mebit.app.resources.ic_jade_mark
+import com.mebit.app.resources.ic_mebit_mark
+import com.mebit.app.resources.ic_trezor_mark
 import com.mebit.app.resources.mebit_logo_dark
 import com.mebit.app.ui.components.TotalLine
 import com.mebit.app.ui.theme.MbAmberInk
@@ -382,7 +385,6 @@ fun KeyringScreen(
     onSettings: () -> Unit = {},
 ) {
     val keys = keyringOrder(store.keys)
-    val phone = remember { getPlatform().phoneMonogram }
     var deleting by remember { mutableStateOf<SavedKey?>(null) }
     var deleteFailed by remember { mutableStateOf(false) }
     MebitScreen(
@@ -414,7 +416,7 @@ fun KeyringScreen(
             Spacer(modifier = Modifier.height(12.dp))
         }
         keys.forEach { key ->
-            KeyCard(key, phone, deleteItem(key), onOpen = { deleteFailed = false }) { deleting = key }
+            KeyCard(key, deleteItem(key), onOpen = { deleteFailed = false }) { deleting = key }
             Spacer(modifier = Modifier.height(10.dp))
         }
     }
@@ -425,11 +427,25 @@ fun KeyringScreen(
 }
 
 /**
+ * The mark in a key's tile, [height] tall, as Penpot draws them since 2026-11-23: the mebit mark for a key on a phone, this one or another,
+ * else the Jade or Trezor logo.
+ */
+@Composable
+internal fun KeyLogo(source: KeySourceLabel, height: Dp) {
+    val (logo, widthPerHeight) = when (source) {
+        KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> Res.drawable.ic_mebit_mark to 24f / 23.6f
+        KeySourceLabel.Jade -> Res.drawable.ic_jade_mark to 1f
+        KeySourceLabel.TrezorSafe7 -> Res.drawable.ic_trezor_mark to 17f / 24.355f
+    }
+    Image(painterResource(logo), contentDescription = null, modifier = Modifier.height(height).aspectRatio(widthPerHeight))
+}
+
+/**
  * Penpot 2.1's key card, 62 dp high. Its texts merge into one node tagged `key_<id>`, which opens nothing. The ⋯ is that node's
  * sibling, not its child, so it stays an element of its own on both platforms.
  */
 @Composable
-private fun KeyCard(key: SavedKey, phone: String, item: DeleteItem, onOpen: () -> Unit, onDelete: () -> Unit) {
+private fun KeyCard(key: SavedKey, item: DeleteItem, onOpen: () -> Unit, onDelete: () -> Unit) {
     val shape = RoundedCornerShape(20.dp)
     Box(
         modifier = Modifier
@@ -442,8 +458,7 @@ private fun KeyCard(key: SavedKey, phone: String, item: DeleteItem, onOpen: () -
     ) {
         Box(Modifier.matchParentSize().semantics(mergeDescendants = true) {}.testTag("key_${key.id}")) {
             Box(Modifier.offset(x = 16.dp, y = 12.dp).size(38.dp).clip(RoundedCornerShape(12.dp)).background(MbIconWash), contentAlignment = Alignment.Center) {
-                val letters = keyMonogram(key.source, phone)
-                if (letters != null) Text(letters, color = MbNavy, fontSize = 10.5.sp, fontWeight = FontWeight.Bold) else HardwareLogo(key.source, 21.dp)
+                KeyLogo(key.source, 21.dp)
             }
             // 132 dp at the end is the ⋯, the pill and their gaps, so the texts are 164 dp wide on the board's 402 dp screen and end in … before the pill on a narrower one.
             Text(key.label, color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(start = 66.dp, top = 10.dp, end = 132.dp))

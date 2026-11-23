@@ -350,16 +350,6 @@ internal fun keySourceName(source: KeySourceLabel): String = when (source) {
 /** "Jade · 7f2c a91b": the source, then the fingerprint in groups of four. The sub line on Penpot 3.2 and 2.1. */
 internal fun keyLine(key: SavedKey): String = "${keySourceName(key.source)} · ${fingerprintGroups(key.fingerprint)}"
 
-/**
- * The letters in a key's tile on Penpot 2.1 and 5.2. [phone] is the phone's own text ([com.mebit.app.Platform.phoneMonogram]); "MB" for a
- * key from another mebit phone is a guess, no board draws it. Null for a Jade or a Trezor, whose tile holds its logo instead.
- */
-internal fun keyMonogram(source: KeySourceLabel, phone: String): String? = when (source) {
-    KeySourceLabel.ThisDevice -> phone
-    KeySourceLabel.MebitOther -> "MB"
-    KeySourceLabel.Jade, KeySourceLabel.TrezorSafe7 -> null
-}
-
 /** Pure. Unconfirmed keys first, as Penpot 6.2 has them, each group in keyring order. */
 internal fun keyringOrder(keys: List<SavedKey>): List<SavedKey> = keys.sortedBy { it.verified }
 

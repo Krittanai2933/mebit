@@ -52,7 +52,7 @@ import com.mebit.app.data.formatBtc
 import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.data.hardwareSource
 import com.mebit.app.data.notReadyLine
-import com.mebit.app.feature.keys.HardwareLogo
+import com.mebit.app.feature.keys.KeyLogo
 import com.mebit.app.feature.keys.PairingCodeBlock
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.theme.MbAmberInk
@@ -342,7 +342,7 @@ private fun DeviceCard(kind: WalletKind, keyName: String, fingerprint: String, s
         Modifier.fillMaxWidth().height(76.dp).clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)).background(MbChip), contentAlignment = Alignment.Center) { HardwareLogo(hardwareSource(kind), 26.dp) }
+        Box(Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)).background(MbChip), contentAlignment = Alignment.Center) { KeyLogo(hardwareSource(kind), 26.dp) }
         Spacer(modifier = Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(keyName, color = MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, lineHeight = 20.sp, maxLines = 1)

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penpot Organize > 2.1 and 3.6 > Settings button > Icon · settings (Lucide "settings"): the cog and its hub, 2 dp strokes. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M9.671,4.136C9.785,2.935 10.794,2.018 12,2.018C13.207,2.018 14.216,2.935 14.33,4.136C14.397,4.896 14.831,5.575 15.491,5.957C16.152,6.338 16.958,6.373 17.649,6.051C18.745,5.554 20.04,5.969 20.643,7.011C21.245,8.054 20.958,9.383 19.979,10.084C19.354,10.522 18.983,11.237 18.983,11.999C18.983,12.762 19.354,13.477 19.979,13.915C20.958,14.616 21.245,15.945 20.643,16.988C20.04,18.03 18.745,18.445 17.649,17.948C16.958,17.626 16.152,17.661 15.491,18.042C14.831,18.424 14.397,19.104 14.33,19.863C14.216,21.064 13.207,21.981 12,21.981C10.794,21.981 9.785,21.064 9.671,19.863C9.604,19.103 9.17,18.423 8.509,18.042C7.848,17.66 7.042,17.625 6.351,17.948C5.255,18.445 3.96,18.03 3.357,16.988C2.755,15.945 3.042,14.616 4.021,13.915C4.646,13.477 5.017,12.762 5.017,11.999C5.017,11.237 4.646,10.522 4.021,10.084C3.044,9.383 2.757,8.055 3.359,7.013C3.96,5.971 5.254,5.555 6.35,6.051C7.042,6.373 7.847,6.338 8.508,5.957C9.168,5.575 9.602,4.896 9.669,4.136"
+        android:strokeColor="#0E1116"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+    <path
+        android:pathData="M15,12a3,3 0,1 1,-6 0a3,3 0,1 1,6 0Z"
+        android:strokeColor="#0E1116"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+</vector>

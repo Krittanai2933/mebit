@@ -2,7 +2,6 @@ package com.mebit.app.data
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
 
 class KeyringTextTest {
     private fun key(id: String, verified: Boolean, source: KeySourceLabel = KeySourceLabel.Jade) =
@@ -16,14 +15,6 @@ class KeyringTextTest {
         assertEquals(emptyList(), keyringOrder(emptyList()))
     }
 
-    @Test
-    fun aTileReadsThePhonesTextForAKeyMadeHereMBForAnotherMebitPhoneAndNoLettersForADevice() {
-        assertEquals("iOS", keyMonogram(KeySourceLabel.ThisDevice, phone = "iOS"))
-        assertEquals("AND", keyMonogram(KeySourceLabel.ThisDevice, phone = "AND"))
-        assertEquals("MB", keyMonogram(KeySourceLabel.MebitOther, phone = "iOS"))
-        assertNull(keyMonogram(KeySourceLabel.Jade, phone = "iOS"))
-        assertNull(keyMonogram(KeySourceLabel.TrezorSafe7, phone = "AND"))
-    }
 
     @Test
     fun theCardsPillSaysConfirmedOrNot() {

@@ -47,7 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.SystemBack
 import com.mebit.app.data.KeySourceLabel
-import com.mebit.app.feature.keys.HardwareLogo
+import com.mebit.app.feature.keys.KeyLogo
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_close
 import com.mebit.app.resources.mebit_logo
@@ -281,7 +281,7 @@ internal fun PolicyCard(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(modifier = Modifier.size(28.dp).background(board.keyBadge, CircleShape), contentAlignment = Alignment.Center) {
-                            if (key.logo != null) HardwareLogo(key.logo, 15.dp) else Text("${i + 1}", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            if (key.logo != null) KeyLogo(key.logo, 15.dp) else Text("${i + 1}", color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         }
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {

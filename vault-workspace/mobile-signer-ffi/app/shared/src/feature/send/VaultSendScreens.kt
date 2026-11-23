@@ -53,16 +53,14 @@ import com.mebit.app.data.acceptsScan
 import com.mebit.app.data.enterDestination
 import com.mebit.app.data.formatBtc
 import com.mebit.app.data.formatBtcCompact
-import com.mebit.app.data.keyMonogram
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.data.sendIssue
 import com.mebit.app.data.vaultKey
 import com.mebit.app.data.xpubsIn
-import com.mebit.app.feature.keys.HardwareLogo
+import com.mebit.app.feature.keys.KeyLogo
 import com.mebit.app.feature.vault.deviceWord
 import com.mebit.app.feature.vault.vaultKeyRows
 import com.mebit.app.formatThaiTime
-import com.mebit.app.getPlatform
 import com.mebit.app.rememberCameraAvailable
 import com.mebit.app.ui.components.BottomActions
 import com.mebit.app.ui.components.KeyboardDismissBox
@@ -401,7 +399,6 @@ private fun KeyRows(send: VaultSend, signers: List<KeySigner>, keyring: List<Sav
     val vault = send.vault
     val texts = vaultKeyRows(vault, keyring)
     val xpubs = xpubsIn(vault.bsms)
-    val phone = remember { getPlatform().phoneMonogram }
     val shape = RoundedCornerShape(20.dp)
     Column(modifier = Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(horizontal = 14.dp)) {
         signers.forEachIndexed { i, signer ->
@@ -409,14 +406,14 @@ private fun KeyRows(send: VaultSend, signers: List<KeySigner>, keyring: List<Sav
             val source = vaultKey(vault, signer.index, xpubs.getOrNull(signer.index), keyring)?.source
             val signed = vault.keyFingerprints.getOrNull(signer.index)?.uppercase() in send.signedFingerprints
             val needed = !signed && send.needsKey(signer.index)
-            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp).testTag("m2_key_${signer.index}"), verticalAlignment = Alignment.CenterVertically) {
+            // Penpot 5.2 puts the 40 dp tile 13 dp under the divider above it and 14 dp over the next one.
+            Row(modifier = Modifier.fillMaxWidth().padding(top = 13.dp, bottom = 14.dp).testTag("m2_key_${signer.index}"), verticalAlignment = Alignment.CenterVertically) {
                 // Penpot 5.2's tile is 40 dp, so the name starts where the divider does.
                 Box(modifier = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(MbIconWash), contentAlignment = Alignment.Center) {
-                    val letters = if (source == null) "${signer.index + 1}" else keyMonogram(source, phone)
-                    if (letters != null) {
-                        Text(letters, color = if (signer is KeySigner.Phone) MbNavy else MbEyebrow, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
-                    } else if (source != null) {
-                        HardwareLogo(source, 22.dp)
+                    if (source != null) {
+                        KeyLogo(source, 22.dp)
+                    } else {
+                        Text("${signer.index + 1}", color = if (signer is KeySigner.Phone) MbNavy else MbEyebrow, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
                     }
                 }
                 Spacer(modifier = Modifier.width(12.dp))
