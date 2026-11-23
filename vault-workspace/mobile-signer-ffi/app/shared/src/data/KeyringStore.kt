@@ -350,28 +350,18 @@ internal fun keySourceName(source: KeySourceLabel): String = when (source) {
 /** "Jade · 7f2c a91b": the source, then the fingerprint in groups of four. The sub line on Penpot 3.2 and 2.1. */
 internal fun keyLine(key: SavedKey): String = "${keySourceName(key.source)} · ${fingerprintGroups(key.fingerprint)}"
 
-internal fun hardwareMonogram(source: KeySourceLabel): String = when (source) {
-    KeySourceLabel.Jade -> "JD"
-    KeySourceLabel.TrezorSafe7 -> "TRZ"
-    KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")
-}
-
-/** Penpot 2.1's text tile. [phone] is the phone's own text ([com.mebit.app.Platform.phoneMonogram]); "MB" for a key from another mebit phone is a guess, no board draws it. */
-internal fun keyMonogram(source: KeySourceLabel, phone: String): String = when (source) {
+/**
+ * The letters in a key's tile on Penpot 2.1 and 5.2. [phone] is the phone's own text ([com.mebit.app.Platform.phoneMonogram]); "MB" for a
+ * key from another mebit phone is a guess, no board draws it. Null for a Jade or a Trezor, whose tile holds its logo instead.
+ */
+internal fun keyMonogram(source: KeySourceLabel, phone: String): String? = when (source) {
     KeySourceLabel.ThisDevice -> phone
     KeySourceLabel.MebitOther -> "MB"
-    KeySourceLabel.Jade, KeySourceLabel.TrezorSafe7 -> hardwareMonogram(source)
+    KeySourceLabel.Jade, KeySourceLabel.TrezorSafe7 -> null
 }
 
 /** Pure. Unconfirmed keys first, as Penpot 6.2 has them, each group in keyring order. */
 internal fun keyringOrder(keys: List<SavedKey>): List<SavedKey> = keys.sortedBy { it.verified }
-
-/** Pure. Penpot 2.1's subtitle when every key is confirmed, 6.2's when some is not, and the empty keyring's line when there is none. */
-internal fun keyringSubtitle(keys: List<SavedKey>): String = when {
-    keys.isEmpty() -> "ยังไม่มีกุญแจในคลัง"
-    keys.all { it.verified } -> "${keys.size} กุญแจในคลัง · ยืนยันแล้วทั้งหมด"
-    else -> "${keys.size} กุญแจ · ยังไม่ยืนยัน ${keys.count { !it.verified }} ใบ (ขึ้นก่อน)"
-}
 
 /** Pure. The text of a Keyring card's pill. */
 internal fun keyBadge(confirmed: Boolean): String = if (confirmed) "ยืนยันแล้ว" else "ยังไม่ยืนยัน"

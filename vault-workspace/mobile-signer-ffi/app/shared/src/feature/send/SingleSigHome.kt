@@ -70,7 +70,6 @@ import com.mebit.app.data.SingleSigWallet
 import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.data.THIS_PHONE_KEY_NAME
 import com.mebit.app.data.fingerprintGroups
-import com.mebit.app.data.hardwareMonogram
 import com.mebit.app.data.hardwareSource
 import com.mebit.app.data.keySourceName
 import com.mebit.app.data.rememberFiatQuote
@@ -220,7 +219,7 @@ fun HardwareHomeScreen(
                     keyName,
                     "${keySourceName(source)} · ${AddressTypeRows.first { it.type == hw.addressType }.label} · ${fingerprintGroups(hw.fingerprint)}",
                     "key_fingerprint",
-                    badge = hardwareMonogram(source),
+                    logo = source,
                 ),
             ),
             expanded = keyDetails,

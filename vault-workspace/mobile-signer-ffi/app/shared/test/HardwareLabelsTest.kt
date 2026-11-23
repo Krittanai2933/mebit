@@ -22,12 +22,6 @@ class HardwareLabelsTest {
     }
 
     @Test
-    fun aJadeIsJDAndASafe7IsTRZ() {
-        assertEquals("JD", hardwareMonogram(KeySourceLabel.Jade))
-        assertEquals("TRZ", hardwareMonogram(KeySourceLabel.TrezorSafe7))
-    }
-
-    @Test
     fun aRealDeviceStartsAsMineAndADemoOneAsSimulated() {
         assertEquals("Jade ของฉัน", defaultKeyLabel(KeySourceLabel.Jade, isMock = false))
         assertEquals("Trezor Safe 7 ของฉัน", defaultKeyLabel(KeySourceLabel.TrezorSafe7, isMock = false))

@@ -231,6 +231,15 @@ fun TwoPhonesMark() = Box(Modifier.size(44.dp)) {
     Box(Modifier.offset(21.dp, 19.5.dp).size(2.dp, 4.dp).background(MbBtcOrange))
 }
 
+/** "รวมทั้งหมด" in Light 13.5 MbBody, then [total] in SemiBold 14.5 MbNavyInk: the line under the title on Penpot 3.6 and 2.1. */
+@Composable
+fun TotalLine(total: String, tag: String) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp).testTag(tag)) {
+        Text("รวมทั้งหมด", color = MbBody, fontSize = 13.5.sp, fontWeight = FontWeight.Light)
+        Text(total, color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
 /** Penpot's mark for a hardware wallet: a device outline with an orange light. */
 @Composable
 fun HardwareMark() = Box(Modifier.size(44.dp)) {

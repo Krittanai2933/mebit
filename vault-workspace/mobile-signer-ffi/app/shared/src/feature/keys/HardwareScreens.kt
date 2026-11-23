@@ -1,6 +1,7 @@
 package com.mebit.app.feature.keys
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -58,12 +60,14 @@ import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.SavedKey
 import com.mebit.app.data.ScanProblem
 import com.mebit.app.data.hardwareKind
-import com.mebit.app.data.hardwareMonogram
 import com.mebit.app.data.hardwareSource
 import com.mebit.app.data.oneKeyPath
 import com.mebit.app.feature.onboarding.AddressTypeRows
 import com.mebit.app.rememberBluetoothSettingsOpener
 import com.mebit.app.rememberTestMode
+import com.mebit.app.resources.Res
+import com.mebit.app.resources.ic_jade_mark
+import com.mebit.app.resources.ic_trezor_mark
 import com.mebit.app.ui.components.IssueBanner
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.SecondaryCta
@@ -85,6 +89,7 @@ import com.mebit.ffi.signer.WalletKind
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.painterResource
 
 private val DeviceRowFill = Color(0xFFFFF8EF)
 private val RadarOff = Color(0xFFC9CED6)
@@ -254,7 +259,7 @@ fun HardwareWalletScreen(
             DeviceList {
                 when {
                     bluetoothOff -> DeviceRow(
-                        monogram = null,
+                        icon = { BluetoothGlyph(MbNavy, 1.8.dp, 8.dp, 14.dp) },
                         title = "Bluetooth ปิดอยู่",
                         sub = "แตะ เปิด เพื่อค้นหาอุปกรณ์",
                         action = "เปิด",
@@ -265,7 +270,7 @@ fun HardwareWalletScreen(
                     found.isNotEmpty() -> found.forEach { wallet ->
                         val reaching = connecting == wallet && wallet.kind == WalletKind.TREZOR_SAFE7
                         DeviceRow(
-                            monogram = hardwareMonogram(hardwareSource(wallet.kind)),
+                            icon = { HardwareLogo(hardwareSource(wallet.kind), 18.dp) },
                             title = wallet.name,
                             sub = if (reaching && card != null) safe7RowLine(card) else "พบใกล้ ๆ",
                             action = if (reaching) "ยกเลิก" else "เชื่อม",
@@ -375,7 +380,13 @@ fun T13UnsupportedModelScreen(
             )
             DeviceList {
                 DeviceRow(
-                    monogram = if (model?.startsWith("Trezor") == true) hardwareMonogram(KeySourceLabel.TrezorSafe7) else "?",
+                    icon = {
+                        if (model?.startsWith("Trezor") == true) {
+                            HardwareLogo(KeySourceLabel.TrezorSafe7, 18.dp)
+                        } else {
+                            Text("?", color = MbEyebrow, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    },
                     title = name,
                     sub = "ไม่รองรับ",
                     action = "ปิด",
@@ -562,10 +573,21 @@ private fun DeviceList(rows: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxWidth().heightIn(min = 52.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = rows)
 }
 
-/** A null [monogram] draws the Bluetooth rune in its place. */
+/** Penpot's "Logo · Jade mark" or "Logo · Trezor mark", [height] tall, for the middle of a key's tile. Only a Jade or a Trezor has one. */
+@Composable
+internal fun HardwareLogo(source: KeySourceLabel, height: Dp) {
+    val (logo, widthPerHeight) = when (source) {
+        KeySourceLabel.Jade -> Res.drawable.ic_jade_mark to 1f
+        KeySourceLabel.TrezorSafe7 -> Res.drawable.ic_trezor_mark to 17f / 24.355f
+        KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> error("not hardware")
+    }
+    Image(painterResource(logo), contentDescription = null, modifier = Modifier.height(height).aspectRatio(widthPerHeight))
+}
+
+/** [icon] fills the row's 32 dp tile: the Bluetooth rune, a device's logo, or a ? for a model mebit does not support. */
 @Composable
 private fun DeviceRow(
-    monogram: String?,
+    icon: @Composable () -> Unit,
     title: String,
     sub: String,
     action: String,
@@ -578,13 +600,7 @@ private fun DeviceRow(
         Modifier.fillMaxWidth().height(52.dp).clip(shape).background(DeviceRowFill).border(1.5.dp, MbBtcOrange, shape).padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(32.dp).background(MbIconWash, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
-            if (monogram != null) {
-                Text(monogram, color = MbEyebrow, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            } else {
-                BluetoothGlyph(MbNavy, 1.8.dp, 8.dp, 14.dp)
-            }
-        }
+        Box(Modifier.size(32.dp).background(MbIconWash, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) { icon() }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(title, color = MbNavyInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.4.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)

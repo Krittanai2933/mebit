@@ -1,5 +1,6 @@
 package com.mebit.app.feature.keys
 
+import androidx.compose.foundation.Image
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,13 +39,14 @@ import com.mebit.app.data.keyBadge
 import com.mebit.app.data.keyLine
 import com.mebit.app.data.keyMonogram
 import com.mebit.app.data.keyringOrder
-import com.mebit.app.data.keyringSubtitle
 import com.mebit.app.getPlatform
+import com.mebit.app.resources.Res
+import com.mebit.app.resources.mebit_logo_dark
+import com.mebit.app.ui.components.TotalLine
 import com.mebit.app.ui.theme.MbAmberInk
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbChip
-import com.mebit.app.ui.theme.MbEyebrow
 import com.mebit.app.ui.theme.MbGreenWash
 import com.mebit.app.ui.theme.MbIconWash
 import com.mebit.app.ui.theme.MbNavy
@@ -88,6 +90,7 @@ import com.mebit.app.ui.components.SettingsGear
 import com.mebit.app.ui.components.TwoPhonesMark
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
+import org.jetbrains.compose.resources.painterResource
 
 /** Longest key name Confirm Key takes, so a pasted paragraph cannot stretch the keyring rows. */
 private const val KEY_NAME_MAX = 40
@@ -383,35 +386,33 @@ fun KeyringScreen(
     var deleting by remember { mutableStateOf<SavedKey?>(null) }
     var deleteFailed by remember { mutableStateOf(false) }
     MebitScreen(
-        eyebrow = MovieRoute.Keyring.eyebrow,
+        eyebrow = null,
         // The title is drawn below so the + shares its row, as on the board.
         title = null,
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         tag = "screen_keys/keyring",
-        // Penpot 2.1 puts the gear where 3.6 does, over the +.
+        // Penpot 2.1's header is 3.6's: the logo, the gear over the +, both ending 29 dp from the screen's right edge, and the total line.
+        headerContent = {
+            Image(painterResource(Res.drawable.mebit_logo_dark), contentDescription = "mebit", modifier = Modifier.size(width = 74.dp, height = 19.dp))
+        },
         trailing = { SettingsGear(onSettings, Modifier.padding(end = 9.dp)) },
     ) {
         Spacer(modifier = Modifier.height(3.dp))
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text(MovieRoute.Keyring.titleTh, color = MbNavyInk, fontSize = 28.sp, fontWeight = FontWeight.Medium, lineHeight = 34.sp, modifier = Modifier.weight(1f).testTag("title"))
-            // Penpot 2.1 ends the + 1 dp inside the screen's padding, where 1.8 ends it 9 dp past.
-            PlusButton("cta_keyring_add", "เพิ่มกุญแจ", onAddKey, Modifier.padding(end = 1.dp))
+            PlusButton("cta_keyring_add", "เพิ่มกุญแจ", onAddKey, Modifier.padding(end = 9.dp))
         }
-        Spacer(modifier = Modifier.height(12.dp))
-        Text(
-            keyringSubtitle(keys),
-            color = MbBody,
-            fontSize = 13.5.sp,
-            fontWeight = FontWeight.Light,
-            lineHeight = 20.sp,
-            modifier = Modifier.testTag(if (keys.isEmpty()) "keyring_empty" else "keyring_subtitle"),
-        )
+        if (keys.isEmpty()) {
+            Text("ยังไม่มีกุญแจในคลัง", color = MbBody, fontSize = 13.5.sp, fontWeight = FontWeight.Light, modifier = Modifier.padding(top = 4.dp).testTag("keyring_empty"))
+        } else {
+            TotalLine("${keys.size} กุญแจ", "keyring_total")
+        }
+        Spacer(modifier = Modifier.height(16.dp))
         if (deleteFailed) {
-            Spacer(modifier = Modifier.height(8.dp))
             Text("ลบกุญแจไม่สำเร็จ ลองอีกครั้ง", color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.testTag("delete_failed"))
+            Spacer(modifier = Modifier.height(12.dp))
         }
-        Spacer(modifier = Modifier.height(29.dp))
         keys.forEach { key ->
             KeyCard(key, phone, deleteItem(key), onOpen = { deleteFailed = false }) { deleting = key }
             Spacer(modifier = Modifier.height(10.dp))
@@ -430,7 +431,6 @@ fun KeyringScreen(
 @Composable
 private fun KeyCard(key: SavedKey, phone: String, item: DeleteItem, onOpen: () -> Unit, onDelete: () -> Unit) {
     val shape = RoundedCornerShape(20.dp)
-    val hardware = key.source == KeySourceLabel.Jade || key.source == KeySourceLabel.TrezorSafe7
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -442,7 +442,8 @@ private fun KeyCard(key: SavedKey, phone: String, item: DeleteItem, onOpen: () -
     ) {
         Box(Modifier.matchParentSize().semantics(mergeDescendants = true) {}.testTag("key_${key.id}")) {
             Box(Modifier.offset(x = 16.dp, y = 12.dp).size(38.dp).clip(RoundedCornerShape(12.dp)).background(MbIconWash), contentAlignment = Alignment.Center) {
-                Text(keyMonogram(key.source, phone), color = if (hardware) MbEyebrow else MbNavy, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                val letters = keyMonogram(key.source, phone)
+                if (letters != null) Text(letters, color = MbNavy, fontSize = 10.5.sp, fontWeight = FontWeight.Bold) else HardwareLogo(key.source, 21.dp)
             }
             // 132 dp at the end is the ⋯, the pill and their gaps, so the texts are 164 dp wide on the board's 402 dp screen and end in … before the pill on a narrower one.
             Text(key.label, color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(start = 66.dp, top = 10.dp, end = 132.dp))
