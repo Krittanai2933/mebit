@@ -50,6 +50,7 @@ import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbChip
 import com.mebit.app.ui.theme.MbEyebrow
+import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbWhite
 
 /** A card's ⋯ menu holds one delete item: live, or greyed with the reason it cannot run. */
@@ -120,9 +121,9 @@ private fun DeleteMenu(tagSuffix: String, label: String, item: DeleteItem, extra
                 modifier = Modifier.fillMaxWidth().height(52.dp).clickable(role = Role.Button, onClick = extra.onClick).testTag(extra.tag).padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Aligned with the delete label, which follows an 18 dp icon and a 10 dp gap.
+                // Aligned with the delete label, which follows an 18 dp icon and a 10 dp gap. Navy, as Penpot 1.8.A3 draws ส่งออก Wallet: only delete is orange.
                 Spacer(Modifier.width(28.dp))
-                Text(extra.label, color = MbEyebrow, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(extra.label, color = MbNavy, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(MbBorder))
         }
