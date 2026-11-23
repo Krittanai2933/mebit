@@ -244,9 +244,12 @@ fn read(text: &str, network: KeyNetwork) -> Result<WalletImport, WalletFileRead>
     if let Some(stated) = &stated
         && !stated.eq_ignore_ascii_case(&shape.first_address)
     {
-        if form == NUNCHUK_FORM {
-            // Read as Nunchuk means it, the keys give another first address: perhaps a single-chain wallet, which
-            // the app cannot hold, so it is refused without calling the file changed.
+        // The keys read as Nunchuk means them give another first address. When they give the stated one read
+        // literally, the file is a single-chain wallet, which the app cannot hold but nobody changed.
+        if form == NUNCHUK_FORM
+            && single_chain_first_address(&descriptor, network)
+                .is_some_and(|address| address.eq_ignore_ascii_case(stated))
+        {
             return Err(WalletFileRead::Unsupported {
                 found: format!("key suffix {NUNCHUK_FORM}"),
             });
@@ -292,6 +295,18 @@ fn with_suffix(
     )
     .unwrap_or_else(|e| match e {});
     Ok((text, shape))
+}
+
+/// Receive address 0 of the stored-form `descriptor` with each key ending in [`NUNCHUK_FORM`], one chain and no change chain.
+fn single_chain_first_address(descriptor: &str, network: KeyNetwork) -> Option<String> {
+    let (text, _) = with_suffix(descriptor, network, NUNCHUK_FORM).ok()?;
+    let parsed = Descriptor::<DescriptorPublicKey>::from_str(&text).ok()?;
+    let address = parsed
+        .at_derivation_index(0)
+        .ok()?
+        .address(network.bitcoin())
+        .ok()?;
+    Some(address.to_string())
 }
 
 /// The BIP-129 record of a stored-form wallet: header, template with the BIP-129 key suffix, the path restriction line, receive address 0.
@@ -679,14 +694,53 @@ mod tests {
         assert_eq!(got.stated_address, Some(first));
     }
 
+    /// Receive address 0 of `text` as written, each key's bare star taken literally.
+    fn literal_first_address(text: &str) -> String {
+        Descriptor::<DescriptorPublicKey>::from_str(text)
+            .unwrap()
+            .at_derivation_index(0)
+            .unwrap()
+            .address(bitcoin::Network::Testnet4)
+            .unwrap()
+            .to_string()
+    }
+
     #[test]
-    fn a_bare_star_reads_only_from_a_nunchuk_style_record_whose_address_agrees() {
+    fn a_nunchuk_style_record_whose_address_neither_reading_gives_may_have_been_changed() {
+        let stored = two_of_three();
+        let star = with(&stored, "/*");
+        let other = address(&multisig(2, &[0, 1]));
+        let record = format!("BSMS 1.0\n{star}\nNo path restrictions\n{other}");
+        assert_eq!(
+            wallet_file_read(record, NET),
+            WalletFileRead::AddressMismatch {
+                stated: other,
+                derived: address(&stored),
+            }
+        );
+    }
+
+    #[test]
+    fn a_nunchuk_style_record_of_a_single_chain_wallet_is_unsupported_not_changed() {
+        let stored = two_of_three();
+        let star = with(&stored, "/*");
+        let single_chain = literal_first_address(&star);
+        assert_ne!(single_chain, address(&stored));
+        let record = format!("BSMS 1.0\n{star}\nNo path restrictions\n{single_chain}");
+        assert_eq!(
+            wallet_file_read(record, NET),
+            WalletFileRead::Unsupported {
+                found: "key suffix /*".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_bare_star_reads_only_from_a_nunchuk_style_record() {
         let stored = two_of_three();
         let first = address(&stored);
         let star = with(&stored, "/*");
-        let other = address(&multisig(2, &[0, 1]));
         for text in [
-            format!("BSMS 1.0\n{star}\nNo path restrictions\n{other}"),
             format!("BSMS 1.0\n{star}\nNo path restrictions"),
             format!("BSMS 1.0\n{star}\n/0/*,/1/*\n{first}"),
             star.clone(),
