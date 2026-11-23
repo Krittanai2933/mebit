@@ -409,8 +409,8 @@ fun ReviewScreen(
     val ready = draft.ready(keys)
     var descriptorOpen by remember { mutableStateOf(false) }
     val address = remember(ready?.descriptor) { ready?.let { draft.firstAddress(it) } }
-    // The box shows the BIP-389 form with its checksum, for reading only. The stored line stays as it is, and a key the core cannot read falls back to it.
-    val descriptor = remember(ready?.descriptor) { ready?.let { r -> runCatching { walletDescriptorText(r.descriptor, KeyNetwork.TEST) }.getOrDefault(r.descriptor) } }
+    // The box shows the BIP-389 form with its checksum, for reading only. The stored line stays as it is.
+    val descriptor = remember(ready?.descriptor) { ready?.let { r -> runCatching { walletDescriptorText(r.descriptor, KeyNetwork.TEST) }.getOrNull() } }
     MebitScreen(
         eyebrow = MovieRoute.Review.eyebrow,
         title = MovieRoute.Review.titleTh,
@@ -435,7 +435,7 @@ fun ReviewScreen(
         ReviewRowsCard(reviewRows(draft.preset, ready?.keys.orEmpty().map { it.label }))
         Spacer(modifier = Modifier.height(16.dp))
         if (descriptorOpen) {
-            descriptor?.let { DescriptorBox(it) }
+            if (ready != null) DescriptorBox(descriptor)
         } else {
             address?.let { FirstAddressCard(it) }
         }
@@ -531,9 +531,12 @@ private fun FirstAddressCard(address: String) {
     }
 }
 
-/** Penpot 3.4.1's box. [descriptor] is one unbroken string that wraps where the box ends, and the box grows with it. */
+/**
+ * Penpot 3.4.1's box. [descriptor] is one unbroken string that wraps where the box ends, and the box grows with it. Null when the core refused
+ * a key, and the box then says so rather than show the stored line, which has no key suffix and no checksum.
+ */
 @Composable
-private fun DescriptorBox(descriptor: String) {
+private fun DescriptorBox(descriptor: String?) {
     val shape = RoundedCornerShape(16.dp)
     Column(
         modifier = Modifier
@@ -547,7 +550,11 @@ private fun DescriptorBox(descriptor: String) {
     ) {
         Text(DESCRIPTOR_LABEL, color = MbSlate, fontSize = 9.5.sp, fontWeight = FontWeight.Light, lineHeight = 18.sp)
         Spacer(modifier = Modifier.height(8.dp))
-        Text(descriptor, color = MbNavyInk, fontSize = 12.sp, lineHeight = 16.2.sp)
+        if (descriptor != null) {
+            Text(descriptor, color = MbNavyInk, fontSize = 12.sp, lineHeight = 16.2.sp)
+        } else {
+            Text("มีกุญแจที่ mebit อ่านไม่ได้ จึงแสดง descriptor ไม่ได้", color = MbBody, fontSize = 12.sp, lineHeight = 16.2.sp, modifier = Modifier.testTag("review_descriptor_refused"))
+        }
     }
 }
 
