@@ -4,7 +4,7 @@ A tap on a transaction row on Home or on the history screen opens that transacti
 
 ## Sub-features
 
-- `mp-s8-open` A tap on a Home row (`home_tx_N`) or a history row (`history_tx_N`) opens S8 (`screen_send/s8`) for that transaction, and `back` or กลับ (`cta_s8_back`) returns to the screen it came from.
+- `mp-s8-open` A tap on a Home row (`home_tx_N`) or a history row (`history_tx_N`) opens S8 (`screen_send/s8`) for that transaction, and `back` or กลับ (`cta_s8_back`) returns to the screen it came from. A row of a several-key wallet's detail (`vault_tx_N`) or of its history opens the same screen as `screen_vaults/tx`, under that wallet's name. Boards 3.7.2 and 3.7.3 draw this screen differently (open item 114).
 - `mp-s8-header` The navy header shows the direction (`tx_direction`), the amount (`tx_amount`), its baht value now once a price arrived (`tx_fiat`) and a TESTNET pill (`tx_testnet`). A send shows the net with รวมค่าธรรมเนียม (`tx_amount_note`) until its detail loads, and then the amount that reached the destination. A send with another party's input keeps the net with รวมค่าธรรมเนียม.
 - `mp-s8-status` The status card (`tx_status`) reads ยังไม่ยืนยัน or ยืนยันแล้ว (`tx_status_title`), the count and, once loaded, the block (`tx_confirmations`), six segments up to six confirmations (`tx_progress`) and a hint (`tx_status_hint`). A pending send says ไม่ต้องทำอะไร และอย่าส่งซ้ำ and, once loaded, the rate it pays.
 - `mp-s8-where` The date (`tx_date`) of a confirmed transaction, and once loaded the destination of a send the wallet paid alone under ส่งไปที่ or the wallet's own address of a receive under เข้าที่อยู่ของคุณ (`tx_address_N`), grouped by four, each with a copy button (`cta_s8_copy_address_N`).

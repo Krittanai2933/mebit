@@ -40,6 +40,13 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.time.Clock
 
+/** [read]'s answer as the detail screen's: Loaded, NotFound when the explorer does not know the txid, or Failed with the core's message. */
+internal inline fun detailLoad(read: () -> HotTxDetail?): TxDetailLoad.Done = try {
+    read()?.let { TxDetailLoad.Loaded(it) } ?: TxDetailLoad.NotFound
+} catch (e: Exception) {
+    TxDetailLoad.Failed(e.message ?: e.toString())
+}
+
 /**
  * What Home 4.1, Receive, Send and the slip 4.6 read of a one-key wallet, whichever signs its payments: [SingleSigWallet] for the
  * phone's own key, [DescribedWallet] for a Jade or a Safe 7. Read state only; each says how to refresh it and how to pay.
@@ -219,11 +226,7 @@ class DescribedWallet internal constructor(
 
     /** What the detail screen knows of [txid] beyond its row. Writes no wallet state, because the screen owns the answer. */
     suspend fun detail(txid: String): TxDetailLoad.Done = withContext(io) {
-        try {
-            core.detail(wallet.descriptor, KeyNetwork.TEST, txid)?.let { TxDetailLoad.Loaded(it) } ?: TxDetailLoad.NotFound
-        } catch (e: Exception) {
-            TxDetailLoad.Failed(e.message ?: e.toString())
-        }
+        detailLoad { core.detail(wallet.descriptor, KeyNetwork.TEST, txid) }
     }
 
     /** The Send screen's fee tiers, the fixed ones when the network cannot be reached. */

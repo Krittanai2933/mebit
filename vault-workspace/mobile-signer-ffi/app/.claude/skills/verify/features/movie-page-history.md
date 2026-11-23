@@ -4,9 +4,9 @@ The history screen lists every transaction the wallet loaded, newest first. Each
 
 ## Sub-features
 
-- `mp-s7-link` Home shows ดูทั้งหมด (`cta_s1_history`) right of ธุรกรรมล่าสุด only when more than four transactions loaded, and the link opens S7.
+- `mp-s7-link` Home shows ดูทั้งหมด (`cta_s1_history`) right of ธุรกรรมล่าสุด only when more than four transactions loaded, and the link opens S7. While a pull refreshes, the link stays, left of กำลังอัปเดต…. A several-key wallet's detail has the same link (`cta_vault_history`), which opens S7 for that wallet (`screen_vaults/history`).
 - `mp-s7-list` S7 (`screen_send/s7`) lists every loaded transaction as a Home row, with `history_tx_0` the newest.
-- `mp-s7-empty` S7 shows ยังไม่มีธุรกรรม (`history_empty`) for a wallet that loaded no transactions, the demo wallet included.
+- `mp-s7-empty` S7 shows ยังไม่มีธุรกรรม (`history_empty`) for a wallet that loaded no transactions, the demo wallet included. A several-key wallet whose history no read answered shows ยังดึงธุรกรรมไม่ได้ในตอนนี้ in its place.
 
 ## How to get to it (user POV)
 
