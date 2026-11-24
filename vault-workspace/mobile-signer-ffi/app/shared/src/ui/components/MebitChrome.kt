@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -52,7 +51,6 @@ import com.mebit.app.rememberTestMode
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_settings
 import com.mebit.app.ui.theme.MbBody
-import com.mebit.app.ui.theme.MbBtcOrange
 import com.mebit.app.ui.theme.MbChip
 import com.mebit.app.ui.theme.MbEyebrow
 import com.mebit.app.ui.theme.MbGold
@@ -204,12 +202,6 @@ fun SettingsGear(onClick: () -> Unit, modifier: Modifier = Modifier) {
     }
 }
 
-/** Penpot's mark for a key on this phone: one phone outline, for [OptionCard]'s leading slot. */
-@Composable
-fun PhoneMark() = Box(Modifier.size(44.dp)) {
-    Box(Modifier.offset(15.dp, 10.dp).size(15.dp, 23.dp).border(2.dp, MbNavy, RoundedCornerShape(4.dp)))
-}
-
 /** "รวมทั้งหมด" in Light 13.5 MbBody, then [total] in SemiBold 14.5 MbNavyInk: the line under the title on Penpot 3.6 and 2.1. */
 @Composable
 fun TotalLine(total: String, tag: String) {
@@ -218,13 +210,6 @@ fun TotalLine(total: String, tag: String) {
         Text("รวมทั้งหมด", color = MbBody, fontSize = 13.5.sp, fontWeight = FontWeight.Light, modifier = Modifier.widthIn(min = 80.dp))
         Text(total, color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
     }
-}
-
-/** Penpot's mark for a hardware wallet: a device outline with an orange light. */
-@Composable
-fun HardwareMark() = Box(Modifier.size(44.dp)) {
-    Box(Modifier.offset(11.dp, 16.dp).size(22.dp, 14.dp).border(2.dp, MbNavy, RoundedCornerShape(3.dp)))
-    Box(Modifier.offset(27.dp, 21.dp).size(5.dp).background(MbBtcOrange, CircleShape))
 }
 
 @Composable
