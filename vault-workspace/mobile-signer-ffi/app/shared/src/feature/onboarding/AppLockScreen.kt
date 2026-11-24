@@ -45,6 +45,7 @@ import com.mebit.app.resources.face_id
 import com.mebit.app.resources.ic_check
 import com.mebit.app.resources.ic_shield_check
 import com.mebit.app.ui.components.BottomActions
+import com.mebit.app.ui.components.LocalCovered
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbEyebrow
@@ -118,9 +119,14 @@ fun AppLockScreen(
         }
     }
 
-    // The unlock screen asks for Face ID as soon as it shows.
-    LaunchedEffect(mode) {
-        if (mode == LockMode.Unlock) scan(allowPasscode = false)
+    // The unlock screen asks for Face ID as soon as it shows, and again once the no-screen-lock block lifts, never under it: with no
+    // lock the phone could only answer Unavailable, and that line would still show after the lock is back.
+    val covered = LocalCovered.current
+    LaunchedEffect(mode, covered) {
+        if (mode == LockMode.Unlock && !covered) {
+            unavailable = false
+            scan(allowPasscode = false)
+        }
     }
 
     val passcodeOnly = failed && attemptsLeft <= 0
