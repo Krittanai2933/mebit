@@ -16,9 +16,8 @@ internal fun stackAfterOpen(stack: List<Stop>, stop: Stop): List<Stop> = when {
     else -> stack + stop
 }
 
-/** The two sides of each รับ / ส่ง switch: a chooser's, and a phone, hardware or several-key wallet's Receive (or its backup gate) and Send. */
+/** The two sides of each รับ / ส่ง switch: a phone, hardware or several-key wallet's Receive (or its backup gate) and Send. */
 private val SwitchSides = listOf(
-    setOf(MovieRoute.ChooseWalletReceive, MovieRoute.ChooseWalletSend),
     setOf(MovieRoute.S2ReceiveBackupGate, MovieRoute.S3Receive, MovieRoute.S4Send),
     setOf(MovieRoute.HardwareReceive, MovieRoute.HardwareSend),
     setOf(MovieRoute.VaultReceive, MovieRoute.M1SendVault),

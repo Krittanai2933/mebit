@@ -86,9 +86,11 @@ internal enum class WalletBoard(
     val keyRowBottom: Dp,
     val keyListTop: Dp,
     val keyListBottom: Dp,
+    /** The key list's bottom over a footer. 3.7.1's backup row puts its divider 8 dp under the last key. Home's เปลี่ยน PIN link, on no board, sits as with no footer. */
+    val keyListOverFooter: Dp,
 ) {
-    Home(eyebrowAlpha = 1f, outlineAlpha = 0.28f, ring = false, keyBadge = MbChip, keyRowHeight = 63.dp, keyRowBottom = 10.dp, keyListTop = 0.dp, keyListBottom = 0.dp),
-    Detail(eyebrowAlpha = 0.72f, outlineAlpha = 0.20f, ring = true, keyBadge = MbDisabledFill, keyRowHeight = 48.dp, keyRowBottom = 0.dp, keyListTop = 3.dp, keyListBottom = 12.dp),
+    Home(eyebrowAlpha = 1f, outlineAlpha = 0.28f, ring = false, keyBadge = MbChip, keyRowHeight = 63.dp, keyRowBottom = 10.dp, keyListTop = 0.dp, keyListBottom = 0.dp, keyListOverFooter = 0.dp),
+    Detail(eyebrowAlpha = 0.72f, outlineAlpha = 0.20f, ring = true, keyBadge = MbDisabledFill, keyRowHeight = 48.dp, keyRowBottom = 0.dp, keyListTop = 3.dp, keyListBottom = 12.dp, keyListOverFooter = 8.dp),
 }
 
 /**
@@ -249,7 +251,7 @@ internal fun PolicyCard(
     keys: List<KeyRowText>,
     expanded: Boolean,
     onToggle: () -> Unit,
-    footer: @Composable ColumnScope.() -> Unit = {},
+    footer: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val card = RoundedCornerShape(16.dp)
     Column(modifier = Modifier.fillMaxWidth().clip(card).background(MbWhite).border(1.dp, MbBorder, card).testTag("key_status")) {
@@ -274,7 +276,7 @@ internal fun PolicyCard(
         }
         if (expanded) {
             Box(modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth().height(1.dp).background(MbBorder))
-            Column(modifier = Modifier.padding(top = board.keyListTop, bottom = board.keyListBottom)) {
+            Column(modifier = Modifier.padding(top = board.keyListTop, bottom = if (footer == null) board.keyListBottom else board.keyListOverFooter)) {
                 keys.forEachIndexed { i, key ->
                     Row(
                         modifier = Modifier.fillMaxWidth().height(board.keyRowHeight).padding(start = 22.dp, end = 22.dp, bottom = board.keyRowBottom),
@@ -298,7 +300,7 @@ internal fun PolicyCard(
                     }
                 }
             }
-            footer()
+            footer?.invoke(this)
         }
     }
 }

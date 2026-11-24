@@ -35,7 +35,6 @@ class BottomBarRoutesTest {
             MovieRoute.S3Receive,
             MovieRoute.HardwareReceive,
             MovieRoute.ChooseWalletReceive,
-            MovieRoute.ChooseWalletSend,
         ).forEach { assertNull(it.bar, it.name) }
     }
 

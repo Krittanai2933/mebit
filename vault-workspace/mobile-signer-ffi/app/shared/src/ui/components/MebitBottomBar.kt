@@ -4,6 +4,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -17,7 +19,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -51,11 +55,13 @@ import org.jetbrains.compose.resources.painterResource
 
 /** From the bar's straight top edge to the screen bottom. */
 @Composable
-fun bottomBarHeight(): Dp {
-    val inset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    // 40 dp or more is Android's three-button bar, which the bar must clear whole. The iPhone's 34 pt home indicator keeps the board's 11 dp.
-    return 60.dp + if (inset >= 40.dp) inset else 11.dp
-}
+fun bottomBarHeight(): Dp = barHeightOver(WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())
+
+/**
+ * Penpot 2.2: the tabs take 60 dp below the top edge, the board leaves 11 dp under them, and the system's own strip comes after,
+ * so the tabs never sit under Android's gesture handle or three buttons, or the iPhone's home indicator.
+ */
+internal fun barHeightOver(systemBottom: Dp): Dp = 60.dp + 11.dp + systemBottom
 
 /** Penpot's Bitcoin bottom bar: two tabs and the orange รับ / ส่ง button in a dip at the centre. */
 @Composable
@@ -90,11 +96,13 @@ fun MebitBottomBar(
         }
         BarTabItem("กระเป๋า", Res.drawable.ic_tab_wallet, selected == BarTab.Wallets, "tab_wallets", onWallets, Modifier.align(Alignment.TopStart).padding(start = 50.dp, top = 26.dp))
         BarTabItem("กุญแจ", Res.drawable.ic_tab_key, selected == BarTab.Keys, "tab_keys", onKeys, Modifier.align(Alignment.TopEnd).padding(end = 50.dp, top = 26.dp))
+        // The whole 84 x 86 dp stays tappable, but the press shows only on the orange circle: a grey square over the dip looked broken.
+        val press = remember { MutableInteractionSource() }
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .size(width = 84.dp, height = 86.dp)
-                .clickable(role = Role.Button, onClick = onReceiveSend)
+                .clickable(interactionSource = press, indication = null, role = Role.Button, onClick = onReceiveSend)
                 .testTag("tab_receive_send"),
         ) {
             Box(Modifier.offset(x = 12.dp).size(60.dp).background(MbPage, CircleShape))
@@ -103,10 +111,14 @@ fun MebitBottomBar(
                     .offset(x = 16.dp, y = 4.dp)
                     .size(52.dp)
                     .shadow(4.dp, CircleShape, clip = false, ambientColor = MbBtcOrange.copy(alpha = 0.16f), spotColor = MbBtcOrange.copy(alpha = 0.16f))
-                    .background(MbBtcOrange, CircleShape),
+                    .background(MbBtcOrange, CircleShape)
+                    .clip(CircleShape)
+                    .indication(press, ripple(color = MbWhite)),
             )
-            Image(painterResource(Res.drawable.ic_tab_bitcoin), contentDescription = null, modifier = Modifier.offset(x = 25.9.dp, y = 14.dp).size(26.dp), colorFilter = ColorFilter.tint(MbWhite))
-            Box(Modifier.offset(y = 65.dp).fillMaxWidth().height(15.dp), contentAlignment = Alignment.Center) {
+            Image(painterResource(Res.drawable.ic_tab_bitcoin), contentDescription = null, modifier = Modifier.offset(x = 16.dp, y = 4.dp).size(52.dp), colorFilter = ColorFilter.tint(MbWhite))
+            // No fixed height on the labels: a Thai line is taller than the board's 15 dp, and a 15 dp box clipped its bottom.
+            // 26 + 34 dp, the tabs' label line: Penpot sets all three labels on one line.
+            Box(Modifier.offset(y = 60.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text("รับ / ส่ง", color = MbNavy, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
             }
         }
@@ -126,7 +138,7 @@ private fun BarTabItem(label: String, icon: DrawableResource, selected: Boolean,
     ) {
         if (selected) Box(Modifier.offset(x = 22.dp, y = 3.dp).size(32.dp).background(MbIconWash, CircleShape))
         Image(painterResource(icon), contentDescription = null, modifier = Modifier.offset(x = 27.dp, y = 8.dp).size(22.dp), colorFilter = ColorFilter.tint(ink))
-        Box(Modifier.offset(y = 34.dp).fillMaxWidth().height(15.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.offset(y = 34.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
             Text(label, color = ink, fontSize = 11.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, textAlign = TextAlign.Center)
         }
         if (selected) Box(Modifier.offset(x = 21.5.dp, y = 50.dp).size(width = 33.dp, height = 2.dp).background(MbBtcOrange, RoundedCornerShape(1.5.dp)))
