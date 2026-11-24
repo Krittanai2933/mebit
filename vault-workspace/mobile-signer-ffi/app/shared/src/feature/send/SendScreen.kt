@@ -1,5 +1,7 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.data.amountText
+import com.mebit.app.data.LocalBtcUnit
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -248,7 +250,7 @@ private fun SendForm(
                 }
                 is SendIssue.Insufficient -> {
                     Spacer(modifier = Modifier.height(20.dp))
-                    IssuePanel("INSUFFICIENT FUNDS", "ยอดไม่พอ — ขาดอีก ${formatBtcCompact(issue.missingSats)} BTC (รวมค่าธรรมเนียม) ลดจำนวน หรือกดส่งทั้งหมด")
+                    IssuePanel("INSUFFICIENT FUNDS", "ยอดไม่พอ — ขาดอีก ${amountText(issue.missingSats, LocalBtcUnit.current)} (รวมค่าธรรมเนียม) ลดจำนวน หรือกดส่งทั้งหมด")
                 }
                 null -> Unit
             }

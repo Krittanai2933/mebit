@@ -1,5 +1,6 @@
 package com.mebit.app.feature.vault
 
+import com.mebit.app.data.LocalBtcUnit
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -113,7 +114,8 @@ fun VaultDetailScreen(
     val armed by remember { derivedStateOf { pull.distanceFraction > 1f } }
     var keysOpen by remember { mutableStateOf(false) }
     val sats = wallets.vaultSats(vault)
-    val line = vaultLine(vault, sats, rememberFiatQuote(quotes))
+    val unit = LocalBtcUnit.current
+    val line = vaultLine(vault, sats, rememberFiatQuote(quotes), unit)
     val history = wallets.vaultTxs(vault)
     WalletPage(
         tag = "screen_vaults/detail",
@@ -161,7 +163,7 @@ fun VaultDetailScreen(
                 Text(note, color = MbSlate, fontSize = 13.sp, lineHeight = 17.sp, modifier = Modifier.testTag("vault_tx_note"))
             } else {
                 LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = TxListMaxHeight).testTag("vault_tx_list")) {
-                    itemsIndexed(historyRows(history.orEmpty()), key = { _, row -> row.tx.txid }) { i, row ->
+                    itemsIndexed(historyRows(history.orEmpty(), unit = unit), key = { _, row -> row.tx.txid }) { i, row ->
                         HomeTxRowItem(row, Modifier.txDivider().testTag("vault_tx_$i")) { onOpenTx(row.tx) }
                     }
                 }

@@ -1,6 +1,7 @@
 package com.mebit.app.feature.vault
 
 import com.mebit.app.Place
+import com.mebit.app.data.BtcUnit
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.CustodyPolicy
 import com.mebit.app.data.FakeVaultsStorage
@@ -25,6 +26,7 @@ class WalletListTest {
         assertEquals("0.0125", cardBalanceText(1_250_000, known = true), "a round amount keeps four places")
         assertEquals("0.0000", cardBalanceText(0, known = true))
         assertEquals("—", cardBalanceText(379_087, known = false))
+        assertEquals("379,087 sat", cardBalanceText(379_087, known = true, unit = BtcUnit.Sat), "a card with no unit label says sat")
     }
 
     @Test

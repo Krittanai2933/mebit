@@ -1,5 +1,6 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.data.BtcUnit
 import com.mebit.app.data.FiatQuote
 import com.mebit.app.data.TxDetailLoad
 import com.mebit.ffi.signer.HotTx
@@ -83,6 +84,14 @@ class TxDetailViewTest {
         assertNull(shown.amountNote)
         assertEquals("มูลค่าตอนนี้ ≈ ฿61,884", shown.fiat)
         assertEquals(TxAddresses("ส่งไปที่", listOf(DESTINATION)), shown.addresses)
+    }
+
+    @Test
+    fun satModeShowsEveryAmountInWholeSats() {
+        val shown = txDetailView(SENT_ROW, TxDetailLoad.Loaded(sent()), QUOTE, KeyNetwork.TEST, BANGKOK, BtcUnit.Sat)
+        assertEquals("1,800,000 sat", shown.amount)
+        assertEquals(TxCostView("1,240 sat · ฿43", "4.2 sat/vB", "1,801,240 sat", "1,698,760 sat"), shown.cost)
+        assertEquals("1,800,000 sat", shown.technical?.outputs?.first()?.amount)
     }
 
     @Test

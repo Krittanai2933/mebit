@@ -1,5 +1,10 @@
 package com.mebit.app.feature.vault
 
+import androidx.compose.foundation.layout.widthIn
+import com.mebit.app.ui.components.ShrinkText
+import com.mebit.app.data.amountBare
+import com.mebit.app.data.LocalBtcUnit
+import com.mebit.app.data.BtcUnit
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -96,8 +101,8 @@ data class SpendingCard(val place: Place, val name: String, val sats: Long, val 
 /** A Jade or Safe 7 one-key wallet's card on Penpot 1.8.1, under the phone's wallets: its key's name, and [sats] once [known], as [SpendingCard]'s. */
 data class HardwareCard(val wallet: HardwareWallet, val keyName: String, val sats: Long, val known: Boolean, val delete: DeleteItem)
 
-/** A card's amount, every sat that matters, and a dash until [known]. The card carries no unit. */
-internal fun cardBalanceText(sats: Long, known: Boolean): String = if (known) formatBtcCompact(sats) else "—"
+/** A card's amount, every sat that matters, and a dash until [known]. In BTC the card carries no unit, and in sat it says "sat". */
+internal fun cardBalanceText(sats: Long, known: Boolean, unit: BtcUnit = BtcUnit.Btc): String = if (known) amountBare(sats, unit) else "—"
 
 /**
  * Penpot 1.8's total adds every wallet's balance, one-key and several-key, as 1.8.0 adds 0.0312, 0.0150 and 0.8420 to 0.8882 BTC, and each
@@ -116,15 +121,17 @@ internal fun listTotal(
     vaultSats: (CreatedVault) -> Long?,
     walletUnopened: Boolean,
     hardware: List<HardwareCard> = emptyList(),
-): String? = walletsTotal(spending, book.current.vaults.distinctBy { it.address }.map(vaultSats), walletUnopened || !book.judged, hardware)
+    unit: BtcUnit = BtcUnit.Btc,
+): String? = walletsTotal(spending, book.current.vaults.distinctBy { it.address }.map(vaultSats), walletUnopened || !book.judged, hardware, unit)
 
-internal fun walletsTotal(cards: List<SpendingCard>, vaults: List<Long?>, walletUnopened: Boolean, hardware: List<HardwareCard> = emptyList()): String? = when {
+internal fun walletsTotal(cards: List<SpendingCard>, vaults: List<Long?>, walletUnopened: Boolean, hardware: List<HardwareCard> = emptyList(), unit: BtcUnit = BtcUnit.Btc): String? = when {
     walletUnopened -> "—"
     cards.isEmpty() && hardware.isEmpty() && vaults.isEmpty() -> null
     else -> homeBalanceText(
         cards.sumOf { it.sats } + hardware.sumOf { it.sats } + vaults.sumOf { it ?: 0L },
         known = cards.all { it.known } && hardware.all { it.known } && vaults.all { it != null },
         loading = false,
+        unit = unit,
     )
 }
 
@@ -203,7 +210,7 @@ fun VaultListScreen(
             // Penpot 1.8 puts the + 29 dp from the screen's right edge, so 9 dp past the screen's own padding.
             PlusButton("cta_vaults_add", "เพิ่ม Wallet", { adding = true }, Modifier.padding(end = 9.dp))
         }
-        listTotal(spending, vaults, vaultSats, walletUnopened = unopenedNotice != null, hardware = hardware)?.let { TotalLine(it, "vaults_total") }
+        listTotal(spending, vaults, vaultSats, walletUnopened = unopenedNotice != null, hardware = hardware, unit = LocalBtcUnit.current)?.let { TotalLine(it, "vaults_total") }
         Spacer(modifier = Modifier.height(16.dp))
         VaultsNotice(vaults)
         unopenedNotice?.let {
@@ -220,7 +227,7 @@ fun VaultListScreen(
                 kind = "SINGLE-SIG",
                 name = card.name,
                 detail = "กุญแจเดียว · $THIS_PHONE_KEY_NAME",
-                balance = cardBalanceText(card.sats, card.known),
+                balance = cardBalanceText(card.sats, card.known, LocalBtcUnit.current),
                 dark = false,
                 badge = card.backupTag,
                 tag = if (card.place == Place.FIRST) "card_spending" else "card_spending_${card.place.number}",
@@ -236,7 +243,7 @@ fun VaultListScreen(
                 kind = "SINGLE-SIG",
                 name = card.wallet.name,
                 detail = "กุญแจเดียว · ${card.keyName}",
-                balance = cardBalanceText(card.sats, card.known),
+                balance = cardBalanceText(card.sats, card.known, LocalBtcUnit.current),
                 dark = false,
                 badge = null,
                 tag = "card_hw_${card.wallet.id}",
@@ -253,7 +260,7 @@ fun VaultListScreen(
                 kind = "MULTISIG ${vault.m}-of-${vault.n}",
                 name = vault.name,
                 detail = "ต้องเซ็น ${vault.m} จาก ${vault.n} กุญแจ",
-                balance = vaultSats(vault).let { cardBalanceText(it ?: 0L, known = it != null) },
+                balance = vaultSats(vault).let { cardBalanceText(it ?: 0L, known = it != null, unit = LocalBtcUnit.current) },
                 dark = true,
                 badge = null,
                 tag = "cta_open_${vault.id}",
@@ -436,12 +443,12 @@ internal fun WalletListCard(
             Text(kind, color = if (dark) MbWhite.copy(alpha = 0.72f) else MbSlate, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.offset(x = 32.dp, y = 16.dp))
             Text(name, color = ink, fontSize = 17.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.offset(x = 32.dp, y = 39.dp))
             Text(detail, color = if (dark) MbWhite.copy(alpha = 0.66f) else MbSlate, fontSize = 11.5.sp, fontWeight = FontWeight.Light, modifier = Modifier.offset(x = 32.dp, y = 70.dp))
-            Text(
+            ShrinkText(
                 balance,
                 color = ink,
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.align(Alignment.TopEnd).padding(end = 18.dp, top = 70.dp).then(if (balanceTag != null) Modifier.testTag(balanceTag) else Modifier),
+                modifier = Modifier.align(Alignment.TopEnd).padding(end = 18.dp, top = 70.dp).widthIn(max = 150.dp).then(if (balanceTag != null) Modifier.testTag(balanceTag) else Modifier),
             )
             if (badge != null) {
                 Box(

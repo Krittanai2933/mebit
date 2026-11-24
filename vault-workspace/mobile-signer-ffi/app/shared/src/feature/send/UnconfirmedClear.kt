@@ -1,5 +1,7 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.data.amountText
+import com.mebit.app.data.LocalBtcUnit
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -243,7 +245,7 @@ private fun ReplacementControls(
 /** The card of a signed replacement before its post. It shows what it pays, its new fee and what the user must know, with the confirm and a way back. */
 @Composable
 private fun ReplacementCard(held: SingleSigWallet.HeldReplacement, quote: FiatQuote?, onConfirm: () -> Unit, onDrop: () -> Unit) {
-    val amount = "${formatBtcCompact(held.prepared.amountSats.toLong())} BTC"
+    val amount = amountText(held.prepared.amountSats.toLong(), LocalBtcUnit.current)
     val copy = held.kind.copy
     Spacer(modifier = Modifier.height(12.dp))
     val shape = RoundedCornerShape(16.dp)

@@ -1,5 +1,7 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.data.amountText
+import com.mebit.app.data.BtcUnit
 import com.mebit.app.data.FiatQuote
 import com.mebit.app.data.bahtText
 import com.mebit.app.data.formatBtcCompact
@@ -12,8 +14,8 @@ internal fun realFeeText(feeSats: Long, quote: FiatQuote?): String =
     listOfNotNull("${thousands(feeSats)} sat", bahtText(feeSats, quote)).joinToString(" · ")
 
 /** Review's คงเหลือ: what [balanceSats] leaves once [totalSats] goes, never below nothing, and a dash while either is unknown. */
-internal fun keptText(balanceSats: Long?, totalSats: Long?): String =
-    if (balanceSats != null && totalSats != null) "${formatBtcCompact((balanceSats - totalSats).coerceAtLeast(0))} BTC" else "—"
+internal fun keptText(balanceSats: Long?, totalSats: Long?, unit: BtcUnit = BtcUnit.Btc): String =
+    if (balanceSats != null && totalSats != null) amountText((balanceSats - totalSats).coerceAtLeast(0), unit) else "—"
 
 /** The fee on the slip, such as `1,128 sat ≈ ฿41`; just the sats without a price. The rate sits beside it. */
 internal fun slipFeeText(feeSats: Long, quote: FiatQuote?): String =

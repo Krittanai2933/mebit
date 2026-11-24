@@ -1,5 +1,9 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.ui.components.ShrinkText
+import com.mebit.app.data.amountNumber
+import com.mebit.app.data.amountText
+import com.mebit.app.data.LocalBtcUnit
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -508,17 +512,17 @@ internal fun MatchCard(review: SpendReview, walletName: String) {
             Image(painterResource(Res.drawable.ic_sign_wallet), contentDescription = null)
             Spacer(modifier = Modifier.width(10.dp))
             Text(walletName, color = MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, maxLines = 1, modifier = Modifier.weight(1f))
-            Text(
+            val unit = LocalBtcUnit.current
+            ShrinkText(
                 buildAnnotatedString {
-                    append(formatBtcCompact(review.paidSats()))
-                    withStyle(SpanStyle(fontSize = 14.sp)) { append(" BTC") }
+                    append(amountNumber(review.paidSats(), unit))
+                    withStyle(SpanStyle(fontSize = 14.sp)) { append(" ${unit.label}") }
                 },
                 color = MbNavyInk,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = amountFontFamily(),
                 lineHeight = 24.sp,
-                maxLines = 1,
                 modifier = Modifier.testTag("hw_sign_amount"),
             )
         }
@@ -551,7 +555,7 @@ internal fun MatchCard(review: SpendReview, walletName: String) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(MbBorder))
         Spacer(modifier = Modifier.height(9.dp))
         if (review.changeSats > 0u) {
-            MatchRow("เงินทอน → $walletName", "${formatBtc(review.changeSats.toLong())} BTC", "hw_sign_change")
+            MatchRow("เงินทอน → $walletName", amountText(review.changeSats.toLong(), LocalBtcUnit.current, ::formatBtc), "hw_sign_change")
             Spacer(modifier = Modifier.height(8.dp))
         }
         MatchRow("ค่าธรรมเนียม", "${thousands(review.feeSats.toLong())} sat", "hw_sign_fee")

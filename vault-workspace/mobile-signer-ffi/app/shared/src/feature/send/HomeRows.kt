@@ -1,5 +1,8 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.data.amountBare
+import com.mebit.app.data.amountText
+import com.mebit.app.data.BtcUnit
 import com.mebit.app.data.SingleSigWallet.WalletMode
 import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.formatThaiDateTimeShort
@@ -25,7 +28,7 @@ internal data class HomeTxRow(val tx: HotTx, val received: Boolean, val title: S
  * A row shows no counterparty name or txid, because the wallet knows no name and the id means nothing to the user. The detail behind a tap shows the txid.
  * [timeZoneId] is an IANA id for the date, and null means the device's zone.
  */
-internal fun homeRows(history: List<HotTx>, limit: Int = HOME_ROW_LIMIT, timeZoneId: String? = null): List<HomeTxRow> =
+internal fun homeRows(history: List<HotTx>, limit: Int = HOME_ROW_LIMIT, timeZoneId: String? = null, unit: BtcUnit = BtcUnit.Btc): List<HomeTxRow> =
     history.take(limit).map { tx ->
         val received = tx.netSats >= 0
         val blockTime = tx.blockTime
@@ -39,7 +42,7 @@ internal fun homeRows(history: List<HotTx>, limit: Int = HOME_ROW_LIMIT, timeZon
                 // The server may confirm a transaction without a time the app can print, and "waiting for a block" would then contradict the status.
                 else -> "—"
             },
-            amount = (if (received) "+" else "−") + formatBtcCompact(abs(tx.netSats)),
+            amount = (if (received) "+" else "−") + amountBare(abs(tx.netSats), unit),
             status = when {
                 tx.confirmations == 0u -> "รอยืนยัน"
                 tx.confirmations < SETTLED_CONFIRMATIONS -> "ยืนยัน ${tx.confirmations} บล็อก"
@@ -49,18 +52,18 @@ internal fun homeRows(history: List<HotTx>, limit: Int = HOME_ROW_LIMIT, timeZon
     }
 
 /** Every loaded transaction as rows, newest first like Home, with no limit. */
-internal fun historyRows(history: List<HotTx>, timeZoneId: String? = null): List<HomeTxRow> =
-    homeRows(history, limit = history.size, timeZoneId = timeZoneId)
+internal fun historyRows(history: List<HotTx>, timeZoneId: String? = null, unit: BtcUnit = BtcUnit.Btc): List<HomeTxRow> =
+    homeRows(history, limit = history.size, timeZoneId = timeZoneId, unit = unit)
 
 /** True when there are more rows than the four the box on Home shows whole, which is when Home offers the link to the full history. */
 internal fun homeHasMoreHistory(history: List<HotTx>): Boolean = history.size > HOME_ROW_LIMIT
 
 /**
- * The Home balance line: the amount in BTC once the chain answered, and a dash while it is unknown or loading.
+ * The Home balance line: the amount in [unit] once the chain answered, and a dash while it is unknown or loading.
  * Four places when they hold the whole amount, every place that matters when they do not, so the line never hides sats.
  */
-internal fun homeBalanceText(sats: Long, known: Boolean, loading: Boolean): String =
-    if (known && !loading) formatBtcCompact(sats) + " BTC" else "—"
+internal fun homeBalanceText(sats: Long, known: Boolean, loading: Boolean, unit: BtcUnit = BtcUnit.Btc): String =
+    if (known && !loading) amountText(sats, unit) else "—"
 
 /** True while a live wallet's scan stopped short and Home asks again by itself, after [scanContinueDelayMillis]. */
 internal fun scanContinues(mode: WalletMode, scan: HotScan): Boolean = mode == WalletMode.Live && scan == HotScan.CONTINUING

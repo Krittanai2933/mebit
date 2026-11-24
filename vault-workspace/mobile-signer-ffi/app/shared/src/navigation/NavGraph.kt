@@ -1078,15 +1078,15 @@ internal fun MebitNavHost(
                                 when (choice) {
                                     is WalletChoice.Spending -> {
                                         val w = wallets.at(choice.place)
-                                        ChoiceCard(w.session.walletName, "กุญแจเดียว · $THIS_PHONE_KEY_NAME", cardBalanceText(w.chain.balanceSats, spendingKnown(w)))
+                                        ChoiceCard(w.session.walletName, "กุญแจเดียว · $THIS_PHONE_KEY_NAME", cardBalanceText(w.chain.balanceSats, spendingKnown(w), unitSettings.current))
                                     }
                                     is WalletChoice.Hardware -> {
                                         val chain = hardware.chain(choice.wallet)
-                                        ChoiceCard(choice.wallet.name, "กุญแจเดียว · ${hardwareKeyName(choice.wallet, keyring.keys)}", cardBalanceText(chain.balanceSats, chain.balanceKnown))
+                                        ChoiceCard(choice.wallet.name, "กุญแจเดียว · ${hardwareKeyName(choice.wallet, keyring.keys)}", cardBalanceText(chain.balanceSats, chain.balanceKnown, unitSettings.current))
                                     }
                                     is WalletChoice.Vault -> {
                                         val sats = wallets.vaultSats(choice.vault)
-                                        ChoiceCard(choice.vault.name, "ต้องเซ็น ${choice.vault.m} จาก ${choice.vault.n} กุญแจ", cardBalanceText(sats ?: 0L, known = sats != null))
+                                        ChoiceCard(choice.vault.name, "ต้องเซ็น ${choice.vault.m} จาก ${choice.vault.n} กุญแจ", cardBalanceText(sats ?: 0L, known = sats != null, unit = unitSettings.current))
                                     }
                                 }
                             },

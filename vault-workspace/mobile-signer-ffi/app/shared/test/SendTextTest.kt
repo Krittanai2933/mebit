@@ -1,5 +1,6 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.data.BtcUnit
 import com.mebit.app.data.FiatQuote
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -83,6 +84,7 @@ class SendTextTest {
         // Board 4.5: 0.0312 BTC less 0.00501128 BTC taken leaves 0.02618872 BTC.
         assertEquals("0.02618872 BTC", keptText(3_120_000, 501_128))
         assertEquals("0.0000 BTC", keptText(501_128, 501_128))
+        assertEquals("2,619,872 sat", keptText(3_120_000, 500_128, BtcUnit.Sat), "sat mode keeps whole sats")
     }
 
     @Test

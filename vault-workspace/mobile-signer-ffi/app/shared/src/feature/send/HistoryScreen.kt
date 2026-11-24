@@ -1,5 +1,6 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.data.LocalBtcUnit
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -35,7 +36,7 @@ fun S7HistoryScreen(
     onOpenCatalog: () -> Unit,
     tag: String = "screen_send/s7",
 ) {
-    val rows = historyRows(history.orEmpty())
+    val rows = historyRows(history.orEmpty(), unit = LocalBtcUnit.current)
     MebitScreen(
         eyebrow = "HISTORY",
         title = "ประวัติธุรกรรม",

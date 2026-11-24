@@ -20,6 +20,9 @@ fun amountNumber(sats: Long, unit: BtcUnit, btc: (Long) -> String = ::formatBtcC
 fun amountText(sats: Long, unit: BtcUnit, btc: (Long) -> String = ::formatBtcCompact): String =
     "${amountNumber(sats, unit, btc)} ${unit.label}"
 
+/** For a row or card that draws no unit beside its BTC figure: the figure alone in BTC, and "500,000 sat" in sat, where a bare number would read as baht. */
+fun amountBare(sats: Long, unit: BtcUnit): String = if (unit == BtcUnit.Sat) amountText(sats, unit) else amountNumber(sats, unit)
+
 /** The unit setting and its file. [file] is null where the phone has no place for it, and then a choice lasts until the app closes. */
 class UnitSettings internal constructor(private val file: PlainFile?) {
     var current: BtcUnit by mutableStateOf(BtcUnit.Btc)

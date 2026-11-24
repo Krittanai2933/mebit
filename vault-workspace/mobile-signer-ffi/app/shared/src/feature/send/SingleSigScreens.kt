@@ -1,5 +1,9 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.ui.components.ShrinkText
+import com.mebit.app.data.amountNumber
+import com.mebit.app.data.amountText
+import com.mebit.app.data.LocalBtcUnit
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -258,9 +262,9 @@ internal fun ReviewPage(
             ReviewDivider()
             ReviewRow("ค่าธรรมเนียม", fee)
             ReviewDivider()
-            ReviewRow("หักจากกระเป๋ารวม", totalSats?.let { "${formatBtcCompact(it)} BTC" } ?: "—", bold = true)
+            ReviewRow("หักจากกระเป๋ารวม", totalSats?.let { amountText(it, LocalBtcUnit.current) } ?: "—", bold = true)
             ReviewDivider()
-            ReviewRow("คงเหลือ", keptText(balanceSats, totalSats))
+            ReviewRow("คงเหลือ", keptText(balanceSats, totalSats, LocalBtcUnit.current))
         }
         content()
     }
@@ -332,9 +336,9 @@ private fun HighFeeConfirm(held: PreparedSend, question: FeeQuestion, quote: Fia
         Spacer(modifier = Modifier.height(6.dp))
         ReviewRow("ค่าธรรมเนียมจริง", realFeeText(feeSats, quote), tag = "high_fee_fee")
         ReviewDivider()
-        ReviewRow(question.amountLabel, "${formatBtcCompact(amountSats)} BTC", tag = "high_fee_amount")
+        ReviewRow(question.amountLabel, amountText(amountSats, LocalBtcUnit.current), tag = "high_fee_amount")
         ReviewDivider()
-        ReviewRow("หักจากกระเป๋ารวม", "${formatBtcCompact(amountSats + feeSats)} BTC", bold = true, tag = "high_fee_total")
+        ReviewRow("หักจากกระเป๋ารวม", amountText(amountSats + feeSats, LocalBtcUnit.current), bold = true, tag = "high_fee_total")
         Spacer(modifier = Modifier.height(12.dp))
         PrimaryCta("ส่งด้วยค่าธรรมเนียมนี้", "high_fee_confirm", onConfirm, height = 44.dp)
         Spacer(modifier = Modifier.height(4.dp))
@@ -377,10 +381,11 @@ private fun SendSummary(amountSats: Long, sendAll: Boolean, estimate: Boolean, d
             else -> "ส่ง"
         }
         Text(label, color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
+        val unit = LocalBtcUnit.current
         Row(verticalAlignment = Alignment.Bottom) {
-            Text((if (estimate) "≈ " else "") + formatBtcCompact(amountSats), color = MbWhite, fontSize = 38.sp, fontWeight = FontWeight.Bold, fontFamily = amountFontFamily(), lineHeight = 50.sp, modifier = Modifier.testTag("send_amount"))
+            ShrinkText((if (estimate) "≈ " else "") + amountNumber(amountSats, unit), color = MbWhite, fontSize = 38.sp, fontWeight = FontWeight.Bold, fontFamily = amountFontFamily(), lineHeight = 50.sp, modifier = Modifier.weight(1f, fill = false).testTag("send_amount"))
             Spacer(modifier = Modifier.width(8.dp))
-            Text("BTC", color = MbWhite.copy(alpha = 0.8f), fontSize = 15.sp, fontWeight = FontWeight.Bold, lineHeight = 20.sp, modifier = Modifier.padding(bottom = 5.dp))
+            Text(unit.label, color = MbWhite.copy(alpha = 0.8f), fontSize = 15.sp, fontWeight = FontWeight.Bold, lineHeight = 20.sp, modifier = Modifier.padding(bottom = 5.dp))
         }
         // The room stays when there is no price, so the card keeps its height.
         Box(modifier = Modifier.fillMaxWidth().height(34.dp)) {
