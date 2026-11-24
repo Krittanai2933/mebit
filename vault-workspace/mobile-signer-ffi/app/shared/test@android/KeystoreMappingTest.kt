@@ -26,9 +26,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The Keystore store's decisions, fed plain facts (file and alias present, screen lock, exceptions, prompt error
- * codes), and its envelope, sealed and opened with a software RSA pair. The Keystore and the OS prompt themselves are proven
- * on an emulator (`.audit/d1-secure-storage/android/spike-2026-11-03.md`), because the host JVM has neither.
+ * The Keystore and the OS prompt themselves are proven on an emulator (`.audit/d1-secure-storage/android/spike-2026-11-03.md`), because the host JVM has neither.
  */
 class KeystoreMappingTest {
     @Test

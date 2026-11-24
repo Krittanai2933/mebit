@@ -80,10 +80,6 @@ fun WalletGate() {
     }
 }
 
-/**
- * The app once the phone has had its lock this run. The nav host does not exist until the wallets are open or there are none, so
- * nothing that reads a session runs before the owner check.
- */
 @Composable
 private fun OpenGate() {
     // Before any screen asks the core about a wallet, so its first sync after a restart reads the scan file.
@@ -104,8 +100,8 @@ private fun OpenGate() {
             payments = PendingPayments(scanDir?.let { plainFile("$it/pending-payment") }),
             lastUsed = scanDir?.let { plainFile("$it/last-wallet") },
             forgetBook = {
-                storage?.delete()
-                pairings?.deleteAll()
+                storage.delete()
+                pairings.deleteAll()
             },
             vaultPayments = PendingPayments(scanDir?.let { plainFile("$it/pending-vault-payment") }),
             bookGuardKeys = { book.guardKeys() },
@@ -118,8 +114,8 @@ private fun OpenGate() {
     // Welcome means this phone holds no wallet, so what the stores hold is nobody's now, as after a reinstall, which a Keychain item survives.
     remember(gate) {
         if (gate.boot == Boot.Onboarding) {
-            storage?.delete()
-            pairings?.deleteAll()
+            storage.delete()
+            pairings.deleteAll()
         }
     }
 

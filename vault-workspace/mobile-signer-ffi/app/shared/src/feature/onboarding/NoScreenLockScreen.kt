@@ -25,11 +25,6 @@ private val IOS_STEPS = listOf(
     "กลับมาที่ mebit แอปจะไปต่อเอง",
 )
 
-/**
- * The block on a phone with no screen lock, which no Penpot board has yet. WalletGate shows it alone before the phone has had a
- * lock this run, and over every screen once a lock it had is gone. It has no way past it: setting the lock and coming back is the
- * only way on. [openSettings] opens the security settings on Android. Null on iOS, which shows the steps instead.
- */
 @Composable
 internal fun NoScreenLockScreen(openSettings: (() -> Unit)?) {
     MebitScreen(

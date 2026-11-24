@@ -95,7 +95,7 @@ private class KeystorePairings(private val dir: File) : Pairings {
 }
 
 @Composable
-internal actual fun rememberPairings(): Pairings? {
+internal actual fun rememberPairings(): Pairings {
     val context = LocalContext.current
     return remember(context) { KeystorePairings(File(context.noBackupFilesDir, "pairing")) }
 }

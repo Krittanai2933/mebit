@@ -3,7 +3,6 @@ package com.mebit.app.navigation
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-/** What a phone shows for its screen lock, as WalletGate reads it at the start and each time the app comes back. */
 class LockGateTest {
     @Test
     fun aPhoneThatNeverHadALockThisRunWaitsOnTheBlockAlone() {

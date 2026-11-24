@@ -79,7 +79,7 @@ private class KeystoreVaults(path: File) : VaultsStorage {
 }
 
 @Composable
-internal actual fun rememberVaultsStorage(): VaultsStorage? {
+internal actual fun rememberVaultsStorage(): VaultsStorage {
     val context = LocalContext.current
     return remember(context) { KeystoreVaults(File(context.noBackupFilesDir, "vaults/book")) }
 }

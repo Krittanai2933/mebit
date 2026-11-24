@@ -96,11 +96,12 @@ fun AppLockScreen(
                 biometrics.authenticate(reason = reason, allowPasscode = allowPasscode)
             }
             busy = false
+            if (scanOpens(result, enable, allowPasscode, readBack, session.saved)) {
+                if (enable && result == BiometricResult.Success) session.markAppLockEnabled()
+                onDone()
+                return@launch
+            }
             when (result) {
-                BiometricResult.Success -> {
-                    if (enable) session.markAppLockEnabled()
-                    onDone()
-                }
                 BiometricResult.Failed -> {
                     // iOS reports a failure after two non-matching scans, and locks Face ID out after five.
                     attemptsLeft -= 2
@@ -110,10 +111,9 @@ fun AppLockScreen(
                     attemptsLeft = 0
                     failed = true
                 }
-                BiometricResult.Cancelled -> Unit
-                is BiometricResult.Unavailable ->
-                    // Nothing can secure the app here, or the saved copy just failed its read-back: onboarding goes on without a lock, unlocking does not.
-                    if (goesOnWithoutLock(enable, allowPasscode, readBack, session.saved)) onDone() else unavailable = true
+                // Nothing can secure the app here: unlocking never goes on without the owner.
+                is BiometricResult.Unavailable -> unavailable = true
+                BiometricResult.Success, BiometricResult.Cancelled -> Unit
             }
         }
     }

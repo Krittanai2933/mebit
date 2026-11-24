@@ -384,8 +384,7 @@ private fun keystoreCode(t: Throwable): Int? {
 }
 
 /**
- * What the probe makes of the facts, in this order: the wallet file, its key, the screen lock. A file without
- * its key is KeyGone even with no screen lock, because removing the lock deletes the key and keeps the file. [aliasPresent]
+ * A file without its key is KeyGone even with no screen lock, because removing the lock deletes the key and keeps the file. [aliasPresent]
  * is null when the Keystore threw, and is not read without a file.
  */
 internal fun androidProbeOutcome(fileExists: Boolean, aliasPresent: Boolean?, deviceSecure: Boolean): StoreProbe = when {

@@ -255,7 +255,6 @@ internal fun MebitNavHost(
     // The row a tap opened, whole, so the detail draws at once. The catalog opens the demo row until a tap.
     var openedTx by remember { mutableStateOf(DEMO_TX) }
 
-    // More than a minute away locks the app again, once the user turned the lock on.
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { appLock.onBackground() }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { appLock.onForeground(session.appLockEnabled) }
 
@@ -328,7 +327,6 @@ internal fun MebitNavHost(
     }
 
     // App Lock is one setting for the phone, so only the wallet that made the phone's first choice runs this step.
-    // After the first wallet's create or import comes App Lock. A later wallet's setup ends on the list here.
     fun lockStep() = if (wallets.listed.size >= 2) finishAdd(endSetup(session)) else navigate(MovieRoute.AppLock)
 
     // The create flow goes on to the address type. A later backup returns to the screen that opened it.
@@ -392,7 +390,6 @@ internal fun MebitNavHost(
         }
     }
 
-    // 1.8.8's confirm came first. The phone's own owner sheet, as a several-key wallet's removal asks.
     fun removeHardware(w: HardwareWallet) {
         scope.launch {
             removeLine = null
@@ -416,8 +413,6 @@ internal fun MebitNavHost(
         }
     }
 
-    // The words of the wallet at [place]: the one in use, or the one whose key the Keyring's ⋯ backs up. Never on a phone whose own
-    // lock is gone.
     fun openWords(place: Place = backStack.last().place) {
         if (appLock.canShowWords(biometrics)) navigate(MovieRoute.BackupWords, place)
     }
@@ -718,7 +713,6 @@ internal fun MebitNavHost(
                             onOpenSpending = { place -> openWallet(place) { MovieRoute.S1HomeSingleSig } },
                             onRemoveSpending = { place -> removeWallet(wallets.at(place)) },
                             onOpenDetail = { navigate(MovieRoute.VaultDetail) },
-                            // The phone's own owner sheet, which a one-key wallet's removal shows as it opens the wallet's saved copy.
                             onRemoveVault = { vault ->
                                 scope.launch {
                                     removeLine = null
@@ -1259,8 +1253,8 @@ internal fun MebitNavHost(
     }
 
     if (appLock.locked) {
-        // Covers everything, swallows taps, and goes away only on Face ID or the device passcode. Composed after the screens, so this
-        // SystemBack wins over their arrows' and Back sends the app to the background: the lock stays and no screen under it pops.
+        // Composed after the screens, so this SystemBack wins over their arrows' and Back sends the app to the background: the lock
+        // stays and no screen under it pops.
         SystemBack(rememberLeaveApp())
         Box(
             modifier = Modifier
