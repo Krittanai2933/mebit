@@ -118,7 +118,7 @@ fun WelcomeScreen(
         }
         // The fan keeps its design size, stays top-aligned and bleeds off the right edge; on a short screen it gives up its shadow tail first.
         Box(
-            modifier = Modifier.weight(1f).fillMaxWidth().padding(top = 10.dp).clipToBounds(),
+            modifier = Modifier.weight(1f).fillMaxWidth().padding(top = 16.dp).clipToBounds(),
             contentAlignment = Alignment.TopStart,
         ) {
             CardFan(Modifier.wrapContentSize(Alignment.TopStart, unbounded = true))
