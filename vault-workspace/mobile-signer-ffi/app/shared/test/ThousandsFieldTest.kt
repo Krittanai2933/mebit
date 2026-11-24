@@ -1,5 +1,6 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.data.groupDigits
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue

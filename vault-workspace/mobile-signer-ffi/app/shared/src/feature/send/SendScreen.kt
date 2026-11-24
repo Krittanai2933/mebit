@@ -67,6 +67,7 @@ import com.mebit.app.data.acceptsScan
 import com.mebit.app.data.bahtText
 import com.mebit.app.data.enterDestination
 import com.mebit.app.data.formatBtcCompact
+import com.mebit.app.data.groupDigits
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.data.sendIssue
 import com.mebit.app.plainText
@@ -485,9 +486,6 @@ private object ThousandsTransformation : VisualTransformation {
         )
     }
 }
-
-/** "18010" to "18,010". It works on the digits as written, so a leading zero keeps its place. */
-internal fun groupDigits(digits: String): String = digits.reversed().chunked(3).joinToString(",").reversed()
 
 /** Where a caret after [digitsBefore] digits sits in [grouped], after a comma that follows them. */
 internal fun caretInGrouped(grouped: String, digitsBefore: Int): Int {
