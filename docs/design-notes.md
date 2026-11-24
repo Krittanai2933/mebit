@@ -1,6 +1,6 @@
 # mebit wallet app — design reference
 
-The wallet app's design lives in Penpot file `mebit`. The `Organize` page has the screens, and the `Organize · Design System` page has the colors, type, geometry and components they are built from. Colors, type, layout, logo use and voice are written out in [`../DESIGN.md`](../DESIGN.md).
+The wallet app's design lives in Penpot file `mebit`. The `Organize` page has the screens, and the `Organize · Design System` page has the colors, type, geometry and components they are built from. Colors, type, layout, logo use and voice are written out in [`DESIGN.md`](DESIGN.md).
 
 This document maps the flows on `Organize`. After it come notes from the earlier lending prototype, kept as product context for the lending leg.
 
@@ -133,5 +133,5 @@ Note that "multi-collateral" was originally scoped as V3 — the multi-*contract
 
 ### Assets
 
-- Colors, type, layout, components, logo use and voice are in [`../DESIGN.md`](../DESIGN.md) and on Penpot `Organize · Design System`.
+- Colors, type, layout, components, logo use and voice are in [`DESIGN.md`](DESIGN.md) and on Penpot `Organize · Design System`.
 - Place the logo from its file. Never redraw it.
