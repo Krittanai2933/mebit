@@ -105,7 +105,7 @@ fun MebitBottomBar(
                     .shadow(4.dp, CircleShape, clip = false, ambientColor = MbBtcOrange.copy(alpha = 0.16f), spotColor = MbBtcOrange.copy(alpha = 0.16f))
                     .background(MbBtcOrange, CircleShape),
             )
-            Image(painterResource(Res.drawable.ic_tab_bitcoin), contentDescription = null, modifier = Modifier.offset(x = 25.9.dp, y = 14.dp).size(26.dp), colorFilter = ColorFilter.tint(MbWhite))
+            Image(painterResource(Res.drawable.ic_tab_bitcoin), contentDescription = null, modifier = Modifier.offset(x = 16.dp, y = 4.dp).size(52.dp), colorFilter = ColorFilter.tint(MbWhite))
             Box(Modifier.offset(y = 65.dp).fillMaxWidth().height(15.dp), contentAlignment = Alignment.Center) {
                 Text("รับ / ส่ง", color = MbNavy, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
             }
