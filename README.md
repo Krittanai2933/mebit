@@ -1,9 +1,16 @@
 # Mebit Wallet
 
+**English** | [ภาษาไทย](README.th.md)
+
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue)](LICENSE)
 ![Rust](https://img.shields.io/badge/Rust-stable-orange?logo=rust)
 ![Kotlin Multiplatform](https://img.shields.io/badge/Kotlin-Multiplatform-7F52FF?logo=kotlin)
 ![Platform](https://img.shields.io/badge/Platform-iOS%20%7C%20Android-lightgrey)
 ![Network](https://img.shields.io/badge/Network-testnet4-yellow)
+
+<p align="center">
+  <img src="assets/readme/mebit-logo.png" alt="Mebit" width="240">
+</p>
 
 <p align="center">Bitcoin self-custody for Thai users, on iOS and Android</p>
 
@@ -54,6 +61,7 @@ mebit/
 │   └── monitor-service/      # lending: LTV monitoring and liquidation triggers
 ├── docs/                     # product, specs and decisions (index: docs/00-README.md)
 ├── design-reference/         # design tokens and fonts
+├── assets/                   # images used by the README
 └── scripts/                  # repo checks
 ```
 
@@ -109,4 +117,8 @@ The policy engine in `vault-core` decides what a PSBT may pay before any key sig
 
 ## Responsible Disclosure
 
-Please report security issues privately to the maintainers, not in a public issue.
+Please report security issues by email to [mebit.co.th@proton.me](mailto:mebit.co.th@proton.me), not in a public issue.
+
+## License
+
+Mebit Wallet is licensed under the [GNU Affero General Public License v3.0](LICENSE). Anyone who distributes a modified version, or runs one as a network service, must publish its source under the same license.
