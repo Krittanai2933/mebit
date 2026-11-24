@@ -108,7 +108,7 @@ Step 6 built the store behind the same seam, following `.audit/d1-secure-storage
 - `probe` checks the API level, then the file, then the key, then the screen lock. A file without its key is `KeyGone`, so a phone whose screen lock was removed reaches the recovery screen and not Welcome. No file and no screen lock is `NoScreenLock`.
 - The key is made on a background thread when the probe finds no wallet on a phone with a screen lock, after an erase, or at a write that finds none. It is never made over a stored wallet's key. A write that arrives before it is ready answers `TryLater`, and the session saves again at its next write point or when the app returns.
 - `erase` deletes the key and the file. `marker()` is `Unsupported`, so the reinstall rule never wipes. An uninstall removes the file and the key together.
-- Below API 30 nothing is stored (`OsTooOld`), and the not-saved notice says so. `minSdk` stays 24.
+- `minSdk` is 30 (Android 11), as the team agreed by 24 Nov 2026, so every phone the app installs on can store. Before that it was 24, the build tool's default, and below API 30 nothing was stored (`OsTooOld`).
 - The manifest has `allowBackup="false"`, data extraction rules that exclude every domain from cloud backup and device transfer, `USE_BIOMETRIC`, and `launchMode="singleTask"` and `configChanges` on `MainActivity`, so a rotation does not rebuild the gate and ask again.
 
 The pure decisions (probe, read, prompt error, unwrap, write, key generation, erase) and the envelope have 26 host tests in `test@android/KeystoreMappingTest.kt`.
