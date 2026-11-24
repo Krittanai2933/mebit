@@ -117,7 +117,7 @@ policy engine ใน `vault-core` เป็นตัวตัดสินว่�
 
 ## การแจ้งช่องโหว่
 
-กรุณาแจ้งปัญหาด้านความปลอดภัยทางอีเมล [mebit.co.th@proton.me](mailto:mebit.co.th@proton.me) อย่าเปิดเป็น issue สาธารณะ
+กรุณาแจ้งปัญหาด้านความปลอดภัยทางอีเมล [meet@mebit.co.th](mailto:meet@mebit.co.th) อย่าเปิดเป็น issue สาธารณะ
 
 ## สัญญาอนุญาต
 
