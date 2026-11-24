@@ -41,7 +41,7 @@ import com.mebit.app.feature.keys.KeyLogo
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_hardware_wallet
 import com.mebit.app.resources.ic_phone
-import com.mebit.app.resources.mebit_logo
+import com.mebit.app.resources.mebit_logo_on_navy
 import com.mebit.app.ui.components.BackChip
 import com.mebit.app.ui.components.CardFan
 import com.mebit.app.ui.components.MebitScreen
@@ -111,7 +111,7 @@ fun WelcomeScreen(
                 Spacer(modifier = Modifier.width(12.dp))
             }
             Image(
-                painter = painterResource(Res.drawable.mebit_logo),
+                painter = painterResource(Res.drawable.mebit_logo_on_navy),
                 contentDescription = "mebit",
                 modifier = Modifier.size(width = 99.5.dp, height = 26.dp),
             )

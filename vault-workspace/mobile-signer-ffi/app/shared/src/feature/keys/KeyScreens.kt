@@ -46,7 +46,7 @@ import com.mebit.app.resources.ic_key
 import com.mebit.app.resources.ic_mebit_mark
 import com.mebit.app.resources.ic_qr
 import com.mebit.app.resources.ic_trezor_mark
-import com.mebit.app.resources.mebit_logo_dark
+import com.mebit.app.resources.mebit_logo_on_light
 import com.mebit.app.ui.components.MenuAction
 import com.mebit.app.ui.components.TotalLine
 import com.mebit.app.ui.theme.MbAmberInk
@@ -398,7 +398,7 @@ fun KeyringScreen(
         tag = "screen_keys/keyring",
         // Penpot 2.1's header is 3.6's: the logo, the gear over the +, both ending 29 dp from the screen's right edge, and the total line.
         headerContent = {
-            Image(painterResource(Res.drawable.mebit_logo_dark), contentDescription = "mebit", modifier = Modifier.size(width = 99.5.dp, height = 26.dp))
+            Image(painterResource(Res.drawable.mebit_logo_on_light), contentDescription = "mebit", modifier = Modifier.size(width = 99.5.dp, height = 26.dp))
         },
         trailing = { SettingsGear(onSettings, Modifier.padding(end = 9.dp)) },
     ) {

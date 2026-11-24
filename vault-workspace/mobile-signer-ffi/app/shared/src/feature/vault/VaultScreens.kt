@@ -65,7 +65,7 @@ import com.mebit.app.feature.send.vaultDeleteItem
 import com.mebit.app.navigation.MovieRoute
 import com.mebit.app.rememberTextFileExport
 import com.mebit.app.resources.Res
-import com.mebit.app.resources.mebit_logo_dark
+import com.mebit.app.resources.mebit_logo_on_light
 import com.mebit.app.ui.components.CardDeleteMenu
 import com.mebit.app.ui.components.DeleteItem
 import com.mebit.app.ui.components.InfoCard
@@ -192,7 +192,7 @@ fun VaultListScreen(
         onOpenCatalog = onOpenCatalog,
         tag = "screen_vaults",
         headerContent = {
-            Image(painterResource(Res.drawable.mebit_logo_dark), contentDescription = "mebit", modifier = Modifier.size(width = 99.5.dp, height = 26.dp))
+            Image(painterResource(Res.drawable.mebit_logo_on_light), contentDescription = "mebit", modifier = Modifier.size(width = 99.5.dp, height = 26.dp))
         },
         // Penpot 3.6 puts the gear over the +, so both end 29 dp from the screen's right edge.
         trailing = { SettingsGear(onSettings, Modifier.padding(end = 9.dp)) },

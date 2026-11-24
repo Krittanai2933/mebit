@@ -50,7 +50,7 @@ import com.mebit.app.data.KeySourceLabel
 import com.mebit.app.feature.keys.KeyLogo
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_close
-import com.mebit.app.resources.mebit_logo
+import com.mebit.app.resources.mebit_logo_on_navy
 import com.mebit.app.ui.components.DebugLink
 import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
@@ -159,7 +159,7 @@ internal fun WalletHero(
 ) {
     // The header keeps the logo's 26 dp, so the X's larger target moves nothing below it.
     Box(modifier = Modifier.fillMaxWidth().height(26.dp)) {
-        Image(painterResource(Res.drawable.mebit_logo), contentDescription = "mebit", modifier = Modifier.size(width = 99.5.dp, height = 26.dp))
+        Image(painterResource(Res.drawable.mebit_logo_on_navy), contentDescription = "mebit", modifier = Modifier.size(width = 99.5.dp, height = 26.dp))
         onClose?.let { CloseButton(it) }
     }
     Spacer(modifier = Modifier.height(22.dp))

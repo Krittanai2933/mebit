@@ -60,7 +60,7 @@ import com.mebit.app.rememberTextFileExport
 import com.mebit.app.safeShareName
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_warning
-import com.mebit.app.resources.mebit_logo
+import com.mebit.app.resources.mebit_logo_on_navy
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
@@ -259,7 +259,7 @@ private fun SharePicture(name: String, matrix: QrMatrix, warning: String, layer:
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(modifier = Modifier.fillMaxWidth().height(84.dp).background(MbNavy), contentAlignment = Alignment.Center) {
-            Image(painterResource(Res.drawable.mebit_logo), contentDescription = null, modifier = Modifier.size(width = 129.dp, height = 34.dp))
+            Image(painterResource(Res.drawable.mebit_logo_on_navy), contentDescription = null, modifier = Modifier.size(width = 129.dp, height = 34.dp))
         }
         Spacer(modifier = Modifier.height(16.dp))
         QrCode(matrix, Modifier.size(322.dp), dark = MbNavy)
