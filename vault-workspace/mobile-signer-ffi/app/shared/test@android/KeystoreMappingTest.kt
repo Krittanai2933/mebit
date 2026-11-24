@@ -156,6 +156,18 @@ class KeystoreMappingTest {
         assertNull(androidWriteRefusal(fileExists = true, deviceSecure = true, mode = WriteMode.Replace(ANY_VERSION)))
     }
 
+    // A pair the read calls KeyGone must not take another envelope: sealing to its public half writes a copy nothing opens.
+    @Test
+    fun aWriteMakesANewKeyOnlyWhenThePairIsGoneOrInvalidated() {
+        assertTrue(androidKeyMustBeRemade(certificatePresent = false, privateHalfFailure = null), "no certificate")
+        assertTrue(androidKeyMustBeRemade(certificatePresent = true, privateHalfFailure = KeyPermanentlyInvalidatedException()), "an invalidated key")
+        assertFalse(androidKeyMustBeRemade(certificatePresent = true, privateHalfFailure = null), "a working key")
+        // Measured while the device was locked: InvalidKeyException <- KeyStoreException(code=2). The write needs only the public half.
+        listOf(InvalidKeyException(), ProviderException(), IllegalStateException(), NullPointerException()).forEach { t ->
+            assertFalse(androidKeyMustBeRemade(certificatePresent = true, privateHalfFailure = t), t::class.simpleName)
+        }
+    }
+
     @Test
     fun aKeyRefusedForAMissingScreenLockIsNoScreenLockAndAnyOtherFailureIsOther() {
         // Measured: generation with no screen lock threw InvalidAlgorithmParameterException <- IllegalStateException.
