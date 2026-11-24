@@ -46,7 +46,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 - [Movie Page import seed](./movie-page-import-seed.md) covers the 24-word grid, suggestions, passphrase, fingerprint check, and import to Home.
 - [Movie Page address type](./movie-page-address-type.md) covers the address type screen after create or import, the fingerprint sheets that follow it, and Receive per type.
 - [Movie Page app lock](./movie-page-app-lock.md) covers Face ID enable, failure, unlock on return, and the sign check (real iPhone).
-- [No screen lock](./no-screen-lock.md) covers the block screen on a phone without a screen lock, the way to the security settings, and the cover when the lock is removed while the app runs.
+- [No screen lock](./no-screen-lock.md) covers the block screen on a phone without a screen lock, the button to the screen-lock picker, and the cover when the lock is removed while the app runs.
 - [Wallet restart](./wallet-restart.md) covers the saved wallet: cold-start unlock, a payment of unknown outcome across a restart, the reinstall wipe, Forget, the App Lock read-back, and the not-saved notice.
 - [Several wallets](./several-wallets.md) covers adding a wallet apart from a key for a Vault, the wallet lists, switching, removing and the full Forget.
 - [Hardware wallets](./hardware-wallets.md) covers a one-key wallet on a Jade or a Safe 7: creating it, its card, Home, Receive, Send to the device signing on the confirmed screen, and removing it, with the debug fake device on a simulator.
