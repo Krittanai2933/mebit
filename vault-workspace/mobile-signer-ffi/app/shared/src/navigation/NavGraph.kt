@@ -1011,7 +1011,7 @@ internal fun MebitNavHost(
                         },
                         onReview = { navigate(MovieRoute.M8ReviewVault) },
                         // 5.8.1: a refused payment can never go out, so 5.1 makes another at a new fee.
-                        onAdjustFee = { if (backStack.any { it.route == MovieRoute.M1SendVault }) backTo(MovieRoute.M1SendVault) else navigate(MovieRoute.M1SendVault) },
+                        onAdjustFee = { land(stackAfterAdjustFee(backStack)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )

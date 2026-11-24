@@ -107,6 +107,18 @@ internal fun stackAfterVaultSend(stack: List<Stop>): List<Stop> {
 }
 
 /**
+ * Pure. 5.8.1's ปรับค่าธรรมเนียม: back to the form 5.1 under the refused payment, else 5.1 in place of the send screens on top, as when
+ * the catalog opened 5.2. Back from 5.1 never returns to a payment that can no longer go out. [stack] is never empty.
+ */
+internal fun stackAfterAdjustFee(stack: List<Stop>): List<Stop> {
+    val form = stack.indexOfLast { it.route == MovieRoute.M1SendVault }
+    if (form >= 0) return stack.take(form + 1)
+    val place = stack.last().place
+    val below = stack.dropLastWhile { it.route == MovieRoute.M2CollectSignatures || it.route == MovieRoute.M3SignOnDevice || it.route == MovieRoute.M3SignOnPhone || it.route == MovieRoute.M8ReviewVault }
+    return stackAfterOpen(below.ifEmpty { listOf(Stop(MovieRoute.VaultList, place)) }, Stop(MovieRoute.M1SendVault, place))
+}
+
+/**
  * Pure. Wallet Created alone, at the place the wizard ended on. The wizard leaves the stack, so Wallet Created has no back chip (Penpot 3.5
  * draws none) and nothing on the stack can reach Review and run "สร้าง Wallet" again.
  */
