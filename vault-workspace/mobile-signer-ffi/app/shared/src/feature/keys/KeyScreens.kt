@@ -42,7 +42,9 @@ import com.mebit.app.data.keyLine
 import com.mebit.app.data.keyringOrder
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_jade_mark
+import com.mebit.app.resources.ic_key
 import com.mebit.app.resources.ic_mebit_mark
+import com.mebit.app.resources.ic_qr
 import com.mebit.app.resources.ic_trezor_mark
 import com.mebit.app.resources.mebit_logo_dark
 import com.mebit.app.ui.components.MenuAction
@@ -85,13 +87,10 @@ import com.mebit.app.feature.send.removeSheetTitle
 import com.mebit.app.navigation.MovieRoute
 import com.mebit.app.ui.components.CardDeleteMenu
 import com.mebit.app.ui.components.DeleteItem
-import com.mebit.app.ui.components.HardwareMark
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.OptionCard
-import com.mebit.app.ui.components.PhoneMark
 import com.mebit.app.ui.components.PlusButton
 import com.mebit.app.ui.components.SettingsGear
-import com.mebit.app.ui.components.TwoPhonesMark
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
 import org.jetbrains.compose.resources.painterResource
@@ -138,7 +137,7 @@ fun AddKeyScreen(
             title = "mebit บนเครื่องนี้",
             body = "สร้าง seed ใหม่เก็บใน secure enclave ของเครื่อง",
             tag = "cta_add_this_device",
-            leading = { PhoneMark() },
+            leading = { KeyLogo(KeySourceLabel.ThisDevice, 24.dp) },
             onClick = onThisDevice,
         )
         Spacer(modifier = Modifier.height(11.dp))
@@ -146,7 +145,7 @@ fun AddKeyScreen(
             title = "mebit บนเครื่องอื่น",
             body = "จับคู่ผ่าน Bluetooth แล้วดึง xpub จากเครื่องนั้นมา",
             tag = "cta_add_mebit_other",
-            leading = { TwoPhonesMark() },
+            leading = { Image(painterResource(Res.drawable.ic_qr), contentDescription = null, modifier = Modifier.size(24.dp)) },
             onClick = onMebitOther,
         )
         Spacer(modifier = Modifier.height(11.dp))
@@ -155,7 +154,7 @@ fun AddKeyScreen(
             body = "อุปกรณ์แยกที่เก็บกุญแจไว้ออฟไลน์",
             tag = "cta_add_hardware",
             chips = listOf("Jade", "Trezor Safe 7"),
-            leading = { HardwareMark() },
+            leading = { Image(painterResource(Res.drawable.ic_key), contentDescription = null, modifier = Modifier.size(24.dp)) },
             onClick = onHardware,
         )
         Spacer(modifier = Modifier.height(13.dp))

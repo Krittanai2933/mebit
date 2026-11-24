@@ -210,14 +210,6 @@ fun PhoneMark() = Box(Modifier.size(44.dp)) {
     Box(Modifier.offset(15.dp, 10.dp).size(15.dp, 23.dp).border(2.dp, MbNavy, RoundedCornerShape(4.dp)))
 }
 
-/** Penpot 2.1.1's mark for mebit on another phone: two phone outlines and an orange link between them. */
-@Composable
-fun TwoPhonesMark() = Box(Modifier.size(44.dp)) {
-    Box(Modifier.offset(12.dp, 14.dp).size(8.dp, 15.dp).border(2.dp, MbNavy, RoundedCornerShape(2.dp)))
-    Box(Modifier.offset(24.dp, 14.dp).size(8.dp, 15.dp).border(2.dp, MbNavy, RoundedCornerShape(2.dp)))
-    Box(Modifier.offset(21.dp, 19.5.dp).size(2.dp, 4.dp).background(MbBtcOrange))
-}
-
 /** "รวมทั้งหมด" in Light 13.5 MbBody, then [total] in SemiBold 14.5 MbNavyInk: the line under the title on Penpot 3.6 and 2.1. */
 @Composable
 fun TotalLine(total: String, tag: String) {
@@ -260,7 +252,7 @@ fun OptionCard(
             modifier = Modifier
                 .size(44.dp)
                 .clip(RoundedCornerShape(14.dp))
-                .background(MbIconWash),
+                .background(MbChip),
             contentAlignment = Alignment.Center,
         ) {
             if (leading != null) leading()
