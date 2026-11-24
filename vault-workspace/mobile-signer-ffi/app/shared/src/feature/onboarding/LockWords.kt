@@ -14,6 +14,12 @@ internal class LockWords(private val biometric: String?) {
     val unlockCta = if (named) "ปลดล็อกด้วย $biometric" else "ยืนยันตัวตนเพื่อปลดล็อก"
     val unlockSubtitle = if (named) "สแกนใบหน้าเพื่อเปิดแอปต่อ" else "ยืนยันตัวตนเพื่อเปิดแอปต่อ"
     val signCta = if (named) "เซ็นด้วย $biometric" else "ยืนยันตัวตนเพื่อเซ็น"
+
+    /** Sign on iPhone's last step (5.3.1), and the end of its line under the title: "ก่อน" + this. */
+    val signStep = if (named) "ยืนยันด้วย $biometric" else "ยืนยันตัวตน"
+
+    /** 5.3.1.1's line under the title once the owner check failed. */
+    val signFailedSubtitle = (if (named) "สแกนใบหน้าไม่ตรง" else "ยืนยันตัวตนไม่ผ่าน") + " ลองอีกครั้ง หรือยกเลิกการเซ็น"
     val tileLabel = biometric ?: "ยืนยันตัวตน"
 
     /** The tile shows the Face ID glyph only where the check is Face ID, and a neutral shield elsewhere. */

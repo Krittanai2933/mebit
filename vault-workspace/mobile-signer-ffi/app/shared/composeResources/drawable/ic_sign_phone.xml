@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penpot 5.3.1's signer tile: the device outline, its screen and two buttons, from the board's shapes. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="28dp"
+    android:viewportWidth="22"
+    android:viewportHeight="28">
+    <path
+        android:pathData="M7.179,1.167H14.822A6,6 0,0 1,20.822,7.167V20.834A6,6 0,0 1,14.822,26.834H7.179A6,6 0,0 1,1.179,20.834V7.167A6,6 0,0 1,7.179,1.167Z"
+        android:strokeColor="#042C49"
+        android:strokeWidth="1.8"
+        android:strokeLineJoin="round"/>
+    <path
+        android:pathData="M6.714,4.667H15.285A2,2 0,0 1,17.285,6.667V12A2,2 0,0 1,15.285,14H6.714A2,2 0,0 1,4.714,12V6.667A2,2 0,0 1,6.714,4.667Z"
+        android:strokeColor="#042C49"
+        android:strokeWidth="1.8"
+        android:strokeLineJoin="round"/>
+    <path
+        android:pathData="M6.137,21a1.72,1.72 0,1 0,3.44,0a1.72,1.72 0,1 0,-3.44,0Z"
+        android:strokeColor="#042C49"
+        android:strokeWidth="1.8"/>
+    <path
+        android:pathData="M12.423,21a1.72,1.72 0,1 0,3.44,0a1.72,1.72 0,1 0,-3.44,0Z"
+        android:strokeColor="#042C49"
+        android:strokeWidth="1.8"/>
+</vector>

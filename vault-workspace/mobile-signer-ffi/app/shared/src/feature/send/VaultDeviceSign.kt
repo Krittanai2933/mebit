@@ -64,7 +64,7 @@ fun SignOnDeviceScreen(
             tag = "screen_send/m3",
             onBack = onBack,
             onOpenCatalog = onOpenCatalog,
-            bottom = { DeviceSignButtons(run, onContinue, { onBack?.invoke() }) },
+            bottom = { SignButtons(run.stage == SignStage.Signed, run.stage is SignStage.Failed, run::start, onContinue, { onBack?.invoke() }) },
         )
         return
     }
@@ -103,21 +103,21 @@ fun SignOnDeviceScreen(
         tag = "screen_send/m3",
         onBack = leave,
         onOpenCatalog = onOpenCatalog,
-        bottom = { DeviceSignButtons(run, onContinue, { leave?.invoke() }) },
+        bottom = { SignButtons(run.stage == SignStage.Signed, run.stage is SignStage.Failed, run::start, onContinue, { leave?.invoke() }) },
     )
 }
 
 /** 5.4.2's line under the title once a several-key wallet's key signed. */
-private const val SIGNED_SUBTITLE = "ลายเซ็นถูกส่งกลับมาที่ mebit แล้ว ตรวจรายการด้านล่างอีกครั้งก่อนไปต่อ"
+internal const val SIGNED_SUBTITLE = "ลายเซ็นถูกส่งกลับมาที่ mebit แล้ว ตรวจรายการด้านล่างอีกครั้งก่อนไปต่อ"
 
-/** The bottom of 5.3.2 to 5.7.3: ดำเนินการต่อ once signed, ลองอีกครั้ง over ยกเลิกการเซ็น after a failure, else ยกเลิกการเซ็น alone. */
+/** The bottom of 5.3.1 to 5.7.3: ดำเนินการต่อ once [signed], ลองอีกครั้ง over ยกเลิกการเซ็น after a [failed] try, else ยกเลิกการเซ็น alone. */
 @Composable
-private fun ColumnScope.DeviceSignButtons(run: DeviceSignRun, onContinue: () -> Unit, onCancel: () -> Unit) {
+internal fun ColumnScope.SignButtons(signed: Boolean, failed: Boolean, onRetry: () -> Unit, onContinue: () -> Unit, onCancel: () -> Unit) {
     Spacer(modifier = Modifier.height(12.dp))
-    when (run.stage) {
-        SignStage.Signed -> PrimaryCta("ดำเนินการต่อ", "cta_m3_continue", onContinue)
-        is SignStage.Failed -> {
-            PrimaryCta("ลองอีกครั้ง", "cta_m3_retry", run::start)
+    when {
+        signed -> PrimaryCta("ดำเนินการต่อ", "cta_m3_continue", onContinue)
+        failed -> {
+            PrimaryCta("ลองอีกครั้ง", "cta_m3_retry", onRetry)
             Spacer(modifier = Modifier.height(16.dp))
             SecondaryCta("ยกเลิกการเซ็น", "cta_m3_cancel", onCancel)
         }
@@ -160,8 +160,8 @@ enum class DeviceSample(
         }
 }
 
-private const val SAMPLE_WALLET = "Wallet ครอบครัว"
-private val SAMPLE_REVIEW = SpendReview(
+internal const val SAMPLE_WALLET = "Wallet ครอบครัว"
+internal val SAMPLE_REVIEW = SpendReview(
     "",
     "",
     listOf(SpendOutput("bc1q9h7a2kxv7tq35zcdw0lfp8xr4e8sm4kz", 5_000_000uL)),
