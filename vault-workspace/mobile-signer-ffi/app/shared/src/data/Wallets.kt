@@ -10,6 +10,7 @@ import com.mebit.app.Marker
 import com.mebit.app.Place
 import com.mebit.app.PlainFile
 import com.mebit.app.SecureShelf
+import com.mebit.app.StoreProbe
 import com.mebit.app.walletName
 import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.HotScan
@@ -369,8 +370,27 @@ class Wallets internal constructor(
      */
     fun phoneWallets(): List<PhoneWallet>? = if (unreadMayOpen) null else listed.map { PhoneWallet(it.session.walletName, it.session.fingerprint, it.session.addressType) }
 
-    /** Called when the app returns. Each session repeats its own failed save. */
-    fun flushPendingSaves() = all.forEach { it.session.flushPendingSave() }
+    /**
+     * Called when the app returns and whenever the gate reads the phone's lock again ([lockPresent]). While the lock is gone, every wallet
+     * with a saved copy owes a save, because removing the lock deletes or invalidates the key that copy is sealed to, and nothing is
+     * written: no key can be made without the lock. With the lock, each session repeats its own failed save, after a probe that finds a
+     * copy without its key marks every saved wallet too, for a lock removed and set again while the app was away. True while a save is
+     * still owed, so the caller tries again shortly.
+     */
+    fun lockRead(lockPresent: Boolean): Boolean {
+        if (!lockPresent) {
+            all.forEach { it.session.saveAgainLater() }
+            return false
+        }
+        if (all.any { it.session.saved == SaveState.Saved } && shelf.store(Place.FIRST).probe() == StoreProbe.KeyGone) {
+            all.forEach { it.session.saveAgainLater() }
+        }
+        all.forEach { it.session.flushPendingSave() }
+        return savesPending
+    }
+
+    /** Whether a wallet owes a save that failed. State, so the gate can try again when one fails. */
+    val savesPending: Boolean get() = all.any { it.session.savePending }
 
     /**
      * One vault's last read this run: the core's balance answer, or null for a read that failed, when it ended, and the transactions asked

@@ -162,8 +162,11 @@ class OnboardingSession(
      */
     private var recordGuard: SingleSigWallet.UnconfirmedSend? = null
 
-    /** A save that failed and has not been repeated yet. [flushPendingSave] and the next write point repeat it. */
-    private var pendingSave = false
+    /** A save that failed and has not been repeated yet. [flushPendingSave] and the next write point repeat it. State, so the gate sees it. */
+    private var pendingSave by mutableStateOf(false)
+
+    /** Whether a save waits for [flushPendingSave]. */
+    internal val savePending: Boolean get() = pendingSave
 
     /** Saved before it returns, so a crash can never lose a key whose words were shown. Refused while the session holds a key, unless it is staged. */
     fun generateThisDevice(passphrase: String = "", network: KeyNetwork = KeyNetwork.TEST) {
@@ -504,6 +507,15 @@ class OnboardingSession(
     /** Tries a save that failed again, for example when the app comes back to the foreground. Does nothing unless one is pending. */
     fun flushPendingSave() {
         if (pendingSave) persist()
+    }
+
+    /**
+     * The phone's lock went away, which deletes or invalidates the key the saved copy is sealed to, so that copy may no longer open. The
+     * next flush saves the same record again, and the store seals it under a new key once the lock is back. A wallet with no copy has
+     * nothing to save again.
+     */
+    internal fun saveAgainLater() {
+        if (held is Held.Copy) pendingSave = true
     }
 
     /** Create and Import never drop a key the user may have written down. Only a Staged import, which nothing has shown as final yet, gives way. */
