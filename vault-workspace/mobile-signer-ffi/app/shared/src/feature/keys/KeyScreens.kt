@@ -101,7 +101,6 @@ private const val KEY_NAME_MAX = 40
 /** The grey Penpot 2.4.1 gives the "ไม่ตรง" link, which the theme has no token for. */
 private val MismatchInk = Color(0xFF545454)
 
-/** Penpot 2.4.1's name suggestion: 24 dp high, where the shared [com.mebit.app.ui.components.HwChip] is 28. */
 @Composable
 private fun NameChip(label: String, onPick: () -> Unit) {
     Box(
@@ -154,6 +153,7 @@ fun AddKeyScreen(
             body = "อุปกรณ์แยกที่เก็บกุญแจไว้ออฟไลน์",
             tag = "cta_add_hardware",
             chips = listOf("Jade", "Trezor Safe 7"),
+            chipsUnderIcon = true,
             leading = { Image(painterResource(Res.drawable.ic_key), contentDescription = null, modifier = Modifier.size(24.dp)) },
             onClick = onHardware,
         )

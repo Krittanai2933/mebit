@@ -215,7 +215,7 @@ fun KeySourceScreen(
         Spacer(modifier = Modifier.height(12.dp))
         OptionCard(
             title = "Hardware wallet",
-            body = "กุญแจอยู่บนอุปกรณ์ตลอด มือถือแค่ดูยอดและส่งให้อุปกรณ์เซ็น",
+            body = "กุญแจอยู่บนอุปกรณ์ มือถือแค่ดูยอดและส่งให้อุปกรณ์เซ็น",
             tag = "cta_hardware",
             chips = listOf("Jade", "Trezor Safe 7"),
             chipsTrailing = "เชื่อมผ่าน Bluetooth",
