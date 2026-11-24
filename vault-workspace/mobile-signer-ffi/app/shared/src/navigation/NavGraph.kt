@@ -1058,15 +1058,13 @@ internal fun MebitNavHost(
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
-                    MovieRoute.ChooseWalletReceive, MovieRoute.ChooseWalletSend -> {
-                        val send = current.route == MovieRoute.ChooseWalletSend
+                    MovieRoute.ChooseWalletReceive -> {
                         LaunchedEffect(vaultDraft.created) {
                             wallets.refreshBalances(vaultDraft.created)
                             hardware.refreshBalances()
                         }
                         // The same name, line and figure as the wallet's card on Home's Wallet list.
                         ChooseWalletScreen(
-                            send = send,
                             choices = walletChoices(wallets.listed.map { it.place }, vaults.current.hardware, vaultDraft.created),
                             card = { choice ->
                                 when (choice) {
@@ -1084,7 +1082,7 @@ internal fun MebitNavHost(
                                     }
                                 }
                             },
-                            onChoose = { if (send) openSend(it) else openReceive(it) },
+                            onChoose = { openReceive(it) },
                             onBack = onBack,
                             onOpenCatalog = openCatalog,
                         )

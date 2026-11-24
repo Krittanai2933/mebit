@@ -23,7 +23,7 @@ class BackStackTest {
             "a hardware add" to stops(p1, MovieRoute.Keyring, MovieRoute.AddKey, MovieRoute.HardwareWallet, MovieRoute.VerifyKey),
             "a finished vault" to stops(p1, MovieRoute.VaultList, MovieRoute.Policy, MovieRoute.ChooseKeys, MovieRoute.Review, MovieRoute.VaultCreated),
             "the detail a vault send's slip went back to, which its X closes to the list" to stops(
-                p1, MovieRoute.VaultList, MovieRoute.ChooseWalletSend, MovieRoute.VaultDetail,
+                p1, MovieRoute.VaultList, MovieRoute.ChooseWalletReceive, MovieRoute.VaultDetail,
             ),
         )
         for ((case, stack) in stacks) for (tab in MovieRoute.entries.filter { it.tab }) {
@@ -137,8 +137,8 @@ class BackStackTest {
         assertEquals(stops(p1, MovieRoute.VaultList, MovieRoute.VaultDetail) + slip, stackAfterVaultSend(fromDetail), "back to the detail it began on")
         val viaReceive = stops(p1, MovieRoute.VaultList, MovieRoute.VaultDetail, MovieRoute.M1SendVault, MovieRoute.VaultReceive, *send)
         assertEquals(stops(p1, MovieRoute.VaultList, MovieRoute.VaultDetail) + slip, stackAfterVaultSend(viaReceive), "every send and Receive screen above the detail goes")
-        val fromChooser = stops(p1, MovieRoute.VaultList, MovieRoute.ChooseWalletSend, *send)
-        assertEquals(stops(p1, MovieRoute.VaultList, MovieRoute.ChooseWalletSend, MovieRoute.VaultDetail) + slip, stackAfterVaultSend(fromChooser), "the detail on top of what opened the send")
+        val fromChooser = stops(p1, MovieRoute.VaultList, MovieRoute.ChooseWalletReceive, *send)
+        assertEquals(stops(p1, MovieRoute.VaultList, MovieRoute.ChooseWalletReceive, MovieRoute.VaultDetail) + slip, stackAfterVaultSend(fromChooser), "the detail on top of what opened the send")
         assertEquals(stops(p1, MovieRoute.VaultList, MovieRoute.VaultDetail) + slip, stackAfterVaultSend(stops(p1, *send)), "the catalog's send alone")
         val withSignPages = stops(p1, MovieRoute.VaultList, MovieRoute.VaultDetail, MovieRoute.M1SendVault, MovieRoute.M2CollectSignatures, MovieRoute.M3SignOnPhone, MovieRoute.M3SignOnDevice, MovieRoute.M8ReviewVault)
         assertEquals(stops(p1, MovieRoute.VaultList, MovieRoute.VaultDetail) + slip, stackAfterVaultSend(withSignPages), "a sign page left on the stack goes too, the phone's included")
@@ -198,7 +198,7 @@ class BackStackTest {
         assertEquals(home + Stop(MovieRoute.HardwareSent, p1, "hw_1"), sent, "Back from the slip is Home, never a screen that could sign again")
         assertEquals(home, stackAfterSlipHome(sent, MovieRoute.HardwareHome), "the slip's way home is Back to the Home under it")
 
-        val chooser = stops(p1, MovieRoute.VaultList, MovieRoute.ChooseWalletSend)
+        val chooser = stops(p1, MovieRoute.VaultList, MovieRoute.ChooseWalletReceive)
         val fromChooser = stackAfterOpen(chooser, Stop(MovieRoute.HardwareSend, p1, "hw_1"))
         val sentFromChooser = stackAfterSent(walk(fromChooser, MovieRoute.HardwareReview, MovieRoute.HardwareSign).last(), MovieRoute.HardwareSent)
         assertEquals(chooser + Stop(MovieRoute.HardwareSent, p1, "hw_1"), sentFromChooser)
@@ -213,7 +213,6 @@ class BackStackTest {
             MovieRoute.S3Receive to MovieRoute.S4Send,
             MovieRoute.S2ReceiveBackupGate to MovieRoute.S4Send,
             MovieRoute.VaultReceive to MovieRoute.M1SendVault,
-            MovieRoute.ChooseWalletReceive to MovieRoute.ChooseWalletSend,
         )
         for ((receive, send) in pairs) {
             val under = stops(p1, MovieRoute.VaultList, MovieRoute.S1HomeSingleSig)
@@ -238,7 +237,7 @@ class BackStackTest {
         assertEquals(home, stackAfterSlipHome(sent, MovieRoute.S1HomeSingleSig), "the slip's way home is Back to the Home under it")
         val viaReceive = walk(home, MovieRoute.S3Receive, MovieRoute.S4Send, MovieRoute.S5ReviewSign).last()
         assertEquals(sent, stackAfterSent(viaReceive, MovieRoute.S6SentSlip), "a switch from Receive leaves no Receive under the slip")
-        val chooser = stops(p1, MovieRoute.VaultList, MovieRoute.ChooseWalletSend)
+        val chooser = stops(p1, MovieRoute.VaultList, MovieRoute.ChooseWalletReceive)
         val sentFromChooser = stackAfterSent(walk(chooser, MovieRoute.S4Send, MovieRoute.S5ReviewSign).last(), MovieRoute.S6SentSlip)
         assertEquals(chooser + Stop(MovieRoute.S6SentSlip, p1), sentFromChooser, "Back from a slip begun on the chooser is the chooser")
     }

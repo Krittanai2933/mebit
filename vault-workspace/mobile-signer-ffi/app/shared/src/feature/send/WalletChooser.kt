@@ -52,11 +52,10 @@ data class ChoiceCard(val name: String, val detail: String, val balance: String)
 
 /**
  * Penpot 4.7: the wallets to pick from, as Home's Wallet list draws them, and a tap opens that wallet's Receive (4.9, 4.7.1). The bar's
- * orange button opens it. [send] is the Send chooser, which no screen opens since 4.7 dropped the รับ / ส่ง switch.
+ * orange button opens it.
  */
 @Composable
 fun ChooseWalletScreen(
-    send: Boolean,
     choices: List<WalletChoice>,
     card: (WalletChoice) -> ChoiceCard,
     onChoose: (WalletChoice) -> Unit,
@@ -64,11 +63,11 @@ fun ChooseWalletScreen(
     onOpenCatalog: () -> Unit,
 ) {
     MebitScreen(
-        eyebrow = if (send) "SEND · เลือกกระเป๋า" else "รับ / ส่ง · เลือกกระเป๋า",
+        eyebrow = "รับ / ส่ง · เลือกกระเป๋า",
         title = "เลือกกระเป๋า",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
-        tag = if (send) "screen_wallets/choose-send" else "screen_wallets/choose-receive",
+        tag = "screen_wallets/choose-receive",
     ) {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("กระเป๋าของคุณ", color = ChooserMuted, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
