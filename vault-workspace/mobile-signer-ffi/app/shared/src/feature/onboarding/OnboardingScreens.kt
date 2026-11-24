@@ -299,7 +299,7 @@ private fun KeyCard(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).background(MbIconWash),
+            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).background(MbChip),
             contentAlignment = Alignment.Center,
         ) {
             KeyLogo(KeySourceLabel.ThisDevice, 24.dp)
