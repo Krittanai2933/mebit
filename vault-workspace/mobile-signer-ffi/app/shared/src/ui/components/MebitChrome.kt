@@ -207,7 +207,7 @@ fun SettingsGear(onClick: () -> Unit, modifier: Modifier = Modifier) {
 @Composable
 fun TotalLine(total: String, tag: String) {
     // Penpot starts the total 82 dp after the label's start, past its 80 dp box.
-    Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp).testTag(tag)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp).testTag(tag)) {
         Text("รวมทั้งหมด", color = MbBody, fontSize = 13.5.sp, fontWeight = FontWeight.Light, modifier = Modifier.widthIn(min = 80.dp))
         Text(total, color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
     }

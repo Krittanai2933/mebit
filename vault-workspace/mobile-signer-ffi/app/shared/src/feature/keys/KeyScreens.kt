@@ -402,7 +402,7 @@ fun KeyringScreen(
         },
         trailing = { SettingsGear(onSettings, Modifier.padding(end = 9.dp)) },
     ) {
-        Spacer(modifier = Modifier.height(3.dp))
+        Spacer(modifier = Modifier.height(15.dp))
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text(MovieRoute.Keyring.titleTh, color = MbNavyInk, fontSize = 28.sp, fontWeight = FontWeight.Medium, lineHeight = 34.sp, modifier = Modifier.weight(1f).testTag("title"))
             PlusButton("cta_keyring_add", "เพิ่มกุญแจ", onAddKey, Modifier.padding(end = 9.dp))
@@ -412,7 +412,7 @@ fun KeyringScreen(
         } else {
             TotalLine("${keys.size} กุญแจ", "keyring_total")
         }
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(25.dp))
         if (deleteFailed) {
             Text("ลบกุญแจไม่สำเร็จ ลองอีกครั้ง", color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.testTag("delete_failed"))
             Spacer(modifier = Modifier.height(12.dp))

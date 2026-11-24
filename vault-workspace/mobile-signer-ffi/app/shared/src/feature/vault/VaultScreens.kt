@@ -197,14 +197,14 @@ fun VaultListScreen(
         // Penpot 3.6 puts the gear over the +, so both end 29 dp from the screen's right edge.
         trailing = { SettingsGear(onSettings, Modifier.padding(end = 9.dp)) },
     ) {
-        Spacer(modifier = Modifier.height(3.dp))
+        Spacer(modifier = Modifier.height(15.dp))
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text(MovieRoute.VaultList.titleTh, color = MbNavyInk, fontSize = 28.sp, fontWeight = FontWeight.Medium, lineHeight = 34.sp, modifier = Modifier.weight(1f).testTag("title"))
             // Penpot 1.8 puts the + 29 dp from the screen's right edge, so 9 dp past the screen's own padding.
             PlusButton("cta_vaults_add", "เพิ่ม Wallet", { adding = true }, Modifier.padding(end = 9.dp))
         }
         listTotal(spending, vaults, vaultSats, walletUnopened = unopenedNotice != null, hardware = hardware)?.let { TotalLine(it, "vaults_total") }
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(25.dp))
         VaultsNotice(vaults)
         unopenedNotice?.let {
             Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.testTag("wallets_unopened"))
