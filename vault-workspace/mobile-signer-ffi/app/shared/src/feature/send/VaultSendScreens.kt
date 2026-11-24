@@ -85,6 +85,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.mebit.app.ui.components.IssueBanner
+import com.mebit.app.resources.Res
+import com.mebit.app.resources.ic_warning_state
 
 private val SummaryGold = Color(0xFFEEB42A)
 
@@ -289,7 +292,8 @@ private fun GuardNote(line: String, tag: String) {
  * ([KeySigner.Phone]) has a filled เซ็น that opens Sign on iPhone ([onSignOnPhone]), a signed key shows 5.8's green เซ็นแล้ว ✓ and the
  * time this phone signed it, a Jade's or Safe 7's key ([KeySigner.Device]) an outlined เซ็น that opens its sign screen ([onSignOnDevice]),
  * its signed row reading "เซ็นบน Jade" or "เซ็นบน Trezor" with the time, any other key an outlined เซ็น that does nothing, with its reason
- * under its line, and a key the payment no longer needs ([VaultSend.needsKey]) no เซ็น at all. Once ready the bars turn green beside ครบแล้ว ส่งได้เลย, as 5.8 draws. A null [send],
+ * under its line, and a key the payment no longer needs ([VaultSend.needsKey]) no เซ็น at all. Once ready the bars turn green beside ครบแล้ว ส่งได้เลย, as 5.8 draws. When
+ * the node refused the payment ([postRefused]) it is 5.8.1: ส่งธุรกรรมไม่สำเร็จ over the signed keys, the banner, and ปรับค่าธรรมเนียม ([onAdjustFee]) back to 5.1. A null [send],
  * or one with nothing prepared, shows one line.
  */
 @Composable
@@ -301,6 +305,7 @@ fun CollectSignaturesScreen(
     onSignOnPhone: (KeySigner.Phone) -> Unit,
     onSignOnDevice: (KeySigner.Device) -> Unit,
     onReview: () -> Unit,
+    onAdjustFee: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
@@ -316,15 +321,21 @@ fun CollectSignaturesScreen(
     val signed = send.signedFingerprints.size
     val needed = send.signaturesNeeded
     val ready = send.readyToBroadcast()
+    // 5.8.1: these bytes can never go out, so the way on is a new payment from 5.1, signed again.
+    val refused = postRefused(send.state)
     MebitScreen(
         eyebrow = "SEND · ${vault.name}",
-        title = "เก็บลายเซ็น",
+        title = if (refused) "ส่งธุรกรรมไม่สำเร็จ" else "เก็บลายเซ็น",
         onBack = onBack?.let { back -> { if (send.busy == null) back() } },
         onOpenCatalog = onOpenCatalog,
         tag = "screen_send/m2",
         bottom = {
             Spacer(modifier = Modifier.height(12.dp))
-            PrimaryCta("ต่อไป ตรวจสอบ", "cta_m2_review", onReview, enabled = ready && send.busy == null)
+            if (refused) {
+                PrimaryCta("ปรับค่าธรรมเนียม", "cta_m2_adjust_fee", onAdjustFee)
+            } else {
+                PrimaryCta("ต่อไป ตรวจสอบ", "cta_m2_review", onReview, enabled = ready && send.busy == null)
+            }
             Box(modifier = Modifier.fillMaxWidth().height(38.dp), contentAlignment = Alignment.Center) {
                 if (needed > 0) Text("ต้องเซ็นอีก $needed ดอก", color = MbSlate, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.testTag("m2_needed"))
             }
@@ -338,14 +349,14 @@ fun CollectSignaturesScreen(
             Spacer(modifier = Modifier.weight(1f))
             if (ready) {
                 Text("ครบแล้ว ส่งได้เลย", color = MbSuccess, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, modifier = Modifier.testTag("m2_ready"))
-            } else {
+            } else if (!refused) {
                 Text(signaturesLeftLine(signed, vault.m, needed), color = MbSlate, fontSize = 12.sp, fontWeight = FontWeight.Medium)
             }
         }
         Spacer(modifier = Modifier.height(10.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             repeat(vault.m) { i ->
-                Box(modifier = Modifier.weight(1f).height(6.dp).clip(CircleShape).background(if (ready) MbSuccess else if (i < signed) MbNavy else MbChip))
+                Box(modifier = Modifier.weight(1f).height(6.dp).clip(CircleShape).background(if (ready || refused) MbSuccess else if (i < signed) MbNavy else MbChip))
             }
         }
         Spacer(modifier = Modifier.height(14.dp))
@@ -356,7 +367,7 @@ fun CollectSignaturesScreen(
             }
         }
         Spacer(modifier = Modifier.height(14.dp))
-        Checklist(payment, quote)
+        if (refused) IssueBanner(REFUSED_TITLE, REFUSED_LINE, "m2_refused", Res.drawable.ic_warning_state) else Checklist(payment, quote)
         // A device's request outlives the sign screen the user left, and holds the send until the device answers.
         val holding = (send.busy as? VaultBusy.Signing)?.keyIndex
         if (holding != null && signers.getOrNull(holding) is KeySigner.Device) {
@@ -496,7 +507,8 @@ private fun CheckRow(label: String, value: String, tag: String) {
  * fee, what leaves it in all, and what it keeps of [balanceSats], the balance of its last read, a dash while unknown. ส่งธุรกรรม finishes and
  * posts the payment ([VaultSend.broadcast]) and is on only at [VaultSend.readyToBroadcast], with no owner check of its own because each
  * signature had one. ยกเลิก and Back return to 5.2 with the signatures kept. A refusal, an unknown outcome and the second tap that posts the
- * same bytes again read as they did on 5.2. Once the payment is out it calls [onSent] once. A null [send], or one with nothing prepared,
+ * same bytes again read as they did on 5.2. Once the payment is out it calls [onSent] once, and once the node refused it ([postRefused])
+ * [onRefused], so 5.2 shows 5.8.1. A null [send], or one with nothing prepared,
  * shows one line.
  */
 @Composable
@@ -505,11 +517,14 @@ fun VaultReviewScreen(
     balanceSats: Long?,
     quotes: QuoteCache,
     onSent: () -> Unit,
+    onRefused: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
     val state = send?.state
-    LaunchedEffect(state) { if (state is VaultSendState.Sent) onSent() }
+    LaunchedEffect(state) {
+        if (state is VaultSendState.Sent) onSent() else if (postRefused(state)) onRefused()
+    }
     val payment = send?.payment
     if (send == null || payment == null) {
         MebitScreen(eyebrow = "SEND · ตรวจสอบ", title = "ตรวจก่อนส่ง", onBack = onBack, onOpenCatalog = onOpenCatalog, tag = "screen_send/m8") {
@@ -594,3 +609,14 @@ private const val NO_REVIEW = "ยังไม่มีรายการให�
 private const val NO_SLIP = "ยังไม่มีรายการที่ส่งออก · กลับไปหน้าก่อน"
 private const val BALANCE_UNKNOWN = "ยังดึงยอดที่ใช้ได้ของ Wallet นี้ไม่ได้ จึงยังส่งไม่ได้ ลองใหม่ภายหลัง"
 private const val PAYMENT_UNCONFIRMED = "การส่งครั้งก่อนจาก Wallet นี้ยังยืนยันไม่ได้ เปิดรายละเอียด Wallet เพื่อตรวจรายการก่อนส่งอีกครั้ง"
+
+/**
+ * Pure. Whether the node refused the payment's bytes, Penpot 5.8.1's case: nothing left, and they can never go out. Never an unknown
+ * outcome, which keeps its guard because that payment may be out, so nothing here may say no money left.
+ */
+internal fun postRefused(state: VaultSendState?): Boolean = (state as? VaultSendState.Collecting)?.stale == true
+
+/** 5.8.1's banner, true to a refusal: the board's "โหนดไม่ตอบ" and "ลายเซ็นยังอยู่" are an unknown outcome's and a payment that can go again. */
+private const val REFUSED_TITLE = "เครือข่ายปฏิเสธธุรกรรม"
+private const val REFUSED_LINE = "ค่าธรรมเนียมต่ำเกินไป หรือรายการนี้ส่งไม่ได้แล้ว\nไม่เสียเงิน ปรับค่าธรรมเนียมแล้วเซ็นใหม่"
+

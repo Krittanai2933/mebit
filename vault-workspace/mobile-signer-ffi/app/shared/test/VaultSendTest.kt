@@ -34,9 +34,11 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import com.mebit.app.feature.send.postRefused
 
 /** A several-key wallet's send on fake Rust calls: what each step asks Rust, what it keeps, and the pay-twice guard around the post. */
 class VaultSendTest {
@@ -373,6 +375,21 @@ class VaultSendTest {
         assertEquals(EARLIER_UNSETTLED, send.lastError)
         assertEquals(emptyList(), rust.posts)
         assertEquals("cd".repeat(32), (send.guard as UnconfirmedSend).txid)
+    }
+
+    @Test
+    fun onlyTheNodesRefusalReadsAsBroadcastFailedNeverAnUnknownOutcome() {
+        val refusing = Rust().apply { post = { throw MobileSignerException.InvalidPsbtJson("invalid PSBT json: esplora post: min relay fee not met") } }
+        val refused = signed(refusing, PendingPayments(FakePlainFile()))
+        assertFalse(postRefused(refused.state), "nothing posted yet")
+        assertFalse(refused.broadcast())
+        assertTrue(postRefused(refused.state), "5.8.1: the node refused the bytes, so nothing left")
+        assertNull(refused.lastError, "5.8.1 says it, so 5.1 is left with no ส่งไม่สำเร็จ")
+        val silent = Rust().apply { post = { throw MobileSignerException.BroadcastUnknown(it) } }
+        val unknown = signed(silent, PendingPayments(FakePlainFile()))
+        assertFalse(unknown.broadcast())
+        assertFalse(postRefused(unknown.state), "an unknown outcome may be out, so it never reads as refused")
+        assertNotNull(unknown.lastError, "an unknown outcome keeps its อย่าส่งซ้ำ")
     }
 
     @Test

@@ -64,6 +64,7 @@ import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.app.ui.theme.MbIconWash
 import org.jetbrains.compose.resources.painterResource
+import org.jetbrains.compose.resources.DrawableResource
 
 /** Penpot Movie Page light scaffold (Add Key / Key Source / Vault Created). */
 @Composable
@@ -391,10 +392,13 @@ fun InfoCard(
     }
 }
 
-/** Penpot 4.5.1: the orange banner for a refused or failed send. Its height is a minimum so a wrapped message grows the box instead of clipping. */
+/**
+ * Penpot 4.5.1: the orange banner for a refused or failed send. Its height is a minimum so a wrapped message grows the box instead of
+ * clipping. An [icon] sits at its left, centred, with the words 10 dp after it, as 5.8.1's state banner draws its warning.
+ */
 @Composable
-fun IssueBanner(title: String, message: String, tag: String) {
-    Column(
+fun IssueBanner(title: String, message: String, tag: String, icon: DrawableResource? = null) {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 76.dp)
@@ -402,9 +406,15 @@ fun IssueBanner(title: String, message: String, tag: String) {
             .background(MbIconWash)
             .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 14.dp),
     ) {
-        Text(title, color = MbNavyInk, fontSize = 13.5.sp, fontWeight = FontWeight.Bold, lineHeight = 18.sp)
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(message, color = MbEyebrow, fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 15.sp, modifier = Modifier.testTag(tag))
+        if (icon != null) {
+            Image(painterResource(icon), contentDescription = null, modifier = Modifier.align(Alignment.CenterVertically))
+            Spacer(modifier = Modifier.width(10.dp))
+        }
+        Column {
+            Text(title, color = MbNavyInk, fontSize = 13.5.sp, fontWeight = FontWeight.Bold, lineHeight = 18.sp)
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(message, color = MbEyebrow, fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 15.sp, modifier = Modifier.testTag(tag))
+        }
     }
 }
 

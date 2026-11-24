@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penpot 5.8.1's "Warning icon" in the state banner: the rounded triangle, its bar and dot, a 2 wide amber stroke, from the board's paths. Not ic_warning, which is 1B.4.1's 18 dp triangle. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp"
+    android:height="20dp"
+    android:viewportWidth="20"
+    android:viewportHeight="20">
+    <path
+        android:pathData="M18.108,15L11.441,3.334C11.146,2.811 10.592,2.488 9.992,2.488C9.392,2.488 8.838,2.811 8.542,3.334L1.875,15C1.576,15.518 1.577,16.156 1.879,16.674C2.18,17.189 2.735,17.506 3.333,17.5L16.667,17.5C17.262,17.5 17.812,17.182 18.109,16.666C18.406,16.15 18.406,15.516 18.108,15"
+        android:strokeColor="#C2700F"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+    <path
+        android:pathData="M10,7.5L10,10.834M10,14.166L10.008,14.166"
+        android:strokeColor="#C2700F"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+</vector>

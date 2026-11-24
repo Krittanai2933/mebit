@@ -1010,6 +1010,8 @@ internal fun MebitNavHost(
                             navigate(MovieRoute.M3SignOnDevice)
                         },
                         onReview = { navigate(MovieRoute.M8ReviewVault) },
+                        // 5.8.1: a refused payment can never go out, so 5.1 makes another at a new fee.
+                        onAdjustFee = { if (backStack.any { it.route == MovieRoute.M1SendVault }) backTo(MovieRoute.M1SendVault) else navigate(MovieRoute.M1SendVault) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
@@ -1047,6 +1049,8 @@ internal fun MebitNavHost(
                                 land(stackAfterVaultSend(backStack))
                             }
                         },
+                        // The node refused the payment: 5.2, under the review, shows 5.8.1.
+                        onRefused = { goBack() },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
