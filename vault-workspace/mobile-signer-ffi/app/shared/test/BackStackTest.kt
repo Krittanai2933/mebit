@@ -145,6 +145,17 @@ class BackStackTest {
     }
 
     @Test
+    fun adjustFeeLandsOnTheFormAndNeverAboveTheRefusedPayment() {
+        val fromDetail = stops(p1, MovieRoute.VaultList, MovieRoute.VaultDetail, MovieRoute.M1SendVault, MovieRoute.M2CollectSignatures)
+        assertEquals(stops(p1, MovieRoute.VaultList, MovieRoute.VaultDetail, MovieRoute.M1SendVault), stackAfterAdjustFee(fromDetail), "back to the form under 5.2")
+        val catalog = stops(p1, MovieRoute.VaultList, MovieRoute.M2CollectSignatures)
+        assertEquals(stops(p1, MovieRoute.VaultList, MovieRoute.M1SendVault), stackAfterAdjustFee(catalog), "the form takes 5.2's place")
+        assertEquals(stops(p1, MovieRoute.VaultList, MovieRoute.M1SendVault), stackAfterAdjustFee(stops(p1, MovieRoute.M2CollectSignatures)), "5.2 alone")
+        val withSignPage = stops(p2, MovieRoute.VaultDetail, MovieRoute.M2CollectSignatures, MovieRoute.M3SignOnPhone, MovieRoute.M2CollectSignatures)
+        assertEquals(stops(p2, MovieRoute.VaultDetail, MovieRoute.M1SendVault), stackAfterAdjustFee(withSignPage), "no send screen stays under the form")
+    }
+
+    @Test
     fun aCreatedWalletIsAloneOnTheStackAtTheWizardsPlace() {
         val review = wizard + stops(p2, MovieRoute.ScriptType, MovieRoute.Review)
         assertEquals(listOf(Stop(MovieRoute.VaultCreated, p2)), stackAfterCreate(review))
