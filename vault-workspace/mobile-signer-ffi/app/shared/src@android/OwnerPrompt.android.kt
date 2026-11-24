@@ -13,7 +13,7 @@ import kotlinx.coroutines.withContext
 /**
  * One OS owner check: the framework sheet with a strong biometric or the screen lock (PIN, pattern, password), on the main
  * thread. Null when the owner passed, else the sheet's `BiometricPrompt` error code. A wrong finger or PIN is retried inside
- * the sheet and never reaches here. Cancelling the caller takes the sheet down. Needs API 30, which every caller checks.
+ * the sheet and never reaches here. Cancelling the caller takes the sheet down. Needs API 30, the app's floor.
  * The store reads through it with [crypto]; the `Biometrics` actual (step 7) can call it without one.
  */
 internal suspend fun askOwner(context: Context, title: String, crypto: BiometricPrompt.CryptoObject?): Int? = withContext(Dispatchers.Main) {

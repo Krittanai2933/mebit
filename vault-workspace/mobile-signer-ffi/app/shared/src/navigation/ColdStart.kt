@@ -26,7 +26,7 @@ fun coldStart(probe: StoreProbe): Boot = when (probe) {
     StoreProbe.Present -> Boot.Locked
     StoreProbe.KeyGone -> Boot.Broken(Cause.KeyGone)
     is StoreProbe.Unavailable -> when (probe.why) {
-        Why.NoScreenLock, Why.OsTooOld, Why.NotWired -> Boot.Onboarding // this phone cannot hold a wallet, so none can be hiding
+        Why.NoScreenLock, Why.NotWired -> Boot.Onboarding // this phone cannot hold a wallet, so none can be hiding
         Why.TryLater, Why.Other -> Boot.Locked
     }
 }

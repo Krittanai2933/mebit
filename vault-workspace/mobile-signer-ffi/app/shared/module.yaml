@@ -31,6 +31,9 @@ test-dependencies@android:
   - net.java.dev.jna:jna:5.18.1
 
 settings:
+  android:
+    # The same floor as androidApp, so this module's Android code can assume Android 11 (open item 79).
+    minSdk: 30
   compose:
     enabled: true
     resources:

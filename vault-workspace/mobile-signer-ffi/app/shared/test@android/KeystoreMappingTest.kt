@@ -26,28 +26,15 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The Keystore store's decisions, fed plain facts (API level, file and alias present, screen lock, exceptions, prompt error
+ * The Keystore store's decisions, fed plain facts (file and alias present, screen lock, exceptions, prompt error
  * codes), and its envelope, sealed and opened with a software RSA pair. The Keystore and the OS prompt themselves are proven
  * on an emulator (`.audit/d1-secure-storage/android/spike-2026-11-03.md`), because the host JVM has neither.
  */
 class KeystoreMappingTest {
     @Test
-    fun belowApi30NothingIsStoredWhateverThePhoneHolds() {
-        for (api in 24..29) {
-            everyFact { fileExists, alias, secure ->
-                assertEquals("Unavailable(OsTooOld)", name(androidProbeOutcome(api, fileExists, alias, secure)), "probe api $api")
-                assertEquals("Unavailable(OsTooOld)", name(androidReadRefusal(api, fileExists, alias)), "read api $api")
-                MODES.forEach { mode ->
-                    assertEquals("Unavailable(OsTooOld)", name(androidWriteRefusal(api, fileExists, secure, mode)), "write api $api $mode")
-                }
-            }
-        }
-    }
-
-    @Test
     fun aWalletFileWithItsKeyIsPresentWithOrWithoutAScreenLock() {
         listOf(true, false).forEach { secure ->
-            assertEquals("Present", name(androidProbeOutcome(30, fileExists = true, aliasPresent = true, deviceSecure = secure)), "secure $secure")
+            assertEquals("Present", name(androidProbeOutcome(fileExists = true, aliasPresent = true, deviceSecure = secure)), "secure $secure")
         }
     }
 
@@ -55,32 +42,32 @@ class KeystoreMappingTest {
     fun aWalletFileWithoutItsKeyIsKeyGoneEvenWithNoScreenLock() {
         // Measured: removing the PIN deletes the alias and keeps the file. That phone must reach the recovery screen, not Welcome.
         listOf(true, false).forEach { secure ->
-            assertEquals("KeyGone", name(androidProbeOutcome(36, fileExists = true, aliasPresent = false, deviceSecure = secure)), "secure $secure")
+            assertEquals("KeyGone", name(androidProbeOutcome(fileExists = true, aliasPresent = false, deviceSecure = secure)), "secure $secure")
         }
     }
 
     @Test
     fun aKeystoreThatThrowsBesideAWalletFileIsTryLater() {
         listOf(true, false).forEach { secure ->
-            assertEquals("Unavailable(TryLater)", name(androidProbeOutcome(36, fileExists = true, aliasPresent = null, deviceSecure = secure)), "secure $secure")
+            assertEquals("Unavailable(TryLater)", name(androidProbeOutcome(fileExists = true, aliasPresent = null, deviceSecure = secure)), "secure $secure")
         }
     }
 
     @Test
     fun noWalletFileIsEmptyWithAScreenLockAndNoScreenLockWithout() {
         listOf(true, false, null).forEach { alias ->
-            assertEquals("Empty", name(androidProbeOutcome(30, fileExists = false, aliasPresent = alias, deviceSecure = true)), "alias $alias")
-            assertEquals("Unavailable(NoScreenLock)", name(androidProbeOutcome(30, fileExists = false, aliasPresent = alias, deviceSecure = false)), "alias $alias")
+            assertEquals("Empty", name(androidProbeOutcome(fileExists = false, aliasPresent = alias, deviceSecure = true)), "alias $alias")
+            assertEquals("Unavailable(NoScreenLock)", name(androidProbeOutcome(fileExists = false, aliasPresent = alias, deviceSecure = false)), "alias $alias")
         }
     }
 
     @Test
     fun aReadStartsOnlyWithTheFileAndItsKey() {
-        assertEquals("NotFound", name(androidReadRefusal(30, fileExists = false, aliasPresent = true)))
-        assertEquals("NotFound", name(androidReadRefusal(30, fileExists = false, aliasPresent = false)))
-        assertEquals("KeyGone", name(androidReadRefusal(30, fileExists = true, aliasPresent = false)))
-        assertEquals("Unavailable(TryLater)", name(androidReadRefusal(30, fileExists = true, aliasPresent = null)))
-        assertNull(androidReadRefusal(30, fileExists = true, aliasPresent = true))
+        assertEquals("NotFound", name(androidReadRefusal(fileExists = false, aliasPresent = true)))
+        assertEquals("NotFound", name(androidReadRefusal(fileExists = false, aliasPresent = false)))
+        assertEquals("KeyGone", name(androidReadRefusal(fileExists = true, aliasPresent = false)))
+        assertEquals("Unavailable(TryLater)", name(androidReadRefusal(fileExists = true, aliasPresent = null)))
+        assertNull(androidReadRefusal(fileExists = true, aliasPresent = true))
     }
 
     @Test
@@ -152,23 +139,23 @@ class KeystoreMappingTest {
     @Test
     fun aCreateMeetsAnyWalletFileAsAlreadyThere() {
         listOf(true, false).forEach { secure ->
-            assertEquals("AlreadyExists", name(androidWriteRefusal(30, fileExists = true, deviceSecure = secure, mode = WriteMode.Create)), "secure $secure")
+            assertEquals("AlreadyExists", name(androidWriteRefusal(fileExists = true, deviceSecure = secure, mode = WriteMode.Create)), "secure $secure")
         }
     }
 
     @Test
     fun aWriteWithoutAScreenLockIsNoScreenLock() {
-        assertEquals("Unavailable(NoScreenLock)", name(androidWriteRefusal(30, fileExists = false, deviceSecure = false, mode = WriteMode.Create)))
+        assertEquals("Unavailable(NoScreenLock)", name(androidWriteRefusal(fileExists = false, deviceSecure = false, mode = WriteMode.Create)))
         listOf(true, false).forEach { fileExists ->
-            assertEquals("Unavailable(NoScreenLock)", name(androidWriteRefusal(30, fileExists, deviceSecure = false, mode = WriteMode.Replace(ANY_VERSION))), "file $fileExists")
+            assertEquals("Unavailable(NoScreenLock)", name(androidWriteRefusal(fileExists, deviceSecure = false, mode = WriteMode.Replace(ANY_VERSION))), "file $fileExists")
         }
     }
 
     @Test
     fun aWriteGoesOnWithAScreenLockUnlessACreateMeetsAFile() {
-        assertNull(androidWriteRefusal(30, fileExists = false, deviceSecure = true, mode = WriteMode.Create))
-        assertNull(androidWriteRefusal(30, fileExists = false, deviceSecure = true, mode = WriteMode.Replace(ANY_VERSION)))
-        assertNull(androidWriteRefusal(36, fileExists = true, deviceSecure = true, mode = WriteMode.Replace(ANY_VERSION)))
+        assertNull(androidWriteRefusal(fileExists = false, deviceSecure = true, mode = WriteMode.Create))
+        assertNull(androidWriteRefusal(fileExists = false, deviceSecure = true, mode = WriteMode.Replace(ANY_VERSION)))
+        assertNull(androidWriteRefusal(fileExists = true, deviceSecure = true, mode = WriteMode.Replace(ANY_VERSION)))
     }
 
     @Test
@@ -343,14 +330,8 @@ class KeystoreMappingTest {
     }
 }
 
-/** Both write kinds. A Replace names a version, so the sealed WriteMode has no entries list. */
-private val MODES = listOf(WriteMode.Create, WriteMode.Replace(ANY_VERSION))
-
 /** A version after one advance, distinct from [ANY_VERSION]. */
 private val LATER_VERSION = CopyCounter().advance()
-
-private fun everyFact(check: (fileExists: Boolean, aliasPresent: Boolean?, deviceSecure: Boolean) -> Unit) =
-    listOf(true, false).forEach { file -> listOf(true, false, null).forEach { alias -> listOf(true, false).forEach { secure -> check(file, alias, secure) } } }
 
 /** A result as one comparable word, so a failure prints what came back. */
 private fun name(result: Any?): String = when (result) {

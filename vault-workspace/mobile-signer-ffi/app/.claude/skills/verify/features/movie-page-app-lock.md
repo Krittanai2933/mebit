@@ -41,7 +41,7 @@ Preconditions:
 - `ios-stop` removes the app from the phone and the developer trust goes with it. `VERIFY_IOS_KEEP_APP=1` keeps it.
 - Android asks through the system prompt with a strong biometric or the screen lock, whatever the button says. A biometric-only sheet would need a cancel button and leaves a PIN-only phone nothing to answer with. Five wrong PINs come back as a cancel, so the unlock screen never asks again by itself. The screen still says Face ID on Android.
 - Hardware wallets (`WalletLink.signWalletPsbt`) confirm on their own screen and are not gated by this lock.
-- The 60-second lock is in memory and starts unlocked. A cold start with a saved wallet opens the unlock screen first, see [wallet restart](./wallet-restart.md). Android does the same from API 30 with a screen lock.
+- The 60-second lock is in memory and starts unlocked. A cold start with a saved wallet opens the unlock screen first, see [wallet restart](./wallet-restart.md). Android does the same.
 - Leaving the app with `simctl launch` of another app leaves a "‹ Settings" breadcrumb in the status bar. That is the simulator, not the app.
 - `devicectl device capture screenshot` shows the whole screen, system sheets included, and does not wake the app. It is the only safe way to look while a sheet is up.
 - After a key was created, App Lock shows the eyebrow "SECURITY · ขั้น 4 / 4" and no back chip (boards 1.3.2 and 1.7); after an import it shows neither. The failed state adds "SECURITY · Face ID ไม่ผ่าน" in the create flow, which no board draws now and has only been checked by reading the code.

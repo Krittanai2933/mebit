@@ -3,7 +3,7 @@ package com.mebit.app
 import androidx.compose.runtime.Composable
 
 /** Why this phone cannot hold or release a wallet right now. A closed set, so no message can ever carry data. */
-enum class Why { NoScreenLock, OsTooOld, NotWired, TryLater, Other }
+enum class Why { NoScreenLock, NotWired, TryLater, Other }
 
 /**
  * One numbered place for a wallet on this phone, and the wallet's whole identity here. It names the secure item or file, the

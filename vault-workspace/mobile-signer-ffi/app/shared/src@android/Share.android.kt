@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
-import android.os.Build
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -174,7 +173,7 @@ private fun displayName(context: Context, uri: Uri): String =
 actual fun ImageBitmap.encodePng(): ByteArray {
     val bitmap = asAndroidBitmap()
     // A captured graphics layer can be a hardware bitmap, which compress cannot read.
-    val hardware = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && bitmap.config == Bitmap.Config.HARDWARE
+    val hardware = bitmap.config == Bitmap.Config.HARDWARE
     val readable = if (hardware) bitmap.copy(Bitmap.Config.ARGB_8888, false) else bitmap
     val out = ByteArrayOutputStream()
     check(readable.compress(Bitmap.CompressFormat.PNG, 100, out)) { "Android could not encode the bitmap as PNG" }

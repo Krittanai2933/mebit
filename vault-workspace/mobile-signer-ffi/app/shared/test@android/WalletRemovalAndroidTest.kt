@@ -32,7 +32,7 @@ private fun check(words: List<String>): String = words.joinToString(" ").hashCod
 private class AndroidLikeShelf(val inner: FakeShelf) : SecureShelf {
     override fun store(place: Place): SecureStore = object : SecureStore by inner.store(place) {
         override suspend fun read(reason: String): ReadResult {
-            androidReadRefusal(30, inner.places.getValue(place).probe == StoreProbe.Present, aliasPresent = true)?.let { return it }
+            androidReadRefusal(inner.places.getValue(place).probe == StoreProbe.Present, aliasPresent = true)?.let { return it }
             return inner.store(place).read(reason)
         }
     }
@@ -68,7 +68,7 @@ class WalletRemovalAndroidTest {
     // A phone with no screen lock saves no wallet, and the owner check a several-key removal asks for can never pass there, so the menu says why.
     @Test
     fun onAPhoneWithNoScreenLockASeveralKeyWalletIsBlockedAsNotSaved() {
-        val refusal = androidWriteRefusal(api = 30, fileExists = false, deviceSecure = false, mode = WriteMode.Create)
+        val refusal = androidWriteRefusal(fileExists = false, deviceSecure = false, mode = WriteMode.Create)
         val wallets = Wallets(
             OnePlaceShelf(FakeSecureStore(write = refusal)),
             forgetScans = {},

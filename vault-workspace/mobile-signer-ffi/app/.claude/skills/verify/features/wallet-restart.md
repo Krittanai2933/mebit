@@ -1,6 +1,6 @@
 # Wallet restart
 
-On iOS a software wallet that was created or imported is saved on the phone. A cold start then opens an unlock screen with the Face ID card instead of Welcome, and a match opens Home with the same key. A payment whose outcome is not known is saved with the wallet, so after a restart Send and Review still refuse to pay it again. A reinstall erases the wallet that the deleted install left, and Forget erases it on purpose. On Android (API 30 and up, with a screen lock) the wallet is saved the same way under a Keystore key, and a cold start opens the unlock screen with the system PIN or fingerprint prompt.
+On iOS a software wallet that was created or imported is saved on the phone. A cold start then opens an unlock screen with the Face ID card instead of Welcome, and a match opens Home with the same key. A payment whose outcome is not known is saved with the wallet, so after a restart Send and Review still refuse to pay it again. A reinstall erases the wallet that the deleted install left, and Forget erases it on purpose. On Android (API 30, the app's floor, with the screen lock the app requires) the wallet is saved the same way under a Keystore key, and a cold start opens the unlock screen with the system PIN or fingerprint prompt.
 
 ## Sub-features
 

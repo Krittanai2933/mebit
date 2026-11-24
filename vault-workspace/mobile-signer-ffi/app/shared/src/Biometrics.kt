@@ -26,7 +26,7 @@ interface Biometrics {
     suspend fun authenticate(reason: String, allowPasscode: Boolean = false): BiometricResult
 
     /**
-     * Never prompts. True while the phone's own owner check, a passcode or a secure screen lock on Android 11 or later, guards
+     * Never prompts. True while the phone's own owner check, a passcode or a secure screen lock, guards
      * this one. Then the gates ask only when the user turned App Lock on. False on a phone with neither, read live each time,
      * so a lock removed while the app runs counts at the next gate.
      */

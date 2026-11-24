@@ -38,6 +38,6 @@ internal fun saveNoticeText(saved: SaveState, why: Why?, lastSaveFailed: Boolean
 /** Pure. What the notice says for [why] the key was not saved, null being a save that named no reason. */
 internal fun notSavedText(why: Why?): String = when (why) {
     Why.NoScreenLock -> "ยังไม่ได้บันทึกกุญแจไว้ในเครื่อง · ตั้งรหัสล็อกหน้าจอ แล้วเปิดแอปอีกครั้ง"
-    Why.NotWired, Why.OsTooOld -> "เครื่องนี้ยังบันทึกกุญแจไว้ไม่ได้ · จด 24 คำไว้ให้ดี"
+    Why.NotWired -> "เครื่องนี้ยังบันทึกกุญแจไว้ไม่ได้ · จด 24 คำไว้ให้ดี"
     Why.TryLater, Why.Other, null -> "บันทึกกุญแจไว้ในเครื่องไม่สำเร็จ · จด 24 คำไว้ให้ดี"
 }

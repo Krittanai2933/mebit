@@ -814,7 +814,7 @@ class OnboardingSessionSaveTest {
 
     @Test
     fun aStoreThatCanNeverKeepTheWalletIsNotRetriedByAFlush() {
-        for (why in listOf(Why.NotWired, Why.OsTooOld)) {
+        for (why in listOf(Why.NotWired)) {
             val store = FakeSecureStore(write = WriteResult.Unavailable(why))
             val session = session(store)
             session.generateThisDevice()

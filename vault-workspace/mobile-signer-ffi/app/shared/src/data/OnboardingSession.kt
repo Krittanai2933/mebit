@@ -471,7 +471,7 @@ class OnboardingSession(
                     lastSaveFailed = true
                 }
                 // A store that can never keep it here has nothing to retry, and a foreground flush would only encode the record again.
-                pendingSave = r.why != Why.NotWired && r.why != Why.OsTooOld
+                pendingSave = r.why != Why.NotWired
             }
         }
         false
