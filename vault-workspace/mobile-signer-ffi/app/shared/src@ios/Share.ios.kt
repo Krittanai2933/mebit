@@ -6,15 +6,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asSkiaBitmap
+import kotlin.experimental.ExperimentalNativeApi
+import kotlin.native.ref.WeakReference
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.convert
 import kotlinx.cinterop.usePinned
 import org.jetbrains.skia.EncodedImageFormat
 import org.jetbrains.skia.Image
-import platform.CoreGraphics.CGRectGetMidX
-import platform.CoreGraphics.CGRectGetMidY
-import platform.CoreGraphics.CGRectMake
 import platform.Foundation.NSData
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSString
@@ -27,16 +26,12 @@ import platform.Foundation.dataWithBytes
 import platform.Foundation.dataWithContentsOfURL
 import platform.Foundation.writeToURL
 import platform.UIKit.UIActivityViewController
-import platform.UIKit.UIApplication
 import platform.UIKit.UIDocumentPickerDelegateProtocol
 import platform.UIKit.UIDocumentPickerViewController
 import platform.UIKit.UIImage
-import platform.UIKit.UIViewController
-import platform.UIKit.popoverPresentationController
 import platform.UniformTypeIdentifiers.UTTypeItem
 import platform.darwin.NSObject
 
-@OptIn(ExperimentalForeignApi::class)
 private object IosSharer : Sharer {
     override fun text(text: String) {
         present(text)
@@ -47,25 +42,20 @@ private object IosSharer : Sharer {
         present(image)
     }
 
-    /** False when no screen can show the sheet. [completion] runs when the sheet closes, with whether the user chose a target and the error text, if any. */
-    fun present(item: Any, completion: ((Boolean, String?) -> Unit)? = null): Boolean {
-        val top = topViewController() ?: return false
+    /**
+     * False when no screen can show the sheet. [onClosed] runs once when the sheet closes, with whether the user chose a target and the
+     * error text, if any. A block that covers the app closes it as no choice.
+     */
+    @OptIn(ExperimentalNativeApi::class)
+    fun present(item: Any, onClosed: (Boolean, String?) -> Unit = { _, _ -> }): Boolean {
         val sheet = UIActivityViewController(activityItems = listOf(item), applicationActivities = null)
-        if (completion != null) sheet.completionWithItemsHandler = { _, completed, _, error -> completion(completed, error?.localizedDescription) }
-        // iPad shows the sheet as a popover, and presenting a popover with no anchor raises an exception.
-        sheet.popoverPresentationController?.let { popover ->
-            val bounds = top.view.bounds()
-            popover.sourceView = top.view
-            popover.sourceRect = CGRectMake(CGRectGetMidX(bounds), CGRectGetMidY(bounds), 0.0, 0.0)
+        // Weak, because the sheet holds this handler and the garbage collector does not follow a cycle through UIKit.
+        val shown = WeakReference(sheet)
+        sheet.completionWithItemsHandler = { _, completed, _, error ->
+            if (NativeSheets.answered(shown.get())) onClosed(completed, error?.localizedDescription)
         }
-        top.presentViewController(sheet, animated = true, completion = null)
-        return true
+        return NativeSheets.present(sheet, onCovered = { onClosed(false, null) })
     }
-}
-
-internal fun topViewController(): UIViewController? {
-    val root = UIApplication.sharedApplication.keyWindow?.rootViewController ?: return null
-    return generateSequence(root) { it.presentedViewController }.last()
 }
 
 @Composable
@@ -82,11 +72,10 @@ actual fun rememberTextFileExport(onResult: (ExportOutcome) -> Unit): TextFileEx
 private class IosTextFileExport(private val delegate: ExportPickerDelegate, private val onResult: (ExportOutcome) -> Unit) : TextFileExport {
     override fun save(name: String, text: String) {
         val url = writeExportFile(name, text) ?: return onResult(ExportOutcome.Failed("write"))
-        val top = topViewController() ?: return onResult(ExportOutcome.Failed("no screen"))
         // asCopy keeps the temp file in place, so the same file can be saved or shared again.
         val picker = UIDocumentPickerViewController(forExportingURLs = listOf(url), asCopy = true)
         picker.delegate = delegate
-        top.presentViewController(picker, animated = true, completion = null)
+        if (!NativeSheets.present(picker, onCovered = { onResult(ExportOutcome.Cancelled) })) onResult(ExportOutcome.Failed("no screen"))
     }
 
     override fun share(name: String, text: String) {
@@ -97,9 +86,13 @@ private class IosTextFileExport(private val delegate: ExportPickerDelegate, priv
 
 /** A pick is Done and Cancel is Cancelled. The picker closes itself either way, so nothing waits on this. */
 private class ExportPickerDelegate(private val onResult: (ExportOutcome) -> Unit) : NSObject(), UIDocumentPickerDelegateProtocol {
-    override fun documentPicker(controller: UIDocumentPickerViewController, didPickDocumentsAtURLs: List<*>) = onResult(ExportOutcome.Done)
+    override fun documentPicker(controller: UIDocumentPickerViewController, didPickDocumentsAtURLs: List<*>) {
+        if (NativeSheets.answered(controller)) onResult(ExportOutcome.Done)
+    }
 
-    override fun documentPickerWasCancelled(controller: UIDocumentPickerViewController) = onResult(ExportOutcome.Cancelled)
+    override fun documentPickerWasCancelled(controller: UIDocumentPickerViewController) {
+        if (NativeSheets.answered(controller)) onResult(ExportOutcome.Cancelled)
+    }
 }
 
 @Composable
@@ -112,23 +105,25 @@ actual fun rememberTextFilePicker(onResult: (FilePick) -> Unit): TextFilePicker 
 
 private class IosTextFilePicker(private val delegate: OpenPickerDelegate, private val onResult: (FilePick) -> Unit) : TextFilePicker {
     override fun pick() {
-        val top = topViewController() ?: return onResult(FilePick.Refused("no screen"))
         // UTTypeItem is any file, so a ".bsms" that iOS knows no type for is still offered. asCopy hands over a copy in the app's own folder, which needs no security scope.
         val any = UTTypeItem ?: return onResult(FilePick.Refused("no type"))
         val picker = UIDocumentPickerViewController(forOpeningContentTypes = listOf(any), asCopy = true)
         picker.allowsMultipleSelection = false
         picker.delegate = delegate
-        top.presentViewController(picker, animated = true, completion = null)
+        if (!NativeSheets.present(picker, onCovered = { onResult(FilePick.Cancelled) })) onResult(FilePick.Refused("no screen"))
     }
 }
 
 private class OpenPickerDelegate(private val onResult: (FilePick) -> Unit) : NSObject(), UIDocumentPickerDelegateProtocol {
     override fun documentPicker(controller: UIDocumentPickerViewController, didPickDocumentsAtURLs: List<*>) {
+        if (!NativeSheets.answered(controller)) return
         val url = didPickDocumentsAtURLs.firstOrNull() as? NSURL ?: return onResult(FilePick.Cancelled)
         onResult(readPicked(url))
     }
 
-    override fun documentPickerWasCancelled(controller: UIDocumentPickerViewController) = onResult(FilePick.Cancelled)
+    override fun documentPickerWasCancelled(controller: UIDocumentPickerViewController) {
+        if (NativeSheets.answered(controller)) onResult(FilePick.Cancelled)
+    }
 }
 
 /** The copy at [url] as text and name, or why it is refused: over [MAX_PICKED_BYTES], not UTF-8, or unreadable. */

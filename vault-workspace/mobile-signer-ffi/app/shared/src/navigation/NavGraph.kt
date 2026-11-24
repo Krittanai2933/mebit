@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mebit.app.BiometricResult
+import com.mebit.app.CloseNativeSheetsWhileCovered
 import com.mebit.app.Pairings
 import com.mebit.app.Place
 import com.mebit.app.SystemBack
@@ -461,6 +462,7 @@ internal fun MebitNavHost(
         LocalBtcUnit provides unitSettings.current,
         LocalCovered provides (LocalCovered.current || appLock.locked),
     ) {
+        CloseNativeSheetsWhileCovered()
         Box(Modifier.fillMaxSize().background(MbPage)) {
             val inset = if (bar != null && !barHidden) bottomBarHeight() else 0.dp
             Box(Modifier.fillMaxSize().padding(bottom = inset).consumeWindowInsets(PaddingValues(bottom = inset))) {

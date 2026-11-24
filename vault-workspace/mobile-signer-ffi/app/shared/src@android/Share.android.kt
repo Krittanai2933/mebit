@@ -1,6 +1,5 @@
 package com.mebit.app
 
-import android.app.Activity
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
@@ -34,12 +33,6 @@ private class AndroidSharer(private val context: Context) : Sharer {
     )
 
     override fun image(png: ByteArray, name: String) = shareFile(context, safeShareName(name) + ".png", png, "image/png")
-}
-
-private fun startChooser(context: Context, intent: Intent) {
-    val chooser = Intent.createChooser(intent, null)
-    if (context !is Activity) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    context.startActivity(chooser)
 }
 
 /** Writes [bytes] as `cacheDir/share/[fileName]`, the one folder the FileProvider serves, and opens the share sheet with that file. */

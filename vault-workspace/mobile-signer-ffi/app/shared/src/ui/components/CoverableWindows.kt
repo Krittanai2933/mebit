@@ -20,7 +20,7 @@ import androidx.compose.ui.window.PopupProperties
 /**
  * Whether a block covers the app: the no-screen-lock block (WalletGate) or the App Lock (MebitNavHost). A popup, sheet or dialog is a
  * window of its own and would draw above either block, so every one opens through the wrappers below. CoverableWindowsRuleTest fails
- * on any other call.
+ * on any other call. The system's own sheets close through CloseNativeSheetsWhileCovered.
  */
 val LocalCovered = compositionLocalOf { false }
 
