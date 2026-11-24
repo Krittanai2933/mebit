@@ -113,7 +113,7 @@ fun WelcomeScreen(
             Image(
                 painter = painterResource(Res.drawable.mebit_logo),
                 contentDescription = "mebit",
-                modifier = Modifier.size(width = 122.dp, height = 32.dp),
+                modifier = Modifier.size(width = 99.5.dp, height = 26.dp),
             )
         }
         // The fan keeps its design size, stays top-aligned and bleeds off the right edge; on a short screen it gives up its shadow tail first.
