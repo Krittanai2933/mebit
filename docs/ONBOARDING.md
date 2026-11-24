@@ -4,13 +4,13 @@
 
 ## อ่านอะไรก่อน (เรียงตามลำดับ)
 
-1. [`docs/00-capstone-brief.md`](docs/00-capstone-brief.md) — โจทย์ต้นฉบับฉบับเต็ม (ภาษาไทย) **อ่านอันนี้ก่อนทุกอย่าง**
-2. [`docs/01-architecture.md`](docs/01-architecture.md) — สรุปสถาปัตยกรรมแบบย่อ (อังกฤษ)
-3. [`docs/02-roles-and-responsibilities.md`](docs/02-roles-and-responsibilities.md) — ใครถือคีย์ไหน เซ็นคู่กับใครตอนไหน
-4. [`docs/03-flows.md`](docs/03-flows.md) — โฟลว์แบบละเอียด: onboarding, เปิด loan, คืนหลักประกัน, liquidation, fallback
-5. [`docs/04-open-items.md`](docs/04-open-items.md) — สิ่งที่ยังไม่ได้ตัดสินใจ — เช็คก่อนเชื่อว่าตัวเลข/กติกาไหนล็อกแล้ว
-6. [`docs/design-notes.md`](docs/design-notes.md) — current Penpot Organize wallet/custody flow และโน้ตดีไซน์ lending รุ่นก่อน (ทีม mobile-signer-ffi ควรอ่าน)
-7. [`docs/05-progress-and-next-steps.md`](docs/05-progress-and-next-steps.md) — **สถานะปัจจุบันจริงๆ ของแต่ละโมดูล และสิ่งที่ต้องทำต่อ** เช็คอันนี้ก่อนเริ่มงานทุกครั้งเพื่อไม่ให้ทำซ้ำกับที่มีอยู่แล้ว
+1. [`docs/00-capstone-brief.md`](00-capstone-brief.md) — โจทย์ต้นฉบับฉบับเต็ม (ภาษาไทย) **อ่านอันนี้ก่อนทุกอย่าง**
+2. [`docs/01-architecture.md`](01-architecture.md) — สรุปสถาปัตยกรรมแบบย่อ (อังกฤษ)
+3. [`docs/02-roles-and-responsibilities.md`](02-roles-and-responsibilities.md) — ใครถือคีย์ไหน เซ็นคู่กับใครตอนไหน
+4. [`docs/03-flows.md`](03-flows.md) — โฟลว์แบบละเอียด: onboarding, เปิด loan, คืนหลักประกัน, liquidation, fallback
+5. [`docs/04-open-items.md`](04-open-items.md) — สิ่งที่ยังไม่ได้ตัดสินใจ — เช็คก่อนเชื่อว่าตัวเลข/กติกาไหนล็อกแล้ว
+6. [`docs/design-notes.md`](design-notes.md) — current Penpot Organize wallet/custody flow และโน้ตดีไซน์ lending รุ่นก่อน (ทีม mobile-signer-ffi ควรอ่าน)
+7. [`docs/05-progress-and-next-steps.md`](05-progress-and-next-steps.md) — **สถานะปัจจุบันจริงๆ ของแต่ละโมดูล และสิ่งที่ต้องทำต่อ** เช็คอันนี้ก่อนเริ่มงานทุกครั้งเพื่อไม่ให้ทำซ้ำกับที่มีอยู่แล้ว
 
 ## โครงสร้าง repo
 
