@@ -43,6 +43,17 @@ internal fun NodeSetting.toChoice(): NodeChoice = when (this) {
     is NodeSetting.Own -> NodeChoice.Own(base)
 }
 
+/**
+ * The explorer page of [txid] on this node, which the slip's QR opens. Auto names blockstream.info, the first public host it tries: the
+ * build's own node, which Auto may try first, is private, and a slip is shared with people who cannot reach it.
+ */
+fun NodeSetting.txPageUrl(txid: String): String = when (this) {
+    NodeSetting.Auto, NodeSetting.Blockstream -> "https://blockstream.info/testnet4/tx/$txid"
+    NodeSetting.MempoolSpace -> "https://mempool.space/testnet4/tx/$txid"
+    // shortcut: assumes the node serves its explorer's web pages beside its /api, as Esplora and mempool do; an API-only node gives a dead link. Add a page URL to the setting when one shows up.
+    is NodeSetting.Own -> base.trimEnd('/').removeSuffix("/api") + "/tx/$txid"
+}
+
 /** The node setting and its file. [file] is null where the phone has no place for it, and then a choice lasts until the app closes. */
 class NodeSettings internal constructor(private val file: PlainFile?, private val use: (NodeChoice) -> Unit = { chainUseNode(it, KeyNetwork.TEST) }) {
     var current: NodeSetting by mutableStateOf(NodeSetting.Auto)

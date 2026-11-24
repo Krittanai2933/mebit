@@ -44,6 +44,7 @@ import com.mebit.app.SystemBack
 import com.mebit.app.data.AmountEntry
 import com.mebit.app.data.BUSY
 import com.mebit.app.data.KeySigner
+import com.mebit.app.data.NodeSetting
 import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.Repost
 import com.mebit.app.data.SavedKey
@@ -566,7 +567,7 @@ fun VaultReviewScreen(
  * also does. Only a payment that went out has a slip, so anything else shows one line.
  */
 @Composable
-fun VaultSentScreen(send: VaultSend?, quotes: QuoteCache, onHome: () -> Unit, onBack: (() -> Unit)?, onOpenCatalog: () -> Unit) {
+fun VaultSentScreen(send: VaultSend?, quotes: QuoteCache, node: NodeSetting, onHome: () -> Unit, onBack: (() -> Unit)?, onOpenCatalog: () -> Unit) {
     val sent = send?.state as? VaultSendState.Sent
     if (send == null || sent == null) {
         MebitScreen(eyebrow = "SENT · WALLET", title = "สลิปส่ง Bitcoin", onBack = onBack, onOpenCatalog = onOpenCatalog, tag = "screen_send/m9") {
@@ -584,7 +585,7 @@ fun VaultSentScreen(send: VaultSend?, quotes: QuoteCache, onHome: () -> Unit, on
         rateSatVb = send.draft.rateSatVb,
         destination = sent.payment.destination,
         walletName = send.vault.name,
-        multiKey = true,
+        node = node,
         quotes = quotes,
         onHome = onHome,
         onOpenCatalog = onOpenCatalog,

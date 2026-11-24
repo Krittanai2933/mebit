@@ -25,6 +25,7 @@ import com.mebit.app.data.FiatQuote
 import com.mebit.app.data.GUARD_NOT_SAVED
 import com.mebit.app.feature.onboarding.LockWords
 import com.mebit.app.getPlatform
+import com.mebit.app.data.NodeSetting
 import com.mebit.app.data.OnboardingSession
 import com.mebit.app.data.QuoteCache
 import com.mebit.app.data.QuoteLoad
@@ -446,6 +447,7 @@ fun S6SentScreen(
     quotes: QuoteCache,
     walletName: String,
     variant: String,
+    node: NodeSetting,
     onHome: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
@@ -460,7 +462,7 @@ fun S6SentScreen(
             rateSatVb = draft.rateSatVb,
             destination = draft.destination,
             walletName = walletName,
-            multiKey = false,
+            node = node,
             quotes = quotes,
             onHome = onHome,
             onOpenCatalog = onOpenCatalog,

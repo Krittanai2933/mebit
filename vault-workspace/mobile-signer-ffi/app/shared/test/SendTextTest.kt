@@ -52,10 +52,12 @@ class SendTextTest {
     }
 
     @Test
-    fun slipFeeIsSatsThenBaht() {
-        assertEquals("1,128 sat ≈ ฿41", slipFeeText(1_128, boardPrice))
-        assertEquals("34,285 sat ≈ ฿1,235", slipFeeText(34_285, boardPrice))
-        assertEquals("564 sat", slipFeeText(564, null))
+    fun slipFeeIsBahtThenTheRate() {
+        assertEquals("41 บาท · 8 sat/vB", slipFeeText(1_128, 8, boardPrice))
+        assertEquals("1,235 บาท · 1 sat/vB", slipFeeText(34_285, 1, boardPrice))
+        assertEquals("564 sat · 4 sat/vB", slipFeeText(564, 4, null))
+        assertEquals("18,010 บาท", slipBaht(500_000, boardPrice))
+        assertNull(slipBaht(500_000, null))
     }
 
     @Test
@@ -63,14 +65,6 @@ class SendTextTest {
         assertEquals("bc1q xy2k gdyg jrsq tzq2 n0yr\nf249 3p83 kkfj hx0w lh", groupedLines("bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh", 6))
         val txid = "e089b6d14c7a9f032e58d1a76bc40f927e3d85a1c6f04b29d8731e6c0a955a2f"
         assertEquals("e089 b6d1 4c7a 9f03 2e58 d1a7 6bc4 0f92\n7e3d 85a1 c6f0 4b29 d873 1e6c 0a95 5a2f", groupedLines(txid, 8))
-    }
-
-    @Test
-    fun theSlipNamesOnlyTheAddressTypeTheAddressProves() {
-        assertEquals("Native SegWit", addressTypeLine("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"))
-        assertEquals("Native SegWit", addressTypeLine("BC1QXY2KGDYGJRSQTZQ2N0YRF2493P83KKFJHX0WLH"))
-        assertEquals("Taproot", addressTypeLine("tb1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqp3mvzv"))
-        assertNull(addressTypeLine("2N1Zq3vJ8s"))
     }
 
     @Test
