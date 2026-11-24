@@ -3,6 +3,7 @@ package com.mebit.app.navigation
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,6 +28,7 @@ import com.mebit.app.rememberScreenLockSettingsOpener
 import com.mebit.app.rememberScanStateDir
 import com.mebit.app.rememberSecureShelf
 import com.mebit.app.rememberVaultsStorage
+import com.mebit.app.ui.components.LocalCovered
 import com.mebit.app.ui.components.coversScreen
 import com.mebit.ffi.signer.hotUseStateDir
 
@@ -70,8 +72,9 @@ fun WalletGate() {
     if (lock == LockGate.Wait) {
         NoScreenLockScreen(rememberScreenLockSettingsOpener())
     } else {
-        // Open and Covered compose the app in the same place, so a lock that comes and goes keeps every wallet and screen.
-        OpenGate()
+        // Open and Covered compose the app in the same place, so a lock that comes and goes keeps every wallet and screen. Covered
+        // closes its sheets and popups, which would draw above the block.
+        CompositionLocalProvider(LocalCovered provides (lock == LockGate.Covered)) { OpenGate() }
         if (lock == LockGate.Covered) {
             // Composed after the app, so this SystemBack wins over its screens' and Back sends the app to the background.
             SystemBack(rememberLeaveApp())

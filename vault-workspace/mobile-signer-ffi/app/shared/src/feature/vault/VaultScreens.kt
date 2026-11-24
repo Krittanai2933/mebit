@@ -37,7 +37,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.mebit.app.ExportOutcome
 import com.mebit.app.FilePick
@@ -47,6 +46,7 @@ import com.mebit.app.data.ImportProblem
 import com.mebit.app.data.bsmsRecordOf
 import com.mebit.app.rememberTextFilePicker
 import com.mebit.app.resources.ic_export
+import com.mebit.app.ui.components.CoverableDialog
 import com.mebit.app.ui.components.MenuAction
 import com.mebit.app.Place
 import com.mebit.app.ui.components.TotalLine
@@ -314,7 +314,8 @@ fun VaultListScreen(
         )
     }
     importProblem?.let { problem ->
-        Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)) {
+        // Only its buttons close it, so a block over the app hides it and it shows again after: the refusal stays the answer to the file the user picked.
+        CoverableDialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)) {
             NoticeDialog(tag = "import_problem", title = problem.title, body = problem.body) {
                 NoticeButton("เลือกไฟล์ใหม่", "import_problem_again", filled = true) {
                     onProblemClear()

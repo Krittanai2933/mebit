@@ -17,7 +17,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -163,6 +162,8 @@ import com.mebit.app.rememberBiometrics
 import com.mebit.app.rememberFakeDeviceScript
 import com.mebit.app.rememberFakeDeviceSwitch
 import com.mebit.app.rememberIsDebugBuild
+import com.mebit.app.ui.components.CoverableSheet
+import com.mebit.app.ui.components.LocalCovered
 import com.mebit.app.ui.components.LocalDebugLinkLift
 import com.mebit.app.ui.components.MebitBottomBar
 import com.mebit.app.ui.components.MebitScreen
@@ -455,7 +456,12 @@ internal fun MebitNavHost(
     val bar = current.route.bar
     // A sheet that covers a tab screen, the wallet list's QR scanner, hides the bar and gives the screen its room.
     var barHidden by remember { mutableStateOf(false) }
-    CompositionLocalProvider(LocalDebugLinkLift provides if (bar != null && !barHidden) 22.dp else 0.dp, LocalBtcUnit provides unitSettings.current) {
+    // While the App Lock covers the screens, their sheets and popups close: a window would draw above the cover.
+    CompositionLocalProvider(
+        LocalDebugLinkLift provides if (bar != null && !barHidden) 22.dp else 0.dp,
+        LocalBtcUnit provides unitSettings.current,
+        LocalCovered provides (LocalCovered.current || appLock.locked),
+    ) {
         Box(Modifier.fillMaxSize().background(MbPage)) {
             val inset = if (bar != null && !barHidden) bottomBarHeight() else 0.dp
             Box(Modifier.fillMaxSize().padding(bottom = inset).consumeWindowInsets(PaddingValues(bottom = inset))) {
@@ -1184,69 +1190,69 @@ internal fun MebitNavHost(
                 )
             }
         }
-    }
 
-    if (catalogOpen) {
-        ModalBottomSheet(
-            onDismissRequest = { catalogOpen = false },
-            sheetState = rememberFullSheetState(),
-            modifier = Modifier.testTag("route_catalog"),
-        ) {
-            Text(
-                text = "MOVIE PAGE ROUTES",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-            )
-            LazyColumn(modifier = Modifier.padding(bottom = 32.dp)) {
-                items(MovieRoute.entries, key = { it.path }) { route ->
-                    Text(
-                        text = route.eyebrow + " · " + route.titleTh +
-                            if (route in ImplementedRoutes) " ✓" else "",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                catalogOpen = false
-                                deviceSample = null
-                                phoneSample = null
-                                navigate(route)
-                            }
-                            .padding(horizontal = 24.dp, vertical = 12.dp)
-                            .testTag("catalog_" + route.path),
-                    )
-                }
-                // The states of 5.3.1, 5.4.1 and 5.3.1.1 with the boards' sample data, so each can be set beside its board with no payment.
-                items(PhoneSample.entries, key = { "sample_" + it.tag }) { sample ->
-                    Text(
-                        text = "SIGN SAMPLE · " + sample.label,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                catalogOpen = false
-                                phoneSample = sample
-                                navigate(MovieRoute.M3SignOnPhone)
-                            }
-                            .padding(horizontal = 24.dp, vertical = 12.dp)
-                            .testTag("catalog_sign_" + sample.tag),
-                    )
-                }
-                // The states of 5.3.2 to 5.7.3 with the boards' sample data, so each can be set beside its board with no device.
-                items(DeviceSample.entries, key = { "sample_" + it.tag }) { sample ->
-                    Text(
-                        text = "SIGN SAMPLE · " + sample.label,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                catalogOpen = false
-                                deviceSample = sample
-                                navigate(MovieRoute.M3SignOnDevice)
-                            }
-                            .padding(horizontal = 24.dp, vertical = 12.dp)
-                            .testTag("catalog_sign_" + sample.tag),
-                    )
+        if (catalogOpen) {
+            CoverableSheet(
+                onDismissRequest = { catalogOpen = false },
+                sheetState = rememberFullSheetState(),
+                modifier = Modifier.testTag("route_catalog"),
+            ) {
+                Text(
+                    text = "MOVIE PAGE ROUTES",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                )
+                LazyColumn(modifier = Modifier.padding(bottom = 32.dp)) {
+                    items(MovieRoute.entries, key = { it.path }) { route ->
+                        Text(
+                            text = route.eyebrow + " · " + route.titleTh +
+                                if (route in ImplementedRoutes) " ✓" else "",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    catalogOpen = false
+                                    deviceSample = null
+                                    phoneSample = null
+                                    navigate(route)
+                                }
+                                .padding(horizontal = 24.dp, vertical = 12.dp)
+                                .testTag("catalog_" + route.path),
+                        )
+                    }
+                    // The states of 5.3.1, 5.4.1 and 5.3.1.1 with the boards' sample data, so each can be set beside its board with no payment.
+                    items(PhoneSample.entries, key = { "sample_" + it.tag }) { sample ->
+                        Text(
+                            text = "SIGN SAMPLE · " + sample.label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    catalogOpen = false
+                                    phoneSample = sample
+                                    navigate(MovieRoute.M3SignOnPhone)
+                                }
+                                .padding(horizontal = 24.dp, vertical = 12.dp)
+                                .testTag("catalog_sign_" + sample.tag),
+                        )
+                    }
+                    // The states of 5.3.2 to 5.7.3 with the boards' sample data, so each can be set beside its board with no device.
+                    items(DeviceSample.entries, key = { "sample_" + it.tag }) { sample ->
+                        Text(
+                            text = "SIGN SAMPLE · " + sample.label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    catalogOpen = false
+                                    deviceSample = sample
+                                    navigate(MovieRoute.M3SignOnDevice)
+                                }
+                                .padding(horizontal = 24.dp, vertical = 12.dp)
+                                .testTag("catalog_sign_" + sample.tag),
+                        )
+                    }
                 }
             }
         }

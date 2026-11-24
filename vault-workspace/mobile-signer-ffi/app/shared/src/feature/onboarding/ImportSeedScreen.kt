@@ -31,7 +31,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -91,6 +90,7 @@ import com.mebit.app.resources.ic_check
 import com.mebit.app.resources.ic_eye
 import com.mebit.app.resources.ic_eye_off
 import com.mebit.app.resources.ic_warning
+import com.mebit.app.ui.components.CoverableSheet
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.rememberFullSheetState
@@ -523,7 +523,7 @@ internal fun PassphraseSheet(
 ) {
     val typed = remember { PassphraseField(initial) }
     var reveal by remember { mutableStateOf(false) }
-    ModalBottomSheet(
+    CoverableSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberFullSheetState(),
         containerColor = MbWhite,
@@ -618,7 +618,7 @@ internal val ImportFingerprintCopy = FingerprintCopy(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun FingerprintSheet(session: OnboardingSession, copy: FingerprintCopy, onConfirm: () -> Unit, onReject: () -> Unit) {
-    ModalBottomSheet(
+    CoverableSheet(
         onDismissRequest = onReject,
         sheetState = rememberFullSheetState(),
         containerColor = MbWhite,
