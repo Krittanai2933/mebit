@@ -51,11 +51,13 @@ import org.jetbrains.compose.resources.painterResource
 
 /** From the bar's straight top edge to the screen bottom. */
 @Composable
-fun bottomBarHeight(): Dp {
-    val inset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    // 40 dp or more is Android's three-button bar, which the bar must clear whole. The iPhone's 34 pt home indicator keeps the board's 11 dp.
-    return 60.dp + if (inset >= 40.dp) inset else 11.dp
-}
+fun bottomBarHeight(): Dp = barHeightOver(WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())
+
+/**
+ * Penpot 2.2: the tabs take 60 dp below the top edge, the board leaves 11 dp under them, and the system's own strip comes after,
+ * so the tabs never sit under Android's gesture handle or three buttons, or the iPhone's home indicator.
+ */
+internal fun barHeightOver(systemBottom: Dp): Dp = 60.dp + 11.dp + systemBottom
 
 /** Penpot's Bitcoin bottom bar: two tabs and the orange รับ / ส่ง button in a dip at the centre. */
 @Composable
