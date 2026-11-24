@@ -325,12 +325,6 @@ enum class MovieRoute(
         "เลือกกระเป๋า",
         "รับเข้ากระเป๋าที่เลือก",
     ),
-    ChooseWalletSend(
-        "wallets/choose-send",
-        "SEND · เลือกกระเป๋า",
-        "เลือกกระเป๋า",
-        "ส่งจากกระเป๋าที่เลือก",
-    ),
     VaultReceive(
         "vaults/receive",
         "RECEIVE",
