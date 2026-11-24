@@ -7,6 +7,7 @@ Cargo.lock
 /vault-workspace/mobile-signer-ffi/esplora-host.local
 /vault-workspace/mobile-signer-ffi/app/node_modules/
 /vault-workspace/mobile-signer-ffi/app/build/
+/vault-workspace/mobile-signer-ffi/app/.expo/
 
 .DS_Store
 
