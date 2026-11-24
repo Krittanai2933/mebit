@@ -79,7 +79,7 @@ class BackStackTest {
                 stops(p2, MovieRoute.KeyCreated, MovieRoute.BackupWords, MovieRoute.VerifyWords, MovieRoute.AddressType, MovieRoute.AppLock),
             "a new phone wallet, backup skipped" to wizard + stops(p1, MovieRoute.AddKey) + stops(p2, MovieRoute.KeyCreated, MovieRoute.AddressType),
             "an imported wallet" to wizard + stops(p1, MovieRoute.AddKey) + stops(p2, MovieRoute.ImportSeed, MovieRoute.AddressType),
-            "a new wallet that shares the wizard's place" to wizard + stops(p1, MovieRoute.AddKey, MovieRoute.KeyCreated, MovieRoute.AddressType, MovieRoute.SpendingPin),
+            "a new wallet that shares the wizard's place" to wizard + stops(p1, MovieRoute.AddKey, MovieRoute.KeyCreated, MovieRoute.AddressType, MovieRoute.AppLock),
         )
         for ((case, stack) in adds) {
             assertEquals(wizard, stackAfterAdd(stack, MovieRoute.Keyring), "$case ends on the Keyring's rule")

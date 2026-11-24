@@ -52,7 +52,7 @@ class AndroidBiometricsTest {
 
     @Test
     fun onlyAndroid11WithASecureScreenLockHasAnOwnerCheck() {
-        // The cases where authenticate answers Unavailable without a sheet, so the Spending PIN must guard the session instead.
+        // The cases where authenticate answers Unavailable without a sheet, so every gate fails closed.
         assertEquals(true, androidOwnerCheck(30, deviceSecure = true))
         assertEquals(true, androidOwnerCheck(36, deviceSecure = true))
         assertEquals(false, androidOwnerCheck(30, deviceSecure = false), "no screen lock")

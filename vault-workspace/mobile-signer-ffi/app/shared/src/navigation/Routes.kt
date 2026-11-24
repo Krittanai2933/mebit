@@ -63,12 +63,6 @@ enum class MovieRoute(
         "ล็อกแอป",
         "เปิด Face ID หรือรหัสผ่านเครื่อง",
     ),
-    SpendingPin(
-        "onboarding/spending-pin",
-        "SPENDING PIN",
-        "ตั้ง PIN สำหรับส่งเงิน",
-        "เครื่องที่ไม่มีรหัสล็อกหน้าจอ",
-    ),
     AddKey(
         "keys/add",
         "ADD KEY",

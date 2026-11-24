@@ -62,7 +62,7 @@ internal fun stackAfterSlipHome(stack: List<Stop>, home: MovieRoute): List<Stop>
 }
 
 /**
- * The end of every phone wallet's setup, the first wallet's after App Lock or the Spending PIN and a later wallet's after Address Type,
+ * The end of every phone wallet's setup, the first wallet's after App Lock and a later wallet's after Address Type,
  * backed up or not, begun on the Keyring or anywhere else. The wallet leaves first setup here, because the list shows it from now on and a
  * vault may use its key, so its passphrase and address type are final. Names the Wallet list, which [stackAfterAdd] opens as the only entry
  * unless the add began on Choose Keys.

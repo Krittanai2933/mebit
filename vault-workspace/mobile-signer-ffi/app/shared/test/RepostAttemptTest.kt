@@ -1,12 +1,8 @@
 package com.mebit.app.feature.send
 
-import com.mebit.app.BiometricResult
-import com.mebit.app.Biometrics
-import com.mebit.app.data.AppLockState
 import com.mebit.app.data.FakePlainFile
 import com.mebit.app.data.FakeSecureStore
 import com.mebit.app.data.OnboardingSession
-import com.mebit.app.data.OwnerCheck
 import com.mebit.app.data.PUBLIC_WORDS_24
 import com.mebit.app.data.PendingPayments
 import com.mebit.app.data.Replacement
@@ -16,9 +12,7 @@ import com.mebit.app.data.SIGNED_TXID
 import com.mebit.app.data.SavedWallet
 import com.mebit.app.data.SendDraft
 import com.mebit.app.data.SingleSigWallet
-import com.mebit.app.data.SpendingPin
 import com.mebit.app.data.TEST_CHECK
-import com.mebit.app.data.sessionWithKey
 import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotSendResult
 import com.mebit.ffi.signer.HotWalletSnapshot
@@ -37,10 +31,8 @@ import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlin.time.TestTimeSource
 
 /**
  * A repost from Send or Review (C2). The owner check that signing asks comes first, so a stranger holding the phone cannot push out
@@ -101,38 +93,6 @@ class RepostAttemptTest {
         first.join()
         assertEquals(1, asked, "owner checks")
         assertEquals(1, posts, "posts")
-    }
-
-    @Test
-    fun onAPhoneWithNoOwnerCheckTheSpendingPinGuardsARepostAsItGuardsSigning() = runBlocking {
-        val clock = TestTimeSource()
-        val session = sessionWithKey(SpendingPin(clock))
-        assertTrue(session.pin.set("270419"))
-        val owner = OwnerCheck(NoLock, session)
-        val appLock = AppLockState(clock)
-        val attempt = RepostAttempt()
-        var posts = 0
-        val confirm: suspend () -> Boolean = { appLock.confirm(owner, enabled = false, reason = "ยืนยันการส่งรายการเดิมอีกครั้ง") }
-        val post = {
-            posts++
-            Repost.Out
-        }
-        val cancelled = launch { attempt.run(TXID, confirm, post) }
-        yield()
-        val sheet = assertNotNull(owner.asking, "the PIN sheet before the repost, with App Lock off")
-        assertEquals("ยืนยันการส่งรายการเดิมอีกครั้ง", sheet.title)
-        "583920".forEach(sheet::type)
-        assertEquals(0, posts, "a wrong PIN posts nothing")
-        sheet.cancel()
-        cancelled.join()
-        assertEquals(0, posts, "a closed sheet posts nothing")
-        assertNull(attempt.done)
-        val passed = launch { attempt.run(TXID, confirm, post) }
-        yield()
-        "270419".forEach(assertNotNull(owner.asking, "the sheet again")::type)
-        passed.join()
-        assertEquals(1, posts, "the right PIN lets the repost post")
-        assertEquals(TXID, attempt.outTxid)
     }
 
     // R8 O1, the review of 2026-11-06. Leaving Send while its repost waited on a slow node cancelled the screen's scope. The post still
@@ -298,12 +258,6 @@ class RepostAttemptTest {
         assertEquals(1, left, "only the tap after both ended left")
     }
 
-    /** A phone with no passcode and no screen lock, so the Spending PIN is the owner check. */
-    private object NoLock : Biometrics {
-        override fun available() = false
-
-        override suspend fun authenticate(reason: String, allowPasscode: Boolean): BiometricResult = BiometricResult.Unavailable("no lock")
-    }
 }
 
 private const val TXID = "c5ed075ef44b807f51123cf0c6e53c75385a17a510f995b560bf73b1102d5474"

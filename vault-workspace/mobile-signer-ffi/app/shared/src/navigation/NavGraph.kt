@@ -53,7 +53,6 @@ import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.THIS_PHONE_KEY_NAME
 import com.mebit.app.data.hardwareKind
 import com.mebit.app.data.oneKeyChoices
-import com.mebit.app.data.OwnerCheck
 import com.mebit.app.FilePick
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.ImportPending
@@ -106,8 +105,6 @@ import com.mebit.app.feature.onboarding.ImportSeedScreen
 import com.mebit.app.feature.onboarding.KeyCreatedScreen
 import com.mebit.app.feature.onboarding.KeySourceScreen
 import com.mebit.app.feature.onboarding.LockMode
-import com.mebit.app.feature.onboarding.PinSheet
-import com.mebit.app.feature.onboarding.SpendingPinScreen
 import com.mebit.app.feature.onboarding.VerifyWordsScreen
 import com.mebit.app.feature.onboarding.WelcomeScreen
 import com.mebit.app.feature.vault.CREATE_FAILED_LINE
@@ -242,9 +239,7 @@ internal fun MebitNavHost(
     // the import goes on to the lock step or the user leaves Import Seed by its back chip. Memory only: never rememberSaveable,
     // which Android writes to disk.
     var importDraft by remember { mutableStateOf(ffiImportSeedDraft()) }
-    val phone = rememberBiometrics()
-    // The gates' owner check, which is the phone's own or, on a phone without one, the Spending PIN (open item 79).
-    val biometrics = remember(phone, session) { OwnerCheck(phone, session) }
+    val biometrics = rememberBiometrics()
     val appLock = remember { AppLockState() }
     val scope = rememberCoroutineScope()
     var addLine by remember { mutableStateOf<String?>(null) }
@@ -260,9 +255,9 @@ internal fun MebitNavHost(
     // The row a tap opened, whole, so the detail draws at once. The catalog opens the demo row until a tap.
     var openedTx by remember { mutableStateOf(DEMO_TX) }
 
-    // More than a minute away locks the app again, once the user turned the lock on or where the Spending PIN guards it.
+    // More than a minute away locks the app again, once the user turned the lock on.
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { appLock.onBackground() }
-    LifecycleEventEffect(Lifecycle.Event.ON_START) { appLock.onForeground(biometrics.locksWhenAway) }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { appLock.onForeground(session.appLockEnabled) }
 
     LaunchedEffect(current) {
         addLine = null
@@ -333,13 +328,8 @@ internal fun MebitNavHost(
     }
 
     // App Lock is one setting for the phone, so only the wallet that made the phone's first choice runs this step.
-    // After the first wallet's create or import comes App Lock on a phone with an owner check, else the Spending PIN, set before the list.
-    // A later wallet's setup ends on the list here.
-    fun lockStep() = when {
-        wallets.listed.size >= 2 -> finishAdd(endSetup(session))
-        biometrics.needsPin -> navigate(MovieRoute.SpendingPin)
-        else -> navigate(MovieRoute.AppLock)
-    }
+    // After the first wallet's create or import comes App Lock. A later wallet's setup ends on the list here.
+    fun lockStep() = if (wallets.listed.size >= 2) finishAdd(endSetup(session)) else navigate(MovieRoute.AppLock)
 
     // The create flow goes on to the address type. A later backup returns to the screen that opened it.
     fun afterBackup() = land(stackAfterBackup(backStack, session.inFirstSetup))
@@ -402,11 +392,11 @@ internal fun MebitNavHost(
         }
     }
 
-    // 1.8.8's confirm came first. The phone's own owner sheet, as a several-key wallet's removal asks, and never the Spending PIN.
+    // 1.8.8's confirm came first. The phone's own owner sheet, as a several-key wallet's removal asks.
     fun removeHardware(w: HardwareWallet) {
         scope.launch {
             removeLine = null
-            when (hardware.remove(w.id) { phone.authenticate(removeReason(w.name), allowPasscode = true) == BiometricResult.Success }) {
+            when (hardware.remove(w.id) { biometrics.authenticate(removeReason(w.name), allowPasscode = true) == BiometricResult.Success }) {
                 HardwareRemoval.Removed, HardwareRemoval.Refused -> Unit
                 HardwareRemoval.NotSaved -> removeLine = REMOVE_FAILED_LINE
             }
@@ -426,10 +416,10 @@ internal fun MebitNavHost(
         }
     }
 
-    // Once onboarding is over the words open past the Spending PIN where it guards the session, and as before elsewhere. They are the
-    // words of the wallet at [place]: the one in use, or the one whose key the Keyring's ⋯ backs up.
+    // The words of the wallet at [place]: the one in use, or the one whose key the Keyring's ⋯ backs up. Never on a phone whose own
+    // lock is gone.
     fun openWords(place: Place = backStack.last().place) {
-        scope.launch { if (biometrics.guardWords("ดู 24 คำสำรอง")) navigate(MovieRoute.BackupWords, place) }
+        if (appLock.canShowWords(biometrics)) navigate(MovieRoute.BackupWords, place)
     }
 
     val openTx: (HotTx) -> Unit = { tx ->
@@ -538,13 +528,6 @@ internal fun MebitNavHost(
                         session = session,
                         biometrics = biometrics,
                         mode = LockMode.Enable,
-                        // A lock removed while this screen showed leaves the phone with no owner check, so its PIN comes before the list.
-                        onDone = { if (biometrics.needsPin) navigate(MovieRoute.SpendingPin) else finishAdd(endSetup(session)) },
-                        onBack = onBack,
-                        onOpenCatalog = openCatalog,
-                    )
-                    MovieRoute.SpendingPin -> SpendingPinScreen(
-                        session = session,
                         onDone = { finishAdd(endSetup(session)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -735,11 +718,11 @@ internal fun MebitNavHost(
                             onOpenSpending = { place -> openWallet(place) { MovieRoute.S1HomeSingleSig } },
                             onRemoveSpending = { place -> removeWallet(wallets.at(place)) },
                             onOpenDetail = { navigate(MovieRoute.VaultDetail) },
-                            // The phone's own owner sheet, which a one-key wallet's removal shows as it opens the wallet's saved copy, and never the Spending PIN.
+                            // The phone's own owner sheet, which a one-key wallet's removal shows as it opens the wallet's saved copy.
                             onRemoveVault = { vault ->
                                 scope.launch {
                                     removeLine = null
-                                    if (phone.authenticate(removeReason(vault.name), allowPasscode = true) != BiometricResult.Success) return@launch
+                                    if (biometrics.authenticate(removeReason(vault.name), allowPasscode = true) != BiometricResult.Success) return@launch
                                     if (!vaultDraft.remove(vault.id)) removeLine = REMOVE_FAILED_LINE
                                 }
                             },
@@ -890,7 +873,6 @@ internal fun MebitNavHost(
                         onHistory = { navigate(MovieRoute.S7History) },
                         onOpenTx = openTx,
                         onOpenCatalog = openCatalog,
-                        onChangePin = if (session.pin.isSet) ({ scope.launch { biometrics.changePin("เปลี่ยน PIN") } }) else null,
                     )
                     MovieRoute.S7History -> S7HistoryScreen(
                         history = singleSig.shownHistory(),
@@ -1277,9 +1259,7 @@ internal fun MebitNavHost(
     }
 
     if (appLock.locked) {
-        // A phone the Spending PIN guards unlocks only through the PIN sheet drawn over this cover, never through a check it lacks.
-        val pinLock = biometrics.usesPin
-        // Covers everything, swallows taps, and goes away only on Face ID, the device passcode or the PIN. Composed after the screens, so this
+        // Covers everything, swallows taps, and goes away only on Face ID or the device passcode. Composed after the screens, so this
         // SystemBack wins over their arrows' and Back sends the app to the background: the lock stays and no screen under it pops.
         SystemBack(rememberLeaveApp())
         Box(
@@ -1288,21 +1268,16 @@ internal fun MebitNavHost(
                 .background(MbPage)
                 .coversScreen(),
         ) {
-            if (!pinLock) {
-                AppLockScreen(
-                    session = session,
-                    biometrics = biometrics,
-                    mode = LockMode.Unlock,
-                    onDone = { appLock.unlock() },
-                    onBack = null,
-                    onOpenCatalog = {},
-                )
-            }
+            AppLockScreen(
+                session = session,
+                biometrics = biometrics,
+                mode = LockMode.Unlock,
+                onDone = { appLock.unlock() },
+                onBack = null,
+                onOpenCatalog = {},
+            )
         }
-        if (pinLock) LaunchedEffect(Unit) { if (biometrics.unlock("ปลดล็อก mebit")) appLock.unlock() }
     }
-
-    biometrics.asking?.let { PinSheet(it, session.pin) }
 }
 
 /** A hardware wallet's screen with no wallet to show: only the debug catalog opens one so, before any is saved or once it is removed. */
