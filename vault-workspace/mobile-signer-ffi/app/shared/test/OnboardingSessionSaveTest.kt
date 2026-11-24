@@ -718,6 +718,94 @@ class OnboardingSessionSaveTest {
         }
     }
 
+    // A removed screen lock deletes the Keystore key and keeps the file, so the read-back finds the copy but no key. That copy is still this
+    // wallet's: the next save must replace it under a new key, never Create, which the Android store refuses over any wallet file.
+    @Test
+    fun aCopyWhoseKeyIsGoneIsReplacedAtTheNextWritePoint() {
+        val store = FakeSecureStore()
+        val session = session(store)
+        session.generateThisDevice()
+        store.read = ReadResult.KeyGone
+        assertEquals(Cause.KeyGone, assertIs<UnlockResult.Broken>(session.proveNow(), "the read-back").cause)
+        assertEquals(SaveState.NotSaved, session.saved, "saved while no key opens the copy")
+        assertNotNull(session.notSavedBecause, "no cause for not saved")
+        store.read = null
+        session.markBackupConfirmed()
+        assertEquals(listOf("Create", "Replace"), store.modes(), "write modes")
+        assertEquals(SaveState.Saved, session.saved, "saved after the Replace")
+        assertNull(session.notSavedBecause, "the notice after the Replace")
+        assertEquals(listOf(true, false, false), store.savedCopy().flags(), "the copy after the Replace")
+        assertEquals(UnlockResult.Verified, session.proveNow(), "the read-back of the new copy")
+    }
+
+    @Test
+    fun aCopyWhoseKeyIsGoneIsReplacedByTheFlushOnceTheNewKeyIsReady() {
+        val store = FakeSecureStore()
+        val session = session(store)
+        session.generateThisDevice()
+        store.read = ReadResult.KeyGone
+        session.proveNow()
+        store.read = null
+        store.write = WriteResult.Unavailable(Why.TryLater) // the store is making the new key
+        session.flushPendingSave()
+        assertEquals(listOf("Create", "Replace"), store.modes(), "write modes while the key is made")
+        assertEquals(SaveState.NotSaved, session.saved, "saved before the new key was ready")
+        store.write = null
+        session.flushPendingSave()
+        assertEquals(listOf("Create", "Replace", "Replace"), store.modes(), "write modes once the key is ready")
+        assertEquals(SaveState.Saved, session.saved, "saved after the second flush")
+        assertNull(session.notSavedBecause, "the notice after the second flush")
+        session.flushPendingSave()
+        assertEquals(3, store.writes.size, "a flush with nothing owed wrote")
+    }
+
+    @Test
+    fun aCopyWhoseKeyIsGoneIsNeverReplacedOverAnotherInstancesNewerCopy() {
+        val store = FakeSecureStore()
+        val a = session(store)
+        a.generateThisDevice()
+        store.read = ReadResult.KeyGone
+        a.proveNow()
+        store.read = null
+        val (gate, b) = launched(store)
+        runBlocking { gate.unlock("test") }
+        b.markAppLockEnabled() // another instance saves first and advances the copy
+        val writes = store.writes.size
+        a.flushPendingSave() // the stale Replace
+        assertEquals(writes + 1, store.writes.size, "the stale Replace reached the store")
+        assertEquals(listOf(false, false, true), store.savedCopy().flags(), "the stale Replace overwrote the newer copy")
+        assertEquals(SaveState.NotSaved, a.saved, "A after the Conflict")
+        a.markBackupConfirmed()
+        a.flushPendingSave()
+        assertEquals(writes + 1, store.writes.size, "a stale session wrote again")
+        assertEquals(listOf(false, false, true), store.savedCopy().flags(), "the copy at the end")
+    }
+
+    // Only a copy without its key is replaced. A copy of another wallet, a newer one or a missing one may be someone else's, so the
+    // session still gives it up and its next save is a Create, which never overwrites.
+    @Test
+    fun anyOtherBrokenReadBackStillGivesTheCopyUpAndSavesWithACreate() {
+        val cases = listOf(
+            "damaged" to ReadResult.Unreadable,
+            "another wallet" to ReadResult.Bytes(v1Bytes(fingerprint = OTHER_CHECK.encodeToByteArray()), ANY_VERSION),
+            "a newer record" to ReadResult.Bytes(v1Bytes(version = 2), ANY_VERSION),
+            "missing" to ReadResult.NotFound,
+        )
+        for ((case, read) in cases) {
+            val store = FakeSecureStore()
+            val session = session(store)
+            session.generateThisDevice()
+            store.read = read
+            assertIs<UnlockResult.Broken>(session.proveNow(), case)
+            store.read = null
+            session.flushPendingSave()
+            assertEquals(1, store.writes.size, "a flush after a $case read-back wrote")
+            session.markBackupConfirmed()
+            assertEquals(listOf("Create", "Create"), store.modes(), "write modes after a $case read-back")
+            assertEquals(SaveState.NotSaved, session.saved, "saved after a $case read-back")
+        }
+    }
+
     @Test
     fun enableOnAPhoneThatCouldNotSaveReportsWhyAndLeavesTheBiometricsScan() {
         val store = FakeSecureStore(read = ReadResult.Bytes(v1Bytes(), ANY_VERSION), write = WriteResult.Unavailable(Why.NoScreenLock))

@@ -104,8 +104,21 @@ class OnboardingSession(
         /** A passphrase import waiting for its fingerprint check. */
         data object Staged : Held
 
+        /** A copy of this wallet is on the phone, the one this session's next save replaces. */
+        sealed interface OnPhone : Held {
+            val version: StoreVersion
+            val fingerprint: String
+            val earlier: List<String>
+        }
+
         /** The phone held this copy, of the key [fingerprint] and naming the wallet's [earlier] keys, at our last read or write. */
-        class Copy(val version: StoreVersion, val fingerprint: String, val earlier: List<String>) : Held
+        class Copy(override val version: StoreVersion, override val fingerprint: String, override val earlier: List<String>) : OnPhone
+
+        /**
+         * The copy is still on the phone but no key opens it, as after its screen lock was removed: Android deletes the key and keeps
+         * the file. Not saved. The next save replaces it, and the store makes a new key for it. A Create would meet it forever.
+         */
+        class Lost(override val version: StoreVersion, override val fingerprint: String, override val earlier: List<String>) : OnPhone
 
         /** Another instance changed the phone since. This session never writes again in this run. */
         data object Stale : Held
@@ -116,7 +129,7 @@ class OnboardingSession(
     /** NotSaved is today's memory-only state. Screens read it to say "saved on this phone" only when it is true. */
     val saved: SaveState
         get() = when (held) {
-            Held.Nothing, Held.Stale -> SaveState.NotSaved
+            Held.Nothing, Held.Stale, is Held.Lost -> SaveState.NotSaved
             Held.Staged -> SaveState.Staged
             is Held.Copy -> SaveState.Saved
         }
@@ -290,10 +303,21 @@ class OnboardingSession(
         record.fingerprint == fingerprint && record.network == network && record.words == words && record.passphrase == passphrase &&
             record.addressType == addressType
 
-    /** The copy on the phone is not this wallet or cannot be opened, so this wallet is not saved after all. The key stays in memory. */
+    /**
+     * The copy on the phone is not this wallet or cannot be opened, so this wallet is not saved after all. The key stays in memory. A copy
+     * whose key is gone is still this wallet's, so the session keeps its version and saves again over it ([Held.Lost]). Any other cause
+     * may be another wallet's copy or a newer one, which no save of this session may replace.
+     */
     private fun notSaved(result: UnlockResult): UnlockResult {
-        held = Held.Nothing
-        notSavedBecause = Why.Other
+        val copy = held as? Held.Copy
+        if (copy != null && result is UnlockResult.Broken && result.cause == Cause.KeyGone) {
+            held = Held.Lost(copy.version, copy.fingerprint, copy.earlier)
+            notSavedBecause = Why.TryLater
+            pendingSave = true
+        } else {
+            held = Held.Nothing
+            notSavedBecause = Why.Other
+        }
         return result
     }
 
@@ -379,7 +403,11 @@ class OnboardingSession(
             }
             is EraseResult.Failed -> {
                 // The copy is still on the phone, but the erase advanced the store's counter, so the session's Replace must expect the new version or every later save is a Conflict.
-                (held as? Held.Copy)?.let { held = Held.Copy(r.version, it.fingerprint, it.earlier) }
+                when (val h = held) {
+                    is Held.Copy -> held = Held.Copy(r.version, h.fingerprint, h.earlier)
+                    is Held.Lost -> held = Held.Lost(r.version, h.fingerprint, h.earlier)
+                    else -> Unit
+                }
                 false
             }
         }
@@ -432,7 +460,7 @@ class OnboardingSession(
         val mode = when (val h = held) {
             Held.Staged, Held.Stale -> return@synchronized false
             Held.Nothing -> WriteMode.Create
-            is Held.Copy -> WriteMode.Replace(h.version)
+            is Held.OnPhone -> WriteMode.Replace(h.version)
         }
         val record = toRecord()
         when (val r = w.save(record, mode)) {
@@ -462,14 +490,9 @@ class OnboardingSession(
                 }
             }
             is SaveResult.NotSaved -> {
-                // A failed Replace leaves the earlier copy on the phone, so the wallet stays Saved under the same version and only a
-                // failed Create is not saved. Downgrading it would make every later write a Create, which meets that copy and is lost for good.
-                if (mode == WriteMode.Create) {
-                    held = Held.Nothing
-                    notSavedBecause = r.why
-                } else {
-                    lastSaveFailed = true
-                }
+                // A failed Replace leaves the earlier copy on the phone under the same version, so a Copy stays Saved and a Lost stays
+                // Lost. Downgrading either would make every later write a Create, which meets that copy and is lost for good.
+                if (held is Held.Copy) lastSaveFailed = true else notSavedBecause = r.why
                 // A store that can never keep it here has nothing to retry, and a foreground flush would only encode the record again.
                 pendingSave = r.why != Why.NotWired
             }
@@ -495,7 +518,7 @@ class OnboardingSession(
     // The key the phone holds joins the earlier ones when this save changes it, because the book may stay saved under it.
     private fun toRecord() = WalletRecord(
         words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled, addressType, addressTypeConfirmed,
-        earlierFingerprints = (held as? Held.Copy)?.let { it.earlier + it.fingerprint - fingerprint }.orEmpty(),
+        earlierFingerprints = (held as? Held.OnPhone)?.let { it.earlier + it.fingerprint - fingerprint }.orEmpty(),
     )
 
     private fun applyKey(key: SoftwareAccountKey, passphrase: String, network: KeyNetwork) {
