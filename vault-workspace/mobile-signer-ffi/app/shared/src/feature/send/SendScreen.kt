@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import com.mebit.app.QrScanSheet
 import com.mebit.app.data.AmountEntry
 import com.mebit.app.data.AmountUnit
+import com.mebit.app.data.BtcUnit
 import com.mebit.app.data.FeeTile
 import com.mebit.app.data.LiveFeeTiers
 import com.mebit.app.data.OnboardingSession
@@ -379,8 +380,10 @@ private fun DestinationField(draft: SendDraft, invalid: Boolean, enter: (String)
 private fun AmountCard(known: Boolean, spendableSats: Long, entry: AmountEntry, quote: FiatQuote?, short: Boolean) {
     val shape = RoundedCornerShape(22.dp)
     val amount = TextStyle(color = MbNavyInk, fontSize = 44.sp, fontWeight = FontWeight.Bold, fontFamily = amountFontFamily(), lineHeight = 56.sp)
+    val coin = LocalBtcUnit.current
     val baht = entry.inBaht(quote)
-    val text = entry.fieldText(quote)
+    val grouped = baht || coin == BtcUnit.Sat
+    val text = entry.fieldText(quote, coin)
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -396,25 +399,25 @@ private fun AmountCard(known: Boolean, spendableSats: Long, entry: AmountEntry, 
             Row(verticalAlignment = Alignment.Bottom) {
                 BasicTextField(
                     value = text,
-                    onValueChange = { if (baht) entry.typeBaht(it, quote) else entry.typeBtc(it) },
+                    onValueChange = { if (baht) entry.typeBaht(it, quote) else if (grouped) entry.typeSats(it) else entry.typeBtc(it) },
                     textStyle = amount,
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = if (baht) KeyboardType.Number else KeyboardType.Decimal),
-                    visualTransformation = if (baht) ThousandsTransformation else VisualTransformation.None,
+                    keyboardOptions = KeyboardOptions(keyboardType = if (grouped) KeyboardType.Number else KeyboardType.Decimal),
+                    visualTransformation = if (grouped) ThousandsTransformation else VisualTransformation.None,
                     decorationBox = { inner ->
                         Box {
-                            if (text.isEmpty()) Text(if (baht) "0" else "0.0000", style = amount.copy(color = Placeholder))
+                            if (text.isEmpty()) Text(if (grouped) "0" else "0.0000", style = amount.copy(color = Placeholder))
                             inner()
                         }
                     },
                     modifier = Modifier.width(IntrinsicSize.Min).widthIn(min = 40.dp).keepsKeyboard().testTag("s4_amount"),
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(if (baht) "THB" else "BTC", color = MbSlate, fontSize = 16.sp, fontWeight = FontWeight.Bold, lineHeight = 22.sp, modifier = Modifier.padding(bottom = 12.dp))
+                Text(if (baht) "THB" else coin.label, color = MbSlate, fontSize = 16.sp, fontWeight = FontWeight.Bold, lineHeight = 22.sp, modifier = Modifier.padding(bottom = 12.dp))
             }
             // The other unit's line has its room even when it shows nothing, so the divider keeps its place.
             Box(modifier = Modifier.fillMaxWidth().height(36.dp)) {
-                entry.otherLine(quote)?.let {
+                entry.otherLine(quote, coin)?.let {
                     Text(it, color = MbEyebrow, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, modifier = Modifier.padding(top = 4.dp).testTag("s4_fiat"))
                 }
             }
@@ -422,7 +425,7 @@ private fun AmountCard(known: Boolean, spendableSats: Long, entry: AmountEntry, 
             Spacer(modifier = Modifier.height(11.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(
-                    text = (if (known) entry.caption(spendableSats, quote) else "ใช้ได้ —") + if (short) " · ไม่พอ" else "",
+                    text = (if (known) entry.caption(spendableSats, quote, coin) else "ใช้ได้ —") + if (short) " · ไม่พอ" else "",
                     color = if (short) MbEyebrow else MbBody,
                     fontSize = 12.5.sp,
                     fontWeight = FontWeight.Medium,
@@ -440,14 +443,14 @@ private fun AmountCard(known: Boolean, spendableSats: Long, entry: AmountEntry, 
             }
         }
         if (quote != null) {
-            UnitToggle(baht, onPick = { entry.pickUnit(it, quote) }, modifier = Modifier.align(Alignment.TopEnd).padding(top = 14.dp, end = 16.dp))
+            UnitToggle(baht, coin, onPick = { entry.pickUnit(it, quote) }, modifier = Modifier.align(Alignment.TopEnd).padding(top = 14.dp, end = 16.dp))
         }
     }
 }
 
-/** The BTC / ฿ switch in the amount card's corner, drawn to the boards' 70 x 30 pill with a white 34 x 24 pill behind the chosen unit. */
+/** The BTC / ฿ switch in the amount card's corner, "sat / ฿" in sat mode, drawn to the boards' 70 x 30 pill with a white 34 x 24 pill behind the chosen unit. */
 @Composable
-private fun UnitToggle(baht: Boolean, onPick: (AmountUnit) -> Unit, modifier: Modifier) {
+private fun UnitToggle(baht: Boolean, coin: BtcUnit, onPick: (AmountUnit) -> Unit, modifier: Modifier) {
     Box(modifier = modifier.size(width = 70.dp, height = 30.dp).clip(CircleShape).background(MbChip)) {
         Box(
             modifier = Modifier
@@ -456,7 +459,7 @@ private fun UnitToggle(baht: Boolean, onPick: (AmountUnit) -> Unit, modifier: Mo
                 .clip(CircleShape)
                 .background(MbWhite),
         )
-        UnitSegment("BTC", active = !baht, start = 5.dp, tag = "s4_unit_btc") { onPick(AmountUnit.Btc) }
+        UnitSegment(coin.label, active = !baht, start = 5.dp, tag = "s4_unit_btc") { onPick(AmountUnit.Btc) }
         UnitSegment("฿", active = baht, start = 35.dp, tag = "s4_unit_thb") { onPick(AmountUnit.Thb) }
     }
 }
