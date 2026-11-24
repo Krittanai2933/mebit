@@ -1,30 +1,91 @@
 package com.mebit.app.navigation
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mebit.app.Place
+import com.mebit.app.SystemBack
 import com.mebit.app.data.NodeSettings
 import com.mebit.app.data.UnitSettings
 import com.mebit.app.data.PendingPayments
 import com.mebit.app.data.SavedVaults
 import com.mebit.app.data.Wallets
+import com.mebit.app.feature.onboarding.NoScreenLockScreen
 import com.mebit.app.feature.onboarding.UnlockScreen
 import com.mebit.app.plainFile
+import com.mebit.app.rememberBiometrics
+import com.mebit.app.rememberLeaveApp
 import com.mebit.app.rememberPairings
+import com.mebit.app.rememberScreenLockSettingsOpener
 import com.mebit.app.rememberScanStateDir
 import com.mebit.app.rememberSecureShelf
 import com.mebit.app.rememberVaultsStorage
+import com.mebit.app.ui.components.coversScreen
 import com.mebit.ffi.signer.hotUseStateDir
 
+/** What the gate does about the phone's own screen lock. */
+enum class LockGate {
+    /** No lock yet this run: only the block shows, and nothing opens a store. */
+    Wait,
+
+    /** The phone has its lock: the app runs. */
+    Open,
+
+    /** The lock this run had is gone: the block covers the app, whose wallets stay in memory until the lock is back. */
+    Covered,
+}
+
+/** Pure. [present] is whether the phone has its own lock now, and [seenThisRun] whether it had one at any read since this process began. */
+fun lockGate(present: Boolean, seenThisRun: Boolean): LockGate = when {
+    present -> LockGate.Open
+    seenThisRun -> LockGate.Covered
+    else -> LockGate.Wait
+}
+
 /**
- * What App() shows: Welcome, the unlock or recovery screen, or the nav host at the route the saved wallet opens at.
- * The nav host does not exist until the wallets are open or there are none, so nothing that reads a session runs
- * before the owner check.
+ * What App() shows: the no-screen-lock block, Welcome, the unlock or recovery screen, or the nav host at the route the saved wallet
+ * opens at. A phone with no screen lock gets only the block, hardware wallets included, because every gate of the app is the phone's
+ * own lock (open item 79). The lock is read again whenever the app comes back, as from Settings.
  */
 @Composable
 fun WalletGate() {
+    val phone = rememberBiometrics()
+    var present by remember(phone) { mutableStateOf(phone.available()) }
+    var seen by remember(phone) { mutableStateOf(present) }
+    fun read() {
+        present = phone.available()
+        seen = seen || present
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { read() }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { read() }
+
+    val lock = lockGate(present, seen)
+    if (lock == LockGate.Wait) {
+        NoScreenLockScreen(rememberScreenLockSettingsOpener())
+    } else {
+        // Open and Covered compose the app in the same place, so a lock that comes and goes keeps every wallet and screen.
+        OpenGate()
+        if (lock == LockGate.Covered) {
+            // Composed after the app, so this SystemBack wins over its screens' and Back sends the app to the background.
+            SystemBack(rememberLeaveApp())
+            Box(modifier = Modifier.fillMaxSize().coversScreen()) { NoScreenLockScreen(rememberScreenLockSettingsOpener()) }
+        }
+    }
+}
+
+/**
+ * The app once the phone has had its lock this run. The nav host does not exist until the wallets are open or there are none, so
+ * nothing that reads a session runs before the owner check.
+ */
+@Composable
+private fun OpenGate() {
     // Before any screen asks the core about a wallet, so its first sync after a restart reads the scan file.
     val scanDir = rememberScanStateDir()
     remember(scanDir) { scanDir?.let(::hotUseStateDir) }
