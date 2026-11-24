@@ -314,8 +314,7 @@ fun VaultListScreen(
         )
     }
     importProblem?.let { problem ->
-        // Only its buttons close it, so a block over the app hides it and it shows again after: the refusal stays the answer to the file the user picked.
-        CoverableDialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)) {
+        CoverableDialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false), hideWhileCovered = true) {
             NoticeDialog(tag = "import_problem", title = problem.title, body = problem.body) {
                 NoticeButton("เลือกไฟล์ใหม่", "import_problem_again", filled = true) {
                     onProblemClear()

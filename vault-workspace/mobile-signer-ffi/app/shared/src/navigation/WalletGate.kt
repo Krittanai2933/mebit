@@ -72,8 +72,7 @@ fun WalletGate() {
     if (lock == LockGate.Wait) {
         NoScreenLockScreen(rememberScreenLockSettingsOpener())
     } else {
-        // Open and Covered compose the app in the same place, so a lock that comes and goes keeps every wallet and screen. Covered
-        // closes its sheets and popups, which would draw above the block.
+        // Open and Covered compose the app in the same place, so a lock that comes and goes keeps every wallet and screen.
         CompositionLocalProvider(LocalCovered provides (lock == LockGate.Covered)) { OpenGate() }
         if (lock == LockGate.Covered) {
             // Composed after the app, so this SystemBack wins over its screens' and Back sends the app to the background.

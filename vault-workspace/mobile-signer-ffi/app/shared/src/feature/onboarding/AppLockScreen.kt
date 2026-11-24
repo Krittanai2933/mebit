@@ -158,7 +158,7 @@ fun AppLockScreen(
             )
         },
     ) {
-        Spacer(modifier = Modifier.height(65.dp))
+        Spacer(modifier = Modifier.height(NavyTileTopGap))
         FaceIdTile(failed = failed, words = words)
         Spacer(modifier = Modifier.height(50.dp))
         when {
@@ -182,7 +182,9 @@ internal fun FaceIdTile(failed: Boolean, words: LockWords) {
     }
 }
 
-/** The centred 132 dp navy tile under a lock screen's title, App Lock's Face ID and the no-screen-lock padlock. [edge] outlines it. */
+/** The gap above a NavyTile on every screen that shows one. */
+internal val NavyTileTopGap = 65.dp
+
 @Composable
 internal fun NavyTile(tag: String, edge: Color? = null, content: @Composable () -> Unit) {
     val shape = RoundedCornerShape(36.dp)

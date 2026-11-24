@@ -179,7 +179,7 @@ internal fun UnlockScreen(gate: WalletGateState) {
                 )
             },
         ) {
-            Spacer(modifier = Modifier.height(65.dp))
+            Spacer(modifier = Modifier.height(NavyTileTopGap))
             FaceIdTile(failed = failed, words = words)
             Spacer(modifier = Modifier.height(50.dp))
             when (view) {

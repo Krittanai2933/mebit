@@ -456,7 +456,6 @@ internal fun MebitNavHost(
     val bar = current.route.bar
     // A sheet that covers a tab screen, the wallet list's QR scanner, hides the bar and gives the screen its room.
     var barHidden by remember { mutableStateOf(false) }
-    // While the App Lock covers the screens, their sheets and popups close: a window would draw above the cover.
     CompositionLocalProvider(
         LocalDebugLinkLift provides if (bar != null && !barHidden) 22.dp else 0.dp,
         LocalBtcUnit provides unitSettings.current,

@@ -13,9 +13,8 @@ actual fun rememberScreenLockSettingsOpener(): (() -> Unit)? {
     val context = LocalContext.current
     return remember(context) {
         val open: () -> Unit = {
-            // The screen-lock picker itself, or the Security page on a phone whose Settings has no picker. Starting it rather than
-            // asking resolveActivity first, which on Android 11 and later answers only for packages the manifest queries.
-            // A phone with neither page leaves the button doing nothing, not crashing.
+            // Starting the intent rather than asking resolveActivity first: on Android 11 and later that sees only packages the manifest
+            // queries and the ones the system makes visible, which differ by device.
             runCatching {
                 try {
                     context.startActivity(Intent(DevicePolicyManager.ACTION_SET_NEW_PASSWORD))

@@ -24,10 +24,6 @@ import androidx.compose.ui.window.PopupProperties
  */
 val LocalCovered = compositionLocalOf { false }
 
-/**
- * Covered, draws nothing and runs [close] once, so the window is closed when the app shows again. A site whose [close] does nothing
- * keeps its window, hidden until the cover lifts.
- */
 @Composable
 private fun UnlessCovered(close: () -> Unit, window: @Composable () -> Unit) {
     if (LocalCovered.current) LaunchedEffect(Unit) { close() } else window()
@@ -65,6 +61,11 @@ fun CoverableSheet(
     )
 }
 
+/** [hideWhileCovered]: kept and shown again once the cover lifts, for a dialog only its own buttons may close. Otherwise closed. */
 @Composable
-fun CoverableDialog(onDismissRequest: () -> Unit, properties: DialogProperties = DialogProperties(), content: @Composable () -> Unit) =
-    UnlessCovered(onDismissRequest) { Dialog(onDismissRequest, properties, content) }
+fun CoverableDialog(
+    onDismissRequest: () -> Unit,
+    properties: DialogProperties = DialogProperties(),
+    hideWhileCovered: Boolean = false,
+    content: @Composable () -> Unit,
+) = UnlessCovered(if (hideWhileCovered) ({}) else onDismissRequest) { Dialog(onDismissRequest, properties, content) }

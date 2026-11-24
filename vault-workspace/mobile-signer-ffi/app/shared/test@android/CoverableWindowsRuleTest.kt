@@ -5,10 +5,6 @@ import kotlin.test.Test
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/**
- * A popup, sheet or dialog is a window of its own, drawn above everything in the app's window, so above the no-screen-lock block and
- * the App Lock too. Only the wrappers in CoverableWindows.kt close one while a block covers the app, so no other file may open one.
- */
 class CoverableWindowsRuleTest {
     @Test
     fun onlyTheCoverableWrappersOpenAWindow() {

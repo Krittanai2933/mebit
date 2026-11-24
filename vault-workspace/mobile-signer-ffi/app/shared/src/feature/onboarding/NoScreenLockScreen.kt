@@ -19,7 +19,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -30,6 +29,7 @@ import com.mebit.app.resources.ic_padlock
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.theme.MbBody
+import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbWhite
@@ -43,10 +43,7 @@ private val IOS_STEPS = listOf(
     "กลับมาที่ mebit แอปจะไปต่อเอง",
 )
 
-/** The steps card's border on board 0.2, which the theme has no token for. */
-private val StepsBorder = Color(0xFFE6E9EE)
 
-/** Penpot Organize 0.1 (Android) and 0.2 (iPhone). */
 @Composable
 internal fun NoScreenLockScreen(openSettings: (() -> Unit)?) {
     MebitScreen(
@@ -72,8 +69,7 @@ internal fun NoScreenLockScreen(openSettings: (() -> Unit)?) {
             }
         },
     ) {
-        // Where App Lock puts its Face ID tile.
-        Spacer(modifier = Modifier.height(65.dp))
+        Spacer(modifier = Modifier.height(NavyTileTopGap))
         NavyTile(tag = "no_lock_tile") {
             Image(painterResource(Res.drawable.ic_padlock), contentDescription = null, modifier = Modifier.size(132.dp))
         }
@@ -88,7 +84,7 @@ internal fun NoScreenLockScreen(openSettings: (() -> Unit)?) {
 private fun IosSteps() {
     val shape = RoundedCornerShape(18.dp)
     Column(
-        modifier = Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, StepsBorder, shape).padding(18.dp),
+        modifier = Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         IOS_STEPS.forEachIndexed { i, step ->
