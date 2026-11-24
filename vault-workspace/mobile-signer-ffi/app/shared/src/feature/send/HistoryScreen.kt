@@ -17,16 +17,25 @@ import com.mebit.ffi.signer.HotTx
 
 internal const val HISTORY_EMPTY_TEXT = "ยังไม่มีธุรกรรม"
 
-/** Every loaded transaction as the Home row. A tap on a row opens it on the detail screen (board 3.6.2) through [onOpenTx]. */
+/** For a wallet whose history no read answered, so it is never said to have none. */
+internal const val HISTORY_UNKNOWN_TEXT = "ยังดึงธุรกรรมไม่ได้ในตอนนี้"
+
+/** What the history screen lists for a one-key wallet: its transactions once a refresh read them, else none yet. */
+internal fun HomeSource.shownHistory(): List<HotTx> = if (mode == WalletMode.Live) history else emptyList()
+
+/**
+ * Every loaded transaction as the Home row, or [HISTORY_UNKNOWN_TEXT] when [history] is null. A tap on a row opens it on the detail
+ * screen through [onOpenTx].
+ */
 @Composable
 fun S7HistoryScreen(
-    wallet: HomeSource,
+    history: List<HotTx>?,
     onOpenTx: (HotTx) -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
     tag: String = "screen_send/s7",
 ) {
-    val rows = if (wallet.mode == WalletMode.Live) historyRows(wallet.history) else emptyList()
+    val rows = historyRows(history.orEmpty())
     MebitScreen(
         eyebrow = "HISTORY",
         title = "ประวัติธุรกรรม",
@@ -35,7 +44,7 @@ fun S7HistoryScreen(
         tag = tag,
     ) {
         if (rows.isEmpty()) {
-            Text(HISTORY_EMPTY_TEXT, color = MbSlate, fontSize = 13.sp, lineHeight = 17.sp, modifier = Modifier.testTag("history_empty"))
+            Text(if (history == null) HISTORY_UNKNOWN_TEXT else HISTORY_EMPTY_TEXT, color = MbSlate, fontSize = 13.sp, lineHeight = 17.sp, modifier = Modifier.testTag("history_empty"))
         } else {
             Column { rows.forEachIndexed { index, row -> HomeTxRowItem(row, Modifier.testTag("history_tx_$index")) { onOpenTx(row.tx) } } }
         }

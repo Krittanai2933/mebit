@@ -185,6 +185,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.mebit.app.feature.send.shownHistory
 
 private val ImplementedRoutes = MovieRoute.entries.toSet()
 
@@ -434,6 +435,11 @@ internal fun MebitNavHost(
     val openHardwareTx: (HotTx) -> Unit = { tx ->
         openedTx = tx
         navigate(MovieRoute.HardwareTxDetail)
+    }
+
+    val openVaultTx: (HotTx) -> Unit = { tx ->
+        openedTx = tx
+        navigate(MovieRoute.VaultTxDetail)
     }
 
     // The wallet a hardware screen shows. Only the debug catalog opens one with none named, and it then shows the first.
@@ -775,10 +781,33 @@ internal fun MebitNavHost(
                         onReceive = { navigate(MovieRoute.VaultReceive) },
                         onSend = { startVaultSend(vaultDraft.selectedVault()) },
                         onExport = { navigate(MovieRoute.WalletExport) },
+                        onHistory = { navigate(MovieRoute.VaultHistory) },
+                        onOpenTx = openVaultTx,
                         // The Wallet list is a tab, so it opens as the only entry, and a detail a vault send lands on closes to the list.
                         onClose = { navigate(MovieRoute.VaultList) },
                         onOpenCatalog = openCatalog,
                     )
+                    MovieRoute.VaultHistory -> vaultDraft.selectedVault()?.let { vault ->
+                        S7HistoryScreen(
+                            history = wallets.vaultTxs(vault),
+                            onOpenTx = openVaultTx,
+                            onBack = onBack,
+                            onOpenCatalog = openCatalog,
+                            tag = "screen_vaults/history",
+                        )
+                    } ?: NoWallet(current.route, onBack, openCatalog)
+                    MovieRoute.VaultTxDetail -> vaultDraft.selectedVault()?.let { vault ->
+                        S8TxDetailScreen(
+                            tx = openedTx,
+                            // IO, as the one-key detail's: a back cannot stop this blocking call.
+                            detail = { txid -> withContext(Dispatchers.IO) { wallets.vaultTxDetail(vault, txid) } },
+                            walletName = vault.name,
+                            quotes = quotes,
+                            onBack = onBack,
+                            onOpenCatalog = openCatalog,
+                            tag = "screen_vaults/tx",
+                        )
+                    } ?: NoWallet(current.route, onBack, openCatalog)
                     MovieRoute.WalletExport -> WalletExportScreen(
                         vault = vaultDraft.selectedVault(),
                         onBack = onBack,
@@ -858,7 +887,7 @@ internal fun MebitNavHost(
                         onChangePin = if (session.pin.isSet) ({ scope.launch { biometrics.changePin("เปลี่ยน PIN") } }) else null,
                     )
                     MovieRoute.S7History -> S7HistoryScreen(
-                        wallet = singleSig,
+                        history = singleSig.shownHistory(),
                         onOpenTx = openTx,
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -1127,7 +1156,7 @@ internal fun MebitNavHost(
                     } ?: NoWallet(current.route, onBack, openCatalog)
                     MovieRoute.HardwareHistory -> shownHardware?.let { w ->
                         S7HistoryScreen(
-                            wallet = hardware.chain(w),
+                            history = hardware.chain(w).shownHistory(),
                             onOpenTx = openHardwareTx,
                             onBack = onBack,
                             onOpenCatalog = openCatalog,

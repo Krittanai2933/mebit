@@ -15,6 +15,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
+import com.mebit.app.feature.send.HISTORY_UNKNOWN_TEXT
 
 private fun key(n: Int, source: KeySourceLabel, label: String, fingerprint: String) =
     SavedKey("key_$n", label, fingerprint, "tpub$n", "m/48'/1'/0'/2'", source, verified = true)
@@ -78,7 +79,7 @@ class VaultDetailTest {
     fun unknownAndEmptyHistoriesSayDifferentThings() {
         val tx = HotTx("t1", 12_000_000, 6u, 1_787_036_520uL)
         assertEquals(VAULT_TX_READING, vaultTxNote(history = null, reading = true))
-        assertEquals(VAULT_TX_UNKNOWN, vaultTxNote(history = null, reading = false))
+        assertEquals(HISTORY_UNKNOWN_TEXT, vaultTxNote(history = null, reading = false))
         assertEquals(HISTORY_EMPTY_TEXT, vaultTxNote(history = emptyList(), reading = false))
         assertEquals(HISTORY_EMPTY_TEXT, vaultTxNote(history = emptyList(), reading = true), "a known empty list stays empty during a re-read")
         assertNull(vaultTxNote(history = listOf(tx), reading = false), "rows show")

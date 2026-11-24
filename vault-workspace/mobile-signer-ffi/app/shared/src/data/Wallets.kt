@@ -419,11 +419,16 @@ class Wallets internal constructor(
 
     /**
      * For a several-key wallet's detail (Penpot 3.7): its balance and, once that read reached the end of both chains, its transactions, by
-     * [readVault]'s rules. Never part of [refreshBalances], so a list on screen asks no page of any vault's history.
+     * [readVault]'s rules. Never part of [refreshBalances], so a list on screen asks no page of any vault's history. [force] reads even
+     * inside the minute a read stays fresh, for a pull (3.7.4).
      */
-    suspend fun readVaultDetail(vault: CreatedVault) {
-        withContext(Dispatchers.Default) { readVault(vault, withHistory = true) }
+    suspend fun readVaultDetail(vault: CreatedVault, force: Boolean = false) {
+        withContext(Dispatchers.Default) { readVault(vault, withHistory = true, force = force) }
     }
+
+    /** One transaction of [vault] in full, for the detail screen (3.7.2, 3.7.3). It blocks on the network, so the caller picks the thread. */
+    fun vaultTxDetail(vault: CreatedVault, txid: String): TxDetailLoad.Done =
+        detailLoad { vaultCore.detail(descriptorIn(vault.bsms), KeyNetwork.TEST, txid) }
 
     /**
      * For a list on screen. One wallet at a time, never in parallel, the one-key wallets first, then [vaults] in book order. Skips a wallet
@@ -449,9 +454,9 @@ class Wallets internal constructor(
      * only their pages and the tip. Both land in one write after the erase check, so a balance and its rows come from one read and an erase
      * leaves neither. Blocks on the network. How far its scan got, or null when nothing was asked or the read failed.
      */
-    private fun readVault(vault: CreatedVault, withHistory: Boolean = false): HotScan? = synchronized(vaultLock) {
+    private fun readVault(vault: CreatedVault, withHistory: Boolean = false, force: Boolean = false): HotScan? = synchronized(vaultLock) {
         val last = vaultReads[vault.address]
-        if (last != null && nowSeconds() - last.atSeconds in 0..BALANCE_FRESH_SECONDS && last.answers(withHistory)) return@synchronized null
+        if (!force && last != null && nowSeconds() - last.atSeconds in 0..BALANCE_FRESH_SECONDS && last.answers(withHistory)) return@synchronized null
         val generation = vaultGeneration
         val descriptor = descriptorIn(vault.bsms)
         // A mainnet vault, a malformed BSMS and a lost host all leave the figure unknown, never guessed.

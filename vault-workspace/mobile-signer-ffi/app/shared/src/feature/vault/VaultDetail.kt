@@ -54,6 +54,18 @@ import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.ffi.signer.HotTx
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.pulltorefresh.pullToRefresh
+import androidx.compose.runtime.derivedStateOf
+import com.mebit.app.feature.send.HISTORY_UNKNOWN_TEXT
+import com.mebit.app.feature.send.RowsPullState
+import com.mebit.app.feature.send.TxListMaxHeight
+import com.mebit.app.feature.send.TxSection
+import com.mebit.app.feature.send.homeHasMoreHistory
+import com.mebit.app.feature.send.txStatus
 
 /**
  * Penpot 3.7 Wallet detail, and 3.7.1 with the policy card open: [vault]'s name, balance and baht on the navy block with รับ, ส่ง and a
@@ -61,6 +73,7 @@ import com.mebit.ffi.signer.HotTx
  * rows [Wallets.vaultTxs], both from one read this screen asks for by [Wallets.readVaultDetail]'s rules, and the keys come from [keyring].
  * A row has no tap yet, so it never opens the one-key S8. No board draws a null [vault], which the catalog can open with an empty book.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VaultDetailScreen(
     vault: CreatedVault?,
@@ -70,6 +83,8 @@ fun VaultDetailScreen(
     onReceive: () -> Unit,
     onSend: () -> Unit,
     onExport: () -> Unit,
+    onHistory: () -> Unit,
+    onOpenTx: (HotTx) -> Unit,
     onClose: () -> Unit,
     onOpenCatalog: () -> Unit,
 ) {
@@ -85,11 +100,27 @@ fun VaultDetailScreen(
         wallets.readVaultDetail(vault)
         reading = false
     }
+    // A pull reads again, even inside the minute a read stays fresh. One that comes while the first read runs is let go: that read is the refresh.
+    var pulled by remember(vault.address) { mutableStateOf(false) }
+    LaunchedEffect(vault.address, pulled) {
+        if (pulled) {
+            wallets.readVaultDetail(vault, force = true)
+            pulled = false
+        }
+    }
+    val pull = remember { RowsPullState() }
+    // Derived, so a drag recomposes the page only when it flips and not on every frame.
+    val armed by remember { derivedStateOf { pull.distanceFraction > 1f } }
     var keysOpen by remember { mutableStateOf(false) }
     val sats = wallets.vaultSats(vault)
     val line = vaultLine(vault, sats, rememberFiatQuote(quotes))
     val history = wallets.vaultTxs(vault)
-    WalletPage(tag = "screen_vaults/detail", board = WalletBoard.Detail, onOpenCatalog = onOpenCatalog) {
+    WalletPage(
+        tag = "screen_vaults/detail",
+        board = WalletBoard.Detail,
+        onOpenCatalog = onOpenCatalog,
+        modifier = Modifier.pullToRefresh(isRefreshing = pulled, state = pull, onRefresh = { if (!reading) pulled = true }),
+    ) {
         WalletHero(
             board = WalletBoard.Detail,
             eyebrow = vaultEyebrow(vault),
@@ -116,14 +147,24 @@ fun VaultDetailScreen(
         )
         // 3.7 puts ธุรกรรม 26 dp under the card and the first row's title 16 dp under its line.
         Spacer(modifier = Modifier.height(26.dp))
-        Text("ธุรกรรม", color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 14.sp, modifier = Modifier.testTag("vault_tx_label"))
-        Spacer(modifier = Modifier.height(16.dp))
-        val note = vaultTxNote(history, reading)
-        if (note != null) {
-            Text(note, color = MbSlate, fontSize = 13.sp, lineHeight = 17.sp, modifier = Modifier.testTag("vault_tx_note"))
-        } else {
-            historyRows(history.orEmpty()).forEachIndexed { i, row ->
-                HomeTxRowItem(row, Modifier.txDivider().testTag("vault_tx_$i"), onClick = null)
+        TxSection(
+            title = "ธุรกรรม",
+            tag = "vault",
+            hasMore = homeHasMoreHistory(history.orEmpty()),
+            historyTag = "cta_vault_history",
+            onHistory = onHistory,
+            status = txStatus(pulled, armed),
+            pull = pull,
+        ) {
+            val note = vaultTxNote(history, reading)
+            if (note != null) {
+                Text(note, color = MbSlate, fontSize = 13.sp, lineHeight = 17.sp, modifier = Modifier.testTag("vault_tx_note"))
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = TxListMaxHeight).testTag("vault_tx_list")) {
+                    itemsIndexed(historyRows(history.orEmpty()), key = { _, row -> row.tx.txid }) { i, row ->
+                        HomeTxRowItem(row, Modifier.txDivider().testTag("vault_tx_$i")) { onOpenTx(row.tx) }
+                    }
+                }
             }
         }
         Spacer(modifier = Modifier.height(16.dp))
@@ -199,7 +240,6 @@ internal fun vaultHeroLine(sats: Long?, baht: String?, reading: Boolean): String
 
 /** Drafts: no board draws these two states. */
 internal const val VAULT_TX_READING = "กำลังดึงธุรกรรม…"
-internal const val VAULT_TX_UNKNOWN = "ยังดึงธุรกรรมไม่ได้ในตอนนี้"
 
 /**
  * The line the transactions show in place of rows, or null when they show rows. Loading while the read is out with nothing to show,
@@ -208,7 +248,7 @@ internal const val VAULT_TX_UNKNOWN = "ยังดึงธุรกรรม�
  */
 internal fun vaultTxNote(history: List<HotTx>?, reading: Boolean): String? = when {
     history == null && reading -> VAULT_TX_READING
-    history == null -> VAULT_TX_UNKNOWN
+    history == null -> HISTORY_UNKNOWN_TEXT
     history.isEmpty() -> HISTORY_EMPTY_TEXT
     else -> null
 }

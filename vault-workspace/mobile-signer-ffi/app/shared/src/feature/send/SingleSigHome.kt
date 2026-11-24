@@ -88,8 +88,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
-// Four and a half rows at the 67 dp pitch, so a fifth row peeks out to show the box scrolls.
-private val TxListMaxHeight = 301.5.dp
 
 /**
  * Penpot 4.1 Home · single-sig. Left out: the settings gear and
@@ -325,113 +323,22 @@ private fun OneKeyHome(
         }
         if (rows.isNotEmpty() || open || pulled) {
             Spacer(modifier = Modifier.height(24.dp))
-            val hasMore = homeHasMoreHistory(wallet.history)
-            val end = txHeaderEnd(pulled, armed, hasMore)
-            Box {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("ธุรกรรมล่าสุด", color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 14.sp, modifier = Modifier.weight(1f).testTag("home_tx_label"))
-                    if (hasMore) {
-                        Text(
-                            "ดูทั้งหมด",
-                            color = MbNavy,
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            lineHeight = 14.sp,
-                            // Hidden, not removed, so the status over it moves nothing below.
-                            modifier = (if (end == TxHeaderEnd.SeeAll) Modifier.clickable(role = Role.Button, onClick = onHistory) else Modifier.alpha(0f).clearAndSetSemantics { })
-                                .padding(vertical = 8.dp)
-                                .testTag("cta_s1_history"),
-                        )
-                    }
-                }
-                if (end == TxHeaderEnd.Armed || end == TxHeaderEnd.Refreshing) {
-                    Row(
-                        modifier = Modifier.matchParentSize().wrapContentHeight(align = Alignment.CenterVertically, unbounded = true),
-                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (end == TxHeaderEnd.Refreshing) {
-                            RefreshSpinner()
-                            Spacer(modifier = Modifier.width(11.dp))
-                        }
-                        Text("กำลังอัปเดต…", color = MbBody, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, lineHeight = 13.2.sp, modifier = Modifier.testTag("home_refresh_status"))
-                    }
-                }
-            }
-            PullGap(pull)
-            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = TxListMaxHeight).testTag("home_tx_list")) {
-                itemsIndexed(rows, key = { _, row -> row.tx.txid }) { index, row ->
-                    HomeTxRowItem(row, Modifier.testTag("home_tx_$index")) { onOpenTx(row.tx) }
-                }
-            }
-        }
-    }
-}
-
-/**
- * How far the rows are pulled open, in Material's threshold units: 0 at rest and 1 where letting go refreshes. A refresh shows in the
- * header (3.6.4), so it closes the gap to 0 and ignores the snaps Material's node makes after every scroll while it holds the offset at
- * the threshold. On release past the threshold the node calls onRefresh and animateToHidden at once, then recomposition calls animateToThreshold.
- */
-private class RowsPullState : PullToRefreshState {
-    private val fraction = Animatable(0f)
-    private var refreshing = false
-    override val distanceFraction: Float get() = fraction.value
-    override val isAnimating: Boolean get() = fraction.isRunning
-    override suspend fun snapTo(targetValue: Float) { if (!refreshing) fraction.snapTo(targetValue) }
-    override suspend fun animateToThreshold() { refreshing = true; fraction.animateTo(0f) }
-    override suspend fun animateToHidden() { refreshing = false; fraction.animateTo(0f) }
-}
-
-/** The right end of the transactions header: 3.6.4's spinner while a pull refreshes, 3.6.3's text once the pull would refresh, else the link. */
-internal enum class TxHeaderEnd { None, SeeAll, Armed, Refreshing }
-
-internal fun txHeaderEnd(refreshing: Boolean, armed: Boolean, hasMore: Boolean): TxHeaderEnd = when {
-    refreshing -> TxHeaderEnd.Refreshing
-    armed -> TxHeaderEnd.Armed
-    hasMore -> TxHeaderEnd.SeeAll
-    else -> TxHeaderEnd.None
-}
-
-/** The gap under the header that the pull opens, with 3.6.3's badge centred in it. */
-@Composable
-private fun PullGap(pull: RowsPullState) {
-    val fraction = pull.distanceFraction
-    Box(modifier = Modifier.fillMaxWidth().height(16.dp + 64.dp * fraction), contentAlignment = Alignment.Center) {
-        if (fraction > 0f) {
-            val grown = minOf(fraction, 1f)
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .graphicsLayer { alpha = grown; scaleX = grown; scaleY = grown }
-                    .background(MbWhite, CircleShape)
-                    .border(0.75.dp, MbBorder, CircleShape)
-                    .testTag("home_pull_badge"),
-                contentAlignment = Alignment.Center,
+            TxSection(
+                title = "ธุรกรรมล่าสุด",
+                tag = "home",
+                hasMore = homeHasMoreHistory(wallet.history),
+                historyTag = "cta_s1_history",
+                onHistory = onHistory,
+                status = txStatus(pulled, armed),
+                pull = pull,
             ) {
-                PullArc(boxSize = 24.dp, circle = 18.dp, sweep = 270f * grown)
+                LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = TxListMaxHeight).testTag("home_tx_list")) {
+                    itemsIndexed(rows, key = { _, row -> row.tx.txid }) { index, row ->
+                        HomeTxRowItem(row, Modifier.testTag("home_tx_$index")) { onOpenTx(row.tx) }
+                    }
+                }
             }
         }
-    }
-}
-
-/** 3.6.4's spinner, turning once a second. The turn is read in the layer, so it redraws without recomposing the page. */
-@Composable
-private fun RefreshSpinner() {
-    val turn by rememberInfiniteTransition().animateFloat(0f, 360f, infiniteRepeatable(tween(1_000, easing = LinearEasing)))
-    PullArc(boxSize = 18.dp, circle = 13.5.dp, sweep = 270f, modifier = Modifier.graphicsLayer { rotationZ = turn })
-}
-
-/** The track circle with the navy arc on it, clockwise from 12 o'clock. */
-@Composable
-private fun PullArc(boxSize: Dp, circle: Dp, sweep: Float, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(boxSize)) {
-        val stroke = 2.5.dp.toPx()
-        val diameter = circle.toPx()
-        val topLeft = Offset((size.width - diameter) / 2, (size.height - diameter) / 2)
-        val arcSize = Size(diameter, diameter)
-        drawArc(MbBorder, 0f, 360f, useCenter = false, topLeft = topLeft, size = arcSize, style = Stroke(stroke))
-        drawArc(MbNavy, -90f, sweep, useCenter = false, topLeft = topLeft, size = arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
     }
 }
 

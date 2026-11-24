@@ -331,6 +331,18 @@ enum class MovieRoute(
         "รับเข้า Wallet",
         "ที่อยู่รับของ Wallet",
     ),
+    VaultHistory(
+        "vaults/history",
+        "HISTORY",
+        "ประวัติธุรกรรม",
+        "ธุรกรรมทั้งหมดของ Wallet",
+    ),
+    VaultTxDetail(
+        "vaults/tx",
+        "TRANSACTION",
+        "รายละเอียดธุรกรรม",
+        "สถานะ · ค่าธรรมเนียม · TXID",
+    ),
     ChooseKey(
         "vault/choose-key",
         "POLICY · ขั้น 2 / 3",
