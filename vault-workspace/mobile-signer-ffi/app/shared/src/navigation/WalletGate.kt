@@ -6,6 +6,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mebit.app.Place
 import com.mebit.app.data.NodeSettings
+import com.mebit.app.data.UnitSettings
 import com.mebit.app.data.PendingPayments
 import com.mebit.app.data.SavedVaults
 import com.mebit.app.data.Wallets
@@ -29,6 +30,7 @@ fun WalletGate() {
     remember(scanDir) { scanDir?.let(::hotUseStateDir) }
     // Also before any chain read: the node the user chose in Settings is in force from the first request.
     val nodeSettings = remember(scanDir) { NodeSettings(scanDir?.let { plainFile("$it/node-choice") }).also { it.restore() } }
+    val unitSettings = remember(scanDir) { UnitSettings(scanDir?.let { plainFile("$it/btc-unit") }).also { it.restore() } }
     val storage = rememberVaultsStorage()
     val shelf = rememberSecureShelf()
     val pairings = rememberPairings()
@@ -68,8 +70,8 @@ fun WalletGate() {
     }
 
     when (val boot = gate.boot) {
-        Boot.Onboarding -> MebitNavHost(wallets, Stop(MovieRoute.start, Place.FIRST), gate.notice, vaults, pairings, nodeSettings)
-        is Boot.Open -> MebitNavHost(wallets, Stop(boot.route, boot.place), vaults = vaults, pairings = pairings, nodeSettings = nodeSettings)
+        Boot.Onboarding -> MebitNavHost(wallets, Stop(MovieRoute.start, Place.FIRST), gate.notice, vaults, pairings, nodeSettings, unitSettings)
+        is Boot.Open -> MebitNavHost(wallets, Stop(boot.route, boot.place), vaults = vaults, pairings = pairings, nodeSettings = nodeSettings, unitSettings = unitSettings)
         Boot.Locked, is Boot.Broken -> UnlockScreen(gate)
     }
 }

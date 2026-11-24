@@ -435,7 +435,7 @@ enum class MovieRoute(
         "settings",
         "PREFERENCES · MEBIT",
         "ตั้งค่า",
-        "เลือกเครือข่ายและโหนดที่แอปใช้เชื่อมต่อ",
+        "ปรับหน่วยแสดง Bitcoin และการเชื่อมต่อ",
         BarTab.None,
     ),
     SettingsNode(
