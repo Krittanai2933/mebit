@@ -50,6 +50,7 @@ import com.mebit.app.data.HardwareWallet
 import com.mebit.app.data.HardwareWallets
 import com.mebit.app.data.hardwareKeyName
 import com.mebit.app.data.KeyringStore
+import com.mebit.app.data.THIS_PHONE_KEY_NAME
 import com.mebit.app.data.hardwareKind
 import com.mebit.app.data.oneKeyChoices
 import com.mebit.app.data.OwnerCheck
@@ -83,7 +84,6 @@ import com.mebit.app.data.unopenedNotice
 import com.mebit.app.data.vaultsUsing
 import com.mebit.app.data.ffiImportSeedDraft
 import com.mebit.app.data.liveQuoteCache
-import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.feature.keys.AddKeyScreen
 import com.mebit.app.feature.keys.DeviceRead
 import com.mebit.app.feature.keys.HardwareWalletScreen
@@ -117,6 +117,7 @@ import com.mebit.app.feature.vault.HardwareCreatedScreen
 import com.mebit.app.feature.vault.PolicyScreen
 import com.mebit.app.feature.vault.duplicateLine
 import com.mebit.app.feature.vault.SpendingCard
+import com.mebit.app.feature.vault.cardBalanceText
 import com.mebit.app.feature.vault.ReviewScreen
 import com.mebit.app.feature.vault.ScriptTypeScreen
 import com.mebit.app.feature.vault.T16InvalidMnScreen
@@ -138,6 +139,7 @@ import com.mebit.app.feature.send.S5ReviewSignScreen
 import com.mebit.app.feature.send.S6SentScreen
 import com.mebit.app.feature.send.S7HistoryScreen
 import com.mebit.app.feature.send.S8TxDetailScreen
+import com.mebit.app.feature.send.ChoiceCard
 import com.mebit.app.feature.send.ChooseWalletScreen
 import com.mebit.app.feature.send.HardwareHomeScreen
 import com.mebit.app.feature.send.HardwareReviewScreen
@@ -149,12 +151,8 @@ import com.mebit.app.feature.send.DEMO_TX
 import com.mebit.app.feature.send.VaultReceiveScreen
 import com.mebit.app.feature.send.REMOVE_FAILED_LINE
 import com.mebit.app.feature.send.WalletChoice
-import com.mebit.app.feature.send.WalletLine
-import com.mebit.app.feature.send.vaultLine
 import com.mebit.app.feature.send.removeReason
 import com.mebit.app.feature.send.walletDeleteItem
-import com.mebit.app.feature.send.fiatLine
-import com.mebit.app.feature.send.homeBalanceText
 import com.mebit.app.feature.send.walletChoices
 import com.mebit.app.feature.send.CollectSignaturesScreen
 import com.mebit.app.feature.send.DeviceSample
@@ -1062,37 +1060,31 @@ internal fun MebitNavHost(
                     )
                     MovieRoute.ChooseWalletReceive, MovieRoute.ChooseWalletSend -> {
                         val send = current.route == MovieRoute.ChooseWalletSend
-                        val quote = rememberFiatQuote(quotes)
                         LaunchedEffect(vaultDraft.created) {
                             wallets.refreshBalances(vaultDraft.created)
                             hardware.refreshBalances()
                         }
+                        // The same name, line and figure as the wallet's card on Home's Wallet list.
                         ChooseWalletScreen(
                             send = send,
                             choices = walletChoices(wallets.listed.map { it.place }, vaults.current.hardware, vaultDraft.created),
-                            line = { choice ->
+                            card = { choice ->
                                 when (choice) {
                                     is WalletChoice.Spending -> {
                                         val w = wallets.at(choice.place)
-                                        WalletLine(
-                                            w.session.walletName,
-                                            homeBalanceText(w.chain.balanceSats, spendingKnown(w), loading = false),
-                                            baht = if (w.chain.mode == WalletMode.Live && w.chain.balanceKnown) fiatLine(w.chain.balanceSats, quote) else null,
-                                        )
+                                        ChoiceCard(w.session.walletName, "กุญแจเดียว · $THIS_PHONE_KEY_NAME", cardBalanceText(w.chain.balanceSats, spendingKnown(w)))
                                     }
                                     is WalletChoice.Hardware -> {
                                         val chain = hardware.chain(choice.wallet)
-                                        WalletLine(
-                                            choice.wallet.name,
-                                            homeBalanceText(chain.balanceSats, chain.balanceKnown, loading = false),
-                                            baht = if (chain.mode == WalletMode.Live && chain.balanceKnown) fiatLine(chain.balanceSats, quote) else null,
-                                        )
+                                        ChoiceCard(choice.wallet.name, "กุญแจเดียว · ${hardwareKeyName(choice.wallet, keyring.keys)}", cardBalanceText(chain.balanceSats, chain.balanceKnown))
                                     }
-                                    is WalletChoice.Vault -> vaultLine(choice.vault, wallets.vaultSats(choice.vault), quote)
+                                    is WalletChoice.Vault -> {
+                                        val sats = wallets.vaultSats(choice.vault)
+                                        ChoiceCard(choice.vault.name, "ต้องเซ็น ${choice.vault.m} จาก ${choice.vault.n} กุญแจ", cardBalanceText(sats ?: 0L, known = sats != null))
+                                    }
                                 }
                             },
                             onChoose = { if (send) openSend(it) else openReceive(it) },
-                            onSwitch = { navigate(if (send) MovieRoute.ChooseWalletReceive else MovieRoute.ChooseWalletSend) },
                             onBack = onBack,
                             onOpenCatalog = openCatalog,
                         )
