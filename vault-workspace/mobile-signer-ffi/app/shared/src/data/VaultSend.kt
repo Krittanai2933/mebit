@@ -293,7 +293,7 @@ class VaultSend internal constructor(
      * as a one-key [SingleSigWallet.post] does. A finished transaction of another txid than the one 5.2 showed is neither guarded nor posted.
      * A guard that already names this txid means these same bytes may be out, so they go again, which can never pay twice, and any other
      * guard refuses. Out: the guard goes and [state] is [VaultSendState.Sent]. An unknown outcome keeps the guard. The node's refusal of a
-     * first post drops the guard and makes the payment stale. Refused while a signature holds the send. Blocks.
+     * first post drops the guard and makes the payment stale, with no [lastError]. Refused while a signature holds the send. Blocks.
      */
     fun broadcast(): Boolean = synchronized(lock) {
         lastError = null
@@ -368,8 +368,13 @@ class VaultSend internal constructor(
     } catch (e: MobileSignerException.InvalidPsbtJson) {
         // Nothing is out: the node refused these bytes, or the core refused before it posted anything.
         guards.settle(guardKey, pending)
-        if (refusedByNode(e)) state = VaultSendState.Collecting(held, stale = true)
-        fail(sendErrorThai(e.message))
+        if (refusedByNode(e)) {
+            // 5.2 says it as 5.8.1, so no line stays behind for 5.1 to show.
+            state = VaultSendState.Collecting(held, stale = true)
+            false
+        } else {
+            fail(sendErrorThai(e.message))
+        }
     } catch (e: Exception) {
         unknown(pending)
     }
