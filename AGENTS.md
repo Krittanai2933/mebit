@@ -49,7 +49,7 @@ Skills (each one's `description` says when to use it):
 - Liquidation prices and LTV are always **derived** from loan/collateral state, never hardcoded or hand-entered — see the correction documented in `docs/design-notes.md`.
 - State machine transitions (in `custody-service`) must be idempotent — resubmitting the same signing request must not double-spend.
 - Don't build UniFFI/mobile app scaffolding speculatively ahead of `vault-core`'s interface stabilizing — mock it instead (see `vault-workspace/mobile-signer-ffi/README.md`).
-- When a doc spec and the existing code disagree (e.g. derivation path format, field types) and it's not obviously a typo, don't pick one yourself — flag it as an open item in `docs/04-open-items.md` and ask, per the pattern already used there.
+- When a doc spec and the existing code disagree (e.g. derivation path format, field types) and it's not obviously a typo, don't pick one yourself — flag it as an open item in `docs/04-open-items.md`, add its row to the status table at the top of that file, and ask, per the pattern already used there. Read that table first when you need the state of the open items, not the whole file.
 - After editing `AGENTS.md`, `CLAUDE.md`, a skill or a brief, run `python3 -I scripts/check-agent-context.py`. It exits 1 and names the fix for each problem.
 
 ## Out of scope
