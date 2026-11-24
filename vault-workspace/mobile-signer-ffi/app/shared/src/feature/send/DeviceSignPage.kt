@@ -31,7 +31,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -78,6 +77,24 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import com.mebit.app.resources.Res
+import com.mebit.app.resources.ic_sign_arrow
+import com.mebit.app.resources.ic_sign_btc
+import com.mebit.app.resources.ic_sign_wallet
+import com.mebit.app.ui.theme.MbBtcOrange
+import com.mebit.app.ui.theme.amountFontFamily
+import org.jetbrains.compose.resources.painterResource
 
 /**
  * How signing on the device went wrong: 5.3.2.1's refusal, 5.3.3.1's lost link, no device to reach, or a device that holds another key, and
@@ -295,7 +312,8 @@ internal fun DeviceSignPage(
     val stage = run.stage
     val failed = stage as? SignStage.Failed
     val failure = failed?.let { deviceFailureText(it.failure, word, registration?.info?.name.orEmpty()) }
-    MebitScreen(
+    val marks = signMarks(stage, run.registers)
+    SignFrame(
         eyebrow = if (failed != null) "SIGN · ล้มเหลว" else eyebrow,
         title = when {
             failure != null -> failure.title
@@ -309,21 +327,23 @@ internal fun DeviceSignPage(
             stage == SignStage.Registering -> "ครั้งแรกที่ $word เซ็นให้ Wallet นี้ $word จะขอบันทึก Wallet ไว้ ตรวจชื่อและกุญแจบน $word ให้ตรงกับด้านล่าง แล้วกดยืนยันบนอุปกรณ์"
             else -> "โปรดตรวจยอดเงินและที่อยู่ปลายทางบนหน้าจอ $word ให้ตรงกับรายการด้านล่างทุกตัวอักษร ก่อนกดยืนยันบนอุปกรณ์"
         },
+        tile = { KeyLogo(hardwareSource(run.kind), 26.dp) },
+        keyName = keyName,
+        keyLine = "Bluetooth · ${fingerprintGroups(fingerprint)}",
+        pill = signPill(stage == SignStage.Signed, failure?.pill),
+        steps = signStepLabels(word, run.registers).take(marks.size),
+        marks = marks,
+        tag = tag,
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
-        tag = tag,
         bottom = bottom,
+        middle = {
+            if (run.asked && run.kind == WalletKind.TREZOR_SAFE7 && stage == SignStage.Connecting) {
+                Spacer(modifier = Modifier.height(16.dp))
+                PairingCodeBlock(forgot = pairingKept, code = run.code, onCode = { run.code = it })
+            }
+        },
     ) {
-        Spacer(modifier = Modifier.height(26.dp))
-        DeviceCard(run.kind, keyName, fingerprint, stage, failure?.pill)
-        if (run.asked && run.kind == WalletKind.TREZOR_SAFE7 && stage == SignStage.Connecting) {
-            Spacer(modifier = Modifier.height(16.dp))
-            PairingCodeBlock(forgot = pairingKept, code = run.code, onCode = { run.code = it })
-        }
-        Spacer(modifier = Modifier.height(12.dp))
-        val marks = signMarks(stage, run.registers)
-        StepsCard(signStepLabels(word, run.registers).take(marks.size), marks)
-        Spacer(modifier = Modifier.height(12.dp))
         when {
             failure?.kicker != null -> FailureBanner(failure.kicker, failure.line)
             failure != null -> WarningBar(failure.line)
@@ -334,78 +354,127 @@ internal fun DeviceSignPage(
     }
 }
 
-/** 4.5.3's card of the key that signs: the device's logo in its tile, the key's name, its fingerprint, and the state pill on the right. */
+/** The pill at the right of the signer's row: its words, ink and fill, and 5.3.2's spinner while the signer is asked. */
+internal class SignPill(val label: String, val ink: Color, val fill: Color, val spinning: Boolean)
+
+/** Pure. 5.4.2's green ยืนยันแล้ว once [signed], the failure's word in amber, else 5.3.2's รอยืนยัน with its spinner. */
+internal fun signPill(signed: Boolean, failedPill: String?): SignPill = when {
+    failedPill != null -> SignPill(failedPill, MbEyebrow, MbIconWash, spinning = false)
+    signed -> SignPill("ยืนยันแล้ว", MbSuccess, MbGreenWash, spinning = false)
+    else -> SignPill("รอยืนยัน", MbNavy, MbChip, spinning = true)
+}
+
+/**
+ * What both sign pages draw, a device's and the phone's (5.3.1 to 5.7.3): the title block, 5.3.2's one panel of the signer with its
+ * tile, name, line, pill and steps, then [middle] and, 12 dp under it, [details]: what the signer must show the same, or the failure.
+ */
 @Composable
-private fun DeviceCard(kind: WalletKind, keyName: String, fingerprint: String, stage: SignStage, failedPill: String?) {
+internal fun SignFrame(
+    eyebrow: String,
+    title: String,
+    subtitle: String?,
+    tile: @Composable () -> Unit,
+    keyName: String,
+    keyLine: String,
+    pill: SignPill,
+    steps: List<String>,
+    marks: List<StepMark>,
+    tag: String,
+    onBack: (() -> Unit)?,
+    onOpenCatalog: () -> Unit,
+    bottom: @Composable ColumnScope.() -> Unit,
+    middle: @Composable ColumnScope.() -> Unit = {},
+    details: @Composable ColumnScope.() -> Unit,
+) {
+    MebitScreen(eyebrow = eyebrow, title = title, subtitle = subtitle, onBack = onBack, onOpenCatalog = onOpenCatalog, tag = tag, bottom = bottom) {
+        Spacer(modifier = Modifier.height(26.dp))
+        SignPanel(tile, keyName, keyLine, pill, steps, marks)
+        middle()
+        Spacer(modifier = Modifier.height(12.dp))
+        details()
+    }
+}
+
+/** 5.3.2's panel: the signer's 48 dp tile, its name and line, the pill, then a rule inset 16 dp and the steps, each 34 dp tall. */
+@Composable
+private fun SignPanel(tile: @Composable () -> Unit, keyName: String, keyLine: String, pill: SignPill, steps: List<String>, marks: List<StepMark>) {
     val shape = RoundedCornerShape(24.dp)
-    Row(
-        Modifier.fillMaxWidth().height(76.dp).clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)).background(MbChip), contentAlignment = Alignment.Center) { KeyLogo(hardwareSource(kind), 26.dp) }
-        Spacer(modifier = Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(keyName, color = MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, lineHeight = 20.sp, maxLines = 1)
-            Text("Bluetooth · ${fingerprintGroups(fingerprint)}", color = MbSlate, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 1, modifier = Modifier.testTag("hw_sign_fingerprint"))
+    Column(Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape)) {
+        Row(Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)).background(MbChip), contentAlignment = Alignment.Center) { tile() }
+            Spacer(modifier = Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(keyName, color = MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, lineHeight = 20.sp, maxLines = 1)
+                Text(keyLine, color = MbSlate, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 1, modifier = Modifier.testTag("hw_sign_fingerprint"))
+            }
+            Row(Modifier.height(26.dp).clip(CircleShape).background(pill.fill).padding(start = if (pill.spinning) 11.dp else 10.dp, end = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (pill.spinning) {
+                    PillSpinner()
+                    Spacer(modifier = Modifier.width(5.dp))
+                }
+                Text(pill.label, color = pill.ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp, modifier = Modifier.testTag("hw_sign_status"))
+            }
         }
-        val (label, ink, fill) = when {
-            failedPill != null -> Triple(failedPill, MbEyebrow, MbIconWash)
-            stage == SignStage.Signed -> Triple("ยืนยันแล้ว", MbSuccess, MbGreenWash)
-            else -> Triple("รอยืนยัน", MbNavy, MbChip)
-        }
-        Row(Modifier.height(26.dp).clip(CircleShape).background(fill).padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, color = ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp, modifier = Modifier.testTag("hw_sign_status"))
+        Box(Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(1.dp).background(MbBorder))
+        Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 7.dp, bottom = 10.dp).testTag("hw_sign_steps")) {
+            steps.zip(marks).forEachIndexed { i, (step, mark) ->
+                Row(Modifier.height(34.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(22.dp).clip(CircleShape).background(
+                            when (mark) {
+                                StepMark.Done -> MbGreenWash
+                                StepMark.Current -> MbNavy
+                                StepMark.Pending -> MbWhite
+                                StepMark.Failed -> MbIconWash
+                            },
+                        ).then(
+                            when (mark) {
+                                StepMark.Pending -> Modifier.border(1.dp, MbBorder, CircleShape)
+                                StepMark.Failed -> Modifier.border(1.5.dp, MbEyebrow, CircleShape)
+                                else -> Modifier
+                            },
+                        ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        when (mark) {
+                            StepMark.Done -> Check(MbSuccess)
+                            StepMark.Failed -> Text("!", color = MbEyebrow, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            else -> Text("${i + 1}", color = if (mark == StepMark.Current) MbWhite else MbSlate, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = amountFontFamily())
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        step,
+                        color = when (mark) {
+                            StepMark.Failed -> MbEyebrow
+                            StepMark.Pending -> MbSlate
+                            else -> MbNavyInk
+                        },
+                        fontSize = 14.sp,
+                        fontWeight = if (mark == StepMark.Current) FontWeight.Bold else FontWeight.Medium,
+                        lineHeight = 19.sp,
+                    )
+                }
+            }
         }
     }
 }
 
-/** The steps, each with its [StepMark]: a green check, the navy number now, a grey number to come, or the orange "!". */
+/** 5.3.2's spinner in the pill: a navy arc 9 dp across in a 12 dp box, turning once a second. The turn is read in the layer, so it redraws without recomposing. */
 @Composable
-private fun StepsCard(steps: List<String>, marks: List<StepMark>) {
-    val shape = RoundedCornerShape(24.dp)
-    Column(
-        Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(horizontal = 16.dp, vertical = 10.dp).testTag("hw_sign_steps"),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        steps.zip(marks).forEachIndexed { i, (step, mark) ->
-            Row(Modifier.height(36.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier.size(22.dp).clip(CircleShape).background(
-                        when (mark) {
-                            StepMark.Done -> MbGreenWash
-                            StepMark.Current -> MbNavy
-                            StepMark.Pending -> MbWhite
-                            StepMark.Failed -> MbIconWash
-                        },
-                    ).then(
-                        when (mark) {
-                            StepMark.Pending -> Modifier.border(1.dp, MbBorder, CircleShape)
-                            StepMark.Failed -> Modifier.border(1.5.dp, MbEyebrow, CircleShape)
-                            else -> Modifier
-                        },
-                    ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    when (mark) {
-                        StepMark.Done -> Check(MbSuccess)
-                        StepMark.Failed -> Text("!", color = MbEyebrow, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        else -> Text("${i + 1}", color = if (mark == StepMark.Current) MbWhite else MbSlate, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    step,
-                    color = when (mark) {
-                        StepMark.Failed -> MbEyebrow
-                        StepMark.Pending -> MbSlate
-                        else -> MbNavyInk
-                    },
-                    fontSize = 14.sp,
-                    fontWeight = if (mark == StepMark.Current) FontWeight.Bold else FontWeight.Medium,
-                    lineHeight = 19.sp,
-                )
-            }
-        }
+private fun PillSpinner() {
+    val turn by rememberInfiniteTransition().animateFloat(0f, 360f, infiniteRepeatable(tween(1_000, easing = LinearEasing)))
+    Canvas(Modifier.size(12.dp).graphicsLayer { rotationZ = turn }) {
+        val ring = 9.dp.toPx()
+        drawArc(
+            MbNavy,
+            -90f,
+            270f,
+            useCenter = false,
+            topLeft = Offset((size.width - ring) / 2, (size.height - ring) / 2),
+            size = Size(ring, ring),
+            style = Stroke(1.6.dp.toPx(), cap = StrokeCap.Round),
+        )
     }
 }
 
@@ -422,30 +491,65 @@ private fun Check(color: Color) {
     }
 }
 
-/** 4.5.3's details the device must show the same: the amount, the address whole in groups of four, the change and the fee. */
+/**
+ * 5.3.2's details the signer must show the same: the wallet and the amount it sends, an arrow down to the address, five groups of four a
+ * line as the board breaks it, then the change and the fee under a rule.
+ */
 @Composable
-private fun MatchCard(review: SpendReview, walletName: String) {
+internal fun MatchCard(review: SpendReview, walletName: String) {
     val shape = RoundedCornerShape(24.dp)
-    Column(Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(horizontal = 16.dp, vertical = 14.dp).testTag("hw_sign_details")) {
-        Text("รายละเอียดที่ต้องตรงกับอุปกรณ์", color = MbBody, fontSize = 12.sp, fontWeight = FontWeight.Bold, lineHeight = 16.sp)
-        Spacer(modifier = Modifier.height(10.dp))
-        MatchRow("ยอดที่ส่ง", "${formatBtcCompact(review.paidSats())} BTC", "hw_sign_amount")
-        Spacer(modifier = Modifier.height(10.dp))
-        Text("ที่อยู่ปลายทาง", color = MbBody, fontSize = 13.sp, lineHeight = 18.sp)
-        review.payments.forEach { out ->
+    Column(Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 16.dp).testTag("hw_sign_details")) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("รายละเอียดที่ต้องตรงกับอุปกรณ์", color = MbBody, fontSize = 12.sp, fontWeight = FontWeight.Bold, lineHeight = 15.sp, modifier = Modifier.weight(1f))
+            Text("ยอดที่ส่ง", color = MbBody, fontSize = 12.sp, lineHeight = 15.sp)
+        }
+        Spacer(modifier = Modifier.height(11.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Image(painterResource(Res.drawable.ic_sign_wallet), contentDescription = null)
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(walletName, color = MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, maxLines = 1, modifier = Modifier.weight(1f))
             Text(
-                out.address.chunked(4).joinToString(" "),
+                buildAnnotatedString {
+                    append(formatBtcCompact(review.paidSats()))
+                    withStyle(SpanStyle(fontSize = 14.sp)) { append(" BTC") }
+                },
                 color = MbNavyInk,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                fontFamily = FontFamily.Monospace,
-                lineHeight = 22.sp,
-                modifier = Modifier.padding(top = 4.dp).testTag("hw_sign_address"),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = amountFontFamily(),
+                lineHeight = 24.sp,
+                maxLines = 1,
+                modifier = Modifier.testTag("hw_sign_amount"),
             )
         }
-        Spacer(modifier = Modifier.height(10.dp))
+        // The arrow sits 4 dp under the wallet's tile, centred on it, and the address's tile 2 dp under its label.
+        Box(Modifier.width(36.dp).height(26.dp).padding(top = 4.dp), contentAlignment = Alignment.TopCenter) {
+            Image(painterResource(Res.drawable.ic_sign_arrow), contentDescription = null)
+        }
+        review.payments.forEach { out ->
+            Row {
+                Box(Modifier.padding(top = 2.dp).size(36.dp).clip(CircleShape).background(MbBtcOrange), contentAlignment = Alignment.Center) {
+                    Image(painterResource(Res.drawable.ic_sign_btc), contentDescription = null)
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("ที่อยู่ปลายทาง", color = MbBody, fontSize = 13.sp, lineHeight = 16.sp)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        addressLines(out.address),
+                        color = MbNavyInk,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = amountFontFamily(),
+                        lineHeight = 18.sp,
+                        modifier = Modifier.testTag("hw_sign_address"),
+                    )
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(MbBorder))
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(9.dp))
         if (review.changeSats > 0u) {
             MatchRow("เงินทอน → $walletName", "${formatBtc(review.changeSats.toLong())} BTC", "hw_sign_change")
             Spacer(modifier = Modifier.height(8.dp))
@@ -453,6 +557,9 @@ private fun MatchCard(review: SpendReview, walletName: String) {
         MatchRow("ค่าธรรมเนียม", "${thousands(review.feeSats.toLong())} sat", "hw_sign_fee")
     }
 }
+
+/** Pure. [address] in groups of four, five groups a line, as 5.3.2 breaks it: a 62-character address reads in four lines. */
+internal fun addressLines(address: String): String = address.chunked(4).chunked(5).joinToString("\n") { it.joinToString(" ") }
 
 /** 5.3.2.0's card in the place of the details while a Jade registers the wallet: its name, m of n, each signer's fingerprint in the Jade's order, and the derivation. */
 @Composable
@@ -475,11 +582,12 @@ private fun RegistrationCard(registration: SignRegistration, word: String) {
     }
 }
 
+/** One line of the details: the label in body grey, the value right in Montserrat, as 5.3.2's change and fee. */
 @Composable
 private fun MatchRow(label: String, value: String, tag: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = MbBody, fontSize = 13.sp, lineHeight = 18.sp)
-        Text(value, color = MbNavyInk, fontSize = 14.sp, fontWeight = FontWeight.Bold, lineHeight = 19.sp, modifier = Modifier.testTag(tag))
+        Text(label, color = MbBody, fontSize = 13.sp, lineHeight = 16.sp)
+        Text(value, color = MbNavyInk, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = amountFontFamily(), lineHeight = 17.sp, modifier = Modifier.testTag(tag))
     }
 }
 
@@ -496,7 +604,7 @@ private fun FailureBanner(kicker: String, line: String) {
 
 /** The proposal boards' "Warning banner": 362 by 46, radius 14, an orange triangle and one line of 13 sp semibold. */
 @Composable
-private fun WarningBar(line: String) {
+internal fun WarningBar(line: String) {
     val shape = RoundedCornerShape(14.dp)
     Row(
         Modifier.fillMaxWidth().height(46.dp).clip(shape).background(MbIconWash).padding(horizontal = 16.dp).testTag("hw_sign_failed"),

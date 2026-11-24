@@ -286,7 +286,7 @@ private fun GuardNote(line: String, tag: String) {
  * Penpot 5.2 Collect Signatures for the payment [VaultSend.prepare] holds: the navy card of what leaves and where, "เซ็นแล้ว x / m" over m
  * bars, a row per key of the wallet in BSMS order, the checklist of what the payment does, and ต่อไป ตรวจสอบ, on only at
  * [VaultSend.readyToBroadcast], which opens the review that posts ([onReview]), with "ต้องเซ็นอีก k ดอก" under it. A row this phone signs
- * ([KeySigner.Phone]) has a filled เซ็น that asks the owner ([confirmSign]) and then Rust, a signed key shows 5.8's green เซ็นแล้ว ✓ and the
+ * ([KeySigner.Phone]) has a filled เซ็น that opens Sign on iPhone ([onSignOnPhone]), a signed key shows 5.8's green เซ็นแล้ว ✓ and the
  * time this phone signed it, a Jade's or Safe 7's key ([KeySigner.Device]) an outlined เซ็น that opens its sign screen ([onSignOnDevice]),
  * its signed row reading "เซ็นบน Jade" or "เซ็นบน Trezor" with the time, any other key an outlined เซ็น that does nothing, with its reason
  * under its line, and a key the payment no longer needs ([VaultSend.needsKey]) no เซ็น at all. Once ready the bars turn green beside ครบแล้ว ส่งได้เลย, as 5.8 draws. A null [send],
@@ -298,7 +298,7 @@ fun CollectSignaturesScreen(
     signers: List<KeySigner>,
     keyring: List<SavedKey>,
     quotes: QuoteCache,
-    confirmSign: suspend () -> Boolean,
+    onSignOnPhone: (KeySigner.Phone) -> Unit,
     onSignOnDevice: (KeySigner.Device) -> Unit,
     onReview: () -> Unit,
     onBack: (() -> Unit)?,
@@ -313,7 +313,6 @@ fun CollectSignaturesScreen(
     }
     val vault = send.vault
     val quote = rememberFiatQuote(quotes)
-    val scope = rememberCoroutineScope()
     val signed = send.signedFingerprints.size
     val needed = send.signaturesNeeded
     val ready = send.readyToBroadcast()
@@ -352,7 +351,7 @@ fun CollectSignaturesScreen(
         Spacer(modifier = Modifier.height(14.dp))
         KeyRows(send, signers, keyring) { signer ->
             when (signer) {
-                is KeySigner.Phone -> scope.launch { send.sign(signer, confirmSign) }
+                is KeySigner.Phone -> onSignOnPhone(signer)
                 is KeySigner.Device -> onSignOnDevice(signer)
             }
         }

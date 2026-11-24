@@ -140,6 +140,8 @@ class BackStackTest {
         val fromChooser = stops(p1, MovieRoute.VaultList, MovieRoute.ChooseWalletSend, *send)
         assertEquals(stops(p1, MovieRoute.VaultList, MovieRoute.ChooseWalletSend, MovieRoute.VaultDetail) + slip, stackAfterVaultSend(fromChooser), "the detail on top of what opened the send")
         assertEquals(stops(p1, MovieRoute.VaultList, MovieRoute.VaultDetail) + slip, stackAfterVaultSend(stops(p1, *send)), "the catalog's send alone")
+        val withSignPages = stops(p1, MovieRoute.VaultList, MovieRoute.VaultDetail, MovieRoute.M1SendVault, MovieRoute.M2CollectSignatures, MovieRoute.M3SignOnPhone, MovieRoute.M3SignOnDevice, MovieRoute.M8ReviewVault)
+        assertEquals(stops(p1, MovieRoute.VaultList, MovieRoute.VaultDetail) + slip, stackAfterVaultSend(withSignPages), "a sign page left on the stack goes too, the phone's included")
     }
 
     @Test

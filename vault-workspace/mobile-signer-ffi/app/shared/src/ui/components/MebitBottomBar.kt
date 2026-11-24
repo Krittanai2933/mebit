@@ -115,7 +115,7 @@ fun MebitBottomBar(
                     .clip(CircleShape)
                     .indication(press, ripple(color = MbWhite)),
             )
-            Image(painterResource(Res.drawable.ic_tab_bitcoin), contentDescription = null, modifier = Modifier.offset(x = 25.9.dp, y = 14.dp).size(26.dp), colorFilter = ColorFilter.tint(MbWhite))
+            Image(painterResource(Res.drawable.ic_tab_bitcoin), contentDescription = null, modifier = Modifier.offset(x = 16.dp, y = 4.dp).size(52.dp), colorFilter = ColorFilter.tint(MbWhite))
             // No fixed height on the labels: a Thai line is taller than the board's 15 dp, and a 15 dp box clipped its bottom.
             // 26 + 34 dp, the tabs' label line: Penpot sets all three labels on one line.
             Box(Modifier.offset(y = 60.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
