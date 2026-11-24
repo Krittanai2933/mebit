@@ -1,5 +1,7 @@
 package com.mebit.app.data
 
+import com.mebit.app.Why
+import com.mebit.app.WriteResult
 import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
@@ -109,9 +111,10 @@ class AddressTypeChoiceTest {
 
     @Test
     fun aFailedReplaceOfTheTypeIsCaughtAtAppLock() {
-        val store = FakeSecureStore(failWrite = 2)
+        val store = FakeSecureStore()
         val session = session(store)
         session.generateThisDevice()
+        store.write = WriteResult.Unavailable(Why.Other) // every later write fails, the read-back's own retry included
         session.chooseAddressType(AddressType.TAPROOT)
         assertTrue(session.lastSaveFailed, "a failed Replace went unreported")
         assertEquals(AddressType.NATIVE_SEGWIT, store.savedCopy().addressType, "the earlier copy is not on the phone")

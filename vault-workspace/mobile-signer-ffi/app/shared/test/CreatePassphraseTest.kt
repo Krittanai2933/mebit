@@ -1,5 +1,7 @@
 package com.mebit.app.data
 
+import com.mebit.app.Why
+import com.mebit.app.WriteResult
 import com.mebit.ffi.signer.SoftwareAccountKey
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -74,9 +76,10 @@ class CreatePassphraseTest {
 
     @Test
     fun aFailedReplaceKeepsTheEarlierCopyAndTheReadBackCatchesIt() {
-        val store = FakeSecureStore(failWrite = 2)
+        val store = FakeSecureStore()
         val session = session(store)
         session.generateThisDevice()
+        store.write = WriteResult.Unavailable(Why.Other) // every later write fails, the read-back's own retry included
         session.changeNewKeyPassphrase(PASSPHRASE)
         assertTrue(session.lastSaveFailed, "a failed Replace went unreported")
         assertTrue(store.savedCopy().passphrase.isEmpty(), "the earlier copy is not on the phone")

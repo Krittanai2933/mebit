@@ -290,6 +290,7 @@ class OnboardingSession(
      */
     internal suspend fun proveSavedCopy(reason: String): UnlockResult {
         val w = wallet ?: return UnlockResult.Unavailable(Why.NotWired)
+        flushPendingSave() // a save still owed would change the copy this reads, as one under a key made since the last save
         if (saved != SaveState.Saved) return UnlockResult.Unavailable(notSavedBecause ?: Why.Other)
         return when (val r = w.open(reason)) {
             // r.version is not adopted: it may name a newer copy another instance wrote, which this session's older flags must never overwrite.

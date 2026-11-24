@@ -807,6 +807,17 @@ class OnboardingSessionSaveTest {
     }
 
     @Test
+    fun aReadBackFirstRepeatsASaveStillOwed() {
+        val store = FakeSecureStore(failWrite = 2)
+        val session = session(store)
+        session.generateThisDevice()
+        session.markBackupConfirmed() // write 2 fails
+        assertEquals(UnlockResult.Verified, session.proveNow(), "the read-back")
+        assertEquals(listOf("Create", "Replace", "Replace"), store.modes(), "write modes")
+        assertEquals(listOf(true, false, false), store.savedCopy().flags(), "the copy the read-back proved")
+    }
+
+    @Test
     fun enableOnAPhoneThatCouldNotSaveReportsWhyAndLeavesTheBiometricsScan() {
         val store = FakeSecureStore(read = ReadResult.Bytes(v1Bytes(), ANY_VERSION), write = WriteResult.Unavailable(Why.NoScreenLock))
         val session = session(store)
