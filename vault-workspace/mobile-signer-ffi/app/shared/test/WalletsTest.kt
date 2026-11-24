@@ -9,6 +9,8 @@ import com.mebit.app.Why
 import com.mebit.app.WriteMode
 import com.mebit.app.WriteResult
 import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
+import com.mebit.app.feature.onboarding.readBackScan
+import com.mebit.app.feature.onboarding.scanOpens
 import com.mebit.app.feature.vault.duplicateLine
 import com.mebit.app.navigation.Boot
 import com.mebit.app.navigation.MovieRoute
@@ -228,6 +230,28 @@ class WalletsTest {
 
         assertFalse(wallets.lockRead(lockPresent = true))
         assertEquals(3, Place.all.sumOf { phone.place(it).writes.size }, "a later return wrote again")
+    }
+
+    // The lock came back while the store still makes the new key, and the user taps Enable on App Lock before the gate's next try. The tap
+    // reads nothing, so it never gives up a copy the new key no longer opens, and never goes on without the owner. The gate's next try
+    // saves the wallet again, and the tap after it proves the new copy.
+    @Test
+    fun anEnableTapBeforeTheGateSavesAgainKeepsTheStepAndTheCopy(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P1, 1)
+        val wallets = phone.unlocked()
+        val session = wallets.at(P1).session
+        wallets.lockRead(lockPresent = false)
+        phone.place(P1).write = WriteResult.Unavailable(Why.TryLater) // the store is still making the new key
+        assertTrue(wallets.lockRead(lockPresent = true), "no save owed after a write that must wait")
+        phone.place(P1).read = ReadResult.Unreadable // the new key landed, so the old copy no longer opens
+        val tap = session.proveSavedCopy("test")
+        assertEquals(Why.TryLater, assertIs<UnlockResult.Unavailable>(tap, "the tap").why)
+        assertFalse(scanOpens(readBackScan(tap), enable = true, allowPasscode = false, copyGivenUp = !session.holdsCopy), "the Enable step went on")
+        phone.place(P1).write = null
+        phone.place(P1).read = null
+        assertFalse(wallets.lockRead(lockPresent = true), "a save still owed once the key is ready")
+        assertEquals(listOf("Replace", "Replace", "Replace"), phone.place(P1).modes(), "place 1's writes")
+        assertEquals(UnlockResult.Verified, session.proveSavedCopy("test"), "the tap after the gate saved again")
     }
 
     // A lock removed and set again while the app was away never shows the block, but the probe finds the files without their key.

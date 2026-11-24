@@ -117,7 +117,7 @@ class AppLockStateTest {
         state.onForeground(enabled = true)
         assertTrue(state.locked)
         val result = Scan(BiometricResult.Unavailable("NoScreenLock"), lock = false).authenticate("ปลดล็อก mebit")
-        if (scanOpens(result, enable = false, allowPasscode = false, readBack = false, savedAfter = SaveState.Saved)) state.unlock()
+        if (scanOpens(result, enable = false, allowPasscode = false, copyGivenUp = false)) state.unlock()
         assertTrue(state.locked, "a phone with no lock cannot unlock the 60-second lock")
     }
 

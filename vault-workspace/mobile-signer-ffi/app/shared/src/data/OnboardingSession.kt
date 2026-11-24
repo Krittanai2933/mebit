@@ -290,11 +290,15 @@ class OnboardingSession(
      * the right check value and would pass, then fail to open at the next cold start. The caller marks the lock on
      * when this returns Verified. A mismatch marks the wallet not saved and keeps the key in memory. A phone that could
      * not save reports why, and the screen keeps today's Biometrics scan.
+     * A copy that cannot be proved yet answers TryLater and stays this wallet's ([holdsCopy]): a save still owed after the flush, which
+     * reads nothing, because the copy on the phone may be sealed to a key the store has replaced since, and a copy whose key is gone,
+     * which the next save replaces under a new key. The user taps again after that save.
      */
     internal suspend fun proveSavedCopy(reason: String): UnlockResult {
         val w = wallet ?: return UnlockResult.Unavailable(Why.NotWired)
-        flushPendingSave() // a save still owed would change the copy this reads, as one under a key made since the last save
+        flushPendingSave()
         if (saved != SaveState.Saved) return UnlockResult.Unavailable(notSavedBecause ?: Why.Other)
+        if (pendingSave) return UnlockResult.Unavailable(Why.TryLater)
         return when (val r = w.open(reason)) {
             // r.version is not adopted: it may name a newer copy another instance wrote, which this session's older flags must never overwrite.
             is UnlockResult.Opened -> if (holdsThisKey(r.record)) UnlockResult.Verified else notSaved(UnlockResult.Broken(Cause.Corrupt))
@@ -303,6 +307,9 @@ class OnboardingSession(
         }
     }
 
+    /** A copy of this wallet is on the phone, saved or waiting for a save to replace it. App Lock reads it back, and gives up on it only when this turns false. */
+    internal val holdsCopy: Boolean get() = held is Held.OnPhone
+
     private fun holdsThisKey(record: WalletRecord) =
         record.fingerprint == fingerprint && record.network == network && record.words == words && record.passphrase == passphrase &&
             record.addressType == addressType
@@ -310,7 +317,8 @@ class OnboardingSession(
     /**
      * The copy on the phone is not this wallet or cannot be opened, so this wallet is not saved after all. The key stays in memory. A copy
      * whose key is gone is still this wallet's, so the session keeps its version and saves again over it ([Held.Lost]). Any other cause
-     * may be another wallet's copy or a newer one, which no save of this session may replace.
+     * may be another wallet's copy or a newer one, which no save of this session may replace. A lost copy answers TryLater, since
+     * nothing about the copy itself is wrong.
      */
     private fun notSaved(result: UnlockResult): UnlockResult {
         val copy = held as? Held.Copy
@@ -318,10 +326,10 @@ class OnboardingSession(
             held = Held.Lost(copy.version, copy.fingerprint, copy.earlier)
             notSavedBecause = Why.TryLater
             pendingSave = true
-        } else {
-            held = Held.Nothing
-            notSavedBecause = Why.Other
+            return UnlockResult.Unavailable(Why.TryLater)
         }
+        held = Held.Nothing
+        notSavedBecause = Why.Other
         return result
     }
 

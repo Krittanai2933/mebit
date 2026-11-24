@@ -118,8 +118,11 @@ class AddressTypeChoiceTest {
         session.chooseAddressType(AddressType.TAPROOT)
         assertTrue(session.lastSaveFailed, "a failed Replace went unreported")
         assertEquals(AddressType.NATIVE_SEGWIT, store.savedCopy().addressType, "the earlier copy is not on the phone")
-        assertIs<UnlockResult.Broken>(runBlocking { session.proveSavedCopy("test") }, "App Lock accepted a copy of another type")
-        assertEquals(SaveState.NotSaved, session.saved)
+        assertEquals(Why.TryLater, assertIs<UnlockResult.Unavailable>(runBlocking { session.proveSavedCopy("test") }, "App Lock accepted a copy of another type").why)
+        assertTrue(session.lastSaveFailed, "the notice no longer says the last save failed")
+        store.write = null
+        assertEquals(UnlockResult.Verified, runBlocking { session.proveSavedCopy("test") }, "the read-back once the store saves")
+        assertEquals(AddressType.TAPROOT, store.savedCopy().addressType, "the copy on the phone")
     }
 
     @Test

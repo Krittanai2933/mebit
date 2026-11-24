@@ -1,23 +1,23 @@
 package com.mebit.app.feature.onboarding
 
 import com.mebit.app.BiometricResult
-import com.mebit.app.data.SaveState
 import com.mebit.app.data.UnlockResult
 
 /**
  * Pure. After a scan on the Enable step that came back Unavailable, whether onboarding goes on without a lock now (true) or
  * shows its line and waits for the link (false). The link goes on, as on a phone that cannot scan. So does a read-back that
- * just found the wallet's copy unusable ([readBack], and the session is no longer saved). The phone's lock is fine then, the
- * copy is what failed, and a second scan would turn on a lock the next launch cannot keep. The Wallet list's notice says the key is not saved.
+ * just gave the wallet's copy up ([copyGivenUp]: the session held a copy before it and holds none after). The phone's lock is
+ * fine then, the copy is what failed, and a second scan would turn on a lock the next launch cannot keep. The Wallet list's
+ * notice says the key is not saved. A read-back that answered try later keeps the copy, so the step stays and the user taps again.
  */
-internal fun goesOnWithoutLock(enable: Boolean, allowPasscode: Boolean, readBack: Boolean, savedAfter: SaveState): Boolean =
-    enable && (allowPasscode || (readBack && savedAfter != SaveState.Saved))
+internal fun goesOnWithoutLock(enable: Boolean, allowPasscode: Boolean, copyGivenUp: Boolean): Boolean =
+    enable && (allowPasscode || copyGivenUp)
 
 /** Pure. Whether the App Lock screen lets the user on after a scan: a match, or an Unavailable that [goesOnWithoutLock] lets through. */
-internal fun scanOpens(result: BiometricResult, enable: Boolean, allowPasscode: Boolean, readBack: Boolean, savedAfter: SaveState): Boolean =
+internal fun scanOpens(result: BiometricResult, enable: Boolean, allowPasscode: Boolean, copyGivenUp: Boolean): Boolean =
     when (result) {
         BiometricResult.Success -> true
-        is BiometricResult.Unavailable -> goesOnWithoutLock(enable, allowPasscode, readBack, savedAfter)
+        is BiometricResult.Unavailable -> goesOnWithoutLock(enable, allowPasscode, copyGivenUp)
         BiometricResult.Failed, BiometricResult.LockedOut, BiometricResult.Cancelled -> false
     }
 

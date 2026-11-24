@@ -8,6 +8,8 @@ import com.mebit.app.Why
 import com.mebit.app.WriteMode
 import com.mebit.app.WriteResult
 import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
+import com.mebit.app.feature.onboarding.readBackScan
+import com.mebit.app.feature.onboarding.scanOpens
 import com.mebit.app.navigation.Boot
 import com.mebit.app.navigation.WalletGateState
 import com.mebit.ffi.signer.KeyNetwork
@@ -708,7 +710,7 @@ class OnboardingSessionSaveTest {
             session.proveNow()
             assertEquals(SaveState.Saved, session.saved, "a refusal learned nothing, $refusal")
         }
-        for (broken in listOf(ReadResult.Unreadable, ReadResult.KeyGone, ReadResult.NotFound)) {
+        for (broken in listOf(ReadResult.Unreadable, ReadResult.NotFound)) {
             val own = session(FakeSecureStore(read = broken))
             own.generateThisDevice()
             assertIs<UnlockResult.Broken>(own.proveNow(), "$broken")
@@ -726,8 +728,9 @@ class OnboardingSessionSaveTest {
         val session = session(store)
         session.generateThisDevice()
         store.read = ReadResult.KeyGone
-        assertEquals(Cause.KeyGone, assertIs<UnlockResult.Broken>(session.proveNow(), "the read-back").cause)
+        assertEquals(Why.TryLater, assertIs<UnlockResult.Unavailable>(session.proveNow(), "the read-back").why)
         assertEquals(SaveState.NotSaved, session.saved, "saved while no key opens the copy")
+        assertFalse(enableGoesOn(session, UnlockResult.Unavailable(Why.TryLater)), "the Enable step went on with no owner check")
         assertNotNull(session.notSavedBecause, "no cause for not saved")
         store.read = null
         session.markBackupConfirmed()
@@ -779,6 +782,52 @@ class OnboardingSessionSaveTest {
         a.flushPendingSave()
         assertEquals(writes + 1, store.writes.size, "a stale session wrote again")
         assertEquals(listOf(false, false, true), store.savedCopy().flags(), "the copy at the end")
+    }
+
+    // The lock came back and the store is still making the new key when the user taps Enable on App Lock. The read-back's flush must wait,
+    // and the copy on the phone may already be sealed to a key the store replaced, so nothing is read: the step stays with no owner check
+    // passed and no App Lock, and the copy stays this wallet's. Once the gate has saved again, the next tap proves the new copy.
+    @Test
+    fun anEnableTapWhileASaveIsOwedReadsNothingKeepsTheStepAndProvesTheCopyOnceSaved() {
+        for (read in listOf(ReadResult.KeyGone, ReadResult.Unreadable)) {
+            val store = FakeSecureStore()
+            val session = session(store)
+            session.generateThisDevice()
+            session.saveAgainLater() // the lock went away and came back
+            store.write = WriteResult.Unavailable(Why.TryLater) // the store is making the new key
+            store.read = read // the old key is gone, or the new one landed and the old copy no longer opens
+            val tap = session.proveNow()
+            assertEquals(Why.TryLater, assertIs<UnlockResult.Unavailable>(tap, "$read").why)
+            assertFalse(enableGoesOn(session, tap), "the Enable step went on with no owner check, $read")
+            assertFalse(session.appLockEnabled, "App Lock on with no owner check, $read")
+            store.write = null
+            store.read = null
+            session.flushPendingSave() // the gate's next try, the key ready
+            assertEquals(listOf("Create", "Replace", "Replace"), store.modes(), "the copy was not saved again with a Replace, $read")
+            assertEquals(UnlockResult.Verified, session.proveNow(), "the next tap, $read")
+        }
+    }
+
+    // The same with no save owed: the read-back itself finds the key gone. The step stays, a second tap before the gate's save tries that
+    // save itself and still stays, and the tap after the save proves the new copy.
+    @Test
+    fun anEnableTapThatFindsTheKeyGoneKeepsTheStepUntilTheCopyIsSavedAgain() {
+        val store = FakeSecureStore()
+        val session = session(store)
+        session.generateThisDevice()
+        store.read = ReadResult.KeyGone
+        val first = session.proveNow()
+        assertEquals(Why.TryLater, assertIs<UnlockResult.Unavailable>(first, "the first tap").why)
+        assertFalse(enableGoesOn(session, first), "the first tap went on with no owner check")
+        store.read = null
+        store.write = WriteResult.Unavailable(Why.TryLater) // the store is making the new key
+        val second = session.proveNow()
+        assertIs<UnlockResult.Unavailable>(second, "the second tap")
+        assertFalse(enableGoesOn(session, second), "the second tap went on with no owner check")
+        store.write = null
+        assertEquals(UnlockResult.Verified, session.proveNow(), "the tap once the key is ready")
+        assertEquals(listOf("Create", "Replace", "Replace"), store.modes(), "write modes")
+        assertEquals(SaveState.Saved, session.saved)
     }
 
     // Only a copy without its key is replaced. A copy of another wallet, a newer one or a missing one may be someone else's, so the
@@ -982,6 +1031,10 @@ class OnboardingSessionSaveTest {
     private fun FakeSecureStore.savedCopy(): WalletRecord = opened().record
 
     private fun OnboardingSession.proveNow(): UnlockResult = runBlocking { proveSavedCopy("test") }
+
+    /** Whether App Lock's Enable step goes on after this read-back, as AppLockScreen decides it on a primary tap. */
+    private fun enableGoesOn(session: OnboardingSession, readBack: UnlockResult): Boolean =
+        scanOpens(readBackScan(readBack), enable = true, allowPasscode = false, copyGivenUp = !session.holdsCopy)
 
     /** backupConfirmed, imported, appLockEnabled, in that order. */
     private fun OnboardingSession.flags() = listOf(backupConfirmed, imported, appLockEnabled)
