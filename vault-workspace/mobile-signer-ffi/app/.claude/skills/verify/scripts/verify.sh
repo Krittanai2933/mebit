@@ -164,6 +164,9 @@ cmd_start() {
   if [ "${VERIFY_SCREEN_LOCK:-1}" != 0 ]; then
     adbs shell locksettings set-pin "$SCREEN_PIN" > "$RUN/locksettings.log" 2>&1 \
       || { cat "$RUN/locksettings.log"; fail "could not set the screen lock PIN. Set VERIFY_SCREEN_LOCK=0 to start without one"; }
+    # With a PIN, a screen that sleeps wakes behind the keyguard and hides the app, so keep it awake for the run.
+    adbs shell svc power stayon true > /dev/null 2>&1
+    adbs shell settings put system screen_off_timeout 1800000 > /dev/null 2>&1
     lock="pin $SCREEN_PIN"
   fi
 
