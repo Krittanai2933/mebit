@@ -1,66 +1,112 @@
-# mebit — Bitcoin self-custody, capstone workspace
+# Mebit Wallet
 
-A Bitcoin self-custody product for Thai users. Originally scoped as a 2-of-3 multisig lending system (borrower deposits BTC, draws a THB loan against it, no single party can move the collateral alone) — as of 2026-08-25 the priority flipped to **wallet-first**: ship general self-custody (M-of-N, any key holder) before buy-sell and lending. Lending is still a real leg of the product, layered on top of the wallet once it's proven. Built as a university capstone project — 4 students, 2 semesters, one team owning the system end-to-end.
+![Rust](https://img.shields.io/badge/Rust-stable-orange?logo=rust)
+![Kotlin Multiplatform](https://img.shields.io/badge/Kotlin-Multiplatform-7F52FF?logo=kotlin)
+![Platform](https://img.shields.io/badge/Platform-iOS%20%7C%20Android-lightgrey)
+![Network](https://img.shields.io/badge/Network-testnet4-yellow)
 
-Start here:
+<p align="center">Bitcoin self-custody for Thai users, on iOS and Android</p>
 
-- **[`docs/00-README.md`](docs/00-README.md)** — index of the full doc set, and what's current vs. lending-specific.
-- **[`docs/07-product-vision-mebit.md`](docs/07-product-vision-mebit.md)** — north star: the 3-leg product structure (wallet, buy-sell, lending), key model, app flow.
-- **[`docs/08-multisig-wallet-spec.md`](docs/08-multisig-wallet-spec.md)** — technical spec for the wallet: key-first data model, script types, hardware wallet support.
-- **[`docs/09-wallet-mvp-buildplan.md`](docs/09-wallet-mvp-buildplan.md)** — what's actually being built right now: stack decisions, phase 0-3.
-- **[`docs/00-capstone-brief.md`](docs/00-capstone-brief.md)** — the original, authoritative *lending-leg* brief (Thai).
-- **[`docs/01-architecture.md`](docs/01-architecture.md)** — distilled English architecture reference for the lending leg.
-- **[`docs/02-roles-and-responsibilities.md`](docs/02-roles-and-responsibilities.md)** — who holds which key, who co-signs with whom and when (Thai, lending leg).
-- **[`docs/03-flows.md`](docs/03-flows.md)** — step-by-step: onboarding, open loan, repayment, liquidation, fallback (Thai, lending leg).
-- **[`docs/04-open-items.md`](docs/04-open-items.md)** — design/business decisions not yet finalized — check before assuming a number or rule is locked in (Thai).
-- **[`docs/design-notes.md`](docs/design-notes.md)** — current Penpot Organize wallet/custody flow reference, plus historical lending prototype notes, for the mobile team.
-- **[`docs/05-progress-and-next-steps.md`](docs/05-progress-and-next-steps.md)** — current status and full to-do list per module (Thai). Update this as milestones land — it's a living document, not a snapshot.
+---
 
-## Layout
+**Mebit Wallet** is a self-custody Bitcoin wallet. Your keys stay on your phone or on a hardware wallet, and no single party, Mebit included, can move your coins alone. Start with one key on the phone, then grow into a wallet that needs several keys to spend. Buy-sell and BTC-backed lending come later, built on the same wallet.
+
+> **Testnet only.** The app runs on Bitcoin testnet4 today. Do not send real BTC to it.
+
+## Features
+
+- **Single-key wallet.** A BIP-84 (native SegWit) wallet kept on the phone, with send, receive, fee tiers and history.
+- **Several-key wallet.** M-of-N multisig (`wsh(sortedmulti)`) where any mix of phone and hardware keys co-sign.
+- **Hardware wallets over Bluetooth.** Blockstream Jade and Trezor Safe 7.
+- **PSBT signing.** Every payment is one PSBT, checked before any key signs it.
+- **Wallet files.** Import and export a several-key wallet as a BIP-129 (BSMS) record or a descriptor.
+- **24-word backup.** Backup can be skipped at setup, but is required before the first receive.
+
+## Architecture
+
+```
+┌──────────────────────────────┐        ┌──────────────────────────┐
+│  Mobile app (iOS / Android)  │        │  Hardware wallet         │
+│  Kotlin + Compose MP         │◀──BLE─▶│  Jade · Trezor Safe 7    │
+│  ─────────────────────────── │        └──────────────────────────┘
+│  mobile-signer-ffi (Rust)    │
+│  via UniFFI                  │──HTTPS─▶ Esplora (testnet4)
+│  ─────────────────────────── │
+│  vault-core (Rust)           │
+│  descriptors, PSBT, policy   │
+└──────────────────────────────┘
+```
+
+The app talks to the Bitcoin network directly through Esplora. It does not route wallet traffic through a Mebit server.
+
+## Repository layout
 
 ```
 mebit/
-├── docs/                 # brief, architecture, design notes — read these first
-├── design-reference/     # mebit/Mapboss design tokens + logos for the mobile app
-├── vault-workspace/      # the actual system — 6 Rust crates (some modules share an owner, see Team split)
-│   ├── vault-core/           # descriptor, key derivation, PSBT, policy engine, + keys/hw (wallet-first pivot) — the critical path
-│   ├── jade-ble/             # Blockstream Jade over Bluetooth LE (wallet-first pivot) — not a default member, build with -p
-│   ├── custody-service/      # platform-side gRPC/REST + signing-request state machine
-│   ├── mobile-signer-ffi/    # borrower app: hot wallet (bdk) + UniFFI vault signer, two layers in one
-│   ├── lender-signer-cli/    # offline signing CLI for the lender/fund rep
-│   └── monitor-service/      # LTV monitoring + liquidation triggers
-├── .claude/
-│   ├── agents/           # one subagent per module — responsibilities, tech, dependencies
-│   └── skills/           # shared knowledge: Bitcoin fundamentals, policy review, testnet workflow, design tokens
-├── .agents/
-│   └── skills            # symlink to .claude/skills, for tools that read only .agents/skills
-├── AGENTS.md             # shared instructions for every coding agent
-├── CLAUDE.md             # stub that imports AGENTS.md
-├── scripts/              # check-agent-context.py checks the agent files
-└── README.md             # this file
+├── vault-workspace/          # Rust workspace (run cargo from here)
+│   ├── vault-core/           # descriptors, key derivation, PSBT, policy engine, hardware-wallet protocols
+│   ├── mobile-signer-ffi/    # the app: Rust core + UniFFI bindings + Kotlin Multiplatform project in app/
+│   ├── jade-ble/             # Jade Bluetooth transport
+│   ├── trezor-ble/           # Trezor Safe 7 Bluetooth transport
+│   ├── wallet-e2e/           # end-to-end signing checks against testnet
+│   ├── custody-service/      # lending: platform signing service
+│   ├── lender-signer-cli/    # lending: offline signer for the lender
+│   └── monitor-service/      # lending: LTV monitoring and liquidation triggers
+├── docs/                     # product, specs and decisions (index: docs/00-README.md)
+├── design-reference/         # design tokens and fonts
+└── scripts/                  # repo checks
 ```
 
-Every crate under `vault-workspace/` has its own `README.md` with its owner, dependencies, and responsibilities — start there once you know which module you're on.
+Each crate has its own `README.md`.
 
-## Team split
+## Build & Run
 
-5 modules, **4 people** — `custody-service`, `lender-signer-cli`, and `monitor-service` are bundled onto one person since the latter two are small and don't need `vault-core` early; `vault-core` keeps its 2-person split on purpose (see below). See `docs/00-capstone-brief.md` §3.6 for the full reasoning and `docs/00-capstone-brief.md` §4 for the two-semester timeline. Short version:
+### Prerequisites
 
-| Module | Owner |
-|---|---|
-| `vault-core` (descriptor + derivation) | person 1 |
-| `vault-core` (PSBT + policy engine) | person 2 |
-| `custody-service` + `lender-signer-cli` + `monitor-service` | person 3 |
-| `mobile-signer-ffi` (hot wallet + vault signer — the largest single scope in the team) | person 4 |
-| `jade-ble` + `vault-core::hw::jade` (Jade over BLE — wallet-first pivot work, outside the 4-way split above) | @phoovich |
+- [Rust](https://rustup.rs/) stable
+- Xcode, for iOS builds and for the Rust libraries the app links
+- Android Studio or the Android SDK, plus `cargo-ndk`, for Android builds
+- Python 3
 
-`vault-core` is the critical path — every other module depends on it. Its policy engine is the single highest-risk piece of code in the project, which is why it kept a dedicated second owner even when the team shrank from 5 to 4 (see `.claude/skills/policy-engine-review/SKILL.md`). `mobile-signer-ffi` carries the most work of any single module now that its scope includes a full `bdk`-based hot wallet on top of the multisig vault signer — see `docs/01-architecture.md` and `docs/00-capstone-brief.md` §3.3 for why, and lean on the MVP-vs-stretch screen split there if the team is short on time. Person 3 juggles three modules — timed to stagger rather than overlap (see the `platform-services` agent), but worth checking in on more often than the others.
+The Kotlin Toolchain bootstraps itself through `./kotlin` in the app folder. No separate install is needed.
 
-## Working with coding agents on this project
+### Rust core
 
-`AGENTS.md` holds the shared instructions. Codex, Cursor, Kimi and other coding agents read it directly, and `CLAUDE.md` is a stub that imports it so Claude Code loads the same text. Edit the shared text in `AGENTS.md`.
+```bash
+cd vault-workspace
+cargo test
+```
 
-`.claude/agents/` has one brief per person/scope: `vault-core-descriptor`, `vault-core-policy`, `platform-services` (custody-service + lender-signer-cli + monitor-service), and `mobile-signer`. Use the one matching what you're working on. Claude Code runs them as subagents, for example from the `vault-core` directory or by asking for "the vault-core agent", and any other agent reads the matching file first, as `AGENTS.md` says. `.claude/skills/` has knowledge shared across modules (Bitcoin fundamentals, the policy-engine adversarial review checklist, the testnet workflow, and the mebit design tokens), and `.agents/skills` links to it for tools that read only that path. After editing any of these files, run `python3 -I scripts/check-agent-context.py`.
-## Explicitly out of scope
+`jade-ble` and `trezor-ble` sit outside the default members. Build them with `-p jade-ble` or `-p trezor-ble`. The Trezor protocol in `vault-core` needs `--features trezor`.
 
-Legal/regulatory compliance and the lender's fund/NAV ledger are the company's responsibility, not this team's — see `docs/00-capstone-brief.md` §1.
+### Mobile app
+
+```bash
+cd vault-workspace/mobile-signer-ffi
+scripts/ffi.sh build          # build the Rust libraries and Kotlin bindings (needs macOS)
+
+cd app
+./kotlin run -m androidApp    # Android
+./kotlin run -m iosApp        # iOS
+./kotlin test                 # tests
+```
+
+To use your own Esplora host, put it on one line in `vault-workspace/mobile-signer-ffi/esplora-host.local`. Git ignores that file, and the wallet tries that host before the public ones.
+
+## Documentation
+
+- [`docs/07-product-vision-mebit.md`](docs/07-product-vision-mebit.md) covers the product: wallet, buy-sell and lending.
+- [`docs/08-multisig-wallet-spec.md`](docs/08-multisig-wallet-spec.md) is the wallet's technical spec.
+- [`docs/09-wallet-mvp-buildplan.md`](docs/09-wallet-mvp-buildplan.md) is the current build plan.
+- [`docs/04-open-items.md`](docs/04-open-items.md) lists decisions that are not final yet.
+- [`docs/00-README.md`](docs/00-README.md) indexes everything else, including the lending specs.
+
+## Contributing
+
+`AGENTS.md` holds the shared instructions for coding agents, and `CLAUDE.md` imports it. Module briefs live in `.claude/agents/` and shared skills in `.claude/skills/`. After editing any of them, run `python3 -I scripts/check-agent-context.py`.
+
+The policy engine in `vault-core` decides what a PSBT may pay before any key signs it. Changes to it need review from both `vault-core` owners and new adversarial tests.
+
+## Responsible Disclosure
+
+Please report security issues privately to the maintainers, not in a public issue.
