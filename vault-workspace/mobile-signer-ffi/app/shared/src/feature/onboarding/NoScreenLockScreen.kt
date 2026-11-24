@@ -1,21 +1,39 @@
 package com.mebit.app.feature.onboarding
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mebit.app.resources.Res
+import com.mebit.app.resources.ic_padlock
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.theme.MbBody
+import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
+import com.mebit.app.ui.theme.MbWhite
+import org.jetbrains.compose.resources.painterResource
 
 /** iOS has no link into Face ID & Passcode, so the screen lists the way there. */
 private val IOS_STEPS = listOf(
@@ -25,6 +43,10 @@ private val IOS_STEPS = listOf(
     "กลับมาที่ mebit แอปจะไปต่อเอง",
 )
 
+/** The steps card's border on board 0.2, which the theme has no token for. */
+private val StepsBorder = Color(0xFFE6E9EE)
+
+/** Penpot Organize 0.1 (Android) and 0.2 (iPhone). */
 @Composable
 internal fun NoScreenLockScreen(openSettings: (() -> Unit)?) {
     MebitScreen(
@@ -37,10 +59,10 @@ internal fun NoScreenLockScreen(openSettings: (() -> Unit)?) {
         bottom = openSettings?.let { open ->
             {
                 Spacer(modifier = Modifier.height(12.dp))
-                PrimaryCta("เปิดการตั้งค่าความปลอดภัย", "cta_open_security_settings", open)
-                Spacer(modifier = Modifier.height(12.dp))
+                PrimaryCta("ตั้งล็อกหน้าจอ", "cta_open_security_settings", open)
+                Spacer(modifier = Modifier.height(14.dp))
                 Text(
-                    text = "ตั้งล็อกหน้าจอแล้วกลับมาที่ mebit แอปจะไปต่อเอง",
+                    text = "ตั้งเสร็จแล้วกลับมาที่ mebit แอปจะไปต่อเอง",
                     color = MbBody,
                     fontSize = 13.5.sp,
                     lineHeight = 20.sp,
@@ -50,14 +72,35 @@ internal fun NoScreenLockScreen(openSettings: (() -> Unit)?) {
             }
         },
     ) {
+        // Where App Lock puts its Face ID tile.
+        Spacer(modifier = Modifier.height(65.dp))
+        NavyTile(tag = "no_lock_tile") {
+            Image(painterResource(Res.drawable.ic_padlock), contentDescription = null, modifier = Modifier.size(132.dp))
+        }
         if (openSettings == null) {
-            Spacer(modifier = Modifier.height(28.dp))
-            IOS_STEPS.forEachIndexed { i, step ->
-                if (i > 0) Spacer(modifier = Modifier.height(12.dp))
-                Row(modifier = Modifier.fillMaxWidth().testTag("no_lock_step_${i + 1}")) {
-                    Text("${i + 1}.", color = MbNavyInk, fontSize = 13.5.sp, lineHeight = 20.sp, modifier = Modifier.width(22.dp))
-                    Text(step, color = MbBody, fontSize = 13.5.sp, lineHeight = 20.sp)
+            Spacer(modifier = Modifier.height(52.dp))
+            IosSteps()
+        }
+    }
+}
+
+@Composable
+private fun IosSteps() {
+    val shape = RoundedCornerShape(18.dp)
+    Column(
+        modifier = Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, StepsBorder, shape).padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        IOS_STEPS.forEachIndexed { i, step ->
+            Row(
+                modifier = Modifier.fillMaxWidth().testTag("no_lock_step_${i + 1}"),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(modifier = Modifier.size(24.dp).background(MbNavy, CircleShape), contentAlignment = Alignment.Center) {
+                    Text("${i + 1}", color = MbWhite, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
+                Text(step, color = MbNavyInk, fontSize = 14.sp, lineHeight = 20.3.sp)
             }
         }
     }

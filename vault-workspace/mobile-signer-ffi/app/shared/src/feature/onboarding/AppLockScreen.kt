@@ -176,6 +176,15 @@ fun AppLockScreen(
 
 @Composable
 internal fun FaceIdTile(failed: Boolean, words: LockWords) {
+    NavyTile(tag = "face_id_tile", edge = if (failed) MbEyebrow else null) {
+        val glyph = if (words.faceGlyph) Res.drawable.face_id else Res.drawable.ic_shield_check
+        Image(painterResource(glyph), contentDescription = words.tileLabel, modifier = Modifier.size(64.dp))
+    }
+}
+
+/** The centred 132 dp navy tile under a lock screen's title, App Lock's Face ID and the no-screen-lock padlock. [edge] outlines it. */
+@Composable
+internal fun NavyTile(tag: String, edge: Color? = null, content: @Composable () -> Unit) {
     val shape = RoundedCornerShape(36.dp)
     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Box(
@@ -184,13 +193,10 @@ internal fun FaceIdTile(failed: Boolean, words: LockWords) {
                 .dropShadow(shape, Shadow(radius = 40.dp, color = MbNavy, spread = (-18).dp, offset = DpOffset(0.dp, 22.dp), alpha = 0.55f))
                 .clip(shape)
                 .background(MbNavy)
-                .then(if (failed) Modifier.border(3.dp, MbEyebrow, shape) else Modifier)
-                .testTag("face_id_tile"),
+                .then(if (edge != null) Modifier.border(3.dp, edge, shape) else Modifier)
+                .testTag(tag),
             contentAlignment = Alignment.Center,
-        ) {
-            val glyph = if (words.faceGlyph) Res.drawable.face_id else Res.drawable.ic_shield_check
-            Image(painterResource(glyph), contentDescription = words.tileLabel, modifier = Modifier.size(64.dp))
-        }
+        ) { content() }
     }
 }
 

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penpot Organize > 0.1 / 0.2 No screen lock > Lock tile, in the tile's own 132 x 132 frame: shackle, body, orange keyhole. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="132dp"
+    android:height="132dp"
+    android:viewportWidth="132"
+    android:viewportHeight="132">
+    <path
+        android:pathData="M51,45A15,15 0,0 1,81 45L81,49A15,15 0,0 1,51 49Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.6"/>
+    <path
+        android:pathData="M49,56L83,56A9,9 0,0 1,92 65L92,87A9,9 0,0 1,83 96L49,96A9,9 0,0 1,40 87L40,65A9,9 0,0 1,49 56Z"
+        android:fillColor="#042C49"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.6"/>
+    <path
+        android:pathData="M61,72A5,5 0,1 1,71 72A5,5 0,1 1,61 72Z"
+        android:fillColor="#F7931A"/>
+    <path
+        android:pathData="M64,76A2,2 0,0 1,68 76L68,82A2,2 0,0 1,64 82Z"
+        android:fillColor="#F7931A"/>
+</vector>
