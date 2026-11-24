@@ -2,7 +2,7 @@
 
 **English** | [ภาษาไทย](README.th.md)
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 ![Rust](https://img.shields.io/badge/Rust-stable-orange?logo=rust)
 ![Kotlin Multiplatform](https://img.shields.io/badge/Kotlin-Multiplatform-7F52FF?logo=kotlin)
 ![Platform](https://img.shields.io/badge/Platform-iOS%20%7C%20Android-lightgrey)
@@ -121,4 +121,4 @@ Please report security issues by email to [mebit.co.th@proton.me](mailto:mebit.c
 
 ## License
 
-Mebit Wallet is licensed under the [GNU Affero General Public License v3.0](LICENSE). Anyone who distributes a modified version, or runs one as a network service, must publish its source under the same license.
+Mebit Wallet is released under the [MIT License](LICENSE).

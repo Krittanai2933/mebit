@@ -2,7 +2,7 @@
 
 [English](README.md) | **ภาษาไทย**
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 ![Rust](https://img.shields.io/badge/Rust-stable-orange?logo=rust)
 ![Kotlin Multiplatform](https://img.shields.io/badge/Kotlin-Multiplatform-7F52FF?logo=kotlin)
 ![Platform](https://img.shields.io/badge/Platform-iOS%20%7C%20Android-lightgrey)
@@ -121,4 +121,4 @@ policy engine ใน `vault-core` เป็นตัวตัดสินว่�
 
 ## สัญญาอนุญาต
 
-Mebit Wallet ใช้สัญญาอนุญาต [GNU Affero General Public License v3.0](LICENSE) ใครที่แจกจ่ายเวอร์ชันที่แก้ไข หรือนำไปเปิดเป็นบริการบนเครือข่าย ต้องเปิดซอร์สโค้ดภายใต้สัญญาอนุญาตเดียวกัน
+Mebit Wallet ใช้สัญญาอนุญาต [MIT](LICENSE)
