@@ -117,7 +117,7 @@ The policy engine in `vault-core` decides what a PSBT may pay before any key sig
 
 ## Responsible Disclosure
 
-Please report security issues by email to [mebit.co.th@proton.me](mailto:mebit.co.th@proton.me), not in a public issue.
+Please report security issues by email to [meet@mebit.co.th](mailto:meet@mebit.co.th), not in a public issue.
 
 ## License
 
