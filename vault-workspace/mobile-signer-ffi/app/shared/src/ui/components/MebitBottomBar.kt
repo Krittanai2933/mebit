@@ -108,7 +108,8 @@ fun MebitBottomBar(
                     .background(MbBtcOrange, CircleShape),
             )
             Image(painterResource(Res.drawable.ic_tab_bitcoin), contentDescription = null, modifier = Modifier.offset(x = 25.9.dp, y = 14.dp).size(26.dp), colorFilter = ColorFilter.tint(MbWhite))
-            Box(Modifier.offset(y = 65.dp).fillMaxWidth().height(15.dp), contentAlignment = Alignment.Center) {
+            // No fixed height on the labels: a Thai line is taller than the board's 15 dp, and a 15 dp box clipped its bottom.
+            Box(Modifier.offset(y = 65.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text("รับ / ส่ง", color = MbNavy, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
             }
         }
@@ -128,7 +129,7 @@ private fun BarTabItem(label: String, icon: DrawableResource, selected: Boolean,
     ) {
         if (selected) Box(Modifier.offset(x = 22.dp, y = 3.dp).size(32.dp).background(MbIconWash, CircleShape))
         Image(painterResource(icon), contentDescription = null, modifier = Modifier.offset(x = 27.dp, y = 8.dp).size(22.dp), colorFilter = ColorFilter.tint(ink))
-        Box(Modifier.offset(y = 34.dp).fillMaxWidth().height(15.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.offset(y = 34.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
             Text(label, color = ink, fontSize = 11.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, textAlign = TextAlign.Center)
         }
         if (selected) Box(Modifier.offset(x = 21.5.dp, y = 50.dp).size(width = 33.dp, height = 2.dp).background(MbBtcOrange, RoundedCornerShape(1.5.dp)))
