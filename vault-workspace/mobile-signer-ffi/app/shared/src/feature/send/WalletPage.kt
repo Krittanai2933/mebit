@@ -159,7 +159,7 @@ internal fun WalletHero(
 ) {
     // The header keeps the logo's 26 dp, so the X's larger target moves nothing below it.
     Box(modifier = Modifier.fillMaxWidth().height(26.dp)) {
-        Image(painterResource(Res.drawable.mebit_logo), contentDescription = "mebit", modifier = Modifier.size(width = 98.dp, height = 26.dp))
+        Image(painterResource(Res.drawable.mebit_logo), contentDescription = "mebit", modifier = Modifier.size(width = 99.5.dp, height = 26.dp))
         onClose?.let { CloseButton(it) }
     }
     Spacer(modifier = Modifier.height(22.dp))
