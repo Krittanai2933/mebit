@@ -402,10 +402,10 @@ private fun RemoveVaultSheet(vault: CreatedVault, onRemove: () -> Unit, onCancel
 /**
  * [badge] is a pill 24 tall at the card's top right, 13 from its top and 46 from its right edge, so it ends 10 dp before the ⋯'s dots.
  * The card merges its children, so the pill has no test tag. The ⋯ is the card's sibling, not its child, so a tap on it never opens the
- * card and it stays an element of its own on both platforms.
+ * card and it stays an element of its own on both platforms. With no [item] the card has no ⋯, as on the รับ / ส่ง chooser (4.7).
  */
 @Composable
-private fun WalletListCard(
+internal fun WalletListCard(
     kind: String,
     name: String,
     detail: String,
@@ -413,11 +413,12 @@ private fun WalletListCard(
     dark: Boolean,
     badge: String?,
     tag: String,
-    menuTag: String,
-    item: DeleteItem,
-    onDelete: () -> Unit,
     onClick: () -> Unit,
+    menuTag: String = "",
+    item: DeleteItem? = null,
+    onDelete: () -> Unit = {},
     extra: MenuAction? = null,
+    balanceTag: String? = null,
 ) {
     val shape = RoundedCornerShape(20.dp)
     val ink = if (dark) MbWhite else MbNavyInk
@@ -435,7 +436,13 @@ private fun WalletListCard(
             Text(kind, color = if (dark) MbWhite.copy(alpha = 0.72f) else MbSlate, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.offset(x = 32.dp, y = 16.dp))
             Text(name, color = ink, fontSize = 17.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.offset(x = 32.dp, y = 39.dp))
             Text(detail, color = if (dark) MbWhite.copy(alpha = 0.66f) else MbSlate, fontSize = 11.5.sp, fontWeight = FontWeight.Light, modifier = Modifier.offset(x = 32.dp, y = 70.dp))
-            Text(balance, color = ink, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.TopEnd).padding(end = 18.dp, top = 70.dp))
+            Text(
+                balance,
+                color = ink,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.align(Alignment.TopEnd).padding(end = 18.dp, top = 70.dp).then(if (balanceTag != null) Modifier.testTag(balanceTag) else Modifier),
+            )
             if (badge != null) {
                 Box(
                     modifier = Modifier.align(Alignment.TopEnd).padding(end = 46.dp, top = 13.dp).height(24.dp).clip(CircleShape).background(MbIconWash).padding(horizontal = 10.dp),
@@ -446,7 +453,9 @@ private fun WalletListCard(
             }
         }
         // The dots end 18 dp inside the card's right edge with their centre 22 dp from its top, level with the kind line.
-        CardDeleteMenu(menuTag, "ลบ Wallet", item, onDark = dark, onDelete = onDelete, modifier = Modifier.align(Alignment.TopEnd).padding(end = 5.dp), extra = extra)
+        if (item != null) {
+            CardDeleteMenu(menuTag, "ลบ Wallet", item, onDark = dark, onDelete = onDelete, modifier = Modifier.align(Alignment.TopEnd).padding(end = 5.dp), extra = extra)
+        }
     }
 }
 
