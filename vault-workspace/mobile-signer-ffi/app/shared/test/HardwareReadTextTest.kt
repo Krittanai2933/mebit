@@ -59,4 +59,18 @@ class HardwareReadTextTest {
         assertEquals("Native SegWit · tb1q…pvkl (ที่อยู่แรก) · กุญแจอยู่บน Jade", hardwareCreatedSubtitle(created), "3.5.2")
         assertEquals("Taproot · tb1q…pvkl (ที่อยู่แรก) · กุญแจอยู่บน Trezor", hardwareCreatedSubtitle(created.copy(kind = WalletKind.TREZOR_SAFE7, addressType = AddressType.TAPROOT)))
     }
+
+    @Test
+    fun searchingDotsHopInARowAtOnePaceThenRest() {
+        // Each dot hops as the one before it did, 0.15 of a cycle later, and is where it was a whole cycle on.
+        listOf(0f, 0.1f, 0.2f, 0.35f, 0.7f).forEach { t ->
+            assertEquals(dotHop(t, 0), dotHop(t + 0.15f, 1), 1e-5f, "dot 1 at $t")
+            assertEquals(dotHop(t, 0), dotHop(t + 0.3f, 2), 1e-5f, "dot 2 at $t")
+            assertEquals(dotHop(t, 2), dotHop(t + 1f, 2), 1e-5f, "one cycle at $t")
+        }
+        assertEquals(1f, dotHop(0.2f, 0), 1e-5f, "the top of the first hop")
+        assertEquals(1f, dotHop(0.5f, 2), 1e-5f, "the top of the last hop")
+        // After the last dot lands all three rest until the next cycle.
+        listOf(0.71f, 0.8f, 0.99f).forEach { t -> (0..2).forEach { i -> assertEquals(0f, dotHop(t, i), "dot $i at $t") } }
+    }
 }
