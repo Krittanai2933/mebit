@@ -151,6 +151,7 @@ enum class DeviceSample(
     CannotRegister("cannot_register", "5.3.2.3 Jade cannot register", WalletKind.JADE, SignStage.Failed(DeviceFailure.RegistrationRefused, SignStep.Registering), registers = true),
     JadeNotReady("jade_not_ready", "5.3.2.4 Jade not ready", WalletKind.JADE, SignStage.Failed(DeviceFailure.NotReady, SignStep.Connecting)),
     AnswerRefused("answer_refused", "5.3.x.5 answer refused", WalletKind.JADE, SignStage.Failed(DeviceFailure.BadAnswer, SignStep.Showing)),
+    OtherNetwork("other_network", "Jade on the other network (no board)", WalletKind.JADE, SignStage.Failed(DeviceFailure.OtherNetwork, SignStep.Connecting)),
     TwoDevices("two_devices", "5.3.x.6 two devices nearby", WalletKind.JADE, SignStage.Failed(DeviceFailure.Several, SignStep.Connecting)),
     ;
 
