@@ -632,7 +632,7 @@ internal fun MebitNavHost(
                         } else {
                             HardwareWalletScreen(
                                 store = keyring,
-                                read = DeviceRead.OneKey(device, createDraft.addressType),
+                                read = DeviceRead.OneKey(device, createDraft.addressType, vaults.network),
                                 onEnrolled = { navigate(MovieRoute.HardwareConfirmKey) },
                                 onUnsupported = { model ->
                                     unsupportedModel = model

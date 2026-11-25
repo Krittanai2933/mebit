@@ -165,7 +165,7 @@ fun HardwareSendScreen(
     val repost = remember { RepostAttempt() }
     SendForm(
         wallet = wallet,
-        network = KeyNetwork.TEST, // the book's network once DescribedWallet carries it (next commit)
+        network = wallet.network,
         walletName = wallet.wallet.name,
         draft = draft,
         quotes = quotes,

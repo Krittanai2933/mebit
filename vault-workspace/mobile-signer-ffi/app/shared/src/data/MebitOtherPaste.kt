@@ -1,10 +1,13 @@
 package com.mebit.app.data
 
-internal fun parseExternalKeyPaste(text: String): PendingKey {
+import com.mebit.ffi.signer.KeyNetwork
+
+/** [network]'s key of a several-key wallet: a tpub on testnet, an xpub on mainnet, at BIP48 under that network's coin type. */
+internal fun parseExternalKeyPaste(text: String, network: KeyNetwork): PendingKey {
     val trimmed = text.trim()
     if (trimmed.isEmpty()) throw IllegalArgumentException("ว่าง")
     val cosigner = if (trimmed.startsWith("BSMS 1.0")) parseBsmsCosigner(trimmed) else parsePlainCosigner(trimmed)
-    bip48Refusal(cosigner.derivationPath, cosigner.xpub)?.let { throw IllegalArgumentException("$NOT_FOR_MULTISIG · $it") }
+    bip48Refusal(cosigner.derivationPath, cosigner.xpub, network)?.let { throw IllegalArgumentException("$NOT_FOR_MULTISIG · $it") }
     return PendingKey(
         label = "mebit · เครื่องอื่น · ${cosigner.fingerprint}",
         fingerprint = cosigner.fingerprint,
@@ -169,26 +172,30 @@ private fun requireAccountXpub(token: String): String {
 }
 
 private const val NOT_FOR_MULTISIG = "ใช้กุญแจนี้สร้าง Wallet แบบ Multisig (Native SegWit) ไม่ได้"
-private const val BIP48_PATH = "m/48'/1'/N'/2'"
-private val bip48NativeSegwit = Regex("^m/48'/1'/\\d{1,9}'/2'$")
-private val bip48NestedSegwit = Regex("^m/48'/1'/\\d{1,9}'/1'$")
+private fun bip48Path(network: KeyNetwork) = "m/48'/${coinType(network)}'/N'/2'"
+private fun bip48NativeSegwit(network: KeyNetwork) = Regex("^m/48'/${coinType(network)}'/\\d{1,9}'/2'$")
+private fun bip48NestedSegwit(network: KeyNetwork) = Regex("^m/48'/${coinType(network)}'/\\d{1,9}'/1'$")
 private val singleKeyPurpose = Regex("^m/(44|49|84|86)'(/|$)")
 
 /**
- * Why a pasted key is not a key of a several-key wallet, or null when it is one. In this testnet build that key is a tpub at
- * m/48'/1'/N'/2', BIP48's Native SegWit (P2WSH) script type, the rule script.rs holds such a key to, so the paste refuses what
- * Choose Keys could never make into a wallet.
+ * Why a pasted key is not a key of a several-key wallet, or null when it is one. On testnet that key is a tpub at m/48'/1'/N'/2',
+ * on mainnet an xpub at m/48'/0'/N'/2', BIP48's Native SegWit (P2WSH) script type, the rule script.rs holds such a key to, so the
+ * paste refuses what Choose Keys could never make into a wallet. The mainnet lines mirror the testnet ones and are drafts for the wording phase.
  */
-private fun bip48Refusal(path: String, xpub: String): String? {
+private fun bip48Refusal(path: String, xpub: String, network: KeyNetwork): String? {
     val prefix = xpub.take(4)
+    val main = network == KeyNetwork.MAIN
+    val want = if (main) "xpub" else "tpub"
+    val bip48Path = bip48Path(network)
     val purpose = singleKeyPurpose.find(path)?.groupValues?.get(1)
     return when {
-        prefix == "ypub" || prefix == "upub" -> "$prefix เป็นกุญแจของกระเป๋ากุญแจเดียวตาม BIP49 · ต้องเป็น tpub ที่ $BIP48_PATH ตาม BIP48"
-        prefix == "zpub" || prefix == "vpub" -> "$prefix เป็นกุญแจของกระเป๋ากุญแจเดียวตาม BIP84 · ต้องเป็น tpub ที่ $BIP48_PATH ตาม BIP48"
-        prefix == "xpub" -> "xpub เป็นกุญแจ mainnet · แอปนี้ใช้ tpub ของ testnet ที่ $BIP48_PATH"
-        purpose != null -> "$path เป็น path ของกระเป๋ากุญแจเดียวตาม BIP$purpose · ต้องเป็น $BIP48_PATH ตาม BIP48"
-        bip48NestedSegwit.matches(path) -> "$path ลงท้ายด้วย 1' คือ Nested SegWit (P2SH-P2WSH) · ต้องลงท้ายด้วย 2' คือ Native SegWit (P2WSH)"
-        !bip48NativeSegwit.matches(path) -> "ต้องเป็น $BIP48_PATH ตาม BIP48 แต่กุญแจนี้อยู่ที่ $path"
+        main && (prefix == "tpub" || prefix == "upub" || prefix == "vpub") -> "$prefix เป็นกุญแจ testnet · แอปนี้ใช้ xpub ของ mainnet ที่ $bip48Path"
+        prefix == "ypub" || prefix == "upub" -> "$prefix เป็นกุญแจของกระเป๋ากุญแจเดียวตาม BIP49 · ต้องเป็น $want ที่ $bip48Path ตาม BIP48"
+        prefix == "zpub" || prefix == "vpub" -> "$prefix เป็นกุญแจของกระเป๋ากุญแจเดียวตาม BIP84 · ต้องเป็น $want ที่ $bip48Path ตาม BIP48"
+        !main && prefix == "xpub" -> "xpub เป็นกุญแจ mainnet · แอปนี้ใช้ tpub ของ testnet ที่ $bip48Path"
+        purpose != null -> "$path เป็น path ของกระเป๋ากุญแจเดียวตาม BIP$purpose · ต้องเป็น $bip48Path ตาม BIP48"
+        bip48NestedSegwit(network).matches(path) -> "$path ลงท้ายด้วย 1' คือ Nested SegWit (P2SH-P2WSH) · ต้องลงท้ายด้วย 2' คือ Native SegWit (P2WSH)"
+        !bip48NativeSegwit(network).matches(path) -> "ต้องเป็น $bip48Path ตาม BIP48 แต่กุญแจนี้อยู่ที่ $path"
         !sitsAtNativeSegwitMultisig(xpub) -> "xpub นี้ไม่ได้อยู่ที่ $path · คัดลอก xpub และ path จากกุญแจดอกเดียวกัน"
         else -> null
     }

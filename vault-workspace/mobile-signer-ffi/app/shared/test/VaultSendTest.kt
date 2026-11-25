@@ -140,7 +140,7 @@ class VaultSendTest {
                     post(txid)
                 },
             ),
-            link = HardwareLink(pairings = null) { inRange(it) },
+            link = HardwareLink(pairings = null, network = KeyNetwork.TEST) { inRange(it) },
         )
     }
 

@@ -80,6 +80,9 @@ class CreateWalletDraft(
     private val derive: (List<String>, UByte) -> String = { xpubs, m -> computeVaultAddressMultisig(xpubs, m) },
     private val describe: (String, KeyNetwork) -> WalletShape = { d, n -> walletDescribe(d, n) },
 ) {
+    /** The network of the book this wallet is saved in, which its keys, descriptor and address are read on. */
+    val network: KeyNetwork get() = book.network
+
     /** Penpot 3.1 opens with multisig selected. */
     var signing: Signing by mutableStateOf(Signing.Multisig)
 
@@ -147,7 +150,7 @@ class CreateWalletDraft(
     fun create(ready: ReadyPlan): CreatedVault? {
         made?.let { return it }
         val address = try {
-            describe(ready.descriptor, KeyNetwork.TEST)
+            describe(ready.descriptor, network)
             derive(ready.keys.map { it.xpub }, ready.preset.m.toUByte())
         } catch (e: Exception) {
             return null

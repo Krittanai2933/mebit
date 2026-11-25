@@ -92,7 +92,7 @@ class VaultSend internal constructor(
     private val worker: CoroutineContext = Dispatchers.Default,
     private val core: DescribedCore = DescribedCore(),
     /** The one way to a Jade or a Safe 7: [HardwareWallets.link], which is the fake device's in a debug build launched with it. */
-    private val link: HardwareLink = HardwareLink(pairings = null),
+    private val link: HardwareLink = HardwareLink(pairings = null, network = KeyNetwork.TEST), // the send's network next commit
 ) {
     private val descriptor = descriptorIn(vault.bsms)
 

@@ -1,5 +1,6 @@
 package com.mebit.app.feature.send
 
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.app.VaultsStorage
 import com.mebit.app.data.FakeVaultsStorage
 import com.mebit.app.data.KeySourceLabel
@@ -78,7 +79,7 @@ class DeleteMenuLinesTest {
     fun aSeveralKeyWalletIsOfferedOnlyWhileItsBookIsSavedAndCanBeJudged() {
         val notSaved = DeleteItem.Blocked("ลบไม่ได้ · Wallet นี้ยังไม่ได้บันทึกในเครื่อง")
         val wallet = { VaultOwners(listOf(TEST_CHECK), everyPlaceOpened = true) }
-        fun item(storage: VaultsStorage?, owners: () -> VaultOwners?) = vaultDeleteItem(SavedVaults(storage, owners).apply { sync() }.saving)
+        fun item(storage: VaultsStorage?, owners: () -> VaultOwners?) = vaultDeleteItem(SavedVaults(storage, KeyNetwork.TEST, owners).apply { sync() }.saving)
         assertEquals(notSaved, item(null, wallet), "no store, as on Android 10 and older")
         assertEquals(notSaved, item(FakeVaultsStorage(), { null }), "no saved wallet, as on a phone with no screen lock")
         assertEquals(unreadable, item(FakeVaultsStorage("not a book"), wallet), "a damaged book")
@@ -89,7 +90,7 @@ class DeleteMenuLinesTest {
     fun aHardwareWalletIsOfferedOnTheSameRuleAsASeveralKeyWallet() {
         val notSaved = DeleteItem.Blocked("ลบไม่ได้ · กระเป๋านี้ยังไม่ได้บันทึกในเครื่อง")
         val wallet = { VaultOwners(listOf(TEST_CHECK), everyPlaceOpened = true) }
-        fun item(storage: VaultsStorage?, owners: () -> VaultOwners?) = hardwareDeleteItem(SavedVaults(storage, owners).apply { sync() }.saving)
+        fun item(storage: VaultsStorage?, owners: () -> VaultOwners?) = hardwareDeleteItem(SavedVaults(storage, KeyNetwork.TEST, owners).apply { sync() }.saving)
         assertEquals(notSaved, item(FakeVaultsStorage(), { null }), "no saved wallet")
         assertEquals(unreadable, item(FakeVaultsStorage("not a book"), wallet), "a damaged book")
         assertEquals(unreadable, item(FakeVaultsStorage().apply { unreadable = true }, wallet), "a book not read yet")

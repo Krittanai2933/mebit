@@ -27,8 +27,12 @@ internal class FakeDeviceLink(
     var offeredAtConnect: ByteArray? = null
     var code: String? = null
 
+    /** The network connect was asked for. */
+    var connectedOn: KeyNetwork? = null
+
     override suspend fun connect(codes: PairingCodes, pairing: ByteArray?, network: KeyNetwork): ByteArray? {
         calls += "connect"
+        connectedOn = network
         offered = pairing
         offeredAtConnect = pairing?.copyOf()
         if (asksCode) code = codes.pairingCode()

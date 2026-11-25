@@ -71,7 +71,10 @@ class KeyringStore internal constructor(
     private val pairings: Pairings? = null,
     openLink: (FoundWallet) -> DeviceLink = ::bleLink,
 ) {
-    private val link = HardwareLink(pairings, openLink)
+    private val link = HardwareLink(pairings, book.network, openLink)
+
+    /** The network of the book, which every key this store reads or makes is for. */
+    private val network: KeyNetwork get() = book.network
 
     /** Every wallet's own key first, then every saved key, a key already saved showing once. Read-only, because only [SavedVaults] changes what is saved. */
     val keys: List<SavedKey>
@@ -123,7 +126,7 @@ class KeyringStore internal constructor(
     }
 
     /** Real tpub for a CI run that has no pasted fixture. */
-    fun startMebitOtherMock(network: KeyNetwork = KeyNetwork.TEST) {
+    fun startMebitOtherMock() {
         clearError()
         try {
             val key = generateSoftwareMultisigKey("", network, (keys.size + 17).toUInt())
@@ -149,7 +152,7 @@ class KeyringStore internal constructor(
         clearError()
         pending = null
         return try {
-            pending = parseExternalKeyPaste(text)
+            pending = parseExternalKeyPaste(text, network)
             true
         } catch (e: IllegalArgumentException) {
             lastError = e.message
@@ -158,7 +161,7 @@ class KeyringStore internal constructor(
     }
 
     /** Demo HW enrollment without live BLE — real account key, HW label. */
-    fun startHardwareMock(source: KeySourceLabel, network: KeyNetwork = KeyNetwork.TEST) {
+    fun startHardwareMock(source: KeySourceLabel) {
         clearError()
         require(source == KeySourceLabel.Jade || source == KeySourceLabel.TrezorSafe7)
         try {
@@ -214,7 +217,7 @@ class KeyringStore internal constructor(
      * pairing is kept at once, and the staged key keeps [expect]'s name. Nothing is saved to the book until [confirmFingerprint]. A model
      * mebit does not support is [EnrollResult.UnsupportedModel] and sets no error. Any other failure sets [lastError].
      */
-    suspend fun enrollHardware(found: FoundWallet, path: String = TESTNET_MULTISIG_ACCOUNT, expect: SavedKey? = null): EnrollResult {
+    suspend fun enrollHardware(found: FoundWallet, path: String = multisigAccount(network), expect: SavedKey? = null): EnrollResult {
         if (hardwareBusy) return EnrollResult.Failed
         hardwareBusy = true
         clearError()
@@ -330,6 +333,9 @@ class KeyringStore internal constructor(
 
 /** BIP-48 P2WSH account on testnet. Coin type 1, account 0, script type 2. */
 internal const val TESTNET_MULTISIG_ACCOUNT = "m/48'/1'/0'/2'"
+
+/** [TESTNET_MULTISIG_ACCOUNT] under [network]'s coin type. */
+internal fun multisigAccount(network: KeyNetwork): String = "m/48'/${coinType(network)}'/0'/2'"
 
 internal fun hardwareName(source: KeySourceLabel): String = when (source) {
     KeySourceLabel.Jade -> "Jade"

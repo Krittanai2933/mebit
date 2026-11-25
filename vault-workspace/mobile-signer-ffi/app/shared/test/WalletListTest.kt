@@ -1,5 +1,6 @@
 package com.mebit.app.feature.vault
 
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.app.Place
 import com.mebit.app.data.BtcUnit
 import com.mebit.app.data.CreatedVault
@@ -69,7 +70,7 @@ class WalletListTest {
     @Test
     fun aWalletTheBookListsTwiceCountsOnceInTheTotal() {
         val vault = CreatedVault("vault_1", "Wallet 1", 2, 3, CustodyPolicy.PersonalCustody, "tb1qvault1", "", emptyList())
-        val book = SavedVaults(null, owners = { null }, deriveAddress = { _, _ -> "" })
+        val book = SavedVaults(null, KeyNetwork.TEST, owners = { null }, deriveAddress = { _, _ -> "" })
         book.edit { it.copy(vaults = listOf(vault, vault.copy(id = "vault_2", name = "Wallet 2"))) }
         assertEquals(2, book.current.vaults.size, "two cards of one wallet")
         val sats: (CreatedVault) -> Long? = { if (it.address == vault.address) 84_200_000L else null }
@@ -81,9 +82,9 @@ class WalletListTest {
     fun theTotalIsADashWhileTheBookOfSeveralKeyWalletsCannotBeRead() {
         val owner = VaultOwners(listOf("aaaa0000"), everyPlaceOpened = true)
         val books = mapOf(
-            "a newer app's book" to SavedVaults(FakeVaultsStorage("MV3\n"), { owner }, { _, _ -> "" }).apply { sync() },
-            "a damaged book" to SavedVaults(FakeVaultsStorage("not a book"), { owner }, { _, _ -> "" }).apply { sync() },
-            "a book not read yet" to SavedVaults(FakeVaultsStorage(""), { owner }, { _, _ -> "" }),
+            "a newer app's book" to SavedVaults(FakeVaultsStorage("MV3\n"), KeyNetwork.TEST, { owner }, { _, _ -> "" }).apply { sync() },
+            "a damaged book" to SavedVaults(FakeVaultsStorage("not a book"), KeyNetwork.TEST, { owner }, { _, _ -> "" }).apply { sync() },
+            "a book not read yet" to SavedVaults(FakeVaultsStorage(""), KeyNetwork.TEST, { owner }, { _, _ -> "" }),
         )
         for ((what, book) in books) {
             assertEquals("—", listTotal(listOf(card(3_000_000)), book, { null }, walletUnopened = false), "$what (${book.health})")
@@ -92,7 +93,7 @@ class WalletListTest {
 
     @Test
     fun aBookReadWithNoSeveralKeyWalletKeepsTheOneKeyTotal() {
-        val book = SavedVaults(FakeVaultsStorage(""), { VaultOwners(listOf("aaaa0000"), everyPlaceOpened = true) }, { _, _ -> "" }).apply { sync() }
+        val book = SavedVaults(FakeVaultsStorage(""), KeyNetwork.TEST, { VaultOwners(listOf("aaaa0000"), everyPlaceOpened = true) }, { _, _ -> "" }).apply { sync() }
         assertEquals("0.0300 BTC", listTotal(listOf(card(3_000_000)), book, { null }, walletUnopened = false))
     }
 

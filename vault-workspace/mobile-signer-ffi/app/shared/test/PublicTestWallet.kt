@@ -1,6 +1,7 @@
 package com.mebit.app.data
 
 import com.mebit.ffi.signer.AddressType
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.WalletKind
 
 // PUBLIC_WORDS_12, PUBLIC_FINGERPRINT and PUBLIC_ACCOUNTS live with the fake device, which holds the same public phrase (FakeDevice.kt).
@@ -17,4 +18,5 @@ internal val PUBLIC_JADE_WALLET = HardwareWallet(
     fingerprint = PUBLIC_FINGERPRINT,
     xpub = PUBLIC_ACCOUNTS.getValue(AddressType.NATIVE_SEGWIT).tpub,
     address = PUBLIC_ACCOUNTS.getValue(AddressType.NATIVE_SEGWIT).receive0,
+    network = KeyNetwork.TEST,
 )

@@ -1,5 +1,6 @@
 package com.mebit.app.data
 
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.BleException
 import com.mebit.ffi.signer.FoundWallet
@@ -36,11 +37,20 @@ private const val PATH_84 = "m/84'/1'/0'"
 
 class HardwareLinkTest {
     @Test
+    fun theLinkConnectsOnItsNetwork(): Unit = runBlocking {
+        for (network in listOf(KeyNetwork.TEST, KeyNetwork.MAIN)) {
+            val link = FakeDeviceLink()
+            HardwareLink(null, network) { link }.use(JADE_FOUND, PATH_84, expect = null, NO_CODES) {}
+            assertEquals(network, link.connectedOn)
+        }
+    }
+
+    @Test
     fun theLinkIsDisconnectedAndClosedOnEveryPath(): Unit = runBlocking {
         for (end in listOf("done", "connect", "unlock", "accountXpub", "another key", "the job")) {
             val link = FakeDeviceLink(failAt = end.takeIf { it in setOf("connect", "unlock", "accountXpub") })
             val outcome = runCatching {
-                HardwareLink(FakePairings()) { link }.use(JADE_FOUND, PATH_84, expect = if (end == "another key") "11112222" else null, NO_CODES) {
+                HardwareLink(FakePairings(), KeyNetwork.TEST) { link }.use(JADE_FOUND, PATH_84, expect = if (end == "another key") "11112222" else null, NO_CODES) {
                     if (end == "the job") throw IllegalStateException("the job failed")
                     "signed"
                 }
@@ -52,7 +62,7 @@ class HardwareLinkTest {
 
         val link = FakeDeviceLink()
         val started = CompletableDeferred<Unit>()
-        val job = launch { HardwareLink(null) { link }.use(JADE_FOUND, PATH_84, null, NO_CODES) { started.complete(Unit); awaitCancellation() } }
+        val job = launch { HardwareLink(null, KeyNetwork.TEST) { link }.use(JADE_FOUND, PATH_84, null, NO_CODES) { started.complete(Unit); awaitCancellation() } }
         started.await()
         job.cancel()
         job.join()
@@ -64,33 +74,33 @@ class HardwareLinkTest {
         val link = FakeDeviceLink(fingerprint = PUBLIC_FINGERPRINT)
         var ran = false
         assertFailsWith<BleException.WrongKey> {
-            HardwareLink(null) { link }.use(JADE_FOUND, PATH_84, expect = "11112222", NO_CODES) { ran = true }
+            HardwareLink(null, KeyNetwork.TEST) { link }.use(JADE_FOUND, PATH_84, expect = "11112222", NO_CODES) { ran = true }
         }
         assertFalse(ran)
         assertEquals(listOf("connect", "unlock", "accountXpub $PATH_84", "disconnect", "close"), link.calls, "only the key was read")
 
         val same = FakeDeviceLink(fingerprint = PUBLIC_FINGERPRINT)
-        assertEquals(PUBLIC_FINGERPRINT, HardwareLink(null) { same }.use(JADE_FOUND, PATH_84, expect = PUBLIC_FINGERPRINT.uppercase(), NO_CODES) { it.key.masterFingerprint })
+        assertEquals(PUBLIC_FINGERPRINT, HardwareLink(null, KeyNetwork.TEST) { same }.use(JADE_FOUND, PATH_84, expect = PUBLIC_FINGERPRINT.uppercase(), NO_CODES) { it.key.masterFingerprint })
     }
 
     @Test
     fun aCodePairingIsKeptUnderTheExpectedKeyAndANewKeysGoesToTheJob(): Unit = runBlocking {
         val pairings = FakePairings()
         val fresh = byteArrayOf(1, 2, 3)
-        HardwareLink(pairings) { FakeDeviceLink(fresh = fresh) }.use(SAFE7, PATH_84, expect = PUBLIC_FINGERPRINT, NO_CODES) {}
+        HardwareLink(pairings, KeyNetwork.TEST) { FakeDeviceLink(fresh = fresh) }.use(SAFE7, PATH_84, expect = PUBLIC_FINGERPRINT, NO_CODES) {}
         assertContentEquals(byteArrayOf(1, 2, 3), pairings.of(PUBLIC_FINGERPRINT))
         assertTrue(fresh.all { it == 0.toByte() }, "the credential the link returned is zeroed")
 
         val unknown = byteArrayOf(4)
         val link = FakeDeviceLink(fingerprint = "11112222", fresh = unknown)
-        val handed = HardwareLink(pairings) { link }.use(SAFE7, TESTNET_MULTISIG_ACCOUNT, expect = null, NO_CODES) { it.pairing?.copyOf() }
+        val handed = HardwareLink(pairings, KeyNetwork.TEST) { link }.use(SAFE7, TESTNET_MULTISIG_ACCOUNT, expect = null, NO_CODES) { it.pairing?.copyOf() }
         assertNull(link.offeredAtConnect, "no credential is offered for a key not known yet")
         assertContentEquals(byteArrayOf(4), handed, "a key no one expected is not saved yet, so the job gets its pairing")
         assertNull(pairings.of("11112222"), "and the link keeps it nowhere")
         assertTrue(unknown.all { it == 0.toByte() }, "zeroed once the job returned")
 
         val other = FakeDeviceLink(fingerprint = "11112222", fresh = byteArrayOf(5))
-        assertFailsWith<BleException.WrongKey> { HardwareLink(pairings) { other }.use(SAFE7, PATH_84, expect = PUBLIC_FINGERPRINT, NO_CODES) {} }
+        assertFailsWith<BleException.WrongKey> { HardwareLink(pairings, KeyNetwork.TEST) { other }.use(SAFE7, PATH_84, expect = PUBLIC_FINGERPRINT, NO_CODES) {} }
         assertNull(pairings.of("11112222"), "a device of another key is refused, and its pairing kept nowhere")
         assertContentEquals(byteArrayOf(1, 2, 3), pairings.of(PUBLIC_FINGERPRINT))
     }
@@ -112,7 +122,7 @@ class HardwareLinkTest {
         assertTrue(pairings.given.last().all { it == 0.toByte() }, "the copy held until then is zeroed")
 
         val another = KeyringStore(book = book, pairings = pairings, openLink = { FakeDeviceLink(fingerprint = "11112222", fresh = byteArrayOf(6)) })
-        assertEquals(EnrollResult.Failed, another.enrollHardware(SAFE7, oneKeyPath(AddressType.NATIVE_SEGWIT), expect = store.keys.single()))
+        assertEquals(EnrollResult.Failed, another.enrollHardware(SAFE7, oneKeyPath(AddressType.NATIVE_SEGWIT, KeyNetwork.TEST), expect = store.keys.single()))
         assertNull(pairings.of("11112222"), "a one-key create refused for a device of another key keeps that device's pairing nowhere")
         assertContentEquals(byteArrayOf(5, 5, 5), pairings.of(PUBLIC_FINGERPRINT))
     }
@@ -128,7 +138,7 @@ class HardwareLinkTest {
         )
         for ((case, storage, why) in cases) {
             val pairings = FakePairings()
-            val store = KeyringStore(book = SavedVaults(storage, owners = me).apply { sync() }, pairings = pairings, openLink = { FakeDeviceLink(fresh = byteArrayOf(5, 5, 5)) })
+            val store = KeyringStore(book = SavedVaults(storage, KeyNetwork.TEST, owners = me).apply { sync() }, pairings = pairings, openLink = { FakeDeviceLink(fresh = byteArrayOf(5, 5, 5)) })
             assertEquals(EnrollResult.Enrolled, store.enrollHardware(SAFE7))
 
             val saved = store.confirmFingerprint(PUBLIC_FINGERPRINT)
@@ -142,30 +152,30 @@ class HardwareLinkTest {
 
         val storage = FakeVaultsStorage().apply { failWrite = true }
         val pairings = FakePairings()
-        val store = KeyringStore(book = SavedVaults(storage, owners = me).apply { sync() }, pairings = pairings, openLink = { FakeDeviceLink(fresh = byteArrayOf(5, 5, 5)) })
+        val store = KeyringStore(book = SavedVaults(storage, KeyNetwork.TEST, owners = me).apply { sync() }, pairings = pairings, openLink = { FakeDeviceLink(fresh = byteArrayOf(5, 5, 5)) })
         assertEquals(EnrollResult.Enrolled, store.enrollHardware(SAFE7))
         assertFalse(store.confirmFingerprint(PUBLIC_FINGERPRINT))
         storage.failWrite = false
         assertTrue(store.confirmFingerprint(PUBLIC_FINGERPRINT), "the same tap once the book can be written")
         assertContentEquals(byteArrayOf(5, 5, 5), pairings.of(PUBLIC_FINGERPRINT), "kept with the key saved for good")
-        assertEquals(listOf(PUBLIC_FINGERPRINT), SavedVaults(storage, owners = me).apply { sync() }.current.keys.map { it.fingerprint })
+        assertEquals(listOf(PUBLIC_FINGERPRINT), SavedVaults(storage, KeyNetwork.TEST, owners = me).apply { sync() }.current.keys.map { it.fingerprint })
     }
 
     @Test
     fun theKeptCredentialGoesOnlyToTheSafe7OfTheExpectedKeyAndIsZeroed(): Unit = runBlocking {
         val pairings = FakePairings().apply { write(PUBLIC_FINGERPRINT, byteArrayOf(9, 9)) }
         val safe7 = FakeDeviceLink()
-        HardwareLink(pairings) { safe7 }.use(SAFE7, PATH_84, expect = PUBLIC_FINGERPRINT, NO_CODES) {}
+        HardwareLink(pairings, KeyNetwork.TEST) { safe7 }.use(SAFE7, PATH_84, expect = PUBLIC_FINGERPRINT, NO_CODES) {}
         assertContentEquals(byteArrayOf(9, 9), safe7.offeredAtConnect)
         assertTrue(assertNotNull(safe7.offered).all { it == 0.toByte() }, "zeroed once connect returned")
         assertContentEquals(byteArrayOf(9, 9), pairings.of(PUBLIC_FINGERPRINT), "a reconnect writes nothing")
 
         val jade = FakeDeviceLink()
-        HardwareLink(pairings) { jade }.use(JADE_FOUND, PATH_84, expect = PUBLIC_FINGERPRINT, NO_CODES) {}
+        HardwareLink(pairings, KeyNetwork.TEST) { jade }.use(JADE_FOUND, PATH_84, expect = PUBLIC_FINGERPRINT, NO_CODES) {}
         assertNull(jade.offeredAtConnect, "a Jade never gets a Safe 7's secret")
 
-        assertTrue(HardwareLink(pairings).keeps(PUBLIC_FINGERPRINT))
-        assertFalse(HardwareLink(pairings).keeps("11112222"))
+        assertTrue(HardwareLink(pairings, KeyNetwork.TEST).keeps(PUBLIC_FINGERPRINT))
+        assertFalse(HardwareLink(pairings, KeyNetwork.TEST).keeps("11112222"))
         assertTrue(pairings.served.all { array -> array.all { it == 0.toByte() } }, "every credential read was zeroed")
     }
 
@@ -174,7 +184,7 @@ class HardwareLinkTest {
         val pairings = FakePairings().apply { write(PUBLIC_FINGERPRINT, byteArrayOf(9, 9)) }
         for (step in listOf("connect", "unlock", "accountXpub")) {
             val link = FakeDeviceLink(fresh = byteArrayOf(1), failAt = step)
-            assertFailsWith<BleException.Disconnected> { HardwareLink(pairings) { link }.use(SAFE7, PATH_84, PUBLIC_FINGERPRINT, NO_CODES) {} }
+            assertFailsWith<BleException.Disconnected> { HardwareLink(pairings, KeyNetwork.TEST) { link }.use(SAFE7, PATH_84, PUBLIC_FINGERPRINT, NO_CODES) {} }
             assertContentEquals(byteArrayOf(9, 9), pairings.of(PUBLIC_FINGERPRINT), step)
         }
     }

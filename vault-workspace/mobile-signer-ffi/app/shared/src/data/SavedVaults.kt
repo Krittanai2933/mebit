@@ -71,6 +71,8 @@ data class VaultOwners(val fingerprints: List<String>, val everyPlaceOpened: Boo
 /** The keys and vaults saved on this phone. Takes a [VaultsStorage] and not a SecureStore, so it has no way to reach the wallet's record, and saves only while [owners] names a wallet. */
 class SavedVaults internal constructor(
     private val storage: VaultsStorage?,
+    /** The network of the wallets this book holds: every hardware wallet in it is read and paid on this network. */
+    val network: KeyNetwork,
     private val owners: () -> VaultOwners?,
     private val deriveAddress: (List<String>, UByte) -> String = { x, m -> computeVaultAddressMultisig(x, m) },
     private val describe: (String, KeyNetwork) -> WalletShape = { d, n -> walletDescribe(d, n) },
@@ -148,7 +150,7 @@ class SavedVaults internal constructor(
         }
         if (!readFor(me) || !judgedNow()) return@synchronized false
         val next = change(current)
-        val text = VaultBookCodec.encodeChecked(opened ?: return@synchronized false, next)
+        val text = VaultBookCodec.encodeChecked(opened ?: return@synchronized false, next, network)
         if (text == null || storage?.write(text) != true) return@synchronized false
         current = next
         owed = false
@@ -197,7 +199,7 @@ class SavedVaults internal constructor(
         if (opened == null && !open(me)) return@synchronized false
         if (opened != leaving) return@synchronized !owed
         if (health == VaultsHealth.Damaged || health == VaultsHealth.Newer) return@synchronized false // a Newer copy is never overwritten
-        val text = VaultBookCodec.encodeChecked(next, current) ?: return@synchronized false
+        val text = VaultBookCodec.encodeChecked(next, current, network) ?: return@synchronized false
         if (storage?.write(text) != true) {
             health = VaultsHealth.SaveFailed
             return@synchronized false
@@ -233,7 +235,7 @@ class SavedVaults internal constructor(
     private fun open(me: VaultOwners): Boolean {
         storedEmpty = null
         val text = storage?.read() ?: return false
-        val decoded = if (text.isEmpty()) null else VaultBookCodec.decode(text)
+        val decoded = if (text.isEmpty()) null else VaultBookCodec.decode(text, network)
         when (decoded) {
             null -> keepMemory()
             VaultBookCodec.Decoded.Damaged -> refuse(VaultsHealth.Damaged)
@@ -276,7 +278,7 @@ class SavedVaults internal constructor(
     /** Writes [current] under the owner the stored copy names. */
     private fun save() {
         if (health == VaultsHealth.Damaged || health == VaultsHealth.Newer) return
-        val text = VaultBookCodec.encodeChecked(opened ?: return, current)
+        val text = VaultBookCodec.encodeChecked(opened ?: return, current, network)
         if (text != null && storage?.write(text) == true) {
             owed = false
             health = VaultsHealth.Ok
@@ -294,7 +296,7 @@ class SavedVaults internal constructor(
         }
     } && book.hardware.all { h ->
         try {
-            describe(h.descriptor, KeyNetwork.TEST).firstAddress == h.address
+            describe(h.descriptor, network).firstAddress == h.address
         } catch (e: Exception) {
             false
         }
@@ -302,7 +304,7 @@ class SavedVaults internal constructor(
 
     companion object {
         /** Nothing is ever saved. For a bare [com.mebit.app.navigation.MebitNavHost] and for tests that do not care. */
-        fun memoryOnly(): SavedVaults = SavedVaults(null, owners = { null })
+        fun memoryOnly(): SavedVaults = SavedVaults(null, KeyNetwork.TEST, owners = { null })
     }
 }
 
@@ -364,7 +366,7 @@ private object VaultBookCodec {
     }
 
     /** The text for ([owner], [book]), or null when [decode] would not read exactly these values back. Null is never written. */
-    fun encodeChecked(owner: String, book: VaultBook): String? {
+    fun encodeChecked(owner: String, book: VaultBook, network: KeyNetwork): String? {
         val text = StringBuilder("MV2\n")
         text.field(owner)
         text.field(book.keys.size)
@@ -412,12 +414,12 @@ private object VaultBookCodec {
         } catch (e: CharacterCodingException) {
             return null
         }
-        val back = decode(encoded) as? Decoded.Ok ?: return null
+        val back = decode(encoded, network) as? Decoded.Ok ?: return null
         return encoded.takeIf { back.owner == owner && back.book == book }
     }
 
     /** Never throws. A version above 2 or a code v2 never writes is Newer, because the rest is not then judged by v2 rules. Anything else encode never writes is Damaged. */
-    fun decode(text: String): Decoded {
+    fun decode(text: String, network: KeyNetwork): Decoded {
         if (text.encodeToByteArray().size > MAX_BYTES || !text.startsWith("MV")) return Decoded.Damaged
         val headerEnd = text.indexOf('\n')
         if (headerEnd < 0) return Decoded.Damaged
@@ -471,7 +473,7 @@ private object VaultBookCodec {
                 val xpub = fields.text() ?: return Decoded.Damaged
                 val address = fields.text() ?: return Decoded.Damaged
                 val pending = fields.text() ?: return Decoded.Damaged
-                add(HardwareWallet(id, name, kind, type, fingerprint, xpub, address, pending))
+                add(HardwareWallet(id, name, kind, type, fingerprint, xpub, address, pending, network))
             }
         }
         // An MV2 text from before f38e8f4 ends here. It reads as no number given, and a new id is still one past every saved id.

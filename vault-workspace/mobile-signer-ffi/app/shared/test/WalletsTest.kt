@@ -1,5 +1,6 @@
 package com.mebit.app.data
 
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.app.Marker
 import com.mebit.app.Place
 import com.mebit.app.PlainFile
@@ -566,7 +567,7 @@ class WalletsTest {
         val wallets = phone.unlocked()
         val storage = FakeVaultsStorage()
         val type = AddressType.NATIVE_SEGWIT
-        val key = HwAccountKey(PUBLIC_ACCOUNTS.getValue(type).tpub, PUBLIC_FINGERPRINT, oneKeyPath(type))
+        val key = HwAccountKey(PUBLIC_ACCOUNTS.getValue(type).tpub, PUBLIC_FINGERPRINT, oneKeyPath(type, KeyNetwork.TEST))
 
         val added = HardwareWallets(book(storage, wallets).apply { sync() }).add(WalletKind.JADE, type, key, wallets.phoneWallets())
         assertEquals(HardwareAdd.Unopened, added, "refused as a phone add is then")
@@ -1429,7 +1430,7 @@ class WalletsTest {
     }
 
     private fun book(storage: FakeVaultsStorage, wallets: Wallets) =
-        SavedVaults(storage, owners = { wallets.vaultOwners() }, deriveAddress = { _, _ -> "addr" })
+        SavedVaults(storage, KeyNetwork.TEST, owners = { wallets.vaultOwners() }, deriveAddress = { _, _ -> "addr" })
 
     private fun vaultUsing(fingerprint: String) =
         CreatedVault("v1", "Vault 1", 1, 1, CustodyPolicy.PersonalCustody, "addr", "x\nwsh(sortedmulti(1,tpub))", listOf(fingerprint), hasMockKey = true)

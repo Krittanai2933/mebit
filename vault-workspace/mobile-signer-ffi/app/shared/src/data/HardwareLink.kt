@@ -34,7 +34,7 @@ private class BleLink(private val link: WalletLink) : DeviceLink, WalletLinkInte
  * A credential is kept only for a key the book holds, so a new key's goes to the job, to keep once Confirm Key saves the key. [open]
  * makes the link, so tests need no Bluetooth.
  */
-internal class HardwareLink(private val pairings: Pairings?, private val open: (FoundWallet) -> DeviceLink = ::bleLink) {
+internal class HardwareLink(private val pairings: Pairings?, private val network: KeyNetwork, private val open: (FoundWallet) -> DeviceLink = ::bleLink) {
     /** [pairing] is a new Safe 7 credential when no key was expected, which the job may copy and [use] zeroes once the job returns. */
     class Opened(val link: WalletLinkInterface, val key: HwAccountKey, val pairing: ByteArray? = null)
 
@@ -50,7 +50,7 @@ internal class HardwareLink(private val pairings: Pairings?, private val open: (
         try {
             val kept = if (found.kind == WalletKind.TREZOR_SAFE7) expect?.let { pairings?.read(it) } else null
             val fresh = try {
-                link.connect(codes, kept, KeyNetwork.TEST)
+                link.connect(codes, kept, network)
             } finally {
                 kept?.fill(0)
             }

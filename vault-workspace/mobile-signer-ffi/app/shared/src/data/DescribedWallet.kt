@@ -124,6 +124,9 @@ class DescribedWallet internal constructor(
     private val nowSeconds: () -> Long = { Clock.System.now().epochSeconds },
     private val io: CoroutineDispatcher = Dispatchers.Default,
 ) : HomeSource, GuardExits {
+    /** The network of the book that holds [wallet], which every read, post and device call of it is on. */
+    val network: KeyNetwork get() = wallet.network
+
     override var mode: WalletMode by mutableStateOf(WalletMode.Demo)
         private set
     override var scan: HotScan by mutableStateOf(HotScan.COMPLETE)
@@ -188,12 +191,12 @@ class DescribedWallet internal constructor(
             lastFailure = null
             if (unconfirmedSend == null) unconfirmedSend = payments.of(wallet.guardKey)
             try {
-                show(core.snapshot(wallet.descriptor, KeyNetwork.TEST))
+                show(core.snapshot(wallet.descriptor, network))
                 // The history can speak only for the guard held as it begins to load.
                 val judged = unconfirmedSend as? UnconfirmedSend
                 // A history failure is not the wallet's, so its own try keeps it from changing the mode or reaching lastError.
                 val loaded = try {
-                    core.history(wallet.descriptor, KeyNetwork.TEST)
+                    core.history(wallet.descriptor, network)
                 } catch (e: Exception) {
                     lastFailure = "history: ${e.message ?: e}"
                     null
@@ -226,13 +229,13 @@ class DescribedWallet internal constructor(
 
     /** What the detail screen knows of [txid] beyond its row. Writes no wallet state, because the screen owns the answer. */
     suspend fun detail(txid: String): TxDetailLoad.Done = withContext(io) {
-        detailLoad { core.detail(wallet.descriptor, KeyNetwork.TEST, txid) }
+        detailLoad { core.detail(wallet.descriptor, network, txid) }
     }
 
     /** The Send screen's fee tiers, the fixed ones when the network cannot be reached. */
     suspend fun feeTiers(): LiveFeeTiers = withContext(io) {
         try {
-            LiveFeeTiers.of(core.feeTiers(KeyNetwork.TEST))
+            LiveFeeTiers.of(core.feeTiers(network))
         } catch (e: Exception) {
             LiveFeeTiers.DEFAULT
         }
@@ -257,7 +260,7 @@ class DescribedWallet internal constructor(
             return false
         }
         val review = try {
-            withContext(io) { core.draft(wallet.descriptor, KeyNetwork.TEST, destination, amountSats?.toULong(), rateSatVb.toULong()) }
+            withContext(io) { core.draft(wallet.descriptor, network, destination, amountSats?.toULong(), rateSatVb.toULong()) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -284,7 +287,7 @@ class DescribedWallet internal constructor(
         val signed = link.use(found, wallet.path, expect = wallet.fingerprint, codes) {
             it.link.signWalletPsbt(wallet.descriptor, review.psbt, review.unsignedTxid, steps)
         }
-        val prepared = withContext(io) { core.finish(wallet.descriptor, KeyNetwork.TEST, signed.psbt, review.unsignedTxid) }
+        val prepared = withContext(io) { core.finish(wallet.descriptor, network, signed.psbt, review.unsignedTxid) }
         if (epoch != paymentEpoch) return false
         payment = DevicePayment.Signed(review, prepared)
         return true
@@ -314,7 +317,7 @@ class DescribedWallet internal constructor(
         val posted = postWithGuard(
             pending,
             prepared.hex,
-            KeyNetwork.TEST,
+            network,
             core.postHex,
             claim = { send -> payments.claim(wallet.guardKey, send).also { if (it == Claim.Written) unconfirmedSend = send } },
             clear = { clearUnconfirmedSend(it) },
@@ -332,7 +335,7 @@ class DescribedWallet internal constructor(
         lastSentAtSeconds = nowSeconds()
         // Its own try: the payment is out, and reading it as failed invites a retry that pays twice.
         try {
-            show(core.snapshot(wallet.descriptor, KeyNetwork.TEST))
+            show(core.snapshot(wallet.descriptor, network))
         } catch (e: Exception) {
         }
         true
@@ -341,7 +344,7 @@ class DescribedWallet internal constructor(
     /** Posts the guarded payment's own bytes again, as [SingleSigWallet.repost] does: the same transaction, so it can never pay twice. Only [Repost.Out] drops the guard. */
     override suspend fun repost(): Repost = withContext(io) {
         val pending = unconfirmedSend as? UnconfirmedSend ?: return@withContext Repost.Failed
-        val outcome = payments.repost(wallet.guardKey, pending) { hex -> postAgain(core.postHex, KeyNetwork.TEST, hex, pending.txid) } ?: Repost.Failed
+        val outcome = payments.repost(wallet.guardKey, pending) { hex -> postAgain(core.postHex, network, hex, pending.txid) } ?: Repost.Failed
         if (outcome == Repost.Out && !pending.holdsCancel) {
             payments.settle(wallet.guardKey, pending, others())
             if (unconfirmedSend == pending) unconfirmedSend = null

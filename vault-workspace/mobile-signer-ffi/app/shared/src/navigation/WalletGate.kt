@@ -122,7 +122,7 @@ private fun OpenGate(lock: LockGate) {
             bookGuardKeys = { book.guardKeys() },
             bookHardware = { book.current.hardware },
         )
-        book = SavedVaults(storage, owners = { wallets.vaultOwners() })
+        book = SavedVaults(storage, network, owners = { wallets.vaultOwners() })
         wallets to book
     }
     val gate = remember(wallets) { WalletGateState(wallets) }

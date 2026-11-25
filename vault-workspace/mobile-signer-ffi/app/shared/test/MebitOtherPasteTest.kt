@@ -1,5 +1,6 @@
 package com.mebit.app.data
 
+import com.mebit.ffi.signer.KeyNetwork
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -105,6 +106,22 @@ class MebitOtherPasteTest {
             "$NOT_FOR_MULTISIG · xpub เป็นกุญแจ mainnet · แอปนี้ใช้ tpub ของ testnet ที่ m/48'/1'/N'/2'",
             refusal("abcd0123\nxpub${tpubA.removePrefix("tpub")}\nm/48'/1'/0'/2'"),
         )
+    }
+
+    // The key is the public phrase's account at m/48'/0'/0'/2', derived outside the app with the mainnet version bytes.
+    @Test
+    fun onMainnetAnXpubAtM48_0PassesAndATpubDoesNot() {
+        val mainnet = { KeyringStore(book = SavedVaults(null, KeyNetwork.MAIN, owners = { null })) }
+        val main = mainnet()
+        assertTrue(main.startMebitOtherFromPaste("$PUBLIC_FINGERPRINT\n$XPUB48_MAINNET\nm/48'/0'/0'/2'"), main.lastError)
+        assertEquals(XPUB48_MAINNET, main.pending?.xpub)
+        val wrongCoin = mainnet()
+        assertEquals(false, wrongCoin.startMebitOtherFromPaste("$PUBLIC_FINGERPRINT\n$XPUB48_MAINNET\nm/48'/1'/0'/2'"))
+        assertEquals("$NOT_FOR_MULTISIG · ต้องเป็น m/48'/0'/N'/2' ตาม BIP48 แต่กุญแจนี้อยู่ที่ m/48'/1'/0'/2'", wrongCoin.lastError)
+        val testKey = mainnet()
+        assertEquals(false, testKey.startMebitOtherFromPaste("abcd0123\n$tpubA\nm/48'/0'/0'/2'"))
+        assertTrue(testKey.lastError.orEmpty().contains("tpub เป็นกุญแจ testnet"), testKey.lastError)
+        assertEquals(false, KeyringStore().startMebitOtherFromPaste("$PUBLIC_FINGERPRINT\n$XPUB48_MAINNET\nm/48'/0'/0'/2'"), "testnet still refuses mainnet's key")
     }
 
     @Test
@@ -235,3 +252,5 @@ private fun bareBsms(xpub: String): String = """
     /0/*,/1/*
     # export=file · not QR
 """.trimIndent()
+
+private const val XPUB48_MAINNET = "xpub6DkFAXWQ2dHxq2vatrt9qyA3bXYU4ToWQwCHbf5XB2mSTexcHZCeKS1VZYcPoBd5X8yVcbXFHJR9R8UCVpt82VX1VhR28mCyxUFL4r6KFrf"

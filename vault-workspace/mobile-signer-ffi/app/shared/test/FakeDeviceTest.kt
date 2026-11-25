@@ -37,10 +37,10 @@ class FakeDeviceTest {
     @Test
     fun theFakeHoldsThePublicPhraseAtEveryPathTheAppReads(): Unit = runBlocking {
         val fake = FakeDevice()
-        val link = HardwareLink(FakePairings(), fake::open)
+        val link = HardwareLink(FakePairings(), KeyNetwork.TEST, fake::open)
         val jade = fake.scan(WalletKind.JADE).single()
         for (type in AddressType.entries) {
-            val key = link.use(jade, oneKeyPath(type), expect = PUBLIC_FINGERPRINT, NO_CODES) { it.key }
+            val key = link.use(jade, oneKeyPath(type, KeyNetwork.TEST), expect = PUBLIC_FINGERPRINT, NO_CODES) { it.key }
             assertEquals(PUBLIC_ACCOUNTS.getValue(type).tpub, key.xpub, "$type")
         }
         val multisig = link.use(jade, TESTNET_MULTISIG_ACCOUNT, expect = null, NO_CODES) { it.key }
@@ -52,15 +52,15 @@ class FakeDeviceTest {
     fun itsSafe7AsksForItsCodeOnceThenTakesThePairingThisPhoneKept(): Unit = runBlocking {
         val pairings = FakePairings()
         val fake = FakeDevice()
-        val link = HardwareLink(pairings, fake::open)
+        val link = HardwareLink(pairings, KeyNetwork.TEST, fake::open)
         val safe7 = fake.scan(WalletKind.TREZOR_SAFE7).single()
         val codes = Codes()
         link.use(safe7, TESTNET_MULTISIG_ACCOUNT, expect = PUBLIC_FINGERPRINT, codes) { it.key }
         assertEquals(1, codes.asked, "a first pairing asks")
         assertNotNull(pairings.of(PUBLIC_FINGERPRINT), "and this phone keeps the pairing under the key's fingerprint")
-        link.use(safe7, oneKeyPath(AddressType.NATIVE_SEGWIT), expect = PUBLIC_FINGERPRINT, codes) { it.key }
+        link.use(safe7, oneKeyPath(AddressType.NATIVE_SEGWIT, KeyNetwork.TEST), expect = PUBLIC_FINGERPRINT, codes) { it.key }
         assertEquals(1, codes.asked, "2.3.5: the kept pairing connects with no code")
-        HardwareLink(pairings, FakeDevice()::open).use(safe7, oneKeyPath(AddressType.NATIVE_SEGWIT), expect = PUBLIC_FINGERPRINT, codes) { it.key }
+        HardwareLink(pairings, KeyNetwork.TEST, FakeDevice()::open).use(safe7, oneKeyPath(AddressType.NATIVE_SEGWIT, KeyNetwork.TEST), expect = PUBLIC_FINGERPRINT, codes) { it.key }
         assertEquals(2, codes.asked, "2.3.6: a fake of a new run forgot this phone and asks again")
     }
 
@@ -68,7 +68,7 @@ class FakeDeviceTest {
     fun aWalletOfItsKeyIsSavedWithThePhrasesAddresses(): Unit = runBlocking {
         val fake = FakeDevice()
         val hardware = HardwareWallets(SavedVaults.memoryOnly(), openLink = fake::open, scan = fake::scan)
-        val key = hardware.link.use(fake.scan(WalletKind.JADE).single(), oneKeyPath(AddressType.TAPROOT), expect = PUBLIC_FINGERPRINT, NO_CODES) { it.key }
+        val key = hardware.link.use(fake.scan(WalletKind.JADE).single(), oneKeyPath(AddressType.TAPROOT, KeyNetwork.TEST), expect = PUBLIC_FINGERPRINT, NO_CODES) { it.key }
         val added = assertIs<HardwareAdd.Added>(hardware.add(WalletKind.JADE, AddressType.TAPROOT, key, emptyList()))
         assertEquals(PUBLIC_ACCOUNTS.getValue(AddressType.TAPROOT).receive0, added.wallet.address)
         assertEquals("กระเป๋า Jade", added.wallet.name)

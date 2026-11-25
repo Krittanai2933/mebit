@@ -96,7 +96,7 @@ class SendErrorThaiTest {
         val chain = DescribedWallet(
             PUBLIC_JADE_WALLET,
             PendingPayments(FakePlainFile()),
-            HardwareLink(null) { FakeDeviceLink() },
+            HardwareLink(null, KeyNetwork.TEST) { FakeDeviceLink() },
             { listOf(TEST_CHECK) },
             DescribedCore(
                 snapshot = { _, _ -> HotWalletSnapshot(PUBLIC_JADE_WALLET.address, 50_000uL, 40_000uL, KeyNetwork.TEST, HotScan.COMPLETE) },

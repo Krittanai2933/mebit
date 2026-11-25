@@ -217,7 +217,7 @@ class CreateWalletDraftTest {
     @Test
     fun theNewestWalletsNumberIsNeverGivenAgainNotAfterARestartEither() {
         val storage = FakeVaultsStorage()
-        fun opened() = SavedVaults(storage, owners = { VaultOwners(listOf(TEST_CHECK), everyPlaceOpened = true) }, deriveAddress = fake).apply { sync() }
+        fun opened() = SavedVaults(storage, KeyNetwork.TEST, owners = { VaultOwners(listOf(TEST_CHECK), everyPlaceOpened = true) }, deriveAddress = fake).apply { sync() }
         fun SavedVaults.made(vararg picks: Int): CreatedVault = draft(this).run {
             pick(*picks)
             create(ready(keys)!!)!!
