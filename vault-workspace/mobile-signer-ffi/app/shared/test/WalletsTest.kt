@@ -27,6 +27,7 @@ import com.mebit.ffi.signer.HwAccountKey
 import com.mebit.ffi.signer.SoftwareAccountKey
 import com.mebit.ffi.signer.WalletBalance
 import com.mebit.ffi.signer.WalletKind
+import com.mebit.ffi.signer.hotReceiveAddress
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -176,6 +177,19 @@ private class ShelfPhone {
 }
 
 class WalletsTest {
+    // Native: the real key derivation. The public phrase's first address is the BIP-84 vector's on mainnet and its testnet form on testnet.
+    @Test
+    fun aMainnetImportOfThePublicWordsReceivesAtBip84sFirstAddress() {
+        for ((network, address) in listOf(KeyNetwork.MAIN to "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu", KeyNetwork.TEST to "tb1q6rz28mcfaxtmd6v789l9rrlrusdprr9pqcpvkl")) {
+            val store = FakeSecureStore(network = network)
+            val session = Wallets(OnePlaceShelf(store)).at(Place.FIRST).session
+            session.restoreFromWords(PUBLIC_WORDS_12)
+            assertEquals(SaveState.Saved, session.saved, "saved on $network")
+            assertEquals(network, assertIs<UnlockResult.Opened>(SavedWallet(store).openNow()).record.network, "the record's network")
+            assertEquals(address, hotReceiveAddress(session.words, session.passphrase, session.network, session.addressType, 0u), "receive 0 on $network")
+        }
+    }
+
     @Test
     fun aVersion1RecordAtPlaceOneOpensWithOneOwnerCheckAndIsNeverRewritten(): Unit = runBlocking {
         val phone = ShelfPhone()

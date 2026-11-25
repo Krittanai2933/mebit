@@ -101,7 +101,7 @@ class SavedWallet internal constructor(private val store: SecureStore) {
     internal fun decoded(r: ReadResult): UnlockResult = when (r) {
         is ReadResult.Bytes -> try {
             when (val d = RecordCodec.decode(r.bytes)) {
-                is Decoded.Ok -> if (d.record.network in NETWORKS) UnlockResult.Opened(d.record, r.version, d.oldGuard) else UnlockResult.Broken(Cause.UnsupportedNetwork)
+                is Decoded.Ok -> if (d.record.network == store.network) UnlockResult.Opened(d.record, r.version, d.oldGuard) else UnlockResult.Broken(Cause.UnsupportedNetwork)
                 Decoded.Newer -> UnlockResult.Broken(Cause.NewerVersion) // never overwritten: a newer app wrote it
                 Decoded.Corrupt -> UnlockResult.Broken(Cause.Corrupt)
             }
@@ -122,7 +122,7 @@ class SavedWallet internal constructor(private val store: SecureStore) {
      * A record the codec cannot write back exactly is NotSaved(Other). The encoded bytes are zeroed once the store has them.
      */
     fun save(record: WalletRecord, mode: WriteMode): SaveResult {
-        if (record.network !in NETWORKS) return SaveResult.NotSaved(Why.Other) // testnet only until the security review
+        if (record.network != store.network) return SaveResult.NotSaved(Why.Other) // a store keeps its own network's wallets only
         val bytes = try {
             RecordCodec.encode(record)
         } catch (e: Exception) {
@@ -161,7 +161,7 @@ class SavedWallet internal constructor(private val store: SecureStore) {
 
     internal companion object {
         /** The networks whose records this build reads and saves. [openableNetwork] keeps the gate off any other. */
-        val NETWORKS = setOf(KeyNetwork.TEST)
+        val NETWORKS = setOf(KeyNetwork.TEST, KeyNetwork.MAIN)
     }
 }
 

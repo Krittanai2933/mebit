@@ -133,6 +133,29 @@ class SavedWalletTest {
     }
 
     @Test
+    fun aStoreRefusesARecordOfTheOtherNetwork() {
+        val test = FakeSecureStore(network = KeyNetwork.TEST)
+        assertEquals(Why.Other, assertIs<SaveResult.NotSaved>(SavedWallet(test).save(testRecord(network = KeyNetwork.MAIN), WriteMode.Create)).why)
+        val main = FakeSecureStore(network = KeyNetwork.MAIN)
+        assertEquals(Why.Other, assertIs<SaveResult.NotSaved>(SavedWallet(main).save(testRecord(network = KeyNetwork.TEST), WriteMode.Create)).why)
+        assertTrue(test.writes.isEmpty() && main.writes.isEmpty() && test.markerWrites.isEmpty() && main.markerWrites.isEmpty(), "a refused save wrote")
+        // v1Bytes' network byte: 0 test, 1 main.
+        val mainBytesOnTest = SavedWallet(FakeSecureStore(read = ReadResult.Bytes(v1Bytes(network = 1), ANY_VERSION), network = KeyNetwork.TEST)).openNow()
+        assertEquals(Cause.UnsupportedNetwork, assertIs<UnlockResult.Broken>(mainBytesOnTest).cause)
+        val testBytesOnMain = SavedWallet(FakeSecureStore(read = ReadResult.Bytes(v1Bytes(network = 0), ANY_VERSION), network = KeyNetwork.MAIN)).openNow()
+        assertEquals(Cause.UnsupportedNetwork, assertIs<UnlockResult.Broken>(testBytesOnMain).cause)
+    }
+
+    @Test
+    fun aStoreOpensAndSavesItsOwnNetwork() {
+        for (network in listOf(KeyNetwork.TEST, KeyNetwork.MAIN)) {
+            val store = FakeSecureStore(network = network)
+            assertIs<SaveResult.Written>(SavedWallet(store).save(testRecord(network = network), WriteMode.Create), "save on $network")
+            assertEquals(network, assertIs<UnlockResult.Opened>(SavedWallet(store).openNow(), "open on $network").record.network)
+        }
+    }
+
+    @Test
     fun createNeverOverwrites() {
         val store = FakeSecureStore(write = WriteResult.AlreadyExists)
         assertEquals(SaveResult.AlreadyExists, SavedWallet(store).save(testRecord(), WriteMode.Create))

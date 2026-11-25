@@ -247,11 +247,11 @@ class SingleSigWalletBroadcastTest {
 
     @Test
     fun thePreparationGetsTheSessionKeyAndThePaymentAsGivenAndThePostGetsWhatItPrepared() {
-        val hot = FakeHot() // a MAIN store cannot save a wallet until the records take both networks, so MAIN is checked again then
+        val hot = FakeHot(network = KeyNetwork.MAIN)
         val session = hot.goLive()
         hot.wallet.broadcast(session, 100_000, 8, DESTINATION)
-        assertEquals(listOf(PrepareCall(WORDS, PASSPHRASE, KeyNetwork.TEST, DESTINATION, 100_000uL, 8uL)), hot.prepares)
-        assertEquals(listOf(PostCall(KeyNetwork.TEST, "hex-1", TXID)), hot.posts)
+        assertEquals(listOf(PrepareCall(WORDS, PASSPHRASE, KeyNetwork.MAIN, DESTINATION, 100_000uL, 8uL)), hot.prepares)
+        assertEquals(listOf(PostCall(KeyNetwork.MAIN, "hex-1", TXID)), hot.posts)
     }
 
     @Test
@@ -836,11 +836,11 @@ class SingleSigWalletBroadcastTest {
 
     @Test
     fun aPostWithTheHeldNetworkNeverTheDefault() {
-        val hot = FakeHot()
+        val hot = FakeHot(network = KeyNetwork.MAIN)
         val session = hot.goLive()
         assertTrue(hot.wallet.prepare(session, 100_000, 8, DESTINATION))
         assertTrue(hot.wallet.post(session))
-        assertEquals(listOf(PostCall(KeyNetwork.TEST, "hex-1", TXID)), hot.posts)
+        assertEquals(listOf(PostCall(KeyNetwork.MAIN, "hex-1", TXID)), hot.posts)
     }
 
     // The user's rule of 8 Nov: the fee Review shows is the fee that goes. Review shows the core's quote, so a payment that pays exactly
