@@ -129,10 +129,11 @@ fun S4SendScreen(
     }
     SendForm(
         wallet = wallet,
+        network = session.network,
         walletName = session.walletName,
         draft = draft,
         quotes = quotes,
-        tiers = { withContext(Dispatchers.Default) { wallet.feeTiers() } },
+        tiers = { withContext(Dispatchers.Default) { wallet.feeTiers(session.network) } },
         repost = repost,
         onContinue = onContinue,
         onReceive = onReceive,
@@ -164,6 +165,7 @@ fun HardwareSendScreen(
     val repost = remember { RepostAttempt() }
     SendForm(
         wallet = wallet,
+        network = KeyNetwork.TEST, // the book's network once DescribedWallet carries it (next commit)
         walletName = wallet.wallet.name,
         draft = draft,
         quotes = quotes,
@@ -186,6 +188,7 @@ fun HardwareSendScreen(
 @Composable
 private fun SendForm(
     wallet: HomeSource,
+    network: KeyNetwork,
     walletName: String,
     draft: SendDraft,
     quotes: QuoteCache,
@@ -203,15 +206,15 @@ private fun SendForm(
     val entry = remember(draft) { AmountEntry(draft) }
     // Once per open of this screen. Rust answers from memory for five minutes, so a second open costs no network call.
     LaunchedEffect(draft) { entry.applyTiers(tiers(), wallet.spendableSats) }
-    val addressOk = if (draft.destination.isEmpty()) null else isValidAddress(draft.destination, KeyNetwork.TEST)
+    val addressOk = if (draft.destination.isEmpty()) null else isValidAddress(draft.destination, network)
     // The spendable balance, not the whole one: a receive still in the mempool cannot pay, and send all pays the spendable figure less the fee.
     val issue = sendIssue(addressOk, draft.amountSats, draft.feeSats, wallet.spendableSats, wallet.balanceKnown, wallet.unconfirmedSend != null)
-    val enter = { text: String -> draft.enterDestination(text) { isValidAddress(it, KeyNetwork.TEST) } }
+    val enter = { text: String -> draft.enterDestination(text) { isValidAddress(it, network) } }
     val cameraAvailable = rememberCameraAvailable()
     var scanning by remember { mutableStateOf(false) }
     if (scanning) {
         QrScanSheet(
-            accepts = { acceptsScan(it) { address -> isValidAddress(address, KeyNetwork.TEST) } },
+            accepts = { acceptsScan(it) { address -> isValidAddress(address, network) } },
             onAddress = { scanned ->
                 scanning = false
                 enter(scanned)

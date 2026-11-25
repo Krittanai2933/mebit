@@ -100,7 +100,7 @@ private val keyMaker = Executors.newSingleThreadExecutor { Thread(it, "mebit-wal
  * write that finds none or finds it invalidated, never over a stored wallet's working key. A write that arrives before it is
  * ready answers TryLater, and the session saves again at its next write point or when the gate retries. Logs nothing.
  */
-private class KeystoreShelf(private val context: Context, network: KeyNetwork) : SecureShelf {
+private class KeystoreShelf(private val context: Context, override val network: KeyNetwork) : SecureShelf {
     private val alias = walletAlias(network)
     private val state = networkStates.getValue(network)
     private val walletPaths = Place.all.associateWith { walletPath(network, it) }
@@ -233,6 +233,7 @@ private class KeystoreShelf(private val context: Context, network: KeyNetwork) :
     }
 
     private inner class KeystorePlace(private val place: Place) : SecureStore {
+        override val network get() = this@KeystoreShelf.network
         private val file = files.getValue(place)
         private val copy = state.copies.getValue(place)
 

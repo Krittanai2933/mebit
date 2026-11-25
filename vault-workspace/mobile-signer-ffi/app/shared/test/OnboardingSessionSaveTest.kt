@@ -646,10 +646,10 @@ class OnboardingSessionSaveTest {
             markAppLockEnabled()
         }
         // The saved wallet refuses MAIN, so a MAIN key that writes nothing proves the record carries the session's network.
-        val store = FakeSecureStore()
-        session(store).generateThisDevice(network = KeyNetwork.MAIN)
+        val store = FakeSecureStore(network = KeyNetwork.MAIN)
+        session(store).generateThisDevice()
         assertTrue(store.writes.isEmpty(), "a MAIN key was saved")
-        val loaded = session(FakeSecureStore())
+        val loaded = session(FakeSecureStore(network = KeyNetwork.MAIN))
         assertTrue(loaded.install(testRecord(network = KeyNetwork.MAIN), ANY_VERSION), "install MAIN")
         assertEquals(KeyNetwork.MAIN, loaded.network, "network after install")
     }

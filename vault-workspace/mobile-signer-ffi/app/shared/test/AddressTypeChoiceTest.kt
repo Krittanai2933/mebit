@@ -219,8 +219,8 @@ class AddressTypeChoiceTest {
     // On mainnet only Native SegWit can be chosen: it is preselected, and a tap on any other type leaves it. The same tap on testnet chooses.
     @Test
     fun onMainnetATapOnATypeTheCoreRefusesChangesNothing() {
-        val main = session(FakeSecureStore())
-        main.generateThisDevice(network = KeyNetwork.MAIN)
+        val main = session(FakeSecureStore(network = KeyNetwork.MAIN))
+        main.generateThisDevice()
         assertEquals(AddressType.NATIVE_SEGWIT, main.addressType, "the preselected type on mainnet")
         for (type in listOf(AddressType.LEGACY, AddressType.NESTED_SEGWIT, AddressType.TAPROOT)) {
             main.chooseAddressType(type)

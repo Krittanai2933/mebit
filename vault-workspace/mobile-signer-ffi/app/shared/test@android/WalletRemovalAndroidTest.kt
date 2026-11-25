@@ -30,6 +30,8 @@ private fun check(words: List<String>): String = words.joinToString(" ").hashCod
 
 /** Places over [FakeShelf] whose one-place read runs [androidReadRefusal] first, as KeystorePlace.read does, so a place with no file answers NotFound before any sheet. */
 private class AndroidLikeShelf(val inner: FakeShelf) : SecureShelf {
+    override val network get() = inner.network
+
     override fun store(place: Place): SecureStore = object : SecureStore by inner.store(place) {
         override suspend fun read(reason: String): ReadResult {
             androidReadRefusal(inner.places.getValue(place).probe == StoreProbe.Present, aliasPresent = true)?.let { return it }

@@ -27,7 +27,7 @@ private data class WalletState(val mode: WalletMode, val history: List<HotTx>, v
 private fun SingleSigWallet.state() = WalletState(mode, history, lastError, lastFailure, unconfirmedSend)
 
 /** A wallet whose detail call answers [answer], bound live with one row and an earlier payment's guard. */
-private class DetailChain(var answer: () -> HotTxDetail?) {
+private class DetailChain(network: KeyNetwork = KeyNetwork.TEST, var answer: () -> HotTxDetail?) {
     val asked = mutableListOf<Asked>()
     val wallet = SingleSigWallet(
         prepareAtRate = { _, _, _, _, _, _, _ -> fail("prepare ran") },
@@ -40,7 +40,7 @@ private class DetailChain(var answer: () -> HotTxDetail?) {
         },
     )
     // Staged, because of the passphrase, so nothing is saved, and the guard needs the fingerprint the key gives.
-    val session = OnboardingSession(restoreKey = { w, _, _, _ -> SoftwareAccountKey(w, TEST_CHECK, "tpub-test", "m/84'/1'/0'") }, payments = PendingPayments(FakePlainFile())).also {
+    val session = OnboardingSession(SavedWallet(FakeSecureStore(network = network)), restoreKey = { w, _, _, _ -> SoftwareAccountKey(w, TEST_CHECK, "tpub-test", "m/84'/1'/0'") }, payments = PendingPayments(FakePlainFile())).also {
         it.restoreFromWords(DETAIL_WORDS, DETAIL_PASSPHRASE)
         assertEquals(Claim.Written, it.recordUnconfirmedSend(PENDING_TXID, 1_792_740_720L))
         wallet.bindSession(it)
@@ -59,8 +59,9 @@ class SingleSigWalletDetailTest {
         val chain = DetailChain { FOUND }
         assertEquals(TxDetailLoad.Loaded(FOUND), chain.wallet.detail(chain.session, DETAIL_TXID))
         assertEquals(listOf(Asked(DETAIL_WORDS, DETAIL_PASSPHRASE, KeyNetwork.TEST, DETAIL_TXID)), chain.asked)
-        chain.wallet.detail(chain.session, DETAIL_TXID, KeyNetwork.MAIN)
-        assertEquals(KeyNetwork.MAIN, chain.asked.last().network)
+        val main = DetailChain(KeyNetwork.MAIN) { FOUND }
+        main.wallet.detail(main.session, DETAIL_TXID)
+        assertEquals(KeyNetwork.MAIN, main.asked.last().network)
     }
 
     @Test
@@ -81,7 +82,7 @@ class SingleSigWalletDetailTest {
         val rust = "invalid PSBT json: esplora get: x"
         val answers = listOf<() -> HotTxDetail?>({ FOUND }, { null }, { throw MobileSignerException.InvalidPsbtJson(rust) })
         for (answer in answers) {
-            val chain = DetailChain(answer)
+            val chain = DetailChain(answer = answer)
             val before = chain.wallet.state()
             assertEquals(WalletMode.Live, before.mode)
             assertEquals(PENDING_TXID, (before.unconfirmedSend as? SingleSigWallet.UnconfirmedSend)?.txid, "the guard is there to be kept")

@@ -85,9 +85,8 @@ class OnboardingSession(
     var addressType: AddressType by mutableStateOf(AddressType.NATIVE_SEGWIT)
         private set
 
-    /** The network the key was made for, saved with it. */
-    var network: KeyNetwork by mutableStateOf(KeyNetwork.TEST)
-        private set
+    /** The network of the store this session saves to, and of every key it makes. A session with no store is only built by tests. */
+    val network: KeyNetwork = wallet?.network ?: KeyNetwork.TEST
 
     /**
      * False from a new key's first save until the user leaves the Address Type step forward ([confirmAddressType]). Saved with the
@@ -169,11 +168,11 @@ class OnboardingSession(
     internal val savePending: Boolean get() = pendingSave
 
     /** Saved before it returns, so a crash can never lose a key whose words were shown. Refused while the session holds a key, unless it is staged. */
-    fun generateThisDevice(passphrase: String = "", network: KeyNetwork = KeyNetwork.TEST) {
+    fun generateThisDevice(passphrase: String = "") {
         lastError = null
         if (refuseToReplace()) return
         try {
-            applyKey(newKey(passphrase, network, 0u), passphrase, network)
+            applyKey(newKey(passphrase, network, 0u), passphrase)
         } catch (e: Exception) {
             lastError = e.message
             return
@@ -204,7 +203,7 @@ class OnboardingSession(
             lastError = ON_PHONE
             return
         }
-        applyKey(key, passphrase, network)
+        applyKey(key, passphrase)
         held = kept // the copy on the phone is still there, so this save must be a Replace of it, not a Create
         addressType = type // the same words of the same wallet, so the type the user chose stands
         persist()
@@ -249,7 +248,7 @@ class OnboardingSession(
      * An imported key counts as backed up: the user typed the words from their own record. [accepted] is false for a
      * passphrase import: the key is staged until the fingerprint matches ([acceptStagedKey]). Refused while the session holds a key, unless it is staged.
      */
-    fun restoreFromWords(words: List<String>, passphrase: String = "", network: KeyNetwork = KeyNetwork.TEST, accepted: Boolean = passphrase.isEmpty()) {
+    fun restoreFromWords(words: List<String>, passphrase: String = "", accepted: Boolean = passphrase.isEmpty()) {
         lastError = null
         if (refuseToReplace()) return
         val key = try {
@@ -268,7 +267,7 @@ class OnboardingSession(
             lastError = duplicateLine(it)
             return
         }
-        applyKey(key, passphrase, network)
+        applyKey(key, passphrase)
         backupConfirmed = true
         imported = true
         inFirstSetup = true
@@ -345,7 +344,6 @@ class OnboardingSession(
         appLockEnabled = startsLocked
         inFirstSetup = false
         lastError = null
-        network = KeyNetwork.TEST
         addressType = AddressType.NATIVE_SEGWIT
         addressTypeConfirmed = true
         recordGuard = null
@@ -432,13 +430,14 @@ class OnboardingSession(
      * file, and the save that follows writes the record without it, so it moves once ([recordGuard]).
      */
     internal fun install(record: WalletRecord, version: StoreVersion, oldGuard: SingleSigWallet.UnconfirmedSend? = null): Boolean {
+        if (record.network != network) return false
         val key = try {
             restoreKey(record.words, record.passphrase, record.network, 0u)
         } catch (e: Exception) {
             return false
         }
         if (key.masterFingerprint != record.fingerprint) return false
-        applyKey(key, record.passphrase, record.network)
+        applyKey(key, record.passphrase)
         backupConfirmed = record.backupConfirmed // from the record, not from how the key was made, which forces these
         imported = record.imported
         appLockEnabled = record.appLockEnabled
@@ -542,13 +541,12 @@ class OnboardingSession(
         earlierFingerprints = (held as? Held.OnPhone)?.let { it.earlier + it.fingerprint - fingerprint }.orEmpty(),
     )
 
-    private fun applyKey(key: SoftwareAccountKey, passphrase: String, network: KeyNetwork) {
+    private fun applyKey(key: SoftwareAccountKey, passphrase: String) {
         words = key.mnemonicWords
         fingerprint = key.masterFingerprint
         xpub = key.xpub
         derivationPath = key.derivationPath
         this.passphrase = passphrase
-        this.network = network
         backupConfirmed = false
         imported = false
         addressType = AddressType.NATIVE_SEGWIT

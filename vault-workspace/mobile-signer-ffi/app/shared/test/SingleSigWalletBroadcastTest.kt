@@ -77,15 +77,15 @@ private data class Seen(val returned: Boolean, val txid: String, val error: Stri
 private fun SingleSigWallet.seen(returned: Boolean) = Seen(returned, lastTxid, lastError, balanceSats, receiveAddress)
 
 /** Prepare, then post with no question between, as the Review screen does when the fee needs none ([feeQuestion]). The demo mock holds nothing to post. */
-internal fun SingleSigWallet.broadcast(session: OnboardingSession, amountSats: Long, feeRateSatVb: Long, destination: String, network: KeyNetwork = KeyNetwork.TEST, sendAll: Boolean = false): Boolean =
-    prepare(session, amountSats, feeRateSatVb, destination, network, sendAll) && (heldSend == null || post(session))
+internal fun SingleSigWallet.broadcast(session: OnboardingSession, amountSats: Long, feeRateSatVb: Long, destination: String, sendAll: Boolean = false): Boolean =
+    prepare(session, amountSats, feeRateSatVb, destination, sendAll = sendAll) && (heldSend == null || post(session))
 
 /**
  * Fakes for the hot_* calls. A test swaps [prepareResult], [postResult] or [snapshotResult] to change what the next call does.
  * The clock is [clock] and stands still unless a test moves it. [store] is the phone the live session is saved on, [guards] its
  * guard file, and [fingerprint] the wallet's.
  */
-private class FakeHot(val guards: FakePlainFile = FakePlainFile(), val fingerprint: String = TEST_CHECK) {
+private class FakeHot(val guards: FakePlainFile = FakePlainFile(), val fingerprint: String = TEST_CHECK, network: KeyNetwork = KeyNetwork.TEST) {
     var prepareResult: (feeRateSatVb: ULong) -> PreparedSend = { rate -> PreparedSend(TXID, "hex-1", rate * 141uL, 100_000uL) }
     var prepareAllResult: (feeRateSatVb: ULong) -> PreparedSend = { rate -> PreparedSend(TXID, "hex-all", rate * 178uL, 1_000_000uL - rate * 178uL) }
     var quoteResult: (amountSats: ULong?, feeRateSatVb: ULong) -> QuotedSend = { amount, rate -> QuotedSend(rate * 141uL, amount ?: (1_000_000uL - rate * 110uL), 0uL, 141uL) }
@@ -99,7 +99,7 @@ private class FakeHot(val guards: FakePlainFile = FakePlainFile(), val fingerpri
     var snapshots = 0
     var history = listOf(HotTx("txid-0", 1_000_000L, 3u, 1_760_000_000uL))
     var historyFails = false
-    val store = FakeSecureStore()
+    val store = FakeSecureStore(network = network)
     val wallet = SingleSigWallet(
         prepareAtRate = { words, passphrase, network, _, destination, amountSats, feeRateSatVb ->
             prepares += PrepareCall(words, passphrase, network, destination, amountSats, feeRateSatVb)
@@ -247,11 +247,11 @@ class SingleSigWalletBroadcastTest {
 
     @Test
     fun thePreparationGetsTheSessionKeyAndThePaymentAsGivenAndThePostGetsWhatItPrepared() {
-        val hot = FakeHot()
+        val hot = FakeHot() // a MAIN store cannot save a wallet until the records take both networks, so MAIN is checked again then
         val session = hot.goLive()
-        hot.wallet.broadcast(session, 100_000, 8, DESTINATION, KeyNetwork.MAIN)
-        assertEquals(listOf(PrepareCall(WORDS, PASSPHRASE, KeyNetwork.MAIN, DESTINATION, 100_000uL, 8uL)), hot.prepares)
-        assertEquals(listOf(PostCall(KeyNetwork.MAIN, "hex-1", TXID)), hot.posts)
+        hot.wallet.broadcast(session, 100_000, 8, DESTINATION)
+        assertEquals(listOf(PrepareCall(WORDS, PASSPHRASE, KeyNetwork.TEST, DESTINATION, 100_000uL, 8uL)), hot.prepares)
+        assertEquals(listOf(PostCall(KeyNetwork.TEST, "hex-1", TXID)), hot.posts)
     }
 
     @Test
@@ -838,9 +838,9 @@ class SingleSigWalletBroadcastTest {
     fun aPostWithTheHeldNetworkNeverTheDefault() {
         val hot = FakeHot()
         val session = hot.goLive()
-        assertTrue(hot.wallet.prepare(session, 100_000, 8, DESTINATION, KeyNetwork.MAIN))
+        assertTrue(hot.wallet.prepare(session, 100_000, 8, DESTINATION))
         assertTrue(hot.wallet.post(session))
-        assertEquals(listOf(PostCall(KeyNetwork.MAIN, "hex-1", TXID)), hot.posts)
+        assertEquals(listOf(PostCall(KeyNetwork.TEST, "hex-1", TXID)), hot.posts)
     }
 
     // The user's rule of 8 Nov: the fee Review shows is the fee that goes. Review shows the core's quote, so a payment that pays exactly
@@ -905,11 +905,11 @@ class SingleSigWalletBroadcastTest {
             fetchHistory = { _, _, _, _ -> fail("history ran") },
             fetchFeeTiers = { answer() },
         )
-        assertEquals(LiveFeeTiers(1, 1, 2, live = true), wallet.feeTiers())
+        assertEquals(LiveFeeTiers(1, 1, 2, live = true), wallet.feeTiers(KeyNetwork.TEST))
         answer = { FeeTiers(4uL, 8uL, 15uL, false) }
-        assertEquals(LiveFeeTiers(4, 8, 15, live = false), wallet.feeTiers())
+        assertEquals(LiveFeeTiers(4, 8, 15, live = false), wallet.feeTiers(KeyNetwork.TEST))
         answer = { throw IllegalStateException("the bridge failed") }
-        assertEquals(LiveFeeTiers.DEFAULT, wallet.feeTiers())
+        assertEquals(LiveFeeTiers.DEFAULT, wallet.feeTiers(KeyNetwork.TEST))
     }
 
     // A quote that fails shows no fee at all, never an estimate, so Review has nothing to sign and keeps Sign off. It says why: the core's

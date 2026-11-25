@@ -182,7 +182,8 @@ class SingleSigWallet(
     /** Whether a bind ended within the last [seconds]. A list reads it so a visit does not ask the server about every wallet again. */
     override fun boundWithin(seconds: Long): Boolean = lastBoundSeconds?.let { nowSeconds() - it in 0..seconds } == true
 
-    fun bindSession(session: OnboardingSession, network: KeyNetwork = KeyNetwork.TEST): Unit = synchronized(bindLock) {
+    fun bindSession(session: OnboardingSession): Unit = synchronized(bindLock) {
+        val network = session.network
         lastError = null
         lastFailure = null
         if (session.words.size < 12) {
@@ -240,7 +241,7 @@ class SingleSigWallet(
     }
 
     /** The fee tiers for the Send screen. Blocks on the network for a few seconds at most, so call it off the main thread. The fixed tiers when the bridge fails, as when Rust cannot be reached. */
-    fun feeTiers(network: KeyNetwork = KeyNetwork.TEST): LiveFeeTiers =
+    fun feeTiers(network: KeyNetwork): LiveFeeTiers =
         try {
             LiveFeeTiers.of(fetchFeeTiers(network))
         } catch (e: Exception) {
@@ -251,7 +252,8 @@ class SingleSigWallet(
      * What the detail screen knows of [txid] beyond its row. Fewer than 12 words is the demo, as in [bindSession] and [prepare], and asks nothing.
      * Writes no wallet state, because the screen owns the answer, so a screen left mid-call leaves nothing behind. Blocks, so call it off the main thread.
      */
-    fun detail(session: OnboardingSession, txid: String, network: KeyNetwork = KeyNetwork.TEST): TxDetailLoad.Done {
+    fun detail(session: OnboardingSession, txid: String): TxDetailLoad.Done {
+        val network = session.network
         if (session.words.size < 12) return TxDetailLoad.RowOnly
         return try {
             fetchDetail(session.words, session.passphrase, network, session.addressType, txid)?.let { TxDetailLoad.Loaded(it) } ?: TxDetailLoad.NotFound
@@ -266,7 +268,8 @@ class SingleSigWallet(
      * of the core, never an estimate. The demo's quote is the demo mock's payment. Writes no wallet state, because Review owns the
      * answer, so a Review left mid-call leaves nothing behind. Blocks on the network, so call it off the main thread.
      */
-    fun quote(session: OnboardingSession, request: SendRequest, network: KeyNetwork = KeyNetwork.TEST): QuoteLoad.Done {
+    fun quote(session: OnboardingSession, request: SendRequest): QuoteLoad.Done {
+        val network = session.network
         if (unconfirmedSend != null) return QuoteLoad.Failed(EARLIER_UNSETTLED)
         if (session.words.size >= 12 && !(live && balanceKnown)) return QuoteLoad.Failed(BALANCE_UNKNOWN)
         if (session.words.size < 12) {
@@ -297,9 +300,9 @@ class SingleSigWallet(
         amountSats: Long,
         feeRateSatVb: Long,
         destination: String,
-        network: KeyNetwork = KeyNetwork.TEST,
         sendAll: Boolean = false,
     ): Boolean {
+        val network = session.network
         lastError = null
         heldSend = null
         val epoch = heldEpoch
@@ -414,7 +417,8 @@ class SingleSigWallet(
      * A chain that holds a cancel keeps its guard on [Repost.Out] too, because the payment it cancels may still confirm.
      * Blocks, so call it off the main thread.
      */
-    fun repost(session: OnboardingSession, network: KeyNetwork = KeyNetwork.TEST): Repost {
+    fun repost(session: OnboardingSession): Repost {
+        val network = session.network
         val pending = unconfirmedSend as? UnconfirmedSend ?: return Repost.Failed
         val outcome = session.repostUnconfirmedSend(pending) { hex -> postAgain(postHex, network, hex, pending.txid) } ?: Repost.Failed
         if (outcome == Repost.Out && !pending.holdsCancel) {
@@ -434,7 +438,8 @@ class SingleSigWallet(
      * when the core refused, and with no error when [dropHeldReplacement] ran while the core was signing. Blocks, so call it off the
      * main thread.
      */
-    fun prepareReplacement(session: OnboardingSession, kind: Replacement, feeRateSatVb: Long, network: KeyNetwork = KeyNetwork.TEST): Boolean {
+    fun prepareReplacement(session: OnboardingSession, kind: Replacement, feeRateSatVb: Long): Boolean {
+        val network = session.network
         lastError = null
         heldReplacement = null
         val epoch = replacementEpoch
