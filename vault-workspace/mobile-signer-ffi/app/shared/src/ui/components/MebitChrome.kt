@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -52,7 +51,7 @@ import com.mebit.app.rememberTestMode
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_settings
 import com.mebit.app.ui.theme.MbBody
-import com.mebit.app.ui.theme.MbBtcOrange
+import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbChip
 import com.mebit.app.ui.theme.MbEyebrow
 import com.mebit.app.ui.theme.MbGold
@@ -204,27 +203,14 @@ fun SettingsGear(onClick: () -> Unit, modifier: Modifier = Modifier) {
     }
 }
 
-/** Penpot's mark for a key on this phone: one phone outline, for [OptionCard]'s leading slot. */
-@Composable
-fun PhoneMark() = Box(Modifier.size(44.dp)) {
-    Box(Modifier.offset(15.dp, 10.dp).size(15.dp, 23.dp).border(2.dp, MbNavy, RoundedCornerShape(4.dp)))
-}
-
 /** "รวมทั้งหมด" in Light 13.5 MbBody, then [total] in SemiBold 14.5 MbNavyInk: the line under the title on Penpot 3.6 and 2.1. */
 @Composable
 fun TotalLine(total: String, tag: String) {
     // Penpot starts the total 82 dp after the label's start, past its 80 dp box.
-    Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp).testTag(tag)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp).testTag(tag)) {
         Text("รวมทั้งหมด", color = MbBody, fontSize = 13.5.sp, fontWeight = FontWeight.Light, modifier = Modifier.widthIn(min = 80.dp))
         Text(total, color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
     }
-}
-
-/** Penpot's mark for a hardware wallet: a device outline with an orange light. */
-@Composable
-fun HardwareMark() = Box(Modifier.size(44.dp)) {
-    Box(Modifier.offset(11.dp, 16.dp).size(22.dp, 14.dp).border(2.dp, MbNavy, RoundedCornerShape(3.dp)))
-    Box(Modifier.offset(27.dp, 21.dp).size(5.dp).background(MbBtcOrange, CircleShape))
 }
 
 @Composable
@@ -235,54 +221,67 @@ fun OptionCard(
     onClick: () -> Unit,
     chips: List<String> = emptyList(),
     chipsTrailing: String? = null,
+    chipsUnderIcon: Boolean = false,
     leading: @Composable (() -> Unit)? = null,
 ) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .shadow(4.dp, RoundedCornerShape(20.dp), clip = false)
             .clip(RoundedCornerShape(20.dp))
             .background(MbWhite)
+            .border(1.dp, MbBorder, RoundedCornerShape(20.dp))
             .clickable(onClick = onClick)
-            .padding(16.dp)
+            .padding(start = 18.dp, top = 14.dp, end = 16.dp, bottom = if (chips.isEmpty()) 16.dp else 18.dp)
             .testTag(tag),
-        verticalAlignment = Alignment.Top,
     ) {
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(MbChip),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (leading != null) leading()
-            else Text("·", color = MbNavy, fontSize = 20.sp)
-        }
-        Spacer(modifier = Modifier.width(14.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                color = MbNavyInk,
-                fontSize = 15.5.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = body,
-                color = MbBody,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Light,
-                lineHeight = 16.sp,
-            )
-            if (chips.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(14.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    chips.forEach { HwChip(it) }
-                    if (chipsTrailing != null) {
-                        Text(text = chipsTrailing, color = MbSlate, fontSize = 11.5.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 4.dp))
-                    }
+        Row(verticalAlignment = Alignment.Top) {
+            Box(
+                modifier = Modifier
+                    .padding(top = 1.dp)
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MbChip),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (leading != null) leading()
+                else Text("·", color = MbNavy, fontSize = 20.sp)
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    color = MbNavyInk,
+                    fontSize = 15.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(modifier = Modifier.height(1.dp))
+                Text(
+                    text = body,
+                    color = MbBody,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Light,
+                    lineHeight = 16.sp,
+                )
+                if (chips.isNotEmpty() && !chipsUnderIcon) {
+                    Spacer(modifier = Modifier.height(11.5.dp))
+                    OptionChips(chips, chipsTrailing)
                 }
             }
+        }
+        if (chips.isNotEmpty() && chipsUnderIcon) {
+            Spacer(modifier = Modifier.height(19.dp))
+            OptionChips(chips, chipsTrailing)
+        }
+    }
+}
+
+@Composable
+private fun OptionChips(chips: List<String>, trailing: String?) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        chips.forEach { HwChip(it) }
+        if (trailing != null) {
+            Text(text = trailing, color = MbSlate, fontSize = 11.5.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 4.dp))
         }
     }
 }
@@ -291,9 +290,11 @@ fun OptionCard(
 fun HwChip(label: String) {
     Box(
         modifier = Modifier
+            .height(24.dp)
             .clip(RoundedCornerShape(99.dp))
             .background(MbChip)
-            .padding(horizontal = 10.dp, vertical = 4.dp),
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
     ) {
         Text(
             text = label,

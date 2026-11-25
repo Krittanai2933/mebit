@@ -39,13 +39,13 @@ import com.mebit.app.data.StartNotice
 import com.mebit.app.data.THIS_PHONE_KEY_NAME
 import com.mebit.app.feature.keys.KeyLogo
 import com.mebit.app.resources.Res
-import com.mebit.app.resources.mebit_logo
+import com.mebit.app.resources.ic_hardware_wallet
+import com.mebit.app.resources.ic_phone
+import com.mebit.app.resources.mebit_logo_on_navy
 import com.mebit.app.ui.components.BackChip
 import com.mebit.app.ui.components.CardFan
-import com.mebit.app.ui.components.HardwareMark
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.OptionCard
-import com.mebit.app.ui.components.PhoneMark
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
 import com.mebit.app.ui.theme.MbGold
@@ -111,7 +111,7 @@ fun WelcomeScreen(
                 Spacer(modifier = Modifier.width(12.dp))
             }
             Image(
-                painter = painterResource(Res.drawable.mebit_logo),
+                painter = painterResource(Res.drawable.mebit_logo_on_navy),
                 contentDescription = "mebit",
                 modifier = Modifier.size(width = 99.5.dp, height = 26.dp),
             )
@@ -206,7 +206,7 @@ fun KeySourceScreen(
             title = "มือถือเครื่องนี้",
             body = "สร้างกุญแจใหม่ในชิปของเครื่อง สำรองด้วย 24 คำ",
             tag = "cta_phone",
-            leading = { PhoneMark() },
+            leading = { Image(painterResource(Res.drawable.ic_phone), contentDescription = null, modifier = Modifier.size(24.dp)) },
             onClick = {
                 session.generateThisDevice()
                 if (session.lastError == null && session.words.isNotEmpty()) onPhone()
@@ -215,11 +215,11 @@ fun KeySourceScreen(
         Spacer(modifier = Modifier.height(12.dp))
         OptionCard(
             title = "Hardware wallet",
-            body = "กุญแจอยู่บนอุปกรณ์ตลอด มือถือแค่ดูยอดและส่งให้อุปกรณ์เซ็น",
+            body = "กุญแจอยู่บนอุปกรณ์ มือถือแค่ดูยอดและส่งให้อุปกรณ์เซ็น",
             tag = "cta_hardware",
             chips = listOf("Jade", "Trezor Safe 7"),
             chipsTrailing = "เชื่อมผ่าน Bluetooth",
-            leading = { HardwareMark() },
+            leading = { Image(painterResource(Res.drawable.ic_hardware_wallet), contentDescription = null, modifier = Modifier.size(24.dp)) },
             onClick = onHardware,
         )
         session.lastError?.let {

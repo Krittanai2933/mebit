@@ -55,7 +55,7 @@ import com.mebit.app.rememberCopier
 import com.mebit.app.rememberSharer
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_wallet_row
-import com.mebit.app.resources.mebit_logo
+import com.mebit.app.resources.mebit_logo_on_navy
 import com.mebit.app.ui.components.DebugLink
 import com.mebit.app.ui.theme.MbBtcOrange
 import com.mebit.app.ui.theme.MbChip
@@ -186,7 +186,7 @@ private fun Slip(
     ) {
         Column(modifier = Modifier.fillMaxWidth().background(SlipNavy).padding(horizontal = 24.dp).padding(top = 20.dp, bottom = 16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Image(painterResource(Res.drawable.mebit_logo), contentDescription = "mebit", modifier = Modifier.size(width = 92.dp, height = 24.dp))
+                Image(painterResource(Res.drawable.mebit_logo_on_navy), contentDescription = "mebit", modifier = Modifier.size(width = 92.dp, height = 24.dp))
                 Spacer(modifier = Modifier.weight(1f))
                 Text("สลิปส่ง Bitcoin", color = Color(0xFFDCEAF4), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }

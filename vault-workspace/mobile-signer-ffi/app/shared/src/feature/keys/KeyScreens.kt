@@ -46,7 +46,7 @@ import com.mebit.app.resources.ic_key
 import com.mebit.app.resources.ic_mebit_mark
 import com.mebit.app.resources.ic_qr
 import com.mebit.app.resources.ic_trezor_mark
-import com.mebit.app.resources.mebit_logo_dark
+import com.mebit.app.resources.mebit_logo_on_light
 import com.mebit.app.ui.components.MenuAction
 import com.mebit.app.ui.components.TotalLine
 import com.mebit.app.ui.theme.MbAmberInk
@@ -101,7 +101,6 @@ private const val KEY_NAME_MAX = 40
 /** The grey Penpot 2.4.1 gives the "ไม่ตรง" link, which the theme has no token for. */
 private val MismatchInk = Color(0xFF545454)
 
-/** Penpot 2.4.1's name suggestion: 24 dp high, where the shared [com.mebit.app.ui.components.HwChip] is 28. */
 @Composable
 private fun NameChip(label: String, onPick: () -> Unit) {
     Box(
@@ -154,6 +153,7 @@ fun AddKeyScreen(
             body = "อุปกรณ์แยกที่เก็บกุญแจไว้ออฟไลน์",
             tag = "cta_add_hardware",
             chips = listOf("Jade", "Trezor Safe 7"),
+            chipsUnderIcon = true,
             leading = { Image(painterResource(Res.drawable.ic_key), contentDescription = null, modifier = Modifier.size(24.dp)) },
             onClick = onHardware,
         )
@@ -398,11 +398,11 @@ fun KeyringScreen(
         tag = "screen_keys/keyring",
         // Penpot 2.1's header is 3.6's: the logo, the gear over the +, both ending 29 dp from the screen's right edge, and the total line.
         headerContent = {
-            Image(painterResource(Res.drawable.mebit_logo_dark), contentDescription = "mebit", modifier = Modifier.size(width = 99.5.dp, height = 26.dp))
+            Image(painterResource(Res.drawable.mebit_logo_on_light), contentDescription = "mebit", modifier = Modifier.size(width = 99.5.dp, height = 26.dp))
         },
         trailing = { SettingsGear(onSettings, Modifier.padding(end = 9.dp)) },
     ) {
-        Spacer(modifier = Modifier.height(3.dp))
+        Spacer(modifier = Modifier.height(15.dp))
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text(MovieRoute.Keyring.titleTh, color = MbNavyInk, fontSize = 28.sp, fontWeight = FontWeight.Medium, lineHeight = 34.sp, modifier = Modifier.weight(1f).testTag("title"))
             PlusButton("cta_keyring_add", "เพิ่มกุญแจ", onAddKey, Modifier.padding(end = 9.dp))
@@ -412,7 +412,7 @@ fun KeyringScreen(
         } else {
             TotalLine("${keys.size} กุญแจ", "keyring_total")
         }
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(25.dp))
         if (deleteFailed) {
             Text("ลบกุญแจไม่สำเร็จ ลองอีกครั้ง", color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.testTag("delete_failed"))
             Spacer(modifier = Modifier.height(12.dp))

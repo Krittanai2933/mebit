@@ -65,8 +65,8 @@ import com.mebit.app.rememberCopier
 import com.mebit.app.rememberSharer
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_warning
-import com.mebit.app.resources.mebit_logo
-import com.mebit.app.resources.mebit_logo_dark
+import com.mebit.app.resources.mebit_logo_on_navy
+import com.mebit.app.resources.mebit_logo_on_light
 import com.mebit.app.ui.components.BottomActions
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
@@ -377,7 +377,7 @@ private fun ReceiveAddress(address: String) {
 private fun ReceiveCard(address: String, modifier: Modifier = Modifier) {
     Column(modifier = modifier.clip(RoundedCornerShape(24.dp)).background(MbWhite), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(modifier = Modifier.fillMaxWidth().height(64.dp).background(SlipNavy), contentAlignment = Alignment.Center) {
-            Image(painterResource(Res.drawable.mebit_logo), contentDescription = null, modifier = Modifier.size(width = 129.dp, height = 34.dp))
+            Image(painterResource(Res.drawable.mebit_logo_on_navy), contentDescription = null, modifier = Modifier.size(width = 129.dp, height = 34.dp))
         }
         Spacer(modifier = Modifier.height(12.dp))
         Row(
@@ -417,7 +417,7 @@ private fun ReceiveCard(address: String, modifier: Modifier = Modifier) {
         Spacer(modifier = Modifier.height(18.dp))
         Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(MbNavy))
         Row(modifier = Modifier.fillMaxWidth().height(54.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-            Image(painterResource(Res.drawable.mebit_logo_dark), contentDescription = null, modifier = Modifier.size(width = 69.dp, height = 18.dp))
+            Image(painterResource(Res.drawable.mebit_logo_on_light), contentDescription = null, modifier = Modifier.size(width = 69.dp, height = 18.dp))
             Spacer(modifier = Modifier.width(10.dp))
             Text("Bitcoin network only | รับเฉพาะเครือข่าย Bitcoin", color = SlipMuted, fontSize = 11.5.sp, fontWeight = FontWeight.Medium, lineHeight = 15.5.sp)
         }
