@@ -9,7 +9,6 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use bitcoin::Network;
 use bitcoin::bip32::{DerivationPath, Xpub};
 use miniscript::Descriptor;
 use tokio::sync::{mpsc, oneshot};
@@ -261,8 +260,7 @@ pub fn jade_wallet_registration(
 /// What a Jade registers for `wallet`: none for a one-key wallet, which a Jade signs as it is.
 fn jade_registration(wallet: &Described) -> Result<Option<WalletRegistration>, JadeError> {
     match wallet.receive() {
-        // Testnet4 only: `Described` reads tpubs alone.
-        Descriptor::Wsh(_) => WalletRegistration::of(wallet.receive(), Network::Testnet4).map(Some),
+        Descriptor::Wsh(_) => WalletRegistration::of(wallet.receive(), wallet.network).map(Some),
         _ => Ok(None),
     }
 }
@@ -368,7 +366,7 @@ impl WalletLink {
         })
     }
 
-    /// Connects to the wallet, pairs if it must, and checks the wallet is what it says.
+    /// Connects to the wallet on `network`, pairs if it must, and checks the wallet is what it says.
     /// Cancelling while it runs leaves nothing that closing the link cannot end: measured with a
     /// Jade, unit-tested with a fake central for a Safe 7. A Jade that fails disconnects in the
     /// background, a Safe 7 before this returns.
@@ -382,11 +380,12 @@ impl WalletLink {
         &self,
         codes: Arc<dyn PairingCodes>,
         pairing: Option<Vec<u8>>,
+        network: KeyNetwork,
     ) -> Result<Option<Vec<u8>>, BleError> {
         platform::ble_ready()?;
         self.attach(async {
             platform::forget_seen_devices().await?;
-            backend::connect(&self.wallet, codes, pairing).await
+            backend::connect(&self.wallet, codes, pairing, network.bitcoin()).await
         })
         .await
     }
@@ -777,6 +776,7 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
+    use bitcoin::Network;
     use bitcoin::Psbt;
     use bitcoin::bip32::{Fingerprint, Xpriv};
     use bitcoin::secp256k1::Secp256k1;
@@ -1604,7 +1604,7 @@ mod tests {
     }
 
     // The export names what a Jade registers: nothing for a one-key wallet, and for a 2-of-3 its name, m and signers in
-    // the Jade's order, by fingerprint. Mainnet and a wallet of eight signers are refused.
+    // the Jade's order, by fingerprint. A wallet of the other network and a wallet of eight signers are refused.
     #[test]
     fn the_registration_export_names_what_a_jade_registers() {
         for &t in AddressType::ALL.iter() {
@@ -1637,6 +1637,25 @@ mod tests {
             jade_wallet_registration(multisig(2, &[1, 2, 3, 4, 5, 6, 7, 8]), KeyNetwork::Test),
             Err(MobileSignerError::InvalidPsbtJson(text)) if text.contains("seven")
         ));
+    }
+
+    // A mainnet wallet registers on the Jade as a mainnet wallet: the network is the wallet's, not a constant.
+    #[test]
+    fn a_mainnet_wallet_is_registered_as_a_mainnet_wallet() {
+        let wallet = crate::script::tests::main_multisig(2, &[1, 2, 3]);
+        let named = jade_wallet_registration(wallet.clone(), KeyNetwork::Main)
+            .unwrap()
+            .unwrap();
+        assert_eq!((named.threshold, named.signers.len()), (2, 3));
+        assert!(named.name.starts_with("mebit2of3-"), "{}", named.name);
+        let refused = jade_wallet_registration(wallet, KeyNetwork::Test);
+        assert!(matches!(
+            refused,
+            Err(MobileSignerError::InvalidPsbtJson(text)) if text.contains("mainnet keys")
+        ));
+        let parsed = Described::parse(&crate::script::tests::main_multisig(2, &[1, 2, 3])).unwrap();
+        let registration = jade_registration(&parsed).unwrap().unwrap();
+        assert_eq!(registration.threshold(), 2);
     }
 
     // The vendor clients check what a device signed, and the answer is read again here: one without the device's

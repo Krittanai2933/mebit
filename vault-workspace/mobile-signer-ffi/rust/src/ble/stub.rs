@@ -5,6 +5,8 @@
 
 use std::sync::Arc;
 
+use bitcoin::Network;
+
 use super::{BleError, FoundWallet, PairingCodes, Running, WalletKind, platform};
 
 // shortcut: no Linux backend. Build one if a Linux app appears.
@@ -16,6 +18,7 @@ pub(super) async fn connect(
     _: &FoundWallet,
     _: Arc<dyn PairingCodes>,
     _: Option<Vec<u8>>,
+    _: Network,
 ) -> Result<(Running, Option<Vec<u8>>), BleError> {
     Err(platform::no_backend())
 }
@@ -45,7 +48,7 @@ mod tests {
             name: "Safe 7".into(),
         };
         assert!(matches!(
-            connect(&wallet, Arc::new(NoCodes), None).await,
+            connect(&wallet, Arc::new(NoCodes), None, Network::Testnet4).await,
             Err(BleError::Unsupported(_))
         ));
     }

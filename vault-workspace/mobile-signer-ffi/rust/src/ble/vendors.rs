@@ -16,9 +16,6 @@ use super::{
     WalletInfo, WalletKind, derivation_path_string, parse_derivation_path, platform,
 };
 
-// shortcut: testnet only. Connect pins the Jade and the Safe 7 to testnet4, the same
-// network as `KeyNetwork::Test`. A mainnet wallet needs a network argument on connect.
-const NETWORK: Network = Network::Testnet4;
 // shortcut: one window for every scan, untuned on phones (Android scans in its low-power mode).
 // Tune it on hardware. Make it a parameter only if a screen needs to choose.
 const SCAN_WINDOW: Duration = Duration::from_secs(4);
@@ -64,6 +61,7 @@ pub(super) async fn connect(
     wallet: &FoundWallet,
     codes: Arc<dyn PairingCodes>,
     pairing: Option<Vec<u8>>,
+    network: Network,
 ) -> Result<(Running, Option<Vec<u8>>), BleError> {
     // Both crates match by suffix, so an empty selector would pick any wallet in range.
     let selector = match wallet.kind {
@@ -77,7 +75,7 @@ pub(super) async fn connect(
     }
     Ok(match wallet.kind {
         WalletKind::Jade => (
-            Running::spawn(JadeBle::connect(NETWORK, Some(&wallet.name), SCAN_WINDOW).await?),
+            Running::spawn(JadeBle::connect(network, Some(&wallet.name), SCAN_WINDOW).await?),
             None,
         ),
         WalletKind::TrezorSafe7 => {
@@ -89,7 +87,8 @@ pub(super) async fn connect(
             // connect, so a Safe 7 asks for its code once per phone: the user's decision of 12 Nov 2026,
             // which reverses docs/04 item 20.
             let connected =
-                TrezorBle::connect(trezor_options(wallet, pairing.as_deref()), &ask).await?;
+                TrezorBle::connect(trezor_options(wallet, pairing.as_deref(), network), &ask)
+                    .await?;
             (
                 Running::spawn(connected.device),
                 connected
@@ -100,9 +99,13 @@ pub(super) async fn connect(
     })
 }
 
-fn trezor_options(wallet: &FoundWallet, pairing: Option<&[u8]>) -> ConnectOptions {
+fn trezor_options(
+    wallet: &FoundWallet,
+    pairing: Option<&[u8]>,
+    network: Network,
+) -> ConnectOptions {
     ConnectOptions {
-        network: NETWORK,
+        network,
         host_name: HOST_NAME.into(),
         app_name: APP_NAME.into(),
         passphrase: Default::default(),
@@ -356,7 +359,8 @@ mod tests {
             id: "id-from-a-scan".into(),
             name: "Trezor Safe 7 (6T5)".into(),
         };
-        let options = trezor_options(&wallet, None);
+        let options = trezor_options(&wallet, None, Network::Testnet4);
+        assert_eq!(options.network, Network::Testnet4);
         assert_eq!(options.device.as_deref(), Some("id-from-a-scan"));
         assert!(options.device_is_hint);
         assert!(options.credential.is_none());
@@ -375,17 +379,49 @@ mod tests {
         };
         let mut kept = vec![1u8];
         kept.extend(0..84u8);
-        let offered = trezor_options(&wallet, Some(&kept)).credential;
+        let offered = trezor_options(&wallet, Some(&kept), Network::Testnet4).credential;
         assert_eq!(offered.map(|c| c.to_bytes().to_vec()), Some(kept.clone()));
         for unreadable in [&[][..], &kept[..65], &[2u8; 85][..]] {
             assert!(
-                trezor_options(&wallet, Some(unreadable))
+                trezor_options(&wallet, Some(unreadable), Network::Testnet4)
                     .credential
                     .is_none(),
                 "{} bytes",
                 unreadable.len()
             );
         }
+    }
+
+    // The network is the caller's: the Safe 7 is told mainnet or testnet4 as asked.
+    #[test]
+    fn a_safe_7_connect_carries_the_network_it_was_asked_for() {
+        let wallet = FoundWallet {
+            kind: WalletKind::TrezorSafe7,
+            id: "id".into(),
+            name: "Trezor Safe 7 (6T5)".into(),
+        };
+        for network in [Network::Bitcoin, Network::Testnet4] {
+            assert_eq!(trezor_options(&wallet, None, network).network, network);
+        }
+    }
+
+    // A Jade's first unlock pins its wallet to main or test for good, and the app does not try to undo it.
+    #[test]
+    fn a_jade_pinned_to_testnet_asked_for_mainnet_is_refused_and_says_why() {
+        let pinned = jade::VersionInfo {
+            firmware: "1.0.41".into(),
+            board: "JADE_V2C".into(),
+            config: "BLE".into(),
+            state: jade::JadeState::Locked,
+            networks: "TEST".into(),
+        };
+        assert!(pinned.check_usable(Network::Testnet4).is_ok());
+        let error = pinned.check_usable(Network::Bitcoin).unwrap_err();
+        let refused = BleError::from(JadeBleError::Jade(error));
+        assert!(
+            matches!(&refused, BleError::Refused(text) if text.contains("pinned to test networks")),
+            "{refused:?}"
+        );
     }
 
     #[test]
@@ -572,7 +608,7 @@ mod tests {
             wallet(WalletKind::Jade, "id", ""),
             wallet(WalletKind::TrezorSafe7, "", "Safe 7"),
         ] {
-            let refused = connect(&empty, Arc::new(NoCodes), None).await;
+            let refused = connect(&empty, Arc::new(NoCodes), None, Network::Bitcoin).await;
             assert!(
                 matches!(&refused, Err(BleError::NotFound(text)) if text.contains("FoundWallet needs")),
                 "{empty:?}"
