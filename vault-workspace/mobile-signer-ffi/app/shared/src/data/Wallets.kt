@@ -374,7 +374,7 @@ class Wallets internal constructor(
      * Called when the app returns and whenever the gate reads the phone's lock again ([lockPresent]). While the lock is gone, every wallet
      * with a saved copy owes a save, because removing the lock deletes or invalidates the key that copy is sealed to, and nothing is
      * written: no key can be made without the lock. With the lock, each session repeats its own failed save, after a probe that finds a
-     * copy without its key marks every saved wallet too, for a lock removed and set again while the app was away. True while a save is
+     * copy without a working key marks every saved wallet too, for a lock removed and set again while the app was away. True while a save is
      * still owed, so the caller tries again shortly.
      */
     fun lockRead(lockPresent: Boolean): Boolean {

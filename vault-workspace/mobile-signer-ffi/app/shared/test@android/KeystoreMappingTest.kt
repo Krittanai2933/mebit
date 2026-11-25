@@ -5,10 +5,12 @@ import android.security.keystore.KeyPermanentlyInvalidatedException
 import com.mebit.app.data.ANY_VERSION
 import java.security.InvalidAlgorithmParameterException
 import java.security.InvalidKeyException
+import java.security.KeyStoreException
 import java.security.KeyPairGenerator
 import java.nio.ByteBuffer
 import java.io.FileNotFoundException
 import java.security.ProviderException
+import java.security.UnrecoverableKeyException
 import java.security.spec.MGF1ParameterSpec
 import javax.crypto.AEADBadTagException
 import javax.crypto.BadPaddingException
@@ -32,7 +34,7 @@ class KeystoreMappingTest {
     @Test
     fun aWalletFileWithItsKeyIsPresentWithOrWithoutAScreenLock() {
         listOf(true, false).forEach { secure ->
-            assertEquals("Present", name(androidProbeOutcome(fileExists = true, aliasPresent = true, deviceSecure = secure)), "secure $secure")
+            assertEquals("Present", name(androidProbeOutcome(fileExists = true, aliasPresent = true, privateHalfFailure = null, deviceSecure = secure)), "secure $secure")
         }
     }
 
@@ -40,22 +42,66 @@ class KeystoreMappingTest {
     fun aWalletFileWithoutItsKeyIsKeyGoneEvenWithNoScreenLock() {
         // Measured: removing the PIN deletes the alias and keeps the file. That phone must reach the recovery screen, not Welcome.
         listOf(true, false).forEach { secure ->
-            assertEquals("KeyGone", name(androidProbeOutcome(fileExists = true, aliasPresent = false, deviceSecure = secure)), "secure $secure")
+            assertEquals("KeyGone", name(androidProbeOutcome(fileExists = true, aliasPresent = false, privateHalfFailure = null, deviceSecure = secure)), "secure $secure")
         }
     }
 
     @Test
     fun aKeystoreThatThrowsBesideAWalletFileIsTryLater() {
         listOf(true, false).forEach { secure ->
-            assertEquals("Unavailable(TryLater)", name(androidProbeOutcome(fileExists = true, aliasPresent = null, deviceSecure = secure)), "secure $secure")
+            assertEquals("Unavailable(TryLater)", name(androidProbeOutcome(fileExists = true, aliasPresent = null, privateHalfFailure = null, deviceSecure = secure)), "secure $secure")
         }
     }
 
     @Test
     fun noWalletFileIsEmptyWithAScreenLockAndNoScreenLockWithout() {
         listOf(true, false, null).forEach { alias ->
-            assertEquals("Empty", name(androidProbeOutcome(fileExists = false, aliasPresent = alias, deviceSecure = true)), "alias $alias")
-            assertEquals("Unavailable(NoScreenLock)", name(androidProbeOutcome(fileExists = false, aliasPresent = alias, deviceSecure = false)), "alias $alias")
+            assertEquals("Empty", name(androidProbeOutcome(fileExists = false, aliasPresent = alias, privateHalfFailure = null, deviceSecure = true)), "alias $alias")
+            assertEquals("Unavailable(NoScreenLock)", name(androidProbeOutcome(fileExists = false, aliasPresent = alias, privateHalfFailure = null, deviceSecure = false)), "alias $alias")
+        }
+    }
+
+    // Measured on the API 30 emulator: removing the PIN keeps the alias and its blobs, and getKey then throws API 30's invalidation shape.
+    // The phone must reach the recovery screen at a cold start, and a return must save every wallet in memory again.
+    @Test
+    fun aWalletFileBesideAnInvalidatedKeyIsKeyGoneAndAKeyThatFailsOtherwiseIsPresent() {
+        listOf(true, false).forEach { secure ->
+            assertEquals("KeyGone", name(androidProbeOutcome(fileExists = true, aliasPresent = true, privateHalfFailure = api30Invalidated(), deviceSecure = secure)), "secure $secure")
+            assertEquals("KeyGone", name(androidProbeOutcome(fileExists = true, aliasPresent = true, privateHalfFailure = KeyPermanentlyInvalidatedException(), deviceSecure = secure)), "secure $secure")
+            assertEquals("Present", name(androidProbeOutcome(fileExists = true, aliasPresent = true, privateHalfFailure = api30Locked(), deviceSecure = secure)), "a locked phone, secure $secure")
+        }
+    }
+
+    @Test
+    fun onlyAnInvalidationIsAnInvalidatedKey() {
+        val invalidated = listOf(
+            "KeyPermanentlyInvalidatedException" to KeyPermanentlyInvalidatedException(),
+            "an invalidation as a cause" to InvalidKeyException("init", KeyPermanentlyInvalidatedException()),
+            "API 30's getKey" to api30Invalidated(),
+            "API 30's getKey as a cause" to IllegalStateException(api30Invalidated()),
+        )
+        val other = listOf(
+            "API 30's getKey on a locked phone or any other Keystore error" to api30Locked(),
+            "the invalidation message with a cause" to UnrecoverableKeyException(API30_MESSAGE).apply { initCause(KeyStoreException("4")) },
+            "the message in other case" to UnrecoverableKeyException(API30_MESSAGE.lowercase()),
+            "the message with a full stop" to UnrecoverableKeyException("$API30_MESSAGE."),
+            "an UnrecoverableKeyException with no message" to UnrecoverableKeyException(),
+            "the message on another type" to InvalidKeyException(API30_MESSAGE),
+            "a locked phone at init (InvalidKeyException <- KeyStoreException)" to InvalidKeyException(KeyStoreException("2")),
+            "ProviderException" to ProviderException(),
+            "IllegalStateException" to IllegalStateException(),
+            "NullPointerException" to NullPointerException(),
+        )
+        invalidated.forEach { (case, t) -> assertTrue(androidKeyInvalidated(t), case) }
+        other.forEach { (case, t) -> assertFalse(androidKeyInvalidated(t), case) }
+        // The read and the write decide by the same rule.
+        invalidated.forEach { (case, t) ->
+            assertEquals("KeyGone", name(androidInitOutcome(t)), case)
+            assertTrue(androidKeyMustBeRemade(certificatePresent = true, privateHalfFailure = t), case)
+        }
+        other.forEach { (case, t) ->
+            assertEquals("Unavailable(TryLater)", name(androidInitOutcome(t)), case)
+            assertFalse(androidKeyMustBeRemade(certificatePresent = true, privateHalfFailure = t), case)
         }
     }
 
@@ -339,6 +385,14 @@ class KeystoreMappingTest {
         assertFalse(androidWriteLanded(sealed) { throw FileNotFoundException("wallet.2") }, "no file, after a first write whose rename failed")
     }
 }
+
+private const val API30_MESSAGE = "User changed or deleted their auth credentials"
+
+/** What API 30's `AndroidKeyStoreSpi.engineGetKey` throws for an invalidated key: the invalidation's message and no cause. */
+private fun api30Invalidated() = UnrecoverableKeyException(API30_MESSAGE)
+
+/** What API 30's getKey throws for any other Keystore error, as on a locked phone: its own message and the Keystore's error as the cause. */
+private fun api30Locked() = UnrecoverableKeyException("Failed to obtain information about key").apply { initCause(KeyStoreException("LOCKED")) }
 
 /** A version after one advance, distinct from [ANY_VERSION]. */
 private val LATER_VERSION = CopyCounter().advance()
