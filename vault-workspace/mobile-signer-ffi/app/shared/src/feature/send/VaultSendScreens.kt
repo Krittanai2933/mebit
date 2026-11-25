@@ -425,7 +425,7 @@ private fun KeyRows(send: VaultSend, signers: List<KeySigner>, keyring: List<Sav
             // Penpot 5.2 puts the 40 dp tile 13 dp under the divider above it and 14 dp over the next one.
             Row(modifier = Modifier.fillMaxWidth().padding(top = 13.dp, bottom = 14.dp).testTag("m2_key_${signer.index}"), verticalAlignment = Alignment.CenterVertically) {
                 // Penpot 5.2's tile is 40 dp, so the name starts where the divider does.
-                Box(modifier = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(MbIconWash), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(MbChip), contentAlignment = Alignment.Center) {
                     if (source != null) {
                         KeyLogo(source, 22.dp)
                     } else {

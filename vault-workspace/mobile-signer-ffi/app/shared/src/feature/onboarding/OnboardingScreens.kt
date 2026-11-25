@@ -113,12 +113,12 @@ fun WelcomeScreen(
             Image(
                 painter = painterResource(Res.drawable.mebit_logo),
                 contentDescription = "mebit",
-                modifier = Modifier.size(width = 122.dp, height = 32.dp),
+                modifier = Modifier.size(width = 99.5.dp, height = 26.dp),
             )
         }
         // The fan keeps its design size, stays top-aligned and bleeds off the right edge; on a short screen it gives up its shadow tail first.
         Box(
-            modifier = Modifier.weight(1f).fillMaxWidth().padding(top = 10.dp).clipToBounds(),
+            modifier = Modifier.weight(1f).fillMaxWidth().padding(top = 16.dp).clipToBounds(),
             contentAlignment = Alignment.TopStart,
         ) {
             CardFan(Modifier.wrapContentSize(Alignment.TopStart, unbounded = true))
@@ -299,7 +299,7 @@ private fun KeyCard(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).background(MbIconWash),
+            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).background(MbChip),
             contentAlignment = Alignment.Center,
         ) {
             KeyLogo(KeySourceLabel.ThisDevice, 24.dp)

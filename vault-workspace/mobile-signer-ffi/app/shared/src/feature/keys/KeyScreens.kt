@@ -42,7 +42,9 @@ import com.mebit.app.data.keyLine
 import com.mebit.app.data.keyringOrder
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.ic_jade_mark
+import com.mebit.app.resources.ic_key
 import com.mebit.app.resources.ic_mebit_mark
+import com.mebit.app.resources.ic_qr
 import com.mebit.app.resources.ic_trezor_mark
 import com.mebit.app.resources.mebit_logo_dark
 import com.mebit.app.ui.components.MenuAction
@@ -85,13 +87,10 @@ import com.mebit.app.feature.send.removeSheetTitle
 import com.mebit.app.navigation.MovieRoute
 import com.mebit.app.ui.components.CardDeleteMenu
 import com.mebit.app.ui.components.DeleteItem
-import com.mebit.app.ui.components.HardwareMark
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.OptionCard
-import com.mebit.app.ui.components.PhoneMark
 import com.mebit.app.ui.components.PlusButton
 import com.mebit.app.ui.components.SettingsGear
-import com.mebit.app.ui.components.TwoPhonesMark
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
 import org.jetbrains.compose.resources.painterResource
@@ -138,7 +137,7 @@ fun AddKeyScreen(
             title = "mebit บนเครื่องนี้",
             body = "สร้าง seed ใหม่เก็บใน secure enclave ของเครื่อง",
             tag = "cta_add_this_device",
-            leading = { PhoneMark() },
+            leading = { KeyLogo(KeySourceLabel.ThisDevice, 24.dp) },
             onClick = onThisDevice,
         )
         Spacer(modifier = Modifier.height(11.dp))
@@ -146,7 +145,7 @@ fun AddKeyScreen(
             title = "mebit บนเครื่องอื่น",
             body = "จับคู่ผ่าน Bluetooth แล้วดึง xpub จากเครื่องนั้นมา",
             tag = "cta_add_mebit_other",
-            leading = { TwoPhonesMark() },
+            leading = { Image(painterResource(Res.drawable.ic_qr), contentDescription = null, modifier = Modifier.size(24.dp)) },
             onClick = onMebitOther,
         )
         Spacer(modifier = Modifier.height(11.dp))
@@ -155,7 +154,7 @@ fun AddKeyScreen(
             body = "อุปกรณ์แยกที่เก็บกุญแจไว้ออฟไลน์",
             tag = "cta_add_hardware",
             chips = listOf("Jade", "Trezor Safe 7"),
-            leading = { HardwareMark() },
+            leading = { Image(painterResource(Res.drawable.ic_key), contentDescription = null, modifier = Modifier.size(24.dp)) },
             onClick = onHardware,
         )
         Spacer(modifier = Modifier.height(13.dp))
@@ -399,7 +398,7 @@ fun KeyringScreen(
         tag = "screen_keys/keyring",
         // Penpot 2.1's header is 3.6's: the logo, the gear over the +, both ending 29 dp from the screen's right edge, and the total line.
         headerContent = {
-            Image(painterResource(Res.drawable.mebit_logo_dark), contentDescription = "mebit", modifier = Modifier.size(width = 74.dp, height = 19.dp))
+            Image(painterResource(Res.drawable.mebit_logo_dark), contentDescription = "mebit", modifier = Modifier.size(width = 99.5.dp, height = 26.dp))
         },
         trailing = { SettingsGear(onSettings, Modifier.padding(end = 9.dp)) },
     ) {
@@ -429,18 +428,14 @@ fun KeyringScreen(
     }
 }
 
-/**
- * The mark in a key's tile, [height] tall, as Penpot draws them since 2026-11-23: the mebit mark for a key on a phone, this one or another,
- * else the Jade or Trezor logo.
- */
 @Composable
 internal fun KeyLogo(source: KeySourceLabel, height: Dp) {
-    val (logo, widthPerHeight) = when (source) {
-        KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> Res.drawable.ic_mebit_mark to 24f / 23.6f
-        KeySourceLabel.Jade -> Res.drawable.ic_jade_mark to 1f
-        KeySourceLabel.TrezorSafe7 -> Res.drawable.ic_trezor_mark to 17f / 24.355f
+    val (logo, widthPerHeight, scale) = when (source) {
+        KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> Triple(Res.drawable.ic_mebit_mark, 1f, 23.56f / 24f)
+        KeySourceLabel.Jade -> Triple(Res.drawable.ic_jade_mark, 1f, 1f)
+        KeySourceLabel.TrezorSafe7 -> Triple(Res.drawable.ic_trezor_mark, 17f / 24.355f, 1f)
     }
-    Image(painterResource(logo), contentDescription = null, modifier = Modifier.height(height).aspectRatio(widthPerHeight))
+    Image(painterResource(logo), contentDescription = null, modifier = Modifier.height(height * scale).aspectRatio(widthPerHeight))
 }
 
 /**
@@ -460,7 +455,7 @@ private fun KeyCard(key: SavedKey, item: DeleteItem, onBackup: (() -> Unit)?, on
             .border(1.dp, MbBorder, shape),
     ) {
         Box(Modifier.matchParentSize().semantics(mergeDescendants = true) {}.testTag("key_${key.id}")) {
-            Box(Modifier.offset(x = 16.dp, y = 12.dp).size(38.dp).clip(RoundedCornerShape(12.dp)).background(MbIconWash), contentAlignment = Alignment.Center) {
+            Box(Modifier.offset(x = 16.dp, y = 12.dp).size(38.dp).clip(RoundedCornerShape(12.dp)).background(MbChip), contentAlignment = Alignment.Center) {
                 KeyLogo(key.source, 21.dp)
             }
             // 132 dp at the end is the ⋯, the pill and their gaps, so the texts are 164 dp wide on the board's 402 dp screen and end in … before the pill on a narrower one.
