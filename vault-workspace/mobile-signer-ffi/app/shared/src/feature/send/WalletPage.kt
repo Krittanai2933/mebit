@@ -190,25 +190,23 @@ internal fun WalletHero(
     }
 }
 
-/**
- * 3.7's close X: the 18 dp X with its right edge at the content's and its top 6 dp below the logo's, read as one button "ปิด", in a 48 dp
- * target centred on it.
- */
 @Composable
 private fun BoxScope.CloseButton(onClose: () -> Unit) {
     SystemBack(onClose)
+    val target = 48.dp
+    val icon = 18.dp
     Box(
         modifier = Modifier
             .align(Alignment.TopEnd)
-            // requiredSize centres the 48 dp target on the 26 dp header, 11 dp above its top, so this puts its centre on the X's.
-            .offset(x = 15.dp, y = 2.dp)
-            .requiredSize(48.dp)
+            // requiredSize centres the 48 dp target on the 26 dp header.
+            .offset(x = (target - icon) / 2)
+            .requiredSize(target)
             .clickable(role = Role.Button, onClick = onClose)
             .semantics { contentDescription = "ปิด" }
             .testTag("cta_vault_close"),
         contentAlignment = Alignment.Center,
     ) {
-        Image(painterResource(Res.drawable.ic_close), contentDescription = null, modifier = Modifier.size(18.dp))
+        Image(painterResource(Res.drawable.ic_close), contentDescription = null, modifier = Modifier.size(icon))
     }
 }
 
