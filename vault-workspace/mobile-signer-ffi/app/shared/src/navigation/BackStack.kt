@@ -16,6 +16,9 @@ internal fun stackAfterOpen(stack: List<Stop>, stop: Stop): List<Stop> = when {
     else -> stack + stop
 }
 
+/** Pure. No tab bar on the screens above Welcome, so Settings opened from Welcome (Penpot 7.1.3) has none. A tab is always the stack's only entry. */
+internal fun barShown(bottom: MovieRoute): Boolean = bottom != MovieRoute.Welcome
+
 /** The two sides of each รับ / ส่ง switch: a phone, hardware or several-key wallet's Receive (or its backup gate) and Send. */
 private val SwitchSides = listOf(
     setOf(MovieRoute.S2ReceiveBackupGate, MovieRoute.S3Receive, MovieRoute.S4Send),

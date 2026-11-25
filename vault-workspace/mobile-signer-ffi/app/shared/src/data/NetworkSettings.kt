@@ -58,12 +58,16 @@ fun networkTap(current: KeyNetwork, tapped: KeyNetwork, refused: Boolean): Netwo
     else -> NetworkTap.Switch
 }
 
+/** What keeps words only in this process's memory, as far as a switch cares: the phone cannot hold a wallet, or some other cause. */
+enum class SwitchHold { Clear, PhoneCannotHold, Unsaved }
+
 /**
  * Pure. Why the network cannot change now, or null. A switch drops every wallet's words from memory, so it waits while some are
- * only in memory ([wordsOnlyInMemory]: the phone could not keep them) or the book's last save failed. Awaiting design review, no board.
+ * only in memory or a wallet's last save failed ([hold], [Wallets.switchHold]), or the book's last save failed. Only a phone that
+ * cannot hold a wallet is told to set a screen lock. Awaiting design review, no board.
  */
-internal fun networkRefusal(wordsOnlyInMemory: Boolean, book: VaultsHealth): String? = when {
-    wordsOnlyInMemory -> "เครื่องนี้ยังบันทึกกระเป๋าไม่ได้ ตั้งรหัสล็อกหน้าจอก่อน จึงจะเปลี่ยนเครือข่ายได้"
-    book == VaultsHealth.SaveFailed -> "บันทึก Wallet และกุญแจล่าสุดไม่สำเร็จ ปิดแล้วเปิดแอปใหม่ก่อนเปลี่ยนเครือข่าย"
+internal fun networkRefusal(hold: SwitchHold, book: VaultsHealth): String? = when {
+    hold == SwitchHold.PhoneCannotHold -> "เครื่องนี้ยังบันทึกกระเป๋าไม่ได้ ตั้งรหัสล็อกหน้าจอก่อน จึงจะเปลี่ยนเครือข่ายได้"
+    hold == SwitchHold.Unsaved || book == VaultsHealth.SaveFailed -> "บันทึก Wallet และกุญแจล่าสุดไม่สำเร็จ ปิดแล้วเปิดแอปใหม่ก่อนเปลี่ยนเครือข่าย"
     else -> null
 }

@@ -8,6 +8,7 @@ import androidx.compose.runtime.snapshots.Snapshot
 import com.mebit.app.EveryRead
 import com.mebit.app.Marker
 import com.mebit.app.Place
+import com.mebit.app.Why
 import com.mebit.app.PlainFile
 import com.mebit.app.SecureShelf
 import com.mebit.app.StoreProbe
@@ -304,6 +305,16 @@ class Wallets internal constructor(
 
     /** Some listed wallet holds words the phone has not kept, so leaving this network or adding a wallet would lose or mix them. */
     fun wordsOnlyInMemory(): Boolean = listed.any { it.session.saved != SaveState.Saved }
+
+    /** What stops a switch of network for the listed wallets' sessions. Their [OnboardingSession.notSavedBecause] tells a phone that cannot hold a wallet from the rest. */
+    fun switchHold(): SwitchHold {
+        val unsaved = listed.filter { it.session.saved != SaveState.Saved }
+        return when {
+            unsaved.any { it.session.notSavedBecause == Why.NoScreenLock } -> SwitchHold.PhoneCannotHold
+            unsaved.isNotEmpty() || listed.any { it.session.lastSaveFailed } -> SwitchHold.Unsaved
+            else -> SwitchHold.Clear
+        }
+    }
 
     /** Null when a wallet can be added. */
     fun addRefusal(): AddRefusal? = when {

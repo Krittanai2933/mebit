@@ -124,14 +124,14 @@ internal fun typedBase(text: String): String = text.trim().trimEnd('/')
  * Penpot 7.1: the Bitcoin unit, then the connection group. Left out: language and theme, which are features of their own (every string
  * is inline Thai and there is one light palette). The network is [NodeSettings.network], and either side can be tapped ([networkTap]):
  * Mainnet asks first (7.1.1), Testnet4 switches at once, and a [refusal] ([networkRefusal]) is shown under the card instead of switching.
- * [onChooseNetwork] writes the choice, and the gate then opens the other network.
+ * [onChooseNetwork] writes the choice and the gate then opens the other network, or returns the refusal it found, which shows under the card.
  */
 @Composable
 fun SettingsScreen(
     node: NodeSettings,
     unit: UnitSettings,
     refusal: String?,
-    onChooseNetwork: (KeyNetwork) -> Unit,
+    onChooseNetwork: (KeyNetwork) -> String?,
     onOpenNode: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
@@ -144,7 +144,7 @@ fun SettingsScreen(
             NetworkTap.Stay -> Unit
             NetworkTap.Refuse -> refused = true
             NetworkTap.Ask -> asking = true
-            NetworkTap.Switch -> onChooseNetwork(to)
+            NetworkTap.Switch -> if (onChooseNetwork(to) != null) refused = true
         }
     }
     LaunchedEffect(node.current) {
@@ -199,7 +199,7 @@ fun SettingsScreen(
         ConfirmSheet(tag = "dialog_network_mainnet", title = MAINNET_SHEET_TITLE, body = MAINNET_SHEET_BODY, onCancel = { asking = false }, icon = Res.drawable.ic_warning) {
             PrimaryCta(MAINNET_SHEET_TITLE, "cta_network_confirm", {
                 asking = false
-                onChooseNetwork(KeyNetwork.MAIN)
+                if (onChooseNetwork(KeyNetwork.MAIN) != null) refused = true
             })
             TextButton(onClick = { asking = false }, contentPadding = PaddingValues(0.dp), modifier = Modifier.fillMaxWidth().height(40.dp).testTag("cta_network_cancel")) {
                 Text("ยกเลิก", color = MbNavy, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)

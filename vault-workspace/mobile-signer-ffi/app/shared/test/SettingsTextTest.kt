@@ -4,6 +4,7 @@ import com.mebit.app.data.NetworkTap
 import com.mebit.app.data.VaultsHealth
 import com.mebit.app.data.chainName
 import com.mebit.app.data.networkChip
+import com.mebit.app.data.SwitchHold
 import com.mebit.app.data.networkRefusal
 import com.mebit.app.data.networkTap
 import com.mebit.app.data.networkWord
@@ -71,9 +72,12 @@ class SettingsTextTest {
     fun theSheetAndTheRefusalsAreTheApprovedTexts() {
         assertEquals("เปลี่ยนเป็น Mainnet", MAINNET_SHEET_TITLE)
         assertEquals("Mainnet ใช้ Bitcoin จริง ส่งแล้วยกเลิกไม่ได้ กระเป๋าบน Testnet4 จะซ่อนไว้จนกว่าจะเปลี่ยนกลับ", MAINNET_SHEET_BODY)
-        assertEquals(null, networkRefusal(false, VaultsHealth.Ok))
-        assertEquals("เครื่องนี้ยังบันทึกกระเป๋าไม่ได้ ตั้งรหัสล็อกหน้าจอก่อน จึงจะเปลี่ยนเครือข่ายได้", networkRefusal(true, VaultsHealth.Ok))
-        assertEquals("บันทึก Wallet และกุญแจล่าสุดไม่สำเร็จ ปิดแล้วเปิดแอปใหม่ก่อนเปลี่ยนเครือข่าย", networkRefusal(false, VaultsHealth.SaveFailed))
-        assertEquals("เครื่องนี้ยังบันทึกกระเป๋าไม่ได้ ตั้งรหัสล็อกหน้าจอก่อน จึงจะเปลี่ยนเครือข่ายได้", networkRefusal(true, VaultsHealth.SaveFailed), "words in memory come first")
+        assertEquals(null, networkRefusal(SwitchHold.Clear, VaultsHealth.Ok))
+        assertEquals("เครื่องนี้ยังบันทึกกระเป๋าไม่ได้ ตั้งรหัสล็อกหน้าจอก่อน จึงจะเปลี่ยนเครือข่ายได้", networkRefusal(SwitchHold.PhoneCannotHold, VaultsHealth.Ok))
+        assertEquals("บันทึก Wallet และกุญแจล่าสุดไม่สำเร็จ ปิดแล้วเปิดแอปใหม่ก่อนเปลี่ยนเครือข่าย", networkRefusal(SwitchHold.Clear, VaultsHealth.SaveFailed))
+        assertEquals("เครื่องนี้ยังบันทึกกระเป๋าไม่ได้ ตั้งรหัสล็อกหน้าจอก่อน จึงจะเปลี่ยนเครือข่ายได้", networkRefusal(SwitchHold.PhoneCannotHold, VaultsHealth.SaveFailed), "words in memory come first")
+        val reopen = "บันทึก Wallet และกุญแจล่าสุดไม่สำเร็จ ปิดแล้วเปิดแอปใหม่ก่อนเปลี่ยนเครือข่าย"
+        assertEquals(reopen, networkRefusal(SwitchHold.Unsaved, VaultsHealth.Ok), "a wallet not saved for another cause, or a failed Replace")
+        assertEquals(reopen, networkRefusal(SwitchHold.Unsaved, VaultsHealth.SaveFailed))
     }
 }

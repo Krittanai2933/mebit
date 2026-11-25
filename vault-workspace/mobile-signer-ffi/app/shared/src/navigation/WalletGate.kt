@@ -18,6 +18,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mebit.app.Place
 import com.mebit.app.SystemBack
 import com.mebit.app.data.NetworkSettings
+import com.mebit.app.data.networkRefusal
 import com.mebit.app.data.openableNetwork
 import com.mebit.app.data.NodeSettings
 import com.mebit.app.data.UnitSettings
@@ -162,9 +163,14 @@ private fun NetworkGate(network: KeyNetwork, lock: LockGate, appDir: String?, un
     }
 
     // Testnet's key list is written first, so the file is current when mainnet reads it. A no-op off testnet.
+    // Returns the refusal when the network cannot change now, so the 7.1.1 sheet's confirm re-checks what the tap checked.
     val switchTo = { to: KeyNetwork ->
-        wallets.noteTestnetKeys()
-        chooseNetwork(to)
+        val refusal = networkRefusal(wallets.switchHold(), vaults.health)
+        if (refusal == null) {
+            wallets.noteTestnetKeys()
+            chooseNetwork(to)
+        }
+        refusal
     }
 
     when (val boot = gate.boot) {

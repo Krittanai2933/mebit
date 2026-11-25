@@ -613,6 +613,30 @@ class WalletsTest {
     }
 
     @Test
+    fun aSwitchIsHeldForTheCauseOfEachUnsavedWallet(): Unit = runBlocking {
+        assertEquals(SwitchHold.Clear, ShelfPhone().saved(P1, 1).unlocked().switchHold(), "a saved wallet")
+        for ((why, hold) in listOf(
+            Why.NoScreenLock to SwitchHold.PhoneCannotHold,
+            Why.NotWired to SwitchHold.Unsaved,
+            Why.TryLater to SwitchHold.Unsaved,
+            Why.Other to SwitchHold.Unsaved,
+        )) {
+            val phone = ShelfPhone()
+            phone.place(P1).write = WriteResult.Unavailable(why)
+            val wallets = phone.launch()
+            wallets.at(P1).session.generateThisDevice()
+            assertEquals(hold, wallets.switchHold(), "a Create the phone refused for $why")
+        }
+        val phone = ShelfPhone().saved(P1, 1)
+        val wallets = phone.unlocked()
+        phone.place(P1).write = WriteResult.Unavailable(Why.Other)
+        wallets.at(P1).session.markBackupConfirmed()
+        assertEquals(SaveState.Saved, wallets.at(P1).session.saved)
+        assertEquals(false, wallets.wordsOnlyInMemory(), "the earlier copy is on the phone")
+        assertEquals(SwitchHold.Unsaved, wallets.switchHold(), "a failed Replace still loses its change when the words are dropped")
+    }
+
+    @Test
     fun noWordsAreOnlyInMemoryOnceTheyAreSavedOrThereAreNone(): Unit = runBlocking {
         assertEquals(false, ShelfPhone().launch().wordsOnlyInMemory(), "no wallet")
         val wallets = ShelfPhone().saved(P1, 1).unlocked()
