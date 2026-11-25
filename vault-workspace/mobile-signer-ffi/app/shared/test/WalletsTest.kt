@@ -72,8 +72,8 @@ private fun recordOf(n: Int, addressTypeConfirmed: Boolean = true, backupConfirm
     testRecord(words = words(n), fingerprint = check(words(n)), backupConfirmed = backupConfirmed, addressTypeConfirmed = addressTypeConfirmed)
 
 /** What the phone holds and what the fakes around [Wallets] saw. [launch] starts a new process over it. */
-private class ShelfPhone {
-    val shelf = FakeShelf()
+private class ShelfPhone(network: KeyNetwork = KeyNetwork.TEST) {
+    val shelf = FakeShelf(network = network)
     val guards = FakePlainFile()
     val last = FakePlainFile()
     var booksForgotten = 0
@@ -130,10 +130,11 @@ private class ShelfPhone {
     fun place(p: Place): FakeSecureStore = shelf.places.getValue(p)
 
     /** The [Wallets] of a new process. */
-    fun launch(lastFile: PlainFile = last): Wallets = Wallets(
+    fun launch(lastFile: PlainFile = last, testnetKeys: PlainFile? = null): Wallets = Wallets(
         shelf,
         PendingPayments(guards),
         lastFile,
+        testnetKeys = testnetKeys,
         forgetBook = { booksForgotten++ },
         forgetScans = { scansForgotten++ },
         newKey = { _, _, _ -> key(nextWords, "") },
@@ -288,6 +289,42 @@ class WalletsTest {
         assertNull(Place.parse(0))
         assertNull(Place.parse(Place.COUNT + 1))
         assertEquals(Place.COUNT, Place.all.size)
+    }
+
+    @Test
+    fun onlyTestnetListsItsKeysAndOnlyMainnetAsks(): Unit = runBlocking {
+        val list = FakePlainFile()
+        val testnet = ShelfPhone().saved(P1, 1).saved(P2, 2).launch(testnetKeys = list)
+        assertIs<Every.Open>(testnet.unlockEvery("test"))
+        testnet.noteTestnetKeys()
+        assertEquals(listOf(check(words(1)), check(words(2))), list.text!!.lines(), "each listed wallet's fingerprint, one a line")
+
+        val unsure = FakePlainFile()
+        val damaged = ShelfPhone().saved(P1, 1).saved(P2, 2)
+        damaged.place(P2).read = ReadResult.Unavailable(Why.TryLater)
+        val partial = damaged.launch(testnetKeys = unsure)
+        assertIs<Every.Open>(partial.unlockEvery("test"))
+        partial.noteTestnetKeys()
+        assertEquals(0, unsure.writes, "a place that may still open could hold a key the list would miss")
+
+        val main = ShelfPhone(KeyNetwork.MAIN).launch(testnetKeys = list)
+        main.noteTestnetKeys()
+        assertEquals(listOf(check(words(1)), check(words(2))), list.text!!.lines(), "mainnet never writes the list")
+        val session = main.at(P1).session
+        session.restoreFromWords(words(2))
+        assertTrue(session.testnetWords, "a testnet wallet of this phone has these words")
+        session.clear()
+        session.restoreFromWords(words(3))
+        assertFalse(session.testnetWords)
+        assertEquals(SaveState.Saved, session.saved)
+
+        list.unreadable = true
+        val blind = ShelfPhone(KeyNetwork.MAIN).launch(testnetKeys = list).at(P1).session
+        blind.restoreFromWords(words(2))
+        assertFalse(blind.testnetWords, "an unreadable list shows no warning")
+        val askedOnTestnet = ShelfPhone().launch(testnetKeys = FakePlainFile().apply { text = check(words(2)) }).at(P1).session
+        askedOnTestnet.restoreFromWords(words(2))
+        assertFalse(askedOnTestnet.testnetWords, "testnet never asks")
     }
 
     @Test

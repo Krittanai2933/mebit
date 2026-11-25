@@ -30,7 +30,7 @@ enum class SaveState { NotSaved, Staged, Saved }
  * guards outlive it. [newKey] and [restoreKey] make the key, and [forgetScans] drops the core's scan of every wallet, and tests
  * replace them because the host JVM has no native library.
  * [place] is this wallet's place on the phone, read only for its name, because [wallet] is already bound to that place.
- * [onPhone] says whether another wallet on the phone holds a fingerprint. [startsLocked] is App Lock as the phone has it when this
+ * [onPhone] says whether another wallet on the phone holds a fingerprint. [onTestnet] says whether a testnet wallet of this phone does, asked on mainnet only. [startsLocked] is App Lock as the phone has it when this
  * wallet is added, which its first save carries and [clear] returns to. [others] gives the other wallets' fingerprints, for the clear
  * of a damaged guard file, null while a wallet this run could not read may be on the phone. [hardwareWith] names the Jade or Trezor
  * wallet with a fingerprint in an address type, whose addresses a phone wallet of that key and type would share, or gives null.
@@ -44,6 +44,7 @@ class OnboardingSession(
     private val forgetVaults: () -> Unit = {},
     val place: Place = Place.FIRST,
     private val onPhone: (String) -> Boolean = { false },
+    private val onTestnet: (String) -> Boolean = { false },
     private val startsLocked: Boolean = false,
     private val others: () -> List<String>? = { emptyList() },
     private val hardwareWith: (fingerprint: String, type: AddressType) -> String? = { _, _ -> null },
@@ -124,6 +125,10 @@ class OnboardingSession(
     }
 
     private var held: Held by mutableStateOf(Held.Nothing)
+
+    /** True while a staged mainnet import has the words of a testnet wallet of this phone: Address Type warns, and nothing is saved until the user goes on. */
+    var testnetWords: Boolean by mutableStateOf(false)
+        private set
 
     /** NotSaved is today's memory-only state. Screens read it to say "saved on this phone" only when it is true. */
     val saved: SaveState
@@ -268,10 +273,12 @@ class OnboardingSession(
             return
         }
         applyKey(key, passphrase)
+        testnetWords = onTestnet(key.masterFingerprint)
         backupConfirmed = true
         imported = true
         inFirstSetup = true
-        if (accepted) persist(fresh = true) else held = Held.Staged
+        // Staged, not saved, for the warning too: the first mainnet wallet could not be removed once saved.
+        if (accepted && !testnetWords) persist(fresh = true) else held = Held.Staged
     }
 
     /** The fingerprint sheet said "matches". Nothing was written before this. */
@@ -348,6 +355,7 @@ class OnboardingSession(
         addressTypeConfirmed = true
         recordGuard = null
         held = Held.Nothing
+        testnetWords = false
         notSavedBecause = null
         lastSaveFailed = false
         pendingSave = false
@@ -552,6 +560,7 @@ class OnboardingSession(
         addressType = AddressType.NATIVE_SEGWIT
         addressTypeConfirmed = false
         held = Held.Nothing
+        testnetWords = false
     }
 
     private companion object {

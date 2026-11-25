@@ -121,6 +121,7 @@ private fun OpenGate(lock: LockGate) {
             vaultPayments = PendingPayments(scanDir?.let { plainFile("$it/pending-vault-payment") }),
             bookGuardKeys = { book.guardKeys() },
             bookHardware = { book.current.hardware },
+            testnetKeys = appDir?.let { plainFile("$it/testnet-keys") },
         )
         book = SavedVaults(storage, network, owners = { wallets.vaultOwners() })
         wallets to book

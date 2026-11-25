@@ -616,6 +616,17 @@ internal val ImportFingerprintCopy = FingerprintCopy(
     reject = "ไม่ตรง · แก้ไข",
 )
 
+/**
+ * The sheet for words that are also this phone's testnet key, shown on mainnet in place of [ImportFingerprintCopy]. Penpot proposal
+ * 1B.4.4.1 "Import Seed · same words as testnet · mainnet": the layout of 1B.4.4 with this copy. Awaiting design review.
+ */
+internal val TestnetWordsCopy = FingerprintCopy(
+    title = "คำชุดนี้ใช้กับเงินทดสอบในเครื่องนี้อยู่แล้ว",
+    body = "กระเป๋า Testnet ในเครื่องนี้ใช้คำชุดเดียวกัน ใครที่เคยเห็นคำชุดนี้จะเอาเงินจริงในกระเป๋านี้ไปได้ ถ้าจะเก็บเงินจริง ให้สร้างกุญแจใหม่แทน",
+    ok = "เข้าใจแล้ว · ใช้คำชุดนี้ต่อ",
+    reject = "ไม่ใช้ · กลับไปแก้",
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun FingerprintSheet(session: OnboardingSession, copy: FingerprintCopy, onConfirm: () -> Unit, onReject: () -> Unit) {

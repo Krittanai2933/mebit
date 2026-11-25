@@ -115,6 +115,8 @@ class Wallets internal constructor(
     private val bookGuardKeys: () -> List<String>? = { emptyList() },
     /** The book's Jade and Trezor wallets, whose key and address type no phone wallet may take. */
     private val bookHardware: () -> List<HardwareWallet> = { emptyList() },
+    /** Testnet's fingerprints, one a line, in the app folder both networks can reach ([noteTestnetKeys]). Null where the phone has no such folder. */
+    private val testnetKeys: PlainFile? = null,
 ) {
     /** The network of this phone's shelf, which every wallet and read here follows. */
     val network: KeyNetwork get() = shelf.network
@@ -131,6 +133,7 @@ class Wallets internal constructor(
             payments = payments,
             forgetVaults = {}, // the book is the phone's, and only forgetEvery erases it
             place = place,
+            onTestnet = { fingerprint -> onTestnet(fingerprint) },
             onPhone = { fingerprint -> all.any { it.place != place && it.session.fingerprint.equals(fingerprint, ignoreCase = true) } },
             startsLocked = locked,
             others = { guardKeysBut(place) },
@@ -519,6 +522,19 @@ class Wallets internal constructor(
     }
 
     private var lastNoted: Place? = null
+
+    /**
+     * Testnet only: lists each listed wallet's fingerprint and its earlier ones, so a mainnet import of the same words can warn. No secret.
+     * Skipped while a place that did not open may still open, as its fingerprint is unknown and a short list would hide a match.
+     */
+    fun noteTestnetKeys() {
+        if (network != KeyNetwork.TEST || unreadMayOpen) return
+        testnetKeys?.write(listed.flatMap { listOf(it.session.fingerprint) + it.session.earlierVaultsOwners() }.distinct().joinToString("\n"))
+    }
+
+    /** Mainnet only: whether testnet's list holds [fingerprint]. A missing or unreadable list holds none, so no warning. */
+    private fun onTestnet(fingerprint: String): Boolean =
+        network == KeyNetwork.MAIN && testnetKeys?.read()?.lines()?.any { it.isNotBlank() && it.equals(fingerprint, ignoreCase = true) } == true
 
     /** Remembers the wallet in use for the next cold start, as a plain number, so the rule that plain files hold no key, address or amount stands. Writes only on a change. */
     fun noteUsed(place: Place) {

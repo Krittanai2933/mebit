@@ -655,6 +655,27 @@ class OnboardingSessionSaveTest {
     }
 
     @Test
+    fun aMainnetImportOfAPhoneTestnetKeyWaitsForTheUserToGoOn() {
+        val keys = Keys(words = PUBLIC_WORDS_12)
+        val store = FakeSecureStore(network = KeyNetwork.MAIN)
+        val session = OnboardingSession(SavedWallet(store), keys.newKey, keys.restoreKey, keys.forgetScans, onTestnet = { true })
+        session.restoreFromWords(PUBLIC_WORDS_12)
+        assertTrue(session.testnetWords)
+        assertEquals(SaveState.Staged, session.saved, "an import with no passphrase is staged too")
+        assertTrue(store.writes.isEmpty(), "nothing is saved before the user goes on")
+        session.acceptStagedKey()
+        assertEquals(SaveState.Saved, session.saved)
+        assertEquals(listOf("Create"), store.modes())
+
+        val rejected = FakeSecureStore(network = KeyNetwork.MAIN)
+        val other = OnboardingSession(SavedWallet(rejected), keys.newKey, keys.restoreKey, keys.forgetScans, onTestnet = { true })
+        other.restoreFromWords(PUBLIC_WORDS_12)
+        other.clear()
+        assertFalse(other.testnetWords)
+        assertTrue(rejected.writes.isEmpty(), "going back saves nothing")
+    }
+
+    @Test
     fun aSessionInstallsOnlyARecordOfItsStoresNetwork() {
         val test = session(FakeSecureStore())
         assertFalse(test.install(testRecord(network = KeyNetwork.MAIN), ANY_VERSION), "a MAIN record on a TEST store")

@@ -105,7 +105,7 @@ fun AddressTypeScreen(
     }
     val next = {
         when {
-            session.saved == SaveState.Staged -> sheet = ImportFingerprintCopy
+            session.saved == SaveState.Staged -> sheet = if (session.testnetWords) TestnetWordsCopy else ImportFingerprintCopy
             createFingerprintDue(session) -> sheet = CreateFingerprintCopy
             else -> finish()
         }
@@ -150,7 +150,7 @@ fun AddressTypeScreen(
             copy = copy,
             onConfirm = {
                 sheet = null
-                if (copy == ImportFingerprintCopy) {
+                if (copy != CreateFingerprintCopy) {
                     // Confirmed in memory first, so the import's one write saves the type as final.
                     session.confirmAddressType()
                     session.acceptStagedKey()
@@ -160,7 +160,7 @@ fun AddressTypeScreen(
             },
             onReject = {
                 sheet = null
-                if (copy == ImportFingerprintCopy) {
+                if (copy != CreateFingerprintCopy) {
                     session.clear()
                     onRejectImport()
                 } else {
