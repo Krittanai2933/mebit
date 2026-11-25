@@ -29,6 +29,12 @@ class NetworkSettings internal constructor(private val file: PlainFile?) {
     }
 }
 
+/** "testnet" or "mainnet": the word the app's lower-case lines use. */
+internal fun networkWord(network: KeyNetwork): String = if (network == KeyNetwork.MAIN) "mainnet" else "testnet"
+
+/** "Mainnet" or "Testnet4": the chain's name as the chip, the switch and the node texts print it. */
+internal fun chainName(network: KeyNetwork): String = if (network == KeyNetwork.MAIN) "Mainnet" else "Testnet4"
+
 /**
  * The network whose storage the gate opens: [chosen], unless this build cannot read that network's records. Such a build would
  * find every record Broken, and the recovery screen's one button erases them, so it stays on testnet and never opens the other.

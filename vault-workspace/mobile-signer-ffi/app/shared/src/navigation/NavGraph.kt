@@ -747,7 +747,7 @@ internal fun MebitNavHost(
                                             importing = ImportPending(pick.name, read.wallet)
                                             navigate(MovieRoute.WalletImport)
                                         } else {
-                                            importProblem = read?.let(::problemOf) ?: UNREADABLE_FILE
+                                            importProblem = read?.let { problemOf(it, vaults.network) } ?: UNREADABLE_FILE
                                         }
                                     }
                                 }
@@ -813,7 +813,7 @@ internal fun MebitNavHost(
                     MovieRoute.WalletImport -> importing?.let { pending ->
                         WalletImportScreen(
                             fileName = pending.fileName,
-                            review = importReview(pending.wallet, createDraft.importName(pending.fileName), keyring.keys),
+                            review = importReview(pending.wallet, createDraft.importName(pending.fileName), keyring.keys, vaults.network),
                             address = pending.wallet.shape.firstAddress,
                             line = importLine,
                             onImport = {

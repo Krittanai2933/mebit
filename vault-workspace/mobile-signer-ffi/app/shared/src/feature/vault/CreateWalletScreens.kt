@@ -64,6 +64,7 @@ import com.mebit.app.data.SavedKey
 import com.mebit.app.data.Signing
 import com.mebit.app.data.bsmsRecordOf
 import com.mebit.app.data.keyLine
+import com.mebit.app.data.networkWord
 import com.mebit.app.feature.onboarding.AddressTypeRows
 import com.mebit.app.feature.onboarding.DEFAULT_BADGE
 import com.mebit.app.feature.onboarding.RadioRow
@@ -441,7 +442,7 @@ fun ReviewScreen(
         },
     ) {
         Spacer(modifier = Modifier.height(4.dp))
-        SummaryCard(draft.nextWalletName(), draft.preset)
+        SummaryCard(draft.nextWalletName(), draft.preset, draft.network)
         Spacer(modifier = Modifier.height(14.dp))
         ReviewRowsCard(reviewRows(draft.preset, ready?.keys.orEmpty().map { it.label }))
         Spacer(modifier = Modifier.height(16.dp))
@@ -454,7 +455,7 @@ fun ReviewScreen(
 }
 
 @Composable
-private fun SummaryCard(name: String, preset: Preset) {
+private fun SummaryCard(name: String, preset: Preset, network: KeyNetwork) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -471,7 +472,7 @@ private fun SummaryCard(name: String, preset: Preset) {
         Spacer(modifier = Modifier.height(14.dp))
         Text(reviewTitle(name, preset), color = MbWhite, fontSize = 18.sp, lineHeight = 26.sp, modifier = Modifier.testTag("review_title"))
         Spacer(modifier = Modifier.height(12.dp))
-        Text(reviewSub(preset), color = MbWhite.copy(alpha = 0.6f), fontSize = 11.5.sp, fontWeight = FontWeight.Light, lineHeight = 16.sp, modifier = Modifier.testTag("review_sub"))
+        Text(reviewSub(preset, network), color = MbWhite.copy(alpha = 0.6f), fontSize = 11.5.sp, fontWeight = FontWeight.Light, lineHeight = 16.sp, modifier = Modifier.testTag("review_sub"))
     }
 }
 
@@ -682,7 +683,7 @@ internal fun duplicateLine(walletName: String): String = "Wallet นี้อย
 /** "Wallet 2 · 2-of-3": the navy card's title. */
 internal fun reviewTitle(name: String, preset: Preset): String = "$name · ${preset.label}"
 
-internal fun reviewSub(preset: Preset): String = "${MultisigScript.NativeSegwit.label} · testnet · ต้องเซ็น ${preset.m} จาก ${preset.n} กุญแจ"
+internal fun reviewSub(preset: Preset, network: KeyNetwork): String = "${MultisigScript.NativeSegwit.label} · ${networkWord(network)} · ต้องเซ็น ${preset.m} จาก ${preset.n} กุญแจ"
 
 /** Penpot 3.4's four ticked lines. The mebit backup key is not built, so its line is fixed. */
 internal fun reviewRows(preset: Preset, keyNames: List<String>): List<String> = listOf(

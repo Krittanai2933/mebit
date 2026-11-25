@@ -24,7 +24,8 @@ class CreateWalletTextTest {
     @Test
     fun theReviewLinesNameMNAndTheKeysThatMayBeLost() {
         assertEquals("Wallet 2 · 2-of-3", reviewTitle("Wallet 2", Preset.TwoOfThree))
-        assertEquals("Native SegWit · testnet · ต้องเซ็น 3 จาก 5 กุญแจ", reviewSub(Preset.ThreeOfFive))
+        assertEquals("Native SegWit · testnet · ต้องเซ็น 3 จาก 5 กุญแจ", reviewSub(Preset.ThreeOfFive, KeyNetwork.TEST))
+        assertEquals("Native SegWit · mainnet · ต้องเซ็น 3 จาก 5 กุญแจ", reviewSub(Preset.ThreeOfFive, KeyNetwork.MAIN))
         assertEquals(
             listOf(
                 "ต้องใช้กุญแจ 2 จาก 3 ใบเซ็นร่วมกัน",

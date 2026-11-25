@@ -44,6 +44,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.NodeSetting
+import com.mebit.app.data.chainName
 import com.mebit.app.data.BtcUnit
 import com.mebit.app.data.NodeSettings
 import com.mebit.app.data.passes
@@ -64,6 +65,7 @@ import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.app.navigation.MovieRoute
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.NodeCheck
 import com.mebit.ffi.signer.NodeStatus
 import com.mebit.ffi.signer.chainCheckNode
@@ -82,14 +84,25 @@ internal fun NodeSetting.label(): String = when (this) {
 }
 
 /** 7.2's line under the test field: what the last test found, in Thai. */
-internal fun checkLine(found: NodeCheck?): String = when (found) {
+internal fun checkLine(found: NodeCheck?, network: KeyNetwork): String = when (found) {
     null -> "เลือกตัวเลือกนี้ได้เมื่อทดสอบผ่าน"
     NodeCheck.Testnet4 -> "ผ่าน · เป็นเชน Testnet4"
-    NodeCheck.OtherChain -> "ไม่ผ่าน · โหนดนี้ไม่ใช่เชน Testnet4"
+    NodeCheck.OtherChain -> "ไม่ผ่าน · โหนดนี้ไม่ใช่เชน ${chainName(network)}"
     NodeCheck.Mainnet -> "ผ่าน · เป็นเชน Mainnet"
     NodeCheck.BadUrl -> "ใช้ https:// เท่านั้น (http:// ได้เฉพาะที่อยู่ Tailscale)"
     is NodeCheck.Unreachable -> "ไม่ผ่าน · ต่อโหนดไม่ได้"
 }
+
+/**
+ * 7.1's line under the network label: 7.1 for testnet, 7.1.2 for mainnet (copied from the board's text layers).
+ */
+internal fun networkLine(network: KeyNetwork): String = if (network == KeyNetwork.MAIN) "เงินจริง ส่งแล้วยกเลิกไม่ได้" else "เงินทดสอบ ไม่มีมูลค่าจริง"
+
+/** 7.2 / 7.2.1: what the own-node card says its node is. */
+internal fun ownNodeLine(network: KeyNetwork): String = "Esplora ของ ${chainName(network)} ที่คุณดูแลเอง"
+
+/** 7.2 / 7.2.1: the warning card's body. */
+internal fun nodeWarning(network: KeyNetwork): String = "ก่อนใช้โหนดใด แอปตรวจว่าเป็นเชน ${chainName(network)} จริง\nแต่โหนดที่ไม่สุจริตยังแสดงยอดผิดได้"
 
 /** What a typed URL is compared and kept as: the core drops spaces and a closing slash the same way. */
 internal fun typedBase(text: String): String = text.trim().trimEnd('/')
@@ -127,7 +140,7 @@ fun SettingsScreen(
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().height(82.dp).padding(start = 16.dp, end = 18.dp)) {
                 Column(Modifier.weight(1f)) {
                     Text("เครือข่าย", color = MbNavyInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, lineHeight = 20.sp)
-                    Text("เงินทดสอบ ไม่มีมูลค่าจริง", color = MbBody, fontSize = 12.sp, fontWeight = FontWeight.Light, lineHeight = 16.sp, modifier = Modifier.testTag("settings_net_line"))
+                    Text(networkLine(node.network), color = MbBody, fontSize = 12.sp, fontWeight = FontWeight.Light, lineHeight = 16.sp, modifier = Modifier.testTag("settings_net_line"))
                 }
                 TwoOptionSwitch(
                     options = listOf(SwitchOption("Testnet4", "settings_net_testnet4"), SwitchOption("Mainnet", "settings_net_mainnet", enabled = false)),
@@ -253,7 +266,8 @@ fun NodeScreen(
             canChoose = passed,
             text = text,
             onText = { text = it },
-            line = checkLine(found),
+            line = checkLine(found, node.network),
+            network = node.network,
             testing = testing,
             onChoose = { node.choose(NodeSetting.Own(typed)) },
             onTest = {
@@ -270,7 +284,7 @@ fun NodeScreen(
         Spacer(modifier = Modifier.height(16.dp))
         IssueBanner(
             title = "เลือกโหนดที่คุณไว้ใจ",
-            message = "ก่อนใช้โหนดใด แอปตรวจว่าเป็นเชน Testnet4 จริง\nแต่โหนดที่ไม่สุจริตยังแสดงยอดผิดได้",
+            message = nodeWarning(node.network),
             tag = "node_warning",
         )
     }
@@ -283,6 +297,7 @@ private fun OwnNodeCard(
     text: String,
     onText: (String) -> Unit,
     line: String,
+    network: KeyNetwork,
     testing: Boolean,
     onChoose: () -> Unit,
     onTest: () -> Unit,
@@ -307,7 +322,7 @@ private fun OwnNodeCard(
             Spacer(modifier = Modifier.width(14.dp))
             Column {
                 Text("โหนดของฉัน", color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 20.sp)
-                Text("Esplora ของ Testnet4 ที่คุณดูแลเอง", color = MbSlate, fontSize = 11.sp, fontWeight = FontWeight.Light, lineHeight = 15.sp)
+                Text(ownNodeLine(network), color = MbSlate, fontSize = 11.sp, fontWeight = FontWeight.Light, lineHeight = 15.sp)
             }
         }
         Spacer(modifier = Modifier.height(14.dp))
