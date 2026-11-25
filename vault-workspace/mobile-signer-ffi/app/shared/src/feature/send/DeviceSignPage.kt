@@ -28,6 +28,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.style.TextAlign
+import com.mebit.app.ui.theme.MbPage
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -86,19 +90,12 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
-import com.mebit.app.resources.Res
-import com.mebit.app.resources.ic_sign_arrow
-import com.mebit.app.resources.ic_sign_btc
-import com.mebit.app.resources.ic_sign_wallet
-import com.mebit.app.ui.theme.MbBtcOrange
 import com.mebit.app.ui.theme.amountFontFamily
-import org.jetbrains.compose.resources.painterResource
 
 /**
  * How signing on the device went wrong: 5.3.2.1's refusal, 5.3.3.1's lost link, no device to reach, or a device that holds another key, and
@@ -496,69 +493,110 @@ private fun Check(color: Color) {
 }
 
 /**
- * 5.3.2's details the signer must show the same: the wallet and the amount it sends, an arrow down to the address, five groups of four a
- * line as the board breaks it, then the change and the fee under a rule. Amounts are in [unit]: a Jade or Trezor shows BTC, so its page
- * passes BTC whatever the setting, and the amounts to compare read the same on both screens.
+ * 5.6.1 Variant 11's receipt ticket, the details the signer must show the same: the wallet it pays from, the amount large in the middle,
+ * each address five groups of four a line with its first and last group in amber, then the change and the fee, over a torn bottom edge.
+ * Amounts are in [unit]: a Jade or Trezor shows BTC, so its page passes BTC whatever the setting, and the amounts to compare read the same
+ * on both screens.
  */
 @Composable
 internal fun MatchCard(review: SpendReview, walletName: String, unit: BtcUnit) {
-    val shape = RoundedCornerShape(24.dp)
-    Column(Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 16.dp).testTag("hw_sign_details")) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("รายละเอียดที่ต้องตรงกับอุปกรณ์", color = MbBody, fontSize = 12.sp, fontWeight = FontWeight.Bold, lineHeight = 15.sp, modifier = Modifier.weight(1f))
-            Text("ยอดที่ส่ง", color = MbBody, fontSize = 12.sp, lineHeight = 15.sp)
-        }
-        Spacer(modifier = Modifier.height(11.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Image(painterResource(Res.drawable.ic_sign_wallet), contentDescription = null)
-            Spacer(modifier = Modifier.width(10.dp))
-            Text(walletName, color = MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, maxLines = 1, modifier = Modifier.weight(1f))
-            ShrinkText(
-                buildAnnotatedString {
-                    append(amountNumber(review.paidSats(), unit))
-                    withStyle(SpanStyle(fontSize = 14.sp)) { append(" ${unit.label}") }
-                },
-                color = MbNavyInk,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = amountFontFamily(),
-                lineHeight = 24.sp,
-                modifier = Modifier.testTag("hw_sign_amount"),
+    val shape = RoundedCornerShape(14.dp)
+    val amountFont = amountFontFamily()
+    Box(Modifier.fillMaxWidth().testTag("hw_sign_details")) {
+        Column(Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(horizontal = 18.dp)) {
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                "ส่งจาก $walletName",
+                color = MbBody,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                lineHeight = 16.sp,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                modifier = Modifier.fillMaxWidth(),
             )
-        }
-        // The arrow sits 4 dp under the wallet's tile, centred on it, and the address's tile 2 dp under its label.
-        Box(Modifier.width(36.dp).height(26.dp).padding(top = 4.dp), contentAlignment = Alignment.TopCenter) {
-            Image(painterResource(Res.drawable.ic_sign_arrow), contentDescription = null)
-        }
-        review.payments.forEach { out ->
-            Row {
-                Box(Modifier.padding(top = 2.dp).size(36.dp).clip(CircleShape).background(MbBtcOrange), contentAlignment = Alignment.Center) {
-                    Image(painterResource(Res.drawable.ic_sign_btc), contentDescription = null)
-                }
-                Spacer(modifier = Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("ที่อยู่ปลายทาง", color = MbBody, fontSize = 13.sp, lineHeight = 16.sp)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        addressLines(out.address),
-                        color = MbNavyInk,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = amountFontFamily(),
-                        lineHeight = 18.sp,
-                        modifier = Modifier.testTag("hw_sign_address"),
-                    )
-                }
+            Spacer(modifier = Modifier.height(2.dp))
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                ShrinkText(
+                    buildAnnotatedString {
+                        withStyle(SpanStyle(letterSpacing = (-0.8).sp)) { append(amountNumber(review.paidSats(), unit)) }
+                        withStyle(SpanStyle(fontSize = 16.sp)) { append(" ${unit.label}") }
+                    },
+                    color = MbNavyInk,
+                    fontSize = 38.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = amountFont,
+                    lineHeight = 46.sp,
+                    modifier = Modifier.testTag("hw_sign_amount"),
+                )
             }
+            Spacer(modifier = Modifier.height(10.dp))
+            Box(Modifier.fillMaxWidth().height(1.dp).background(MbBorder))
+            Spacer(modifier = Modifier.height(11.dp))
+            Text("ปลายทาง", color = MbBody, fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 16.sp)
+            review.payments.forEach { out ->
+                Text(
+                    receiptAddress(out.address),
+                    color = MbNavyInk,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = amountFont,
+                    lineHeight = 25.sp,
+                    modifier = Modifier.padding(top = 4.dp).testTag("hw_sign_address"),
+                )
+            }
+            Spacer(modifier = Modifier.height(18.dp))
+            Box(Modifier.fillMaxWidth().height(1.dp).background(MbBorder))
+            Spacer(modifier = Modifier.height(11.dp))
+            if (review.changeSats > 0u) {
+                MatchRow("เงินทอน", amountText(review.changeSats.toLong(), unit, ::formatBtc), "hw_sign_change")
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            MatchRow("ค่าธรรมเนียม", "${thousands(review.feeSats.toLong())} sat", "hw_sign_fee")
+            Spacer(modifier = Modifier.height(22.dp + TEAR_HEIGHT))
         }
-        Spacer(modifier = Modifier.height(8.dp))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(MbBorder))
-        Spacer(modifier = Modifier.height(9.dp))
-        if (review.changeSats > 0u) {
-            MatchRow("เงินทอน → $walletName", amountText(review.changeSats.toLong(), unit, ::formatBtc), "hw_sign_change")
-            Spacer(modifier = Modifier.height(8.dp))
+        TornEdge(Modifier.align(Alignment.BottomCenter))
+    }
+}
+
+private val TEAR_HEIGHT = 12.dp
+
+/** [addressLines] with the first and the last group in amber: the ends a person checks first. */
+private fun receiptAddress(address: String): AnnotatedString = buildAnnotatedString {
+    val text = addressLines(address)
+    val last = text.lastIndexOf(' ').coerceAtLeast(text.lastIndexOf('\n')) + 1
+    val first = minOf(4, text.length)
+    withStyle(SpanStyle(color = MbEyebrow)) { append(text.substring(0, first)) }
+    if (last > first) {
+        append(text.substring(first, last))
+        withStyle(SpanStyle(color = MbEyebrow)) { append(text.substring(last)) }
+    } else {
+        append(text.substring(first))
+    }
+}
+
+/**
+ * The ticket's torn bottom: a strip of the page's colour over the card's last [TEAR_HEIGHT], with white teeth 16 dp wide rising from its
+ * foot, as the variant's two gradients draw it. Clipped, so the last tooth stops at the card's edge.
+ */
+@Composable
+private fun TornEdge(modifier: Modifier) {
+    Canvas(modifier.fillMaxWidth().height(TEAR_HEIGHT).clipToBounds()) {
+        drawRect(MbPage)
+        val tooth = 16.dp.toPx()
+        var x = 0f
+        while (x < size.width) {
+            drawPath(
+                Path().apply {
+                    moveTo(x, size.height)
+                    lineTo(x + tooth, size.height)
+                    lineTo(x + tooth / 2, size.height / 2)
+                    close()
+                },
+                MbWhite,
+            )
+            x += tooth
         }
-        MatchRow("ค่าธรรมเนียม", "${thousands(review.feeSats.toLong())} sat", "hw_sign_fee")
     }
 }
 
