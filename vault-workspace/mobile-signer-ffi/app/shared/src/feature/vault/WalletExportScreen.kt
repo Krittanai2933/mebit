@@ -94,7 +94,7 @@ private val BarGrey = Color(0xFFD7DEE5)
  * that it holds every xpub, a file save and a share of one plain QR as a picture. Null [vault] only from the debug catalog.
  */
 @Composable
-fun WalletExportScreen(vault: CreatedVault?, onBack: (() -> Unit)?, onOpenCatalog: () -> Unit) {
+fun WalletExportScreen(vault: CreatedVault?, network: KeyNetwork, onBack: (() -> Unit)?, onOpenCatalog: () -> Unit) {
     var tab by remember { mutableStateOf(ExportTab.Bsms) }
     var failed by remember { mutableStateOf(false) }
     val export = rememberTextFileExport { outcome -> failed = outcome is ExportOutcome.Failed }
@@ -103,8 +103,8 @@ fun WalletExportScreen(vault: CreatedVault?, onBack: (() -> Unit)?, onOpenCatalo
     val pictureLayer = rememberGraphicsLayer()
     val frame = rememberGraphicsLayer()
     // Native calls that read the stored descriptor: null when the core refuses it.
-    val bsms = remember(vault?.bsms) { vault?.let { bsmsRecordOf(it) } }
-    val descriptor = remember(vault?.bsms) { vault?.let { v -> runCatching { walletDescriptorText(descriptorIn(v.bsms), KeyNetwork.TEST) }.getOrNull() } }
+    val bsms = remember(vault?.bsms) { vault?.let { bsmsRecordOf(it, network) } }
+    val descriptor = remember(vault?.bsms) { vault?.let { v -> runCatching { walletDescriptorText(descriptorIn(v.bsms), network) }.getOrNull() } }
     val text = if (tab == ExportTab.Bsms) bsms else descriptor
     val fileName = vault?.let { if (tab == ExportTab.Bsms) bsmsFileName(it.name) else descriptorFileName(it.name) }
     // The BSMS tab's parts, each encoded once. Without the UR call the record would be one plain QR.

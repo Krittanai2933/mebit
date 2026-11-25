@@ -79,7 +79,7 @@ import org.jetbrains.compose.resources.painterResource
  * reader, and เข้าใจแล้ว calls [onClose].
  */
 @Composable
-internal fun WalletQrScanSheet(onWallet: (WalletImport) -> Unit, onClose: () -> Unit) {
+internal fun WalletQrScanSheet(network: KeyNetwork, onWallet: (WalletImport) -> Unit, onClose: () -> Unit) {
     var reader by remember { mutableStateOf(QrPartsReader()) }
     DisposableEffect(reader) { onDispose { reader.close() } }
     var progress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
@@ -91,7 +91,7 @@ internal fun WalletQrScanSheet(onWallet: (WalletImport) -> Unit, onClose: () -> 
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { torch = false }
     val openSettings = rememberAppSettingsOpener()
     val readFile = { text: String ->
-        val read = runCatching { walletFileRead(text, KeyNetwork.TEST) }.getOrNull()
+        val read = runCatching { walletFileRead(text, network) }.getOrNull()
         if (read is WalletFileRead.Read) {
             done = true
             onWallet(read.wallet)

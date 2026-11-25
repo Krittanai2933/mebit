@@ -3,6 +3,7 @@ package com.mebit.app.data
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.mebit.ffi.signer.KeyNetwork
 
 enum class CustodyPolicy {
     PersonalCustody,
@@ -26,6 +27,9 @@ data class CreatedVault(
 
 /** The vaults in the book and the one the vault screens show (detail, Receive, Send, T20, Wallet Created). The wizard that makes one is [CreateWalletDraft]. */
 class VaultDraft(private val book: SavedVaults = SavedVaults.memoryOnly()) {
+    /** The network of the book, which the wallets it lists are on. */
+    val network: KeyNetwork get() = book.network
+
     val created: List<CreatedVault> get() = book.current.vaults
     var selectedVaultId: String? by mutableStateOf(null)
 

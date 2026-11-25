@@ -127,6 +127,7 @@ class OrganizeVaultSendSpec {
         val send = VaultSend(
             vault = vault,
             guards = PendingPayments(FakePlainFile()),
+            network = KeyNetwork.TEST,
             nowSeconds = { 0L },
             worker = EmptyCoroutineContext,
             core = DescribedCore(

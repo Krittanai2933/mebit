@@ -1,5 +1,6 @@
 package com.mebit.app.data
 
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SpendOutput
 import com.mebit.ffi.signer.SpendReview
 import com.mebit.ffi.signer.WalletKey
@@ -29,6 +30,7 @@ class VaultSendConcurrencyTest {
         val send = VaultSend(
             vault,
             PendingPayments(FakePlainFile()),
+            KeyNetwork.TEST,
             worker = Dispatchers.Default,
             core = DescribedCore(
                 describe = { _, _ -> WalletShape(2u, vault.keyFingerprints.map { WalletKey(it.lowercase(), "m/48'/1'/0'/2'", "") }, vault.address, 201uL) },

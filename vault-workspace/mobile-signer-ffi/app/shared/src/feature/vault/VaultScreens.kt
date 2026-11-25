@@ -50,6 +50,7 @@ import com.mebit.app.ui.components.CoverableDialog
 import com.mebit.app.ui.components.MenuAction
 import com.mebit.app.Place
 import com.mebit.app.ui.components.TotalLine
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.WalletImport
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.HardwareWallet
@@ -183,6 +184,7 @@ fun VaultListScreen(
     }
     if (scanning) {
         WalletQrScanSheet(
+            network = vaults.network,
             onWallet = {
                 scanning = false
                 onImportScanned(it)
@@ -350,6 +352,7 @@ fun VaultListScreen(
     removingVault?.let { vault ->
         RemoveVaultSheet(
             vault = vault,
+            network = vaults.network,
             onRemove = {
                 removingVault = null
                 onRemoveVault(vault)
@@ -364,7 +367,7 @@ fun VaultListScreen(
  * button. The remove works with or without it.
  */
 @Composable
-private fun RemoveVaultSheet(vault: CreatedVault, onRemove: () -> Unit, onCancel: () -> Unit) {
+private fun RemoveVaultSheet(vault: CreatedVault, network: KeyNetwork, onRemove: () -> Unit, onCancel: () -> Unit) {
     var exported by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
     val export = rememberTextFileExport { outcome ->
@@ -378,7 +381,7 @@ private fun RemoveVaultSheet(vault: CreatedVault, onRemove: () -> Unit, onCancel
         }
     }
     // The BIP-129 record, not the stored text, so another wallet app can read the file.
-    val record = remember(vault.bsms) { bsmsRecordOf(vault) }
+    val record = remember(vault.bsms) { bsmsRecordOf(vault, network) }
     val save = {
         if (record == null) failed = true else export.save(bsmsFileName(vault.name), record)
     }
@@ -474,7 +477,7 @@ fun T20VaultActionsScreen(
 ) {
     val vault = draft.selectedVault()
     // The record a file or QR carries, not the layout the app keeps the wallet in.
-    val record = remember(vault?.bsms) { vault?.let(::bsmsRecordOf) }
+    val record = remember(vault?.bsms) { vault?.let { bsmsRecordOf(it, draft.network) } }
     MebitScreen(
         eyebrow = "WALLET ACTIONS",
         title = "การกระทำของ Wallet",
