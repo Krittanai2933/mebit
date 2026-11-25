@@ -328,6 +328,8 @@ class KeystoreMappingTest {
         assertEquals("com.mebit.app.wallet", walletAlias(KeyNetwork.TEST))
         assertEquals("vaults/book", vaultsPath(KeyNetwork.TEST))
         assertEquals("mebit_vaults_v1", vaultsAlias(KeyNetwork.TEST))
+        assertEquals("pairing", pairingPath(KeyNetwork.TEST))
+        assertEquals("mebit_pairing_v1", pairingAlias(KeyNetwork.TEST))
     }
 
     @Test
@@ -343,6 +345,10 @@ class KeystoreMappingTest {
         assertNotEquals(vaultsAlias(KeyNetwork.TEST), vaultsAlias(KeyNetwork.MAIN))
         assertEquals("com.mebit.app.wallet.main", walletAlias(KeyNetwork.MAIN))
         assertEquals("mebit_vaults_v1.main", vaultsAlias(KeyNetwork.MAIN))
+        assertEquals("main/pairing", pairingPath(KeyNetwork.MAIN))
+        assertNotEquals(pairingAlias(KeyNetwork.TEST), pairingAlias(KeyNetwork.MAIN))
+        assertEquals("mebit_pairing_v1.main", pairingAlias(KeyNetwork.MAIN))
+        assertTrue(!pairingPath(KeyNetwork.MAIN).startsWith(pairingPath(KeyNetwork.TEST) + "/"), "mainnet pairings under testnet's folder, which an older Forget empties")
     }
 
     @Test

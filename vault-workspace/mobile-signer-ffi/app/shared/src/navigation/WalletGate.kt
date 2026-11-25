@@ -100,7 +100,7 @@ private fun OpenGate(lock: LockGate) {
     val unitSettings = remember(scanDir) { UnitSettings(scanDir?.let { plainFile("$it/btc-unit") }).also { it.restore() } }
     val storage = rememberVaultsStorage(KeyNetwork.TEST)
     val shelf = rememberSecureShelf(KeyNetwork.TEST)
-    val pairings = rememberPairings()
+    val pairings = rememberPairings(KeyNetwork.TEST)
     // The pay-twice guard files, one-key and several-key, and the last-used wallet sit beside the scan files. Built together, because
     // each asks the other: the book is saved for the wallets' keys, and a wallet's clear of a damaged guard file names the book's wallets.
     val (wallets, vaults) = remember(shelf, scanDir, storage, pairings) {

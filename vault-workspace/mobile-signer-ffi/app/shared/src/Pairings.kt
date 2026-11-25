@@ -1,6 +1,7 @@
 package com.mebit.app
 
 import androidx.compose.runtime.Composable
+import com.mebit.ffi.signer.KeyNetwork
 
 /**
  * The Safe 7 pairing credentials, one per master fingerprint of a key a Safe 7 holds. Each is a secret, because the phone's half of the
@@ -23,6 +24,6 @@ internal interface Pairings {
 /** The name a credential is kept under, `safe7.<fingerprint>`, or null for anything but 8 hex, so no outside text ever names a file. */
 internal fun pairingName(fingerprint: String): String? = fingerprint.lowercase().takeIf { Regex("[0-9a-f]{8}").matches(it) }?.let { "safe7.$it" }
 
-/** This platform's store for Safe 7 pairing credentials. */
+/** This platform's store for [network]'s Safe 7 pairing credentials, apart from the other network's. */
 @Composable
-internal expect fun rememberPairings(): Pairings
+internal expect fun rememberPairings(network: KeyNetwork): Pairings

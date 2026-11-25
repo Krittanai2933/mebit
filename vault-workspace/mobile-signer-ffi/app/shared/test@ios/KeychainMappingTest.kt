@@ -263,6 +263,7 @@ class KeychainMappingTest {
         assertEquals("com.mebit.app.wallet", walletService(KeyNetwork.TEST))
         assertEquals("com.mebit.app.vaults", vaultsService(KeyNetwork.TEST))
         assertEquals("wallet-marker", markerName(KeyNetwork.TEST))
+        assertEquals("com.mebit.app.pairing", pairingService(KeyNetwork.TEST))
     }
 
     @Test
@@ -272,6 +273,8 @@ class KeychainMappingTest {
         assertEquals("main/wallet-marker", markerName(KeyNetwork.MAIN))
         assertNotEquals(walletService(KeyNetwork.TEST), walletService(KeyNetwork.MAIN))
         assertNotEquals(vaultsService(KeyNetwork.TEST), vaultsService(KeyNetwork.MAIN))
+        assertEquals("com.mebit.app.pairing.main", pairingService(KeyNetwork.MAIN))
+        assertNotEquals(pairingService(KeyNetwork.TEST), pairingService(KeyNetwork.MAIN))
     }
 
     @Test
