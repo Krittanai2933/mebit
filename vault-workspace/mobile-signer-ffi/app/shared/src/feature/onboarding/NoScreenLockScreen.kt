@@ -55,9 +55,7 @@ internal fun NoScreenLockScreen(openSettings: (() -> Unit)?) {
         tag = "screen_no_screen_lock",
         bottom = openSettings?.let { open ->
             {
-                Spacer(modifier = Modifier.height(12.dp))
-                PrimaryCta("ตั้งล็อกหน้าจอ", "cta_open_security_settings", open)
-                Spacer(modifier = Modifier.height(14.dp))
+                // Above the button: below it, the line sat at the window's bottom edge on a POCO X3 NFC with MIUI's button bar.
                 Text(
                     text = "ตั้งเสร็จแล้วกลับมาที่ mebit แอปจะไปต่อเอง",
                     color = MbBody,
@@ -66,6 +64,8 @@ internal fun NoScreenLockScreen(openSettings: (() -> Unit)?) {
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().testTag("no_lock_come_back"),
                 )
+                Spacer(modifier = Modifier.height(14.dp))
+                PrimaryCta("ตั้งล็อกหน้าจอ", "cta_open_security_settings", open)
             }
         },
     ) {
