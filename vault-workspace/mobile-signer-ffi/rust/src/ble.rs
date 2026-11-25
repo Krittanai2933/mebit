@@ -289,6 +289,8 @@ pub async fn scan_wallets(kind: WalletKind) -> Result<Vec<FoundWallet>, BleError
 pub struct WalletLink {
     wallet: FoundWallet,
     claimed: AtomicBool,
+    /// The network `connect` pinned the device's session to. Set before `running`, so a running link has it.
+    network: OnceLock<KeyNetwork>,
     running: OnceLock<Running>,
 }
 
@@ -362,6 +364,7 @@ impl WalletLink {
         Arc::new(Self {
             wallet,
             claimed: AtomicBool::new(false),
+            network: OnceLock::new(),
             running: OnceLock::new(),
         })
     }
@@ -383,7 +386,7 @@ impl WalletLink {
         network: KeyNetwork,
     ) -> Result<Option<Vec<u8>>, BleError> {
         platform::ble_ready()?;
-        self.attach(async {
+        self.attach(network, async {
             platform::forget_seen_devices().await?;
             backend::connect(&self.wallet, codes, pairing, network.bitcoin()).await
         })
@@ -423,7 +426,8 @@ impl WalletLink {
     /// Signs `psbt_base64`, a payment of the wallet `descriptor` whose unsigned id is
     /// `unsigned_txid` (the payment the user was shown), with the key of that wallet this device
     /// holds, and returns what the PSBT says after it. Before anything reaches the device, it
-    /// refuses a descriptor `wallet_describe` refuses, a PSBT `wallet_review` refuses, and a PSBT
+    /// refuses a descriptor `wallet_describe` refuses on the network `connect` was given (a wallet
+    /// of the other network included), a PSBT `wallet_review` refuses, and a PSBT
     /// whose id is another ("changed since shown"). `WrongKey` means the device holds no key of the
     /// wallet, and nothing showed on it. When that key has already signed, the review comes back
     /// without asking the device to sign, and `steps` hears nothing. Else a Jade must hold a
@@ -441,7 +445,8 @@ impl WalletLink {
         steps: Arc<dyn SignSteps>,
     ) -> Result<SpendReview, BleError> {
         let refused = |error| BleError::Refused(said(error));
-        let wallet = Described::parse(&descriptor).map_err(refused)?;
+        let network = *self.network.get().ok_or_else(closed)?;
+        let wallet = Described::parse_on(&descriptor, network).map_err(refused)?;
         let psbt = spend::parse(&psbt_base64).map_err(refused)?;
         let shown = spend::as_shown(&wallet, psbt, &unsigned_txid, &SCAN_STORE).map_err(refused)?;
         self.running
@@ -467,6 +472,7 @@ impl WalletLink {
     /// Hands back the pairing credential `connecting` made, if any.
     async fn attach(
         &self,
+        network: KeyNetwork,
         connecting: impl Future<Output = Result<(Running, Option<Vec<u8>>), BleError>>,
     ) -> Result<Option<Vec<u8>>, BleError> {
         if self.claimed.swap(true, Ordering::SeqCst) {
@@ -475,7 +481,8 @@ impl WalletLink {
             ));
         }
         let (running, credential) = connecting.await?;
-        // One caller got past `claimed`, so nothing else has set it.
+        // One caller got past `claimed`, so nothing else has set either.
+        let _ = self.network.set(network);
         let _ = self.running.set(running);
         Ok(credential)
     }
@@ -877,9 +884,11 @@ mod tests {
     async fn fake_where(link_goes_down: Option<oneshot::Receiver<()>>) -> Fake {
         let (wallet, answer, log) = fake_wallet(link_goes_down);
         let link = WalletLink::new(found());
-        link.attach(async { Ok((Running::spawn(wallet), None)) })
-            .await
-            .unwrap();
+        link.attach(KeyNetwork::Test, async {
+            Ok((Running::spawn(wallet), None))
+        })
+        .await
+        .unwrap();
         (link, answer, log)
     }
 
@@ -1022,12 +1031,16 @@ mod tests {
         let link = WalletLink::new(found());
         assert!(matches!(link.info().await, Err(BleError::Disconnected(_))));
         assert_eq!(link.disconnect().await, Ok(()));
-        link.attach(async { Ok((Running::spawn(wallet), None)) })
-            .await
-            .unwrap();
+        link.attach(KeyNetwork::Test, async {
+            Ok((Running::spawn(wallet), None))
+        })
+        .await
+        .unwrap();
         let (second, _answer, _log) = fake_wallet(None);
         let again = link
-            .attach(async { Ok((Running::spawn(second), None)) })
+            .attach(KeyNetwork::Test, async {
+                Ok((Running::spawn(second), None))
+            })
             .await;
         assert!(matches!(again, Err(BleError::Refused(_))));
     }
@@ -1038,7 +1051,9 @@ mod tests {
             let (wallet, _answer, _log) = fake_wallet(None);
             let link = WalletLink::new(found());
             let handed = link
-                .attach(async { Ok((Running::spawn(wallet), made.clone())) })
+                .attach(KeyNetwork::Test, async {
+                    Ok((Running::spawn(wallet), made.clone()))
+                })
                 .await;
             assert_eq!(handed, Ok(made));
         }
@@ -1048,12 +1063,16 @@ mod tests {
     async fn a_failed_connect_spends_the_link() {
         let link = WalletLink::new(found());
         let refused = link
-            .attach(async { Err(BleError::Timeout("timed out waiting for the Jade".into())) })
+            .attach(KeyNetwork::Test, async {
+                Err(BleError::Timeout("timed out waiting for the Jade".into()))
+            })
             .await;
         assert!(matches!(refused, Err(BleError::Timeout(_))));
         let (wallet, _answer, _log) = fake_wallet(None);
         let again = link
-            .attach(async { Ok((Running::spawn(wallet), None)) })
+            .attach(KeyNetwork::Test, async {
+                Ok((Running::spawn(wallet), None))
+            })
             .await;
         assert!(matches!(again, Err(BleError::Refused(_))));
         assert!(matches!(link.info().await, Err(BleError::Disconnected(_))));
@@ -1281,9 +1300,11 @@ mod tests {
     async fn link_to(device: Holding) -> (Arc<WalletLink>, Log) {
         let log = device.log.clone();
         let link = WalletLink::new(found());
-        link.attach(async { Ok((Running::spawn(device), None)) })
-            .await
-            .unwrap();
+        link.attach(KeyNetwork::Test, async {
+            Ok((Running::spawn(device), None))
+        })
+        .await
+        .unwrap();
         (link, log)
     }
 
@@ -1350,6 +1371,28 @@ mod tests {
                 "{refused:?}"
             );
         }
+        assert!(
+            logged(&log).is_empty(),
+            "the device was asked {:?}",
+            logged(&log)
+        );
+    }
+
+    // A link connected for testnet refuses a mainnet wallet before the device hears anything. The same seed makes a key
+    // on each network, so this Jade holds a key of the wallet, and its testnet session would show bc1 payments as tb1.
+    #[tokio::test]
+    async fn a_wallet_of_another_network_than_the_link_never_reaches_the_device() {
+        let descriptor = crate::script::tests::main_multisig(2, &[1, 2, 3]);
+        let wallet = Described::parse(&descriptor).unwrap();
+        let to = crate::spend::tests::script_of("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
+        let psbt = crate::spend::tests::payment_to(&wallet, to);
+        let txid = psbt.unsigned_tx.compute_txid().to_string();
+        let (link, log) = jade(soft_master(1), &Registry::default()).await;
+        let refused = sign(&link, &descriptor, &psbt.to_string(), &txid, &log).await;
+        assert!(
+            matches!(&refused, Err(BleError::Refused(text)) if text.contains("its keys are mainnet keys, and the wallet is on testnet4")),
+            "{refused:?}"
+        );
         assert!(
             logged(&log).is_empty(),
             "the device was asked {:?}",

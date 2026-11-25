@@ -108,8 +108,7 @@ impl From<VaultCoreError> for MobileSignerError {
     }
 }
 
-/// Bitcoin mainnet, or testnet4. Testnet4 matches the network the Bluetooth
-/// link already uses.
+/// Bitcoin mainnet, or testnet4.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum KeyNetwork {
     Main,

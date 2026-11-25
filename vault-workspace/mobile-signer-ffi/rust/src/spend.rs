@@ -2173,7 +2173,7 @@ pub(crate) mod tests {
     /// BIP-173's testnet P2WPKH vector, an address of no wallet here.
     const ELSEWHERE: &str = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
 
-    fn script_of(address: &str) -> ScriptBuf {
+    pub(crate) fn script_of(address: &str) -> ScriptBuf {
         Address::from_str(address)
             .unwrap()
             .assume_checked()
@@ -2936,7 +2936,7 @@ pub(crate) mod tests {
     }
 
     /// `payment_of` paying `destination`.
-    fn payment_to(wallet: &Described, destination: ScriptBuf) -> Psbt {
+    pub(crate) fn payment_to(wallet: &Described, destination: ScriptBuf) -> Psbt {
         let parent = Transaction {
             version: Version::TWO,
             lock_time: LockTime::ZERO,

@@ -3821,7 +3821,8 @@ public actual open class WalletLink: Disposable, WalletLinkInterface {
      * Signs `psbt_base64`, a payment of the wallet `descriptor` whose unsigned id is
      * `unsigned_txid` (the payment the user was shown), with the key of that wallet this device
      * holds, and returns what the PSBT says after it. Before anything reaches the device, it
-     * refuses a descriptor `wallet_describe` refuses, a PSBT `wallet_review` refuses, and a PSBT
+     * refuses a descriptor `wallet_describe` refuses on the network `connect` was given (a wallet
+     * of the other network included), a PSBT `wallet_review` refuses, and a PSBT
      * whose id is another ("changed since shown"). `WrongKey` means the device holds no key of the
      * wallet, and nothing showed on it. When that key has already signed, the review comes back
      * without asking the device to sign, and `steps` hears nothing. Else a Jade must hold a
