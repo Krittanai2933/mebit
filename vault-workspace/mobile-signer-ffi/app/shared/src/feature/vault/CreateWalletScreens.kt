@@ -1,6 +1,7 @@
 package com.mebit.app.feature.vault
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -69,6 +70,9 @@ import com.mebit.app.feature.onboarding.RadioRow
 import com.mebit.app.navigation.MovieRoute
 import com.mebit.app.rememberCopier
 import com.mebit.app.rememberTextFileExport
+import com.mebit.app.resources.Res
+import com.mebit.app.resources.ic_multisig
+import com.mebit.app.resources.ic_single_sig
 import com.mebit.app.safeShareName
 import com.mebit.app.ui.components.DebugLink
 import com.mebit.app.ui.components.MebitScreen
@@ -82,6 +86,7 @@ import com.mebit.app.ui.theme.MbDisabledFill
 import com.mebit.app.ui.theme.MbDisabledInk
 import com.mebit.app.ui.theme.MbEyebrow
 import com.mebit.app.ui.theme.MbGreenWash
+import com.mebit.app.ui.theme.MbIconWash
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbPage
@@ -93,6 +98,8 @@ import com.mebit.app.ui.theme.MbWhite
 import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.walletDescriptorText
+import org.jetbrains.compose.resources.DrawableResource
+import org.jetbrains.compose.resources.painterResource
 
 /** What Penpot leaves under the primary button on every wizard board, so the button sits at y 732. */
 internal val BelowPrimary = 38.dp
@@ -126,9 +133,9 @@ fun PolicyScreen(
         Column(modifier = Modifier.selectableGroup()) {
             SigningCard(
                 title = "กระเป๋าเดี่ยว",
-                kind = "SINGLE-SIG",
-                body = "กุญแจเดียวเซ็นได้เลย ใช้จ่ายคล่อง เหมาะกับเงินที่ใช้ประจำ",
-                keys = 1,
+                kind = "Single-sig",
+                body = "กุญแจเดียวเซ็นได้เลย เหมาะกับเงินที่ใช้จ่ายประจำ",
+                icon = Res.drawable.ic_single_sig,
                 selected = single,
                 tag = "policy_single",
                 onClick = { draft.signing = Signing.SingleSig },
@@ -136,9 +143,9 @@ fun PolicyScreen(
             Spacer(modifier = Modifier.height(12.dp))
             SigningCard(
                 title = "หลายลายเซ็น",
-                kind = "MULTISIG",
-                body = "ต้องใช้หลายกุญแจร่วมกันเซ็น กุญแจหายใบเดียวเงินยังปลอดภัย",
-                keys = 2,
+                kind = "Multisig",
+                body = "หลายกุญแจร่วมกันเซ็น หายใบเดียวเงินยังปลอดภัย",
+                icon = Res.drawable.ic_multisig,
                 selected = !single,
                 tag = "policy_multi",
                 onClick = { draft.signing = Signing.Multisig },
@@ -170,14 +177,13 @@ fun PolicyScreen(
     }
 }
 
-/** A 362 by 122 card: [keys] key outlines, the [title], the [kind] line and the [body]. Selection is only the fill and the stroke. */
 @Composable
-private fun SigningCard(title: String, kind: String, body: String, keys: Int, selected: Boolean, tag: String, onClick: () -> Unit) {
+private fun SigningCard(title: String, kind: String, body: String, icon: DrawableResource, selected: Boolean, tag: String, onClick: () -> Unit) {
     val shape = RoundedCornerShape(20.dp)
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(122.dp)
+            .heightIn(min = 87.dp)
             .shadow(4.dp, shape, clip = false)
             .clip(shape)
             .background(if (selected) MbWarmTint else MbWhite)
@@ -185,12 +191,17 @@ private fun SigningCard(title: String, kind: String, body: String, keys: Int, se
             .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
             .testTag(tag),
     ) {
-        repeat(keys) { i ->
-            Box(Modifier.offset(x = (20 + 17 * i).dp, y = (24 + 2 * i).dp).size(13.dp, 22.dp).border(2.dp, MbNavy, RoundedCornerShape(4.dp)))
+        Box(Modifier.offset(x = 18.dp, y = 17.dp).size(52.dp).background(if (selected) MbIconWash else MbChip, RoundedCornerShape(16.dp)), contentAlignment = Alignment.Center) {
+            Image(painterResource(icon), contentDescription = null, modifier = Modifier.size(40.dp))
         }
-        Text(title, color = MbNavyInk, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, lineHeight = 24.sp, modifier = Modifier.offset(x = 66.dp, y = 17.dp))
-        Text(kind, color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 14.sp, modifier = Modifier.offset(x = 66.dp, y = 47.dp))
-        Text(body, color = MbBody, fontSize = 12.5.sp, fontWeight = FontWeight.Light, lineHeight = 17.5.sp, modifier = Modifier.padding(start = 66.dp, top = 69.dp, end = 26.dp))
+        Column(Modifier.padding(start = 82.dp, top = 15.dp, end = 18.dp, bottom = 18.dp)) {
+            Row {
+                Text(title, color = MbNavyInk, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, lineHeight = 24.sp)
+                Text(kind, color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 14.sp, modifier = Modifier.padding(start = 6.dp, top = 7.3.dp))
+            }
+            Spacer(modifier = Modifier.height(5.7.dp))
+            Text(body, color = MbBody, fontSize = 12.5.sp, fontWeight = FontWeight.Light, lineHeight = 17.5.sp)
+        }
     }
 }
 
