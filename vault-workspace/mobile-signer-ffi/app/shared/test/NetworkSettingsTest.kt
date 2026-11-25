@@ -40,4 +40,12 @@ class NetworkSettingsTest {
         settings.choose(KeyNetwork.MAIN)
         assertEquals(KeyNetwork.MAIN, settings.current)
     }
+
+    // Until the records take mainnet (phase 3 widens SavedWallet.NETWORKS, and must change this test), a stored "main" leaves the
+    // gate on testnet: opening mainnet storage it cannot read would show the recovery screen, whose one button erases it.
+    @Test
+    fun theGateOpensOnlyANetworkThisBuildCanRead() {
+        assertEquals(KeyNetwork.TEST, openableNetwork(KeyNetwork.TEST))
+        assertEquals(KeyNetwork.TEST, openableNetwork(KeyNetwork.MAIN))
+    }
 }

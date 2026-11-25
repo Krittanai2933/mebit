@@ -28,3 +28,9 @@ class NetworkSettings internal constructor(private val file: PlainFile?) {
         const val MAIN_TEXT = "main"
     }
 }
+
+/**
+ * The network whose storage the gate opens: [chosen], unless this build cannot read that network's records. Such a build would
+ * find every record Broken, and the recovery screen's one button erases them, so it stays on testnet and never opens the other.
+ */
+internal fun openableNetwork(chosen: KeyNetwork): KeyNetwork = if (chosen in SavedWallet.NETWORKS) chosen else KeyNetwork.TEST

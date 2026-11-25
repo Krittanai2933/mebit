@@ -154,7 +154,7 @@ private class KeychainShelf(network: KeyNetwork, private val vaults: KeychainVau
      */
     private val lock = NSLock()
 
-    /** Which copy each place's two slots hold, as this process counts it. Guarded by [lock]. One per process, because this object is. */
+    /** Which copy each place's two slots hold, as this process counts it. Guarded by [lock]. One per network, because each network has a shelf of its own. */
     private val copies: Map<Place, CopyCounter> = Place.all.associateWith { CopyCounter() }
 
     private val stores: Map<Place, SecureStore> = Place.all.associateWith { KeychainPlace(it) }

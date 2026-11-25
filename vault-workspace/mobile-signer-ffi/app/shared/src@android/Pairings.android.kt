@@ -27,7 +27,7 @@ private const val PAIRING_AES_GCM = "AES/GCM/NoPadding"
 private const val PAIRING_IV_SIZE = 12
 private const val PAIRING_TAG_BITS = 128
 
-/** One lock for every [KeystorePairings], because they all share the one folder and key. */
+/** One lock for every [KeystorePairings], one per network: a write holds it only for a moment, so sharing it is harmless. */
 private val pairingsLock = Any()
 
 /**

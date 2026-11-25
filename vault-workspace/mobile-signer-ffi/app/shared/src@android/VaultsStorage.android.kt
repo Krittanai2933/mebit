@@ -27,7 +27,7 @@ private const val AES_GCM = "AES/GCM/NoPadding"
 private const val IV_SIZE = 12
 private const val TAG_BITS = 128
 
-/** One lock for every [KeystoreVaults], one per network and one more is harmless: a write takes it for a moment. */
+/** One lock for every [KeystoreVaults], one per network: a write holds it only for a moment, so sharing it is harmless. */
 private val vaultsFileLock = Any()
 
 /** The file holds the IV, then the AES-256-GCM ciphertext and tag. Its key needs an unlocked phone but no owner check, because the wallet's key prompts at every use and this read must not. */

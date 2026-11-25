@@ -16,6 +16,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mebit.app.Place
 import com.mebit.app.SystemBack
 import com.mebit.app.data.NetworkSettings
+import com.mebit.app.data.openableNetwork
 import com.mebit.app.data.NodeSettings
 import com.mebit.app.data.UnitSettings
 import com.mebit.app.data.PendingPayments
@@ -95,7 +96,7 @@ private val SAVE_RETRY_WAITS = listOf(0, 1, 2, 4, 8, 16).map { it.seconds }
 private fun OpenGate(lock: LockGate) {
     // The app folder is testnet's scan folder on purpose: the network choice lives in it, so it cannot depend on that choice. btc-unit stays in it too.
     val appDir = rememberScanStateDir(KeyNetwork.TEST)
-    val network = remember(appDir) { NetworkSettings(appDir?.let { plainFile("$it/network") }).also { it.restore() }.current }
+    val network = remember(appDir) { openableNetwork(NetworkSettings(appDir?.let { plainFile("$it/network") }).also { it.restore() }.current) }
     // Before any screen asks the core about a wallet, so its first sync after a restart reads the scan file.
     val scanDir = rememberScanStateDir(network)
     remember(scanDir) { scanDir?.let(::hotUseStateDir) }
