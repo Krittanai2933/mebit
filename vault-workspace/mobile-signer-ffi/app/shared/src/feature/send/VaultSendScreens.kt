@@ -1,5 +1,9 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.ui.components.ShrinkText
+import com.mebit.app.data.amountNumber
+import com.mebit.app.data.amountText
+import com.mebit.app.data.LocalBtcUnit
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -186,7 +190,7 @@ fun VaultSendScreen(
                 }
                 is SendIssue.Insufficient -> {
                     Spacer(modifier = Modifier.height(20.dp))
-                    IssuePanel("INSUFFICIENT FUNDS", "ยอดไม่พอ — ขาดอีก ${formatBtcCompact(issue.missingSats)} BTC (รวมค่าธรรมเนียม) ลดจำนวน หรือกดส่งทั้งหมด")
+                    IssuePanel("INSUFFICIENT FUNDS", "ยอดไม่พอ — ขาดอีก ${amountText(issue.missingSats, LocalBtcUnit.current)} (รวมค่าธรรมเนียม) ลดจำนวน หรือกดส่งทั้งหมด")
                 }
                 null -> Unit
             }
@@ -381,19 +385,21 @@ fun CollectSignaturesScreen(
     }
 }
 
-/** 5.2's navy card: "ส่ง", the amount in BTC with its baht beside it when there is a price, and "ถึง" the address's ends. */
+/** 5.2's navy card: "ส่ง", the amount in the chosen unit with its baht beside it when there is a price, and "ถึง" the address's ends. */
 @Composable
 private fun PaymentCard(payment: VaultPayment, quote: com.mebit.app.data.FiatQuote?) {
     val amount = payment.amountSats.toLong()
+    val unit = LocalBtcUnit.current
     Column(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(MbNavy).padding(horizontal = 20.dp, vertical = 16.dp).testTag("m2_summary"),
     ) {
         Text("ส่ง", color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
         Row(verticalAlignment = Alignment.Bottom) {
-            Text(formatBtcCompact(amount), color = MbWhite, fontSize = 30.sp, fontWeight = FontWeight.Bold, fontFamily = amountFontFamily(), lineHeight = 38.sp, modifier = Modifier.testTag("m2_amount"))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("BTC", color = MbWhite.copy(alpha = 0.8f), fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 5.dp))
-            Spacer(modifier = Modifier.weight(1f))
+            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.Bottom) {
+                ShrinkText(amountNumber(amount, unit), color = MbWhite, fontSize = 30.sp, fontWeight = FontWeight.Bold, fontFamily = amountFontFamily(), lineHeight = 38.sp, modifier = Modifier.weight(1f, fill = false).testTag("m2_amount"))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(unit.label, color = MbWhite.copy(alpha = 0.8f), fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 5.dp))
+            }
             fiatLine(amount, quote)?.let { Text(it, color = SummaryGold, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 6.dp).testTag("m2_fiat")) }
         }
         Text("ถึง ${shorten(payment.destination, "…")}", color = MbWhite.copy(alpha = 0.85f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, modifier = Modifier.testTag("m2_to"))
@@ -484,7 +490,7 @@ private fun Checklist(payment: VaultPayment, quote: com.mebit.app.data.FiatQuote
     val shape = RoundedCornerShape(16.dp)
     Column(modifier = Modifier.fillMaxWidth().clip(shape).background(MbChip).padding(horizontal = 16.dp, vertical = 10.dp)) {
         CheckRow("ปลายทาง", shorten(payment.destination, "…"), "m2_check_destination")
-        if (payment.changeSats > 0uL) CheckRow("เงินทอนกลับเข้า Wallet", "${formatBtc(payment.changeSats.toLong())} BTC", "m2_check_change")
+        if (payment.changeSats > 0uL) CheckRow("เงินทอนกลับเข้า Wallet", amountText(payment.changeSats.toLong(), LocalBtcUnit.current, ::formatBtc), "m2_check_change")
         CheckRow("ค่าธรรมเนียม", realFeeText(payment.feeSats.toLong(), quote), "m2_check_fee")
     }
 }

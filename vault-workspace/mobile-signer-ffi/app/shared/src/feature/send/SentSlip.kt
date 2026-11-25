@@ -1,5 +1,8 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.ui.components.ShrinkText
+import com.mebit.app.data.amountNumber
+import com.mebit.app.data.LocalBtcUnit
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -240,10 +243,11 @@ private fun Slip(
                 Text("จำนวน:", color = SlipMuted, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, lineHeight = 19.sp, modifier = Modifier.padding(top = 9.dp))
                 Spacer(modifier = Modifier.weight(1f))
                 Column(horizontalAlignment = Alignment.End) {
-                    Text(
+                    val unit = LocalBtcUnit.current
+                    ShrinkText(
                         text = buildAnnotatedString {
-                            append(formatBtcCompact(amountSats))
-                            withStyle(SpanStyle(fontSize = 15.sp)) { append(" BTC") }
+                            append(amountNumber(amountSats, unit))
+                            withStyle(SpanStyle(fontSize = 15.sp)) { append(" ${unit.label}") }
                         },
                         color = SlipNavy,
                         fontSize = 30.sp,

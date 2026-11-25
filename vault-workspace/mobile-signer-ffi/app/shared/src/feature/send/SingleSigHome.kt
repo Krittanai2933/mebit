@@ -1,5 +1,6 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.data.LocalBtcUnit
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -260,7 +261,7 @@ private fun OneKeyHome(
     }
     val debugBuild = rememberIsDebugBuild()
     val quote = rememberFiatQuote(quotes)
-    val rows = if (wallet.mode == WalletMode.Live) historyRows(wallet.history) else emptyList()
+    val rows = if (wallet.mode == WalletMode.Live) historyRows(wallet.history, unit = LocalBtcUnit.current) else emptyList()
     val pull = remember { RowsPullState() }
     // Derived, so a drag recomposes the page only when one of these flips and not on every frame.
     val armed by remember { derivedStateOf { pull.distanceFraction > 1f } }
@@ -282,7 +283,7 @@ private fun OneKeyHome(
             board = WalletBoard.Home,
             eyebrow = "SINGLE-SIG · กุญแจเดียว",
             name = walletName,
-            balance = homeBalanceText(wallet.balanceSats, wallet.balanceKnown, loading),
+            balance = homeBalanceText(wallet.balanceSats, wallet.balanceKnown, loading, LocalBtcUnit.current),
             balanceTag = "ss_balance",
             receiveTag = "cta_s1_receive",
             onReceive = onReceive,

@@ -1,5 +1,6 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.ui.components.ShrinkText
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -172,14 +173,14 @@ internal fun WalletHero(
     Text(name, color = MbWhite, fontSize = 19.sp, fontWeight = FontWeight.Medium, lineHeight = 25.sp)
     Spacer(modifier = Modifier.height(12.dp))
     Row(verticalAlignment = Alignment.Bottom) {
-        Text(
+        ShrinkText(
             text = balance,
             color = MbWhite,
             fontSize = 38.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = amountFontFamily(),
             lineHeight = 50.sp,
-            modifier = Modifier.testTag(balanceTag),
+            modifier = Modifier.weight(1f, fill = false).testTag(balanceTag),
         )
         if (demo) {
             Text(" demo", color = MbWhite.copy(alpha = 0.6f), fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.padding(bottom = 10.dp))

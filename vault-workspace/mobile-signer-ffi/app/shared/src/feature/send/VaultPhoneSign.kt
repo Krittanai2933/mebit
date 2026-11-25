@@ -1,5 +1,6 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.data.LocalBtcUnit
 import androidx.compose.foundation.Image
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -149,7 +150,7 @@ private fun PhoneSignPage(
         onOpenCatalog = onOpenCatalog,
         bottom = { SignButtons(signed, text.bar != null, onRetry, onContinue, { onBack?.invoke() }) },
     ) {
-        if (text.bar != null) WarningBar(text.bar) else MatchCard(review, walletName)
+        if (text.bar != null) WarningBar(text.bar) else MatchCard(review, walletName, LocalBtcUnit.current)
     }
 }
 

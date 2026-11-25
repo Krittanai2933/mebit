@@ -10,6 +10,7 @@ import kotlin.math.floor
 private const val SATS_PER_BTC = 100_000_000.0
 private const val MAX_SATS = 21_000_000.0 * SATS_PER_BTC
 private const val MAX_BAHT_DIGITS = 9
+private const val MAX_SAT_DIGITS = 16
 private val BtcTyping = Regex("""\d{0,8}(\.\d{0,8})?""")
 
 /** Whole [baht] to sats at [thbPerBtc], rounded half up. Null when that is more than 21 million BTC. */
@@ -34,7 +35,8 @@ fun formatBtcCompact(sats: Long): String {
 enum class AmountUnit { Btc, Thb }
 
 /**
- * What the Send screen's amount card takes and shows, in BTC or in baht.
+ * What the Send screen's amount card takes and shows, in bitcoin or in baht. Bitcoin is BTC, or whole sats when the unit setting is [BtcUnit.Sat]:
+ * the `coin` argument of the methods below is that setting, and a card in BTC behaves as it did before the setting existed.
  * [SendDraft.amountSats] is the one truth. The BTC text and the baht text are two renderings of it, so picking a unit never changes the sats.
  * Baht needs a price. Given no `quote`, a pick of baht and a typed baht amount are ignored, and everything shows in BTC.
  * The screen creates one per visit, so the unit is BTC again whenever the screen opens and the amount stays.
@@ -62,6 +64,16 @@ class AmountEntry(private val draft: SendDraft) {
     fun typeBtc(text: String) {
         if (!BtcTyping.matches(text)) return
         draft.setAmountBtc(text)
+    }
+
+    /** Takes the sat field's digits. Anything but digits, or an amount above 21 million BTC, is ignored, so the field keeps its old text. */
+    fun typeSats(text: String) {
+        if (!text.all { it in '0'..'9' }) return
+        val digits = text.trimStart('0')
+        if (digits.length > MAX_SAT_DIGITS) return
+        val sats = digits.toLongOrNull() ?: 0L
+        if (sats > MAX_SATS) return
+        draft.setAmountInSats(sats)
     }
 
     /**
@@ -96,11 +108,11 @@ class AmountEntry(private val draft: SendDraft) {
     }
 
     /**
-     * The amount field's text: the BTC text as typed, or in baht the digits of the sats, empty for zero.
+     * The amount field's text: the BTC text as typed, the digits of the sats in sat, or in baht the digits of the baht, empty for zero.
      * Baht rounds half up, as the baht line does, so what was typed in baht reads back as typed. Send all cuts down.
      */
-    fun fieldText(quote: FiatQuote?): String {
-        val priced = bahtQuote(quote) ?: return draft.amountText
+    fun fieldText(quote: FiatQuote?, coin: BtcUnit = BtcUnit.Btc): String {
+        val priced = bahtQuote(quote) ?: return if (coin == BtcUnit.Sat) draft.amountSats.takeIf { it != 0L }?.toString().orEmpty() else draft.amountText
         val sats = draft.amountSats
         // shortcut: baht typed reads back as typed only up to 100,000,000 baht per bitcoin, where a sat is worth at most a baht. Above that, keep the typed text.
         return when {
@@ -111,16 +123,16 @@ class AmountEntry(private val draft: SendDraft) {
     }
 
     /** The gold line under the amount: the other unit, such as `≈ ฿18,010` or `≈ 0.0050 BTC`. Null for no amount or, in BTC, no price. */
-    fun otherLine(quote: FiatQuote?): String? = when {
+    fun otherLine(quote: FiatQuote?, coin: BtcUnit = BtcUnit.Btc): String? = when {
         draft.amountSats == 0L -> null
-        bahtQuote(quote) != null -> "≈ ${formatBtcCompact(draft.amountSats)} BTC"
+        bahtQuote(quote) != null -> "≈ ${amountText(draft.amountSats, coin)}"
         else -> fiatLine(draft.amountSats, quote)
     }
 
     /** The caption under the amount: what the wallet holds in the unit shown, cut down in baht, or the note that the amount is send all. */
-    fun caption(balanceSats: Long, quote: FiatQuote?): String {
+    fun caption(balanceSats: Long, quote: FiatQuote?, coin: BtcUnit = BtcUnit.Btc): String {
         if (isSendAll) return "ส่งยอดทั้งหมด · หักค่าธรรมเนียมแล้ว"
-        val priced = bahtQuote(quote) ?: return "ใช้ได้ ${formatBtcCompact(balanceSats)} BTC"
+        val priced = bahtQuote(quote) ?: return "ใช้ได้ ${amountText(balanceSats, coin)}"
         return "ใช้ได้ ฿${thousands(satsToBahtFloor(balanceSats, priced.thbPerBtc))}"
     }
 }

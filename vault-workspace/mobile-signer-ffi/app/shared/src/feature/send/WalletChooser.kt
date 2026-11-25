@@ -1,5 +1,6 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.data.BtcUnit
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,8 +38,8 @@ data class WalletLine(val name: String, val balance: String, val baht: String?)
  * A vault's row. Its balance and baht once [knownSats] is known, as a one-key row shows them, and a dash with no baht until then.
  * Penpot 4.2 and 4.7 draw "0.8420 BTC" over "≈ ฿3,033,100".
  */
-internal fun vaultLine(vault: CreatedVault, knownSats: Long?, quote: FiatQuote?): WalletLine =
-    WalletLine(vault.name, homeBalanceText(knownSats ?: 0L, known = knownSats != null, loading = false), knownSats?.let { fiatLine(it, quote) })
+internal fun vaultLine(vault: CreatedVault, knownSats: Long?, quote: FiatQuote?, unit: BtcUnit = BtcUnit.Btc): WalletLine =
+    WalletLine(vault.name, homeBalanceText(knownSats ?: 0L, known = knownSats != null, loading = false, unit = unit), knownSats?.let { fiatLine(it, quote) })
 
 /**
  * The order of every list of wallets, the Wallet list's and the รับ/ส่ง chooser's, as the user set it on 12 Nov 2026: this phone's

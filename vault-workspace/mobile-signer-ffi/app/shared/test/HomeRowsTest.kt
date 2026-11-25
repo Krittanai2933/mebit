@@ -1,5 +1,6 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.data.BtcUnit
 import com.mebit.ffi.signer.HotTx
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -64,6 +65,14 @@ class HomeRowsTest {
     fun aWholeBitcoinKeepsItsSign() {
         assertEquals("+1.0000", homeRows(listOf(tx(100_000_000))).single().amount)
         assertEquals("−21000000.0000", homeRows(listOf(tx(-2_100_000_000_000_000))).single().amount)
+    }
+
+    @Test
+    fun satModeShowsWholeSatsWithTheirUnit() {
+        assertEquals("+1,234 sat", homeRows(listOf(tx(1_234)), unit = BtcUnit.Sat).single().amount)
+        assertEquals("−2,100,000,000,000,000 sat", homeRows(listOf(tx(-2_100_000_000_000_000)), unit = BtcUnit.Sat).single().amount)
+        assertEquals("19,436 sat", homeBalanceText(19_436, known = true, loading = false, unit = BtcUnit.Sat))
+        assertEquals("—", homeBalanceText(19_436, known = false, loading = false, unit = BtcUnit.Sat))
     }
 
     @Test

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -29,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.disabled
@@ -42,7 +44,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.NodeSetting
+import com.mebit.app.data.BtcUnit
 import com.mebit.app.data.NodeSettings
+import com.mebit.app.data.UnitSettings
 import com.mebit.app.feature.vault.PickRow
 import com.mebit.app.ui.components.IssueBanner
 import com.mebit.app.ui.components.MebitScreen
@@ -53,6 +57,8 @@ import com.mebit.app.ui.theme.MbChip
 import com.mebit.app.ui.theme.MbDisabledInk
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
+import com.mebit.app.ui.theme.MbPage
+import com.mebit.app.ui.theme.amountFontFamily
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
@@ -87,12 +93,13 @@ internal fun checkLine(found: NodeCheck?): String = when (found) {
 internal fun typedBase(text: String): String = text.trim().trimEnd('/')
 
 /**
- * Penpot 7.1, the connection group only. Left out: language, theme and the Bitcoin unit, which are features of their own (every string
- * is inline Thai, there is one light palette, and every amount is in BTC). The network is Testnet4 with Mainnet drawn disabled.
+ * Penpot 7.1: the Bitcoin unit, then the connection group. Left out: language and theme, which are features of their own (every string
+ * is inline Thai and there is one light palette). The network is Testnet4 with Mainnet drawn disabled.
  */
 @Composable
 fun SettingsScreen(
     node: NodeSettings,
+    unit: UnitSettings,
     onOpenNode: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
@@ -110,27 +117,32 @@ fun SettingsScreen(
         onOpenCatalog = onOpenCatalog,
         tag = "screen_settings",
     ) {
-        Text("การเชื่อมต่อ", color = MbBody, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 4.dp).testTag("settings_group"))
-        Spacer(modifier = Modifier.height(8.dp))
-        SettingsCard(Modifier.height(64.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(64.dp)) {
+        UnitCard(unit)
+        Spacer(modifier = Modifier.height(20.dp))
+        Text("การเชื่อมต่อ", color = MbBody, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 4.dp).testTag("settings_group"))
+        Spacer(modifier = Modifier.height(9.dp))
+        SettingsCard(Modifier.height(82.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().height(82.dp).padding(start = 16.dp, end = 18.dp)) {
                 Column(Modifier.weight(1f)) {
-                    Text("เครือข่าย", color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 20.sp)
-                    Text("เงินทดสอบ ไม่มีมูลค่าจริง", color = MbSlate, fontSize = 11.sp, fontWeight = FontWeight.Light, lineHeight = 15.sp, modifier = Modifier.testTag("settings_net_line"))
+                    Text("เครือข่าย", color = MbNavyInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, lineHeight = 20.sp)
+                    Text("เงินทดสอบ ไม่มีมูลค่าจริง", color = MbBody, fontSize = 12.sp, fontWeight = FontWeight.Light, lineHeight = 16.sp, modifier = Modifier.testTag("settings_net_line"))
                 }
-                NetworkSwitch()
+                TwoOptionSwitch(
+                    options = listOf(SwitchOption("Testnet4", "settings_net_testnet4"), SwitchOption("Mainnet", "settings_net_mainnet", enabled = false)),
+                    pickedAt = 0,
+                )
             }
         }
-        Spacer(modifier = Modifier.height(12.dp))
-        SettingsCard(Modifier.height(72.dp).clickable(role = Role.Button, onClick = onOpenNode).testTag("settings_node")) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(72.dp)) {
+        Spacer(modifier = Modifier.height(16.dp))
+        SettingsCard(Modifier.height(82.dp).clickable(role = Role.Button, onClick = onOpenNode).testTag("settings_node")) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().height(82.dp).padding(start = 16.dp, end = 18.dp)) {
                 Column(Modifier.weight(1f)) {
-                    Text("โหนด", color = MbNavyInk, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 20.sp)
+                    Text("โหนด", color = MbNavyInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, lineHeight = 20.sp)
                     Spacer(modifier = Modifier.height(2.dp))
                     NodeStatusLine(status)
                 }
-                Text(node.current.label(), color = MbNavy, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("settings_node_value"))
-                Text("›", color = MbNavy, fontSize = 20.sp, modifier = Modifier.padding(start = 8.dp))
+                Text(node.current.label(), color = MbNavy, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("settings_node_value"))
+                Text("›", color = MbBody, fontSize = 24.sp, modifier = Modifier.padding(start = 8.dp))
             }
         }
     }
@@ -138,8 +150,8 @@ fun SettingsScreen(
 
 @Composable
 private fun SettingsCard(modifier: Modifier, content: @Composable () -> Unit) {
-    val shape = RoundedCornerShape(20.dp)
-    Box(modifier = modifier.fillMaxWidth().shadow(4.dp, shape, clip = false).clip(shape).background(MbWhite)) { content() }
+    val shape = RoundedCornerShape(24.dp)
+    Box(modifier = modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape)) { content() }
 }
 
 /** The dot, the host in use and whether it answered. A dot that has not heard yet is grey. */
@@ -153,26 +165,50 @@ private fun NodeStatusLine(status: NodeStatus?) {
             status.reachable -> "${status.host} · ต่อได้"
             else -> "${status.host} · ต่อไม่ได้"
         }
-        Text(line, color = MbSlate, fontSize = 11.sp, fontWeight = FontWeight.Light, lineHeight = 15.sp, maxLines = 1)
+        Text(line, color = MbBody, fontSize = 12.sp, fontWeight = FontWeight.Light, lineHeight = 16.sp, maxLines = 1)
     }
 }
 
-/** Testnet4 chosen, Mainnet drawn and disabled: the app signs and pays on testnet only. */
+/** 7.1's unit card: "sat" or "BTC", and every amount in the app follows it. */
 @Composable
-private fun NetworkSwitch() {
-    Row(modifier = Modifier.height(34.dp).clip(CircleShape).background(MbChip), verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier.height(34.dp).clip(CircleShape).background(MbNavy).padding(horizontal = 12.dp)
-                .semantics { selected = true }.testTag("settings_net_testnet4"),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("Testnet4", color = MbWhite, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+private fun UnitCard(unit: UnitSettings) {
+    SettingsCard(Modifier.height(82.dp).testTag("settings_unit")) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().height(82.dp).padding(start = 16.dp, end = 18.dp)) {
+            Text("หน่วย Bitcoin", color = MbNavyInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            TwoOptionSwitch(
+                options = BtcUnit.entries.map { SwitchOption(it.label, "settings_unit_" + it.label.lowercase()) { unit.choose(it) } },
+                pickedAt = if (unit.current == BtcUnit.Sat) 0 else 1,
+            )
         }
-        Box(
-            modifier = Modifier.height(34.dp).padding(horizontal = 12.dp).semantics { disabled() }.testTag("settings_net_mainnet"),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("Mainnet", color = MbDisabledInk, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+/** One side of a [TwoOptionSwitch]. With no [onPick] it cannot be tapped, and a disabled one is drawn grey. */
+private class SwitchOption(val label: String, val tag: String, val enabled: Boolean = true, val onPick: (() -> Unit)? = null)
+
+/** 7.1's switch, shared by the network card (Testnet4 picked, Mainnet disabled) and the unit card: a 126 by 38 track, radius 13, the picked side a navy pill inset 2 with radius 11. */
+@Composable
+private fun TwoOptionSwitch(options: List<SwitchOption>, pickedAt: Int) {
+    val pill = RoundedCornerShape(11.dp)
+    Row(modifier = Modifier.width(126.dp).height(38.dp).clip(RoundedCornerShape(13.dp)).background(MbPage).padding(2.dp), verticalAlignment = Alignment.CenterVertically) {
+        options.forEachIndexed { at, option ->
+            val picked = at == pickedAt
+            val tap = option.onPick?.let { Modifier.clickable(role = Role.RadioButton, onClick = it) } ?: Modifier
+            Box(
+                modifier = (if (picked) Modifier.clip(pill).background(MbNavy) else Modifier).then(tap).weight(1f).fillMaxHeight()
+                    .semantics { selected = picked; if (!option.enabled) disabled() }.testTag(option.tag),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    option.label,
+                    color = if (picked) MbWhite else if (option.enabled) MbNavy else MbDisabledInk,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = amountFontFamily(),
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
         }
     }
 }

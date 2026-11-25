@@ -90,7 +90,9 @@ import com.mebit.app.feature.keys.HardwareWalletScreen
 import com.mebit.app.feature.keys.KeyringScreen
 import com.mebit.app.feature.settings.NodeScreen
 import com.mebit.app.feature.settings.SettingsScreen
+import com.mebit.app.data.LocalBtcUnit
 import com.mebit.app.data.NodeSettings
+import com.mebit.app.data.UnitSettings
 import com.mebit.app.feature.keys.PairMebitOtherScreen
 import com.mebit.app.feature.keys.T13UnsupportedModelScreen
 import com.mebit.app.feature.keys.T14VerifyMismatchScreen
@@ -205,6 +207,7 @@ internal fun MebitNavHost(
     vaults: SavedVaults = remember { SavedVaults.memoryOnly() },
     pairings: Pairings? = null,
     nodeSettings: NodeSettings = remember { NodeSettings(null) },
+    unitSettings: UnitSettings = remember { UnitSettings(null) },
 ) {
     val backStack = remember { mutableStateListOf(start) }
     val current = backStack.last()
@@ -467,7 +470,7 @@ internal fun MebitNavHost(
     val bar = current.route.bar
     // A sheet that covers a tab screen, the wallet list's QR scanner, hides the bar and gives the screen its room.
     var barHidden by remember { mutableStateOf(false) }
-    CompositionLocalProvider(LocalDebugLinkLift provides if (bar != null && !barHidden) 22.dp else 0.dp) {
+    CompositionLocalProvider(LocalDebugLinkLift provides if (bar != null && !barHidden) 22.dp else 0.dp, LocalBtcUnit provides unitSettings.current) {
         Box(Modifier.fillMaxSize().background(MbPage)) {
             val inset = if (bar != null && !barHidden) bottomBarHeight() else 0.dp
             Box(Modifier.fillMaxSize().padding(bottom = inset).consumeWindowInsets(PaddingValues(bottom = inset))) {
@@ -599,6 +602,7 @@ internal fun MebitNavHost(
                     )
                     MovieRoute.Settings -> SettingsScreen(
                         node = nodeSettings,
+                        unit = unitSettings,
                         onOpenNode = { navigate(MovieRoute.SettingsNode) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -1074,15 +1078,15 @@ internal fun MebitNavHost(
                                 when (choice) {
                                     is WalletChoice.Spending -> {
                                         val w = wallets.at(choice.place)
-                                        ChoiceCard(w.session.walletName, "กุญแจเดียว · $THIS_PHONE_KEY_NAME", cardBalanceText(w.chain.balanceSats, spendingKnown(w)))
+                                        ChoiceCard(w.session.walletName, "กุญแจเดียว · $THIS_PHONE_KEY_NAME", cardBalanceText(w.chain.balanceSats, spendingKnown(w), unitSettings.current))
                                     }
                                     is WalletChoice.Hardware -> {
                                         val chain = hardware.chain(choice.wallet)
-                                        ChoiceCard(choice.wallet.name, "กุญแจเดียว · ${hardwareKeyName(choice.wallet, keyring.keys)}", cardBalanceText(chain.balanceSats, chain.balanceKnown))
+                                        ChoiceCard(choice.wallet.name, "กุญแจเดียว · ${hardwareKeyName(choice.wallet, keyring.keys)}", cardBalanceText(chain.balanceSats, chain.balanceKnown, unitSettings.current))
                                     }
                                     is WalletChoice.Vault -> {
                                         val sats = wallets.vaultSats(choice.vault)
-                                        ChoiceCard(choice.vault.name, "ต้องเซ็น ${choice.vault.m} จาก ${choice.vault.n} กุญแจ", cardBalanceText(sats ?: 0L, known = sats != null))
+                                        ChoiceCard(choice.vault.name, "ต้องเซ็น ${choice.vault.m} จาก ${choice.vault.n} กุญแจ", cardBalanceText(sats ?: 0L, known = sats != null, unit = unitSettings.current))
                                     }
                                 }
                             },

@@ -1,5 +1,7 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.data.amountText
+import com.mebit.app.data.BtcUnit
 import com.mebit.app.data.FiatQuote
 import com.mebit.app.data.TxDetailLoad
 import com.mebit.app.data.formatBtcCompact
@@ -64,7 +66,7 @@ internal val DEMO_TX = HotTx("6d6562697464656d6f" + "0".repeat(46), -1_801_240L,
  * that another party's input helped pay, it shows the net with its fee, labelled so.
  * [network] is the one the detail was asked on. [timeZoneId] is an IANA id for the date, and null means the device's zone.
  */
-internal fun txDetailView(row: HotTx, load: TxDetailLoad, quote: FiatQuote?, network: KeyNetwork, timeZoneId: String? = null): TxDetailView {
+internal fun txDetailView(row: HotTx, load: TxDetailLoad, quote: FiatQuote?, network: KeyNetwork, timeZoneId: String? = null, unit: BtcUnit = BtcUnit.Btc): TxDetailView {
     val detail = (load as? TxDetailLoad.Loaded)?.detail
     val tx = detail?.tx ?: row
     val received = tx.netSats >= 0
@@ -79,7 +81,7 @@ internal fun txDetailView(row: HotTx, load: TxDetailLoad, quote: FiatQuote?, net
     return TxDetailView(
         received = received,
         title = if (received) "รับ" else "ส่งออก",
-        amount = btc(amountSats),
+        amount = amountText(amountSats, unit),
         amountNote = "รวมค่าธรรมเนียม".takeIf { !received && reached == null },
         fiat = fiatLine(amountSats, quote)?.let { "มูลค่าตอนนี้ $it" },
         testnet = network == KeyNetwork.TEST,
@@ -97,13 +99,13 @@ internal fun txDetailView(row: HotTx, load: TxDetailLoad, quote: FiatQuote?, net
         }?.takeIf { it.addresses.isNotEmpty() },
         cost = detail?.takeUnless { received }?.let {
             val change = it.outputs.filter { o -> o.owner == TxoOwner.CHANGE }.sumOf { o -> o.valueSats }.toLong()
-            TxCostView(realFeeText(it.feeSats.toLong(), quote).takeIf { soleSend }, rate(it).takeIf { soleSend }, btc(net), change.takeIf { c -> c > 0 }?.let(::btc))
+            TxCostView(realFeeText(it.feeSats.toLong(), quote).takeIf { soleSend }, rate(it).takeIf { soleSend }, amountText(net, unit), change.takeIf { c -> c > 0 }?.let { c -> amountText(c, unit) })
         },
         txid = row.txid,
         technical = detail?.let {
             TxTechnicalView(
-                inputs = it.inputs.map { i -> txoLine(i, if (i.owner == TxoOwner.OTHER) null else OWN) },
-                outputs = it.outputs.map { o -> txoLine(o, outputTag(o.owner, received, soleSend)) },
+                inputs = it.inputs.map { i -> txoLine(i, if (i.owner == TxoOwner.OTHER) null else OWN, unit) },
+                outputs = it.outputs.map { o -> txoLine(o, outputTag(o.owner, received, soleSend), unit) },
                 fee = "${thousands(it.feeSats.toLong())} sat",
                 rate = rate(it),
                 size = "${thousands(it.sizeBytes.toLong())} B",
@@ -123,8 +125,6 @@ internal fun txDetailView(row: HotTx, load: TxDetailLoad, quote: FiatQuote?, net
 }
 
 private const val OWN = "ของกระเป๋านี้"
-
-private fun btc(sats: Long) = formatBtcCompact(sats) + " BTC"
 
 /** Up to [CONFIRMATION_TARGET] the card counts blocks on six segments and says when it is usually final. Past it, the count alone. */
 private fun status(tx: HotTx, detail: HotTxDetail?, received: Boolean): TxStatusView {
@@ -159,5 +159,5 @@ private fun outputTag(owner: TxoOwner, received: Boolean, soleSend: Boolean): St
     else -> OWN
 }
 
-private fun txoLine(txo: HotTxo, tag: String?) =
-    TxoLine(txo.address?.let { shorten(it, "…") } ?: "ไม่มีที่อยู่", btc(txo.valueSats.toLong()), tag)
+private fun txoLine(txo: HotTxo, tag: String?, unit: BtcUnit) =
+    TxoLine(txo.address?.let { shorten(it, "…") } ?: "ไม่มีที่อยู่", amountText(txo.valueSats.toLong(), unit), tag)

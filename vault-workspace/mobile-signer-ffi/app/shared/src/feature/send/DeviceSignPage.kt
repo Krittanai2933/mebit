@@ -1,5 +1,9 @@
 package com.mebit.app.feature.send
 
+import com.mebit.app.data.BtcUnit
+import com.mebit.app.ui.components.ShrinkText
+import com.mebit.app.data.amountNumber
+import com.mebit.app.data.amountText
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -348,7 +352,7 @@ internal fun DeviceSignPage(
             failure?.kicker != null -> FailureBanner(failure.kicker, failure.line)
             failure != null -> WarningBar(failure.line)
             stage == SignStage.Registering && registration != null -> RegistrationCard(registration, word)
-            review != null -> MatchCard(review, changeTo)
+            review != null -> MatchCard(review, changeTo, BtcUnit.Btc)
         }
         below()
     }
@@ -493,10 +497,11 @@ private fun Check(color: Color) {
 
 /**
  * 5.3.2's details the signer must show the same: the wallet and the amount it sends, an arrow down to the address, five groups of four a
- * line as the board breaks it, then the change and the fee under a rule.
+ * line as the board breaks it, then the change and the fee under a rule. Amounts are in [unit]: a Jade or Trezor shows BTC, so its page
+ * passes BTC whatever the setting, and the amounts to compare read the same on both screens.
  */
 @Composable
-internal fun MatchCard(review: SpendReview, walletName: String) {
+internal fun MatchCard(review: SpendReview, walletName: String, unit: BtcUnit) {
     val shape = RoundedCornerShape(24.dp)
     Column(Modifier.fillMaxWidth().clip(shape).background(MbWhite).border(1.dp, MbBorder, shape).padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 16.dp).testTag("hw_sign_details")) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -508,17 +513,16 @@ internal fun MatchCard(review: SpendReview, walletName: String) {
             Image(painterResource(Res.drawable.ic_sign_wallet), contentDescription = null)
             Spacer(modifier = Modifier.width(10.dp))
             Text(walletName, color = MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, maxLines = 1, modifier = Modifier.weight(1f))
-            Text(
+            ShrinkText(
                 buildAnnotatedString {
-                    append(formatBtcCompact(review.paidSats()))
-                    withStyle(SpanStyle(fontSize = 14.sp)) { append(" BTC") }
+                    append(amountNumber(review.paidSats(), unit))
+                    withStyle(SpanStyle(fontSize = 14.sp)) { append(" ${unit.label}") }
                 },
                 color = MbNavyInk,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = amountFontFamily(),
                 lineHeight = 24.sp,
-                maxLines = 1,
                 modifier = Modifier.testTag("hw_sign_amount"),
             )
         }
@@ -551,7 +555,7 @@ internal fun MatchCard(review: SpendReview, walletName: String) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(MbBorder))
         Spacer(modifier = Modifier.height(9.dp))
         if (review.changeSats > 0u) {
-            MatchRow("เงินทอน → $walletName", "${formatBtc(review.changeSats.toLong())} BTC", "hw_sign_change")
+            MatchRow("เงินทอน → $walletName", amountText(review.changeSats.toLong(), unit, ::formatBtc), "hw_sign_change")
             Spacer(modifier = Modifier.height(8.dp))
         }
         MatchRow("ค่าธรรมเนียม", "${thousands(review.feeSats.toLong())} sat", "hw_sign_fee")

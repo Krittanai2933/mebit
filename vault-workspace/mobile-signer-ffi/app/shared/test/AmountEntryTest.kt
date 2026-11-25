@@ -11,7 +11,8 @@ class AmountEntryTest {
     private val boardPrice = FiatQuote(3_602_000.0, fetchedAtSeconds = 0)
     private val address = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
 
-    private fun fresh(): Pair<SendDraft, AmountEntry> = SendDraft().let { it to AmountEntry(it) }
+    // 141 vB is Native SegWit's typical size, so the tests do not need the native library for it.
+    private fun fresh(): Pair<SendDraft, AmountEntry> = SendDraft(141L).let { it to AmountEntry(it) }
 
     @Test
     fun pickingAUnitNeverChangesTheSatsOrTheBtcText() {
@@ -340,5 +341,63 @@ class AmountEntryTest {
         entry.typeBtc("")
         assertEquals(0L, draft.amountSats)
         assertEquals("", draft.amountText)
+    }
+
+    @Test
+    fun theSatFieldTakesWholeSatsAndKeepsOldTextForAnythingElse() {
+        val (draft, entry) = fresh()
+        entry.typeSats("15653")
+        assertEquals(15_653L, draft.amountSats)
+        assertEquals("15653", entry.fieldText(null, BtcUnit.Sat))
+        assertEquals("0.00015653", draft.amountText)
+        listOf("1.5", "abc", "-1", "1,5", " 7").forEach {
+            entry.typeSats(it)
+            assertEquals(15_653L, draft.amountSats, it)
+        }
+        entry.typeSats("007")
+        assertEquals(7L, draft.amountSats, "leading zeros are dropped")
+        entry.typeSats("0")
+        assertEquals(0L, draft.amountSats)
+        assertEquals("", entry.fieldText(null, BtcUnit.Sat))
+        entry.typeSats("")
+        assertEquals("", draft.amountText)
+    }
+
+    @Test
+    fun theSatFieldNeverTakesMoreThan21MillionBitcoin() {
+        val (draft, entry) = fresh()
+        entry.typeSats("2100000000000000")
+        assertEquals(2_100_000_000_000_000L, draft.amountSats)
+        entry.typeSats("2100000000000001")
+        entry.typeSats("99999999999999999999")
+        assertEquals(2_100_000_000_000_000L, draft.amountSats)
+        assertEquals("2100000000000000", entry.fieldText(null, BtcUnit.Sat))
+    }
+
+    @Test
+    fun switchingBetweenSatAndBahtNeverChangesTheSats() {
+        val (draft, entry) = fresh()
+        entry.typeSats("500000")
+        repeat(3) {
+            entry.pickUnit(AmountUnit.Thb, boardPrice)
+            assertEquals("18010", entry.fieldText(boardPrice, BtcUnit.Sat))
+            assertEquals("≈ 500,000 sat", entry.otherLine(boardPrice, BtcUnit.Sat))
+            entry.pickUnit(AmountUnit.Btc, boardPrice)
+            assertEquals("500000", entry.fieldText(boardPrice, BtcUnit.Sat))
+            assertEquals("≈ ฿18,010", entry.otherLine(boardPrice, BtcUnit.Sat))
+        }
+        assertEquals(500_000L, draft.amountSats)
+    }
+
+    @Test
+    fun satModeCaptionAndSendAllAreInSats() {
+        val (draft, entry) = fresh()
+        assertEquals("ใช้ได้ 3,129,999 sat", entry.caption(3_129_999, null, BtcUnit.Sat))
+        assertEquals("ใช้ได้ 0.03129999 BTC", entry.caption(3_129_999, null, BtcUnit.Btc))
+        entry.sendAll(3_120_000)
+        assertEquals("3118872", entry.fieldText(null, BtcUnit.Sat))
+        assertEquals(3_118_872L, draft.amountSats)
+        // BTC mode is what it was.
+        assertEquals("0.03118872", entry.fieldText(null, BtcUnit.Btc))
     }
 }
