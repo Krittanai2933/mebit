@@ -119,7 +119,6 @@ fun VaultDetailScreen(
     val history = wallets.vaultTxs(vault)
     WalletPage(
         tag = "screen_vaults/detail",
-        board = WalletBoard.Detail,
         onOpenCatalog = onOpenCatalog,
         modifier = Modifier.pullToRefresh(isRefreshing = pulled, state = pull, onRefresh = { if (!reading) pulled = true }),
     ) {

@@ -247,7 +247,6 @@ private fun OneKeyHome(
     val open by remember { derivedStateOf { pull.distanceFraction > 0f } }
     WalletPage(
         tag = tag,
-        board = WalletBoard.Home,
         onOpenCatalog = onOpenCatalog,
         modifier = Modifier.pullToRefresh(
             isRefreshing = pulled,
