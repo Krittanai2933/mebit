@@ -34,6 +34,7 @@ import com.mebit.app.data.keyLine
 import com.mebit.app.data.keySourceName
 import com.mebit.app.feature.onboarding.AddressTypeRows
 import com.mebit.app.feature.onboarding.DEFAULT_BADGE
+import com.mebit.app.feature.onboarding.NOT_ON_MAINNET
 import com.mebit.app.feature.onboarding.RadioRow
 import com.mebit.app.navigation.MovieRoute
 import com.mebit.app.ui.components.DebugLink
@@ -154,9 +155,13 @@ fun HardwareAddressTypeScreen(
                 RadioRow(
                     label = row.label,
                     detail = row.detail(draft.network),
-                    badge = if (row.type == AddressType.NATIVE_SEGWIT) DEFAULT_BADGE else null,
+                    badge = when {
+                        row.type == AddressType.NATIVE_SEGWIT -> DEFAULT_BADGE
+                        !row.enabled(draft.network) -> NOT_ON_MAINNET
+                        else -> null
+                    },
                     selected = row.type == draft.addressType,
-                    enabled = true,
+                    enabled = row.enabled(draft.network),
                     tag = "hw_address_type_" + row.type.name.lowercase(),
                     onSelect = { draft.addressType = row.type },
                 )
