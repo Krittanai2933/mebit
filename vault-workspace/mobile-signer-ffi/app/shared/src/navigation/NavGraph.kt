@@ -4,6 +4,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.clearAndSetSemantics
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -463,7 +464,9 @@ internal fun MebitNavHost(
         LocalCovered provides (LocalCovered.current || appLock.locked),
     ) {
         CloseNativeSheetsWhileCovered()
-        Box(Modifier.fillMaxSize().background(MbPage)) {
+        // While a block covers them, the screens leave the accessibility tree, so a screen reader cannot read a balance or an address behind it.
+        val hidden = if (LocalCovered.current) Modifier.clearAndSetSemantics {} else Modifier
+        Box(Modifier.fillMaxSize().background(MbPage).then(hidden)) {
             val inset = if (bar != null && !barHidden) bottomBarHeight() else 0.dp
             Box(Modifier.fillMaxSize().padding(bottom = inset).consumeWindowInsets(PaddingValues(bottom = inset))) {
                 // Keyed on the wallet, so a wallet's screens never inherit another wallet's remembered state, such as its retries, its open key details and its pull.
