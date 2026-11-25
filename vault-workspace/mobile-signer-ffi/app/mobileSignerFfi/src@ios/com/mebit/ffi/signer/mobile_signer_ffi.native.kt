@@ -1565,10 +1565,12 @@ internal object UniffiLib {
         `ptr`: Pointer?,
         `codes`: Pointer?,
         `pairing`: RustBufferByValue,
+        `network`: RustBufferByValue,
     ): Long = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_method_walletlink_connect(
         `ptr`,
         `codes`,
         `pairing`,
+        `network`,
     )
     fun uniffi_mobile_signer_ffi_fn_method_walletlink_disconnect(
         `ptr`: Pointer?,
@@ -1616,21 +1618,27 @@ internal object UniffiLib {
     )
     fun uniffi_mobile_signer_ffi_fn_func_chain_check_node(
         `base`: RustBufferByValue,
+        `network`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_chain_check_node(
         `base`,
+        `network`,
         uniffiCallStatus,
     )
     fun uniffi_mobile_signer_ffi_fn_func_chain_node_status(
+        `network`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_chain_node_status(
+        `network`,
         uniffiCallStatus,
     )
     fun uniffi_mobile_signer_ffi_fn_func_chain_use_node(
         `choice`: RustBufferByValue,
+        `network`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): Unit = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_chain_use_node(
         `choice`,
+        `network`,
         uniffiCallStatus,
     )
     fun uniffi_mobile_signer_ffi_fn_func_check_mnemonic(
@@ -1687,9 +1695,11 @@ internal object UniffiLib {
     )
     fun uniffi_mobile_signer_ffi_fn_func_hot_account_path(
         `addressType`: RustBufferByValue,
+        `network`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_account_path(
         `addressType`,
+        `network`,
         uniffiCallStatus,
     )
     fun uniffi_mobile_signer_ffi_fn_func_hot_address_type_enabled(
@@ -3726,7 +3736,7 @@ public actual open class WalletLink: Disposable, WalletLinkInterface {
     }
 
     /**
-     * Connects to the wallet, pairs if it must, and checks the wallet is what it says.
+     * Connects to the wallet on `network`, pairs if it must, and checks the wallet is what it says.
      * Cancelling while it runs leaves nothing that closing the link cannot end: measured with a
      * Jade, unit-tested with a fake central for a Safe 7. A Jade that fails disconnects in the
      * background, a Safe 7 before this returns.
@@ -3738,13 +3748,14 @@ public actual open class WalletLink: Disposable, WalletLinkInterface {
      * Keystore. A Jade ignores `pairing` and returns null.
      */
     @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
-    public actual override suspend fun `connect`(`codes`: PairingCodes, `pairing`: kotlin.ByteArray?): kotlin.ByteArray? {
+    public actual override suspend fun `connect`(`codes`: PairingCodes, `pairing`: kotlin.ByteArray?, `network`: KeyNetwork): kotlin.ByteArray? {
         return uniffiRustCallAsync(
             callWithPointer { thisPtr ->
                 UniffiLib.uniffi_mobile_signer_ffi_fn_method_walletlink_connect(
                     thisPtr,
                     FfiConverterTypePairingCodes.lower(`codes`),
                     FfiConverterOptionalByteArray.lower(`pairing`),
+                    FfiConverterTypeKeyNetwork.lower(`network`),
                 )
             },
             { future, callback, continuation -> UniffiLib.ffi_mobile_signer_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
@@ -4800,6 +4811,7 @@ public object FfiConverterTypeNodeCheck : FfiConverterRustBuffer<NodeCheck>{
             4 -> NodeCheck.Unreachable(
                 FfiConverterString.read(buf),
                 )
+            5 -> NodeCheck.Mainnet
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
         }
     }
@@ -4830,6 +4842,12 @@ public object FfiConverterTypeNodeCheck : FfiConverterRustBuffer<NodeCheck>{
                 + FfiConverterString.allocationSize(value.`reason`)
             )
         }
+        is NodeCheck.Mainnet -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
     }
 
     override fun write(value: NodeCheck, buf: ByteBuffer) {
@@ -4849,6 +4867,10 @@ public object FfiConverterTypeNodeCheck : FfiConverterRustBuffer<NodeCheck>{
             is NodeCheck.Unreachable -> {
                 buf.putInt(4)
                 FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+            is NodeCheck.Mainnet -> {
+                buf.putInt(5)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -5552,37 +5574,41 @@ public actual fun `bip39Suggest`(`prefix`: kotlin.String, `limit`: kotlin.UInt):
 }
 
 /**
- * The genesis probe on `base`, for the "ทดสอบ" button. Blocks up to a few seconds.
+ * The genesis probe on `base` for `network`, for the "ทดสอบ" button. Blocks up to a few seconds.
  */
-public actual fun `chainCheckNode`(`base`: kotlin.String): NodeCheck {
+public actual fun `chainCheckNode`(`base`: kotlin.String, `network`: KeyNetwork): NodeCheck {
     return FfiConverterTypeNodeCheck.lift(uniffiRustCall { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_chain_check_node(
             FfiConverterString.lower(`base`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,
         )
     })
 }
 
 /**
- * The host the wallet reads from now, probing the list if none is trusted yet. Blocks up to a few
- * seconds.
+ * The host the wallet reads from now on `network`, probing the list if none is trusted yet. Blocks
+ * up to a few seconds.
  */
-public actual fun `chainNodeStatus`(): NodeStatus {
+public actual fun `chainNodeStatus`(`network`: KeyNetwork): NodeStatus {
     return FfiConverterTypeNodeStatus.lift(uniffiRustCall { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_chain_node_status(
+            FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,
         )
     })
 }
 
 /**
- * Chooses the node every later request goes to. Call it before the first one at start-up.
+ * Chooses the node every later request of `network` goes to. The other network keeps its own choice.
+ * Call it before the first request at start-up.
  */
 @Throws(MobileSignerException::class)
-public actual fun `chainUseNode`(`choice`: NodeChoice) {
+public actual fun `chainUseNode`(`choice`: NodeChoice, `network`: KeyNetwork) {
     uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_chain_use_node(
             FfiConverterTypeNodeChoice.lower(`choice`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,
         )
     }
@@ -5693,13 +5719,14 @@ public actual fun `generateSoftwareMultisigKey`(`passphrase`: kotlin.String, `ne
 }
 
 /**
- * The account path the hot wallet derives `address_type`'s keys from, `m/{purpose}'/1'/0'` on either
- * network, as the fingerprint sheets print it.
+ * The account path the hot wallet derives `address_type`'s keys from on `network`, `m/{purpose}'/0'/0'`
+ * on mainnet and `m/{purpose}'/1'/0'` on testnet4, as the fingerprint sheets print it.
  */
-public actual fun `hotAccountPath`(`addressType`: AddressType): kotlin.String {
+public actual fun `hotAccountPath`(`addressType`: AddressType, `network`: KeyNetwork): kotlin.String {
     return FfiConverterString.lift(uniffiRustCall { uniffiRustCallStatus ->
         UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_account_path(
             FfiConverterTypeAddressType.lower(`addressType`),
+            FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,
         )
     })
@@ -5741,7 +5768,7 @@ public actual fun `hotBroadcast`(`network`: KeyNetwork, `hex`: kotlin.String, `t
 }
 
 /**
- * The fee tiers for the Send screen, from the testnet4 host in use. One network call in the usual
+ * The fee tiers for the Send screen, from the host of `network` in use. One network call in the usual
  * case, answered from memory for five minutes after. Never fails: when no host answers or the
  * answer is unusable the fixed tiers 4, 8 and 15 come back with `live` false.
  */
@@ -6033,7 +6060,7 @@ public actual fun `isValidAddress`(`address`: kotlin.String, `network`: KeyNetwo
 
 /**
  * What a Jade registers for the wallet `descriptor` before it signs for it, null for a one-key
- * wallet, which a Jade signs as it is. Pure: no device, no network. Refuses mainnet, a
+ * wallet, which a Jade signs as it is. Pure: no device, no network. Refuses a wallet of the other network, a
  * descriptor `wallet_describe` refuses, and a several-key wallet a Jade cannot register (more
  * than seven signers). Signing builds the same registration from the same descriptor.
  */
@@ -6120,7 +6147,7 @@ public actual fun `signPsbt`(`psbtJson`: kotlin.String, `borrowerPubkey`: kotlin
 /**
  * The confirmed + mempool balance of the wallet `descriptor` describes, by the sync a read of it within ten seconds
  * shares, with how far the scan got. It reads no coin list, so a list that shows balances pays for none, and a coin list
- * a host fails or limits never blanks a balance. Testnet4 only. About 40 Esplora calls for a wallet nobody paid and a
+ * a host fails or limits never blanks a balance. About 40 Esplora calls for a wallet nobody paid and a
  * routine sync's few after that, so call it off the main thread. No screen may show `balance_sats` unless `scan` is
  * `Complete`.
  */

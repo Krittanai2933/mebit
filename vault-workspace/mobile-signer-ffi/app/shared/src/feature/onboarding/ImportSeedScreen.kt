@@ -106,6 +106,7 @@ import com.mebit.app.ui.theme.MbPick
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.app.ui.theme.amountFontFamily
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.hotAccountPath
 import org.jetbrains.compose.resources.painterResource
 
@@ -640,7 +641,7 @@ internal fun FingerprintSheet(session: OnboardingSession, copy: FingerprintCopy,
                     letterSpacing = 2.sp,
                     modifier = Modifier.testTag("fingerprint"),
                 )
-                Text(hotAccountPath(session.addressType), color = MbSlate, fontSize = 12.sp)
+                Text(hotAccountPath(session.addressType, KeyNetwork.TEST), color = MbSlate, fontSize = 12.sp)
             }
             Spacer(modifier = Modifier.height(12.dp))
             Text(

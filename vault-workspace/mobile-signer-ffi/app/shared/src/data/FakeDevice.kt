@@ -113,7 +113,7 @@ internal class FakeDevice(script: List<FakeBehaviour> = emptyList(), private val
     fun open(found: FoundWallet): DeviceLink = Link(found.kind)
 
     private inner class Link(private val kind: WalletKind) : DeviceLink {
-        override suspend fun connect(codes: PairingCodes, pairing: ByteArray?): ByteArray? {
+        override suspend fun connect(codes: PairingCodes, pairing: ByteArray?, network: KeyNetwork): ByteArray? {
             if (kind == WalletKind.JADE) return null
             val known = paired
             if (pairing != null && known != null && pairing.contentEquals(known)) return null

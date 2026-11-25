@@ -36,7 +36,7 @@ class HardwareWalletsTest {
         for (type in AddressType.entries) {
             val account = PUBLIC_ACCOUNTS.getValue(type)
             val wallet = PUBLIC_JADE_WALLET.copy(addressType = type, xpub = account.tpub, address = account.receive0)
-            assertEquals(hotAccountPath(type), wallet.path, "$type: the path the phone wallet derives from")
+            assertEquals(hotAccountPath(type, KeyNetwork.TEST), wallet.path, "$type: the path the phone wallet derives from")
             val shape = walletDescribe(wallet.descriptor, KeyNetwork.TEST)
             assertEquals(1u, shape.needed.toUInt(), "$type")
             assertEquals(listOf(Triple(PUBLIC_FINGERPRINT, wallet.path, account.tpub)), shape.keys.map { Triple(it.fingerprint, it.path, it.xpub) }, "$type")

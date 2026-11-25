@@ -2,6 +2,7 @@ package com.mebit.app.data
 
 import com.mebit.ffi.signer.BleException
 import com.mebit.ffi.signer.HwAccountKey
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.PairingCodes
 import com.mebit.ffi.signer.SignSteps
 import com.mebit.ffi.signer.SpendReview
@@ -26,7 +27,7 @@ internal class FakeDeviceLink(
     var offeredAtConnect: ByteArray? = null
     var code: String? = null
 
-    override suspend fun connect(codes: PairingCodes, pairing: ByteArray?): ByteArray? {
+    override suspend fun connect(codes: PairingCodes, pairing: ByteArray?, network: KeyNetwork): ByteArray? {
         calls += "connect"
         offered = pairing
         offeredAtConnect = pairing?.copyOf()

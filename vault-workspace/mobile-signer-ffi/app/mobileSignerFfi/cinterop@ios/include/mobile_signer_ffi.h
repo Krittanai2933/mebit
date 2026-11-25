@@ -201,7 +201,7 @@ void * uniffi_mobile_signer_ffi_fn_constructor_walletlink_new(RustBuffer wallet,
 );
 int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_account_xpub(void * ptr, RustBuffer derivationPath
 );
-int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_connect(void * ptr, void * codes, RustBuffer pairing
+int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_connect(void * ptr, void * codes, RustBuffer pairing, RustBuffer network
 );
 int64_t uniffi_mobile_signer_ffi_fn_method_walletlink_disconnect(void * ptr
 );
@@ -215,12 +215,11 @@ RustBuffer uniffi_mobile_signer_ffi_fn_func_bip39_last_word_candidates(RustBuffe
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_bip39_suggest(RustBuffer prefix, int32_t limit, UniffiRustCallStatus *_Nonnull out_status
 );
-RustBuffer uniffi_mobile_signer_ffi_fn_func_chain_check_node(RustBuffer base, UniffiRustCallStatus *_Nonnull out_status
+RustBuffer uniffi_mobile_signer_ffi_fn_func_chain_check_node(RustBuffer base, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
 );
-RustBuffer uniffi_mobile_signer_ffi_fn_func_chain_node_status(UniffiRustCallStatus *_Nonnull out_status
-    
+RustBuffer uniffi_mobile_signer_ffi_fn_func_chain_node_status(RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
 );
-void uniffi_mobile_signer_ffi_fn_func_chain_use_node(RustBuffer choice, UniffiRustCallStatus *_Nonnull out_status
+void uniffi_mobile_signer_ffi_fn_func_chain_use_node(RustBuffer choice, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_check_mnemonic(RustBuffer words, UniffiRustCallStatus *_Nonnull out_status
 );
@@ -235,7 +234,7 @@ RustBuffer uniffi_mobile_signer_ffi_fn_func_fetch_btc_thb(UniffiRustCallStatus *
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_generate_software_multisig_key(RustBuffer passphrase, RustBuffer network, int32_t account, UniffiRustCallStatus *_Nonnull out_status
 );
-RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_account_path(RustBuffer addressType, UniffiRustCallStatus *_Nonnull out_status
+RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_account_path(RustBuffer addressType, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
 );
 int8_t uniffi_mobile_signer_ffi_fn_func_hot_address_type_enabled(RustBuffer addressType, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
 );

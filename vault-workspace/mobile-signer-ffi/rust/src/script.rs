@@ -1,6 +1,6 @@
 //! A wallet the book names by its descriptor text and whose keys are not on this phone: one hardware key
 //! (`pkh`, `sh(wpkh)`, `wpkh` or `tr` over one account key, account 0) or several keys (`wsh(sortedmulti)`).
-//! Read once at the FFI edge, testnet4 only. Receive is `0/i` and change `1/i` by rule, so the text carries
+//! Read once at the FFI edge, on mainnet or testnet4. Receive is `0/i` and change `1/i` by rule, so the text carries
 //! no derivation suffix. Public data only: no seed enters here.
 
 use std::collections::BTreeMap;

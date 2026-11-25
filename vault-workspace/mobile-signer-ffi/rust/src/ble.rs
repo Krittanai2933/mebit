@@ -233,7 +233,7 @@ pub struct JadeRegistration {
 }
 
 /// What a Jade registers for the wallet `descriptor` before it signs for it, null for a one-key
-/// wallet, which a Jade signs as it is. Pure: no device, no network. Refuses mainnet, a
+/// wallet, which a Jade signs as it is. Pure: no device, no network. Refuses a wallet of the other network, a
 /// descriptor `wallet_describe` refuses, and a several-key wallet a Jade cannot register (more
 /// than seven signers). Signing builds the same registration from the same descriptor.
 #[uniffi::export]
