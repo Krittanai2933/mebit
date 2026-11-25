@@ -10,6 +10,8 @@ mod address_type;
 pub mod ble;
 pub mod bsms;
 mod chain;
+#[cfg(test)]
+mod mainnet_vectors;
 pub mod hot_wallet;
 pub mod price;
 mod proof;
