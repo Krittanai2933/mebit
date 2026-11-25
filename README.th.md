@@ -31,9 +31,7 @@
 
 ## สถาปัตยกรรม
 
-<video src="https://raw.githubusercontent.com/Krittanai2933/mebit/main/assets/readme/vault-signer-architecture.mp4" controls muted playsinline width="100%"></video>
-
-[สถาปัตยกรรม vault signer (วิดีโอ)](assets/readme/vault-signer-architecture.mp4)
+https://github.com/user-attachments/assets/6427dc43-0b65-45f7-ac7f-f7828fb7c351
 
 แอปคุยกับเครือข่าย Bitcoin โดยตรงผ่าน Esplora ข้อมูลกระเป๋าไม่ผ่านเซิร์ฟเวอร์ของ Mebit
 

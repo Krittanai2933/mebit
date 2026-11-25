@@ -31,15 +31,7 @@
 
 ## Architecture
 
-<video src="https://raw.githubusercontent.com/Krittanai2933/mebit/main/assets/readme/vault-signer-architecture.mp4" controls muted playsinline width="100%"></video>
-
-
-
 https://github.com/user-attachments/assets/6427dc43-0b65-45f7-ac7f-f7828fb7c351
-
-
-
-[Vault signer architecture (video)](assets/readme/vault-signer-architecture.mp4)
 
 The app talks to the Bitcoin network directly through Esplora. It does not route wallet traffic through a Mebit server.
 
