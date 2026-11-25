@@ -41,6 +41,16 @@ emu_alive() { ps -p "$EMU_PID" -o command= 2>/dev/null | grep -q -- "-port $PORT
 app_resumed() { adbs shell dumpsys activity activities 2> /dev/null | grep -q "ResumedActivity.* $PKG/"; }
 built_apk() { find "$APP/build/tasks/_androidApp_buildAndroidDebug" -maxdepth 1 -name '*-debug.apk' 2>/dev/null | head -1; }
 sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
+# stale_libs APK: the ABIs whose Rust library in androidApp/jniLibs is not the one packed in APK. The Toolchain does not
+# count jniLibs as an input, so a build after a hand-copied .so keeps the old one, and no checksum covers a function body.
+stale_libs() {
+  local f abi
+  for f in "$APP"/androidApp/jniLibs/*/libmobile_signer_ffi.so; do
+    [ -f "$f" ] || continue
+    abi=$(basename "$(dirname "$f")")
+    [ "$(unzip -p "$1" "lib/$abi/libmobile_signer_ffi.so" 2> /dev/null | shasum -a 256 | cut -d' ' -f1)" = "$(sha "$f")" ] || printf '%s ' "$abi"
+  done
+}
 
 # meta FILE [LINE...]: record which code a proof drove, so a reader can tell it from the working tree later.
 meta() {
@@ -271,6 +281,12 @@ cmd_doctor() {
   [ -n "$EMULATOR" ] && ok "emulator: $EMULATOR" || no "emulator not found; set ANDROID_HOME"
   ok "kotlin toolchain pinned at $(grep -m1 '^kotlin_cli_version=' "$APP/kotlin" | cut -d= -f2)"
   [ -n "$EMULATOR" ] && ok "AVDs: $("$EMULATOR" -list-avds | grep -E '^[A-Za-z0-9._-]+$' | tr '\n' ' ')"
+  apk=$(built_apk)
+  if [ -n "$apk" ]; then
+    l=$(stale_libs "$apk")
+    [ -z "$l" ] && ok "the built APK packs the same Rust libraries as androidApp/jniLibs" \
+      || no "the built APK packs a different Rust library than androidApp/jniLibs (${l% }). Run rm -rf build/tasks/_androidApp_buildAndroidDebug, then build again"
+  fi
 
   if [ ! -f "$STATE" ]; then
     echo "--    no active Android run (verify.sh start)"

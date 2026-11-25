@@ -26,8 +26,10 @@
 #          rows ran at runtime and which were build only. Refuses to start while a simulator is booted.
 #   apk    Opt in: copy the built .so files into app/androidApp/jniLibs/<abi>/, the only place that
 #          reaches an APK. Never edits androidApp/module.yaml. After this, every build refreshes the copies.
+#          Each change to a copy also deletes the Toolchain's packaged APK, which would keep the old library.
 #   clean  Remove what build and apk wrote outside git: the link def, the host library copies, the iOS and
-#          Android target dirs, the staged .so files. Keeps the installed bindgen and the host build.
+#          Android target dirs, the staged .so files, the jniLibs copies and the packaged APK. Keeps the
+#          installed bindgen and the host build.
 # Exit: 0 ok, 1 failure (reason on stderr), 2 usage or a missing tool (the message has the install command).
 #
 # Inputs: ANDROID_HOME, else ANDROID_SDK_ROOT (default ~/Library/Android/sdk). NDK_HOME, ANDROID_NDK_ROOT and ANDROID_NDK_HOME
@@ -446,9 +448,13 @@ refresh_apk_libs() {
   local abi dest
   for abi in $ABIS; do
     dest=$APP/androidApp/jniLibs/$abi/lib$NS.so
-    if [ -f "$dest" ]; then cmp -s "$JNILIBS/$abi/lib$NS.so" "$dest" || cp "$JNILIBS/$abi/lib$NS.so" "$dest"; fi
+    if [ -f "$dest" ] && ! cmp -s "$JNILIBS/$abi/lib$NS.so" "$dest"; then cp "$JNILIBS/$abi/lib$NS.so" "$dest"; forget_packaged_apks; fi
   done
 }
+
+# The Toolchain does not count androidApp/jniLibs as an input. After a library there changes, the next build copies
+# the APK it packaged before, old library included. Deleting the packaging task's folder makes it package again.
+forget_packaged_apks() { rm -rf "$APP"/build/tasks/_androidApp_buildAndroid*; }
 
 cmd_apk() {
   [ "$(uname)" = Darwin ] || die "apk needs macOS"
@@ -460,6 +466,7 @@ cmd_apk() {
     mkdir -p "$APP/androidApp/jniLibs/$abi"
     cp "$JNILIBS/$abi/lib$NS.so" "$APP/androidApp/jniLibs/$abi/"
   done
+  forget_packaged_apks
   cat <<EOF
 ffi.sh apk: copied $ABIS into app/androidApp/jniLibs (git-ignored). Any androidApp build now packages them.
   Only these ABIs have the library. The Toolchain can warn "Incomplete native libraries" for the others
@@ -477,7 +484,8 @@ cmd_clean() {
     rmdir "$APP/androidApp/jniLibs/$abi" 2>/dev/null || true
   done
   rmdir "$APP/androidApp/jniLibs" 2>/dev/null || true
-  echo "ffi.sh clean: removed the link def, the host library copies, target/ios-$IOS_MIN, target/android-ndk-$NDK_VERSION, target/jniLibs and the jniLibs copies"
+  forget_packaged_apks
+  echo "ffi.sh clean: removed the link def, the host library copies, target/ios-$IOS_MIN, target/android-ndk-$NDK_VERSION, target/jniLibs, the jniLibs copies and the packaged APK"
 }
 
 case ${1:-} in
