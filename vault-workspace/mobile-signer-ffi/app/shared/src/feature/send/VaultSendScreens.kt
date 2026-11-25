@@ -55,7 +55,6 @@ import com.mebit.app.data.VaultSend
 import com.mebit.app.data.VaultSendState
 import com.mebit.app.data.acceptsScan
 import com.mebit.app.data.enterDestination
-import com.mebit.app.data.formatBtc
 import com.mebit.app.data.formatBtcCompact
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.data.sendIssue
@@ -290,8 +289,8 @@ private fun GuardNote(line: String, tag: String) {
 }
 
 /**
- * Penpot 5.2 Collect Signatures for the payment [VaultSend.prepare] holds: the navy card of what leaves and where, "เซ็นแล้ว x / m" over m
- * bars, a row per key of the wallet in BSMS order, the checklist of what the payment does, and ต่อไป ตรวจสอบ, on only at
+ * Penpot 5.2 Collect Signatures for the payment [VaultSend.prepare] holds: the navy card of what leaves and the whole address, "เซ็นแล้ว x / m" over m
+ * bars, a row per key of the wallet in BSMS order, and ต่อไป ตรวจสอบ, on only at
  * [VaultSend.readyToBroadcast], which opens the review that posts ([onReview]), with "ต้องเซ็นอีก k ดอก" under it. A row this phone signs
  * ([KeySigner.Phone]) has a filled เซ็น that opens Sign on iPhone ([onSignOnPhone]), a signed key shows 5.8's green เซ็นแล้ว ✓ and the
  * time this phone signed it, a Jade's or Safe 7's key ([KeySigner.Device]) an outlined เซ็น that opens its sign screen ([onSignOnDevice]),
@@ -370,8 +369,11 @@ fun CollectSignaturesScreen(
                 is KeySigner.Device -> onSignOnDevice(signer)
             }
         }
-        Spacer(modifier = Modifier.height(14.dp))
-        if (refused) IssueBanner(REFUSED_TITLE, REFUSED_LINE, "m2_refused", Res.drawable.ic_warning_state) else Checklist(payment, quote)
+        // The change and the fee are on each sign page (5.3.x), so 5.2 lists them no more.
+        if (refused) {
+            Spacer(modifier = Modifier.height(14.dp))
+            IssueBanner(REFUSED_TITLE, REFUSED_LINE, "m2_refused", Res.drawable.ic_warning_state)
+        }
         // A device's request outlives the sign screen the user left, and holds the send until the device answers.
         val holding = (send.busy as? VaultBusy.Signing)?.keyIndex
         if (holding != null && signers.getOrNull(holding) is KeySigner.Device) {
@@ -385,7 +387,7 @@ fun CollectSignaturesScreen(
     }
 }
 
-/** 5.2's navy card: "ส่ง", the amount in the chosen unit with its baht beside it when there is a price, and "ถึง" the address's ends. */
+/** 5.2's navy card: "ส่ง", the amount in the chosen unit with its baht beside it when there is a price, then under a rule "ถึง" and the whole address, its ends in gold. */
 @Composable
 private fun PaymentCard(payment: VaultPayment, quote: com.mebit.app.data.FiatQuote?) {
     val amount = payment.amountSats.toLong()
@@ -402,7 +404,19 @@ private fun PaymentCard(payment: VaultPayment, quote: com.mebit.app.data.FiatQuo
             }
             fiatLine(amount, quote)?.let { Text(it, color = SummaryGold, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 6.dp).testTag("m2_fiat")) }
         }
-        Text("ถึง ${shorten(payment.destination, "…")}", color = MbWhite.copy(alpha = 0.85f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, modifier = Modifier.testTag("m2_to"))
+        Spacer(modifier = Modifier.height(10.dp))
+        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MbWhite.copy(alpha = 0.14f)))
+        Spacer(modifier = Modifier.height(9.dp))
+        Text("ถึง", color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            accentedAddress(payment.destination, MbWhite, SummaryGold),
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = amountFontFamily(),
+            lineHeight = 21.sp,
+            modifier = Modifier.testTag("m2_to"),
+        )
     }
 }
 
@@ -481,30 +495,6 @@ private fun SignButton(signer: KeySigner, signed: Boolean, signing: Boolean, idl
     }
     Box(modifier = look.testTag("cta_m2_sign_${signer.index}"), contentAlignment = Alignment.Center) {
         Text(if (signing) "…" else "เซ็น", color = if (phone != null) MbWhite else MbNavy, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
-/** 5.2's grey card: the destination's ends, the change back to the wallet when there is any, and the fee in sats and baht. */
-@Composable
-private fun Checklist(payment: VaultPayment, quote: com.mebit.app.data.FiatQuote?) {
-    val shape = RoundedCornerShape(16.dp)
-    Column(modifier = Modifier.fillMaxWidth().clip(shape).background(MbChip).padding(horizontal = 16.dp, vertical = 10.dp)) {
-        CheckRow("ปลายทาง", shorten(payment.destination, "…"), "m2_check_destination")
-        if (payment.changeSats > 0uL) CheckRow("เงินทอนกลับเข้า Wallet", amountText(payment.changeSats.toLong(), LocalBtcUnit.current, ::formatBtc), "m2_check_change")
-        CheckRow("ค่าธรรมเนียม", realFeeText(payment.feeSats.toLong(), quote), "m2_check_fee")
-    }
-}
-
-@Composable
-private fun CheckRow(label: String, value: String, tag: String) {
-    Row(modifier = Modifier.fillMaxWidth().height(28.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(modifier = Modifier.size(16.dp).clip(CircleShape).background(MbSuccess), contentAlignment = Alignment.Center) {
-            Text("✓", color = MbWhite, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-        }
-        Spacer(modifier = Modifier.width(10.dp))
-        Text(label, color = MbBody, fontSize = 13.sp)
-        Spacer(modifier = Modifier.weight(1f))
-        Text(value, color = MbNavyInk, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag(tag))
     }
 }
 

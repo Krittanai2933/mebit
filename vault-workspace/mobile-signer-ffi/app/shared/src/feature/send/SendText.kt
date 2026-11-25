@@ -1,10 +1,39 @@
 package com.mebit.app.feature.send
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import com.mebit.app.data.amountText
 import com.mebit.app.data.BtcUnit
 import com.mebit.app.data.FiatQuote
 import com.mebit.app.data.bahtText
 import com.mebit.app.data.formatBtcCompact
+
+/**
+ * Pure. How many characters open [address] before what is its own: a bech32 address's network, its "1" and its version (bc1q, tb1p,
+ * bcrt1q), or a base58 address's version character.
+ */
+internal fun addressPrefixLength(address: String): Int {
+    val network = listOf("bcrt1", "bc1", "tb1").firstOrNull { address.lowercase().startsWith(it) }
+    return minOf(if (network != null) network.length + 1 else 1, address.length)
+}
+
+/** Pure. The places in [address] that Penpot 5.2 and 5.3.2 pick out: the first four characters after its prefix and the last six, the ends a person compares first. */
+internal fun addressAccents(address: String): Set<Int> {
+    val start = addressPrefixLength(address)
+    return ((start until minOf(start + 4, address.length)) + (maxOf(start, address.length - 6) until address.length)).toSet()
+}
+
+/** [address] in groups of four, [perLine] groups a line or one run that wraps when null, its [addressAccents] in [accent] and the rest in [ink]. */
+internal fun accentedAddress(address: String, ink: Color, accent: Color, perLine: Int? = null): AnnotatedString = buildAnnotatedString {
+    val accents = addressAccents(address)
+    address.forEachIndexed { i, c ->
+        if (i > 0 && i % 4 == 0) append(if (perLine != null && i % (4 * perLine) == 0) '\n' else ' ')
+        withStyle(SpanStyle(color = if (i in accents) accent else ink)) { append(c) }
+    }
+}
 
 /** [sats] as the baht line under an amount, such as `≈ ฿18,010`. Null when there is no price to give it, and the screen hides the line. */
 internal fun fiatLine(sats: Long, quote: FiatQuote?): String? = bahtText(sats, quote)?.let { "≈ $it" }

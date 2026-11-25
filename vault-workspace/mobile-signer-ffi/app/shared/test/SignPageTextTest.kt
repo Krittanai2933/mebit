@@ -75,4 +75,35 @@ class SignPageTextTest {
         val p2wsh = "tb1q" + "x".repeat(58)
         assertEquals(listOf(5, 5, 5, 1), addressLines(p2wsh).lines().map { it.split(" ").size })
     }
+
+    /** The characters [addressAccents] picks out, in order. */
+    private fun picked(address: String) = addressAccents(address).sorted().map { address[it] }.joinToString("")
+
+    @Test
+    fun theHighlightSkipsThePrefixThenTakesFourAndTheLastSix() {
+        assertEquals("9h7a" + "8sm4kz", picked("bc1q9h7a2kxv7tq35zcdw0lfp8xr4e8sm4kz"))
+        assertEquals("89e2" + "nxm4kz", picked("bc1q89e2jlze5xa6ls0tyfxj06duy5el2s5lnxm4kz"))
+        assertEquals("abcd" + "uvwxyz", picked("tb1pabcd" + "k".repeat(50) + "uvwxyz"))
+        assertEquals("abcd" + "uvwxyz", picked("bcrt1qabcd" + "k".repeat(30) + "uvwxyz"))
+        assertEquals("BoaT" + "ETtpyT", picked("1BoaTSLRHtKNngkdXEeobR76b53LETtpyT"))
+    }
+
+    @Test
+    fun aShortAddressNeverPicksThePrefixOrRunsPastTheEnd() {
+        assertEquals("9h7a", picked("bc1q9h7a"))
+        assertTrue(addressAccents("bc1").isEmpty())
+        assertTrue(addressAccents("").isEmpty())
+    }
+
+    @Test
+    fun theAccentedAddressReadsAsTheGroupedLines() {
+        val address = "bc1q9h7a2kxv7tq35zcdw0lfp8xr4e8sm4kz"
+        assertEquals(addressLines(address), accentedAddress(address, ink, accent, perLine = 5).text)
+        assertEquals(address.chunked(4).joinToString(" "), accentedAddress(address, ink, accent).text)
+        val gold = accentedAddress(address, ink, accent).spanStyles.filter { it.item.color == accent }
+        assertEquals(10, gold.size)
+    }
+
+    private val ink = androidx.compose.ui.graphics.Color.White
+    private val accent = androidx.compose.ui.graphics.Color.Yellow
 }

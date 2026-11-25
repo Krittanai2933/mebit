@@ -180,7 +180,7 @@ fun HardwareSignScreen(
                 }
                 else -> SecondaryCta("ยกเลิกการเซ็น", "cta_hw_sign_cancel", { leave?.invoke() })
             }
-            Spacer(modifier = Modifier.height(38.dp))
+            Spacer(modifier = Modifier.height(SIGN_BOTTOM_GAP))
         },
     ) {
         if (postFailed) {

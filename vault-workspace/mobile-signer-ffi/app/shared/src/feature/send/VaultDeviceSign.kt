@@ -107,8 +107,11 @@ fun SignOnDeviceScreen(
     )
 }
 
+/** The space under a sign page's buttons: less than other pages' 38 dp, so 5.3.x with its ticket fits a 852 pt screen. */
+internal val SIGN_BOTTOM_GAP = 24.dp
+
 /** 5.4.2's line under the title once a several-key wallet's key signed. */
-internal const val SIGNED_SUBTITLE = "ลายเซ็นถูกส่งกลับมาที่ mebit แล้ว ตรวจรายการด้านล่างอีกครั้งก่อนไปต่อ"
+internal const val SIGNED_SUBTITLE = "ลายเซ็นถูกส่งกลับมาที่ mebit แล้ว ตรวจรายการอีกครั้งก่อนไปต่อ"
 
 /** The bottom of 5.3.1 to 5.7.3: ดำเนินการต่อ once [signed], ลองอีกครั้ง over ยกเลิกการเซ็น after a [failed] try, else ยกเลิกการเซ็น alone. */
 @Composable
@@ -123,7 +126,7 @@ internal fun ColumnScope.SignButtons(signed: Boolean, failed: Boolean, onRetry: 
         }
         else -> SecondaryCta("ยกเลิกการเซ็น", "cta_m3_cancel", onCancel)
     }
-    Spacer(modifier = Modifier.height(38.dp))
+    Spacer(modifier = Modifier.height(SIGN_BOTTOM_GAP))
 }
 
 /**
