@@ -31,18 +31,9 @@
 
 ## Architecture
 
-```
-┌──────────────────────────────┐        ┌──────────────────────────┐
-│  Mobile app (iOS / Android)  │        │  Hardware wallet         │
-│  Kotlin + Compose MP         │◀──BLE─▶│  Jade · Trezor Safe 7    │
-│  ─────────────────────────── │        └──────────────────────────┘
-│  mobile-signer-ffi (Rust)    │
-│  via UniFFI                  │──HTTPS─▶ Esplora (testnet4)
-│  ─────────────────────────── │
-│  vault-core (Rust)           │
-│  descriptors, PSBT, policy   │
-└──────────────────────────────┘
-```
+<video src="https://raw.githubusercontent.com/Krittanai2933/mebit/main/assets/readme/vault-signer-architecture.mp4" controls muted playsinline width="100%"></video>
+
+[Vault signer architecture (video)](assets/readme/vault-signer-architecture.mp4)
 
 The app talks to the Bitcoin network directly through Esplora. It does not route wallet traffic through a Mebit server.
 
