@@ -339,8 +339,12 @@ class OnboardingSession(
         return result
     }
 
-    /** Forget the key, for an import the user rejected at the fingerprint check. Memory only: a saved wallet is erased by [forgetSavedWallet] and nothing else. */
-    fun clear() {
+    /**
+     * Forget the key, for an import the user rejected at the fingerprint check, and for a network switch. Memory only: a saved wallet is
+     * erased by [forgetSavedWallet] and nothing else. Under [persistLock], so a [persist] on another thread never writes a half-cleared
+     * record. The lock is reentrant (the JVM monitor, and atomicfu's native lock counts re-entries), and [persist] calls this holding it.
+     */
+    fun clear(): Unit = synchronized(persistLock) {
         words = emptyList()
         fingerprint = ""
         xpub = ""

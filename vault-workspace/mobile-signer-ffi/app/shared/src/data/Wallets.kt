@@ -302,9 +302,12 @@ class Wallets internal constructor(
         return true
     }
 
+    /** Some listed wallet holds words the phone has not kept, so leaving this network or adding a wallet would lose or mix them. */
+    fun wordsOnlyInMemory(): Boolean = listed.any { it.session.saved != SaveState.Saved }
+
     /** Null when a wallet can be added. */
     fun addRefusal(): AddRefusal? = when {
-        listed.any { it.session.saved != SaveState.Saved } -> AddRefusal.NotSavedHere
+        wordsOnlyInMemory() -> AddRefusal.NotSavedHere
         listed.any { !it.session.addressTypeConfirmed } -> AddRefusal.SetupUnfinished
         unreadMayOpen -> AddRefusal.Unopened
         all.none(::isEmptyEntry) && firstFreePlace() == null -> AddRefusal.Full

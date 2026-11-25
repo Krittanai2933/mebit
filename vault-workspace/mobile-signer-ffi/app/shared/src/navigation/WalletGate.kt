@@ -4,8 +4,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -89,20 +91,29 @@ fun WalletGate() {
     }
 }
 
-/** The waits before each flush of [OpenGate]: at once, then for a key that may take seconds to make in a TEE or StrongBox. */
+/** The waits before each flush of [NetworkGate]: at once, then for a key that may take seconds to make in a TEE or StrongBox. */
 private val SAVE_RETRY_WAITS = listOf(0, 1, 2, 4, 8, 16).map { it.seconds }
 
 @Composable
 private fun OpenGate(lock: LockGate) {
     // The app folder is testnet's scan folder on purpose: the network choice lives in it, so it cannot depend on that choice. btc-unit stays in it too.
     val appDir = rememberScanStateDir(KeyNetwork.TEST)
-    val network = remember(appDir) { openableNetwork(NetworkSettings(appDir?.let { plainFile("$it/network") }).also { it.restore() }.current) }
+    val settings = remember(appDir) { NetworkSettings(appDir?.let { plainFile("$it/network") }).also { it.restore() } }
+    val network = openableNetwork(settings.current)
+    val unitSettings = remember(appDir) { UnitSettings(appDir?.let { plainFile("$it/btc-unit") }).also { it.restore() } }
+    // A switch in Settings changes `network`. Everything below belongs to one network, so it is made again for the other: new stores,
+    // new wallets and book, a new gate that starts again, a new nav host at its start. The old wallets drop their words (see below).
+    key(network) { NetworkGate(network, lock, appDir, unitSettings, chooseNetwork = settings::choose) }
+}
+
+/** The gate of one [network]. [chooseNetwork] is Settings' switch: it writes the choice, and [OpenGate] then makes this again for the other network. */
+@Composable
+private fun NetworkGate(network: KeyNetwork, lock: LockGate, appDir: String?, unitSettings: UnitSettings, chooseNetwork: (KeyNetwork) -> Unit) {
     // Before any screen asks the core about a wallet, so its first sync after a restart reads the scan file.
     val scanDir = rememberScanStateDir(network)
     remember(scanDir) { scanDir?.let(::hotUseStateDir) }
     // Also before any chain read: the node the user chose in Settings is in force from the first request.
     val nodeSettings = remember(scanDir) { NodeSettings(scanDir?.let { plainFile("$it/node-choice") }, network).also { it.restore() } }
-    val unitSettings = remember(appDir) { UnitSettings(appDir?.let { plainFile("$it/btc-unit") }).also { it.restore() } }
     val storage = rememberVaultsStorage(network)
     val shelf = rememberSecureShelf(network)
     val pairings = rememberPairings(network)
@@ -127,6 +138,8 @@ private fun OpenGate(lock: LockGate) {
         wallets to book
     }
     val gate = remember(wallets) { WalletGateState(wallets) }
+    // The words of the network left behind must not stay in this process's memory. A save of theirs that still runs finds them gone under the session's lock.
+    DisposableEffect(wallets) { onDispose { wallets.all.forEach { it.session.clear() } } }
 
     // A failed save is tried again when the app comes back, for example once the user has set a passcode, and when the lock comes
     // back after Covered marked every saved wallet ([Wallets.lockRead]). Keyed on the lock this composition read, never on one read
@@ -148,9 +161,15 @@ private fun OpenGate(lock: LockGate) {
         }
     }
 
+    // Testnet's key list is written first, so the file is current when mainnet reads it. A no-op off testnet.
+    val switchTo = { to: KeyNetwork ->
+        wallets.noteTestnetKeys()
+        chooseNetwork(to)
+    }
+
     when (val boot = gate.boot) {
-        Boot.Onboarding -> MebitNavHost(wallets, Stop(MovieRoute.start, Place.FIRST), gate.notice, vaults, pairings, nodeSettings, unitSettings)
-        is Boot.Open -> MebitNavHost(wallets, Stop(boot.route, boot.place), vaults = vaults, pairings = pairings, nodeSettings = nodeSettings, unitSettings = unitSettings)
+        Boot.Onboarding -> MebitNavHost(wallets, Stop(MovieRoute.start, Place.FIRST), gate.notice, vaults, pairings, nodeSettings, unitSettings, chooseNetwork = switchTo)
+        is Boot.Open -> MebitNavHost(wallets, Stop(boot.route, boot.place), vaults = vaults, pairings = pairings, nodeSettings = nodeSettings, unitSettings = unitSettings, chooseNetwork = switchTo)
         Boot.Locked, is Boot.Broken -> UnlockScreen(gate)
     }
 }

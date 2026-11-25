@@ -40,3 +40,27 @@ internal fun chainName(network: KeyNetwork): String = if (network == KeyNetwork.
  * find every record Broken, and the recovery screen's one button erases them, so it stays on testnet and never opens the other.
  */
 internal fun openableNetwork(chosen: KeyNetwork): KeyNetwork = if (chosen in SavedWallet.NETWORKS) chosen else KeyNetwork.TEST
+
+/** What a tap on one side of 7.1's network switch does. */
+enum class NetworkTap { Stay, Refuse, Ask, Switch }
+
+/**
+ * Pure. The picked side does nothing. A switch while [refused] shows the reason. Mainnet asks first (7.1.1), and Testnet4 is
+ * taken straight away.
+ */
+fun networkTap(current: KeyNetwork, tapped: KeyNetwork, refused: Boolean): NetworkTap = when {
+    tapped == current -> NetworkTap.Stay
+    refused -> NetworkTap.Refuse
+    tapped == KeyNetwork.MAIN -> NetworkTap.Ask
+    else -> NetworkTap.Switch
+}
+
+/**
+ * Pure. Why the network cannot change now, or null. A switch drops every wallet's words from memory, so it waits while some are
+ * only in memory ([wordsOnlyInMemory]: the phone could not keep them) or the book's last save failed. Awaiting design review, no board.
+ */
+internal fun networkRefusal(wordsOnlyInMemory: Boolean, book: VaultsHealth): String? = when {
+    wordsOnlyInMemory -> "เครื่องนี้ยังบันทึกกระเป๋าไม่ได้ ตั้งรหัสล็อกหน้าจอก่อน จึงจะเปลี่ยนเครือข่ายได้"
+    book == VaultsHealth.SaveFailed -> "บันทึก Wallet และกุญแจล่าสุดไม่สำเร็จ ปิดแล้วเปิดแอปใหม่ก่อนเปลี่ยนเครือข่าย"
+    else -> null
+}

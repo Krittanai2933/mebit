@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,7 +19,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,7 +47,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.NodeSetting
+import com.mebit.app.data.NetworkTap
 import com.mebit.app.data.chainName
+import com.mebit.app.data.networkTap
+import com.mebit.app.feature.send.ConfirmSheet
+import com.mebit.app.resources.Res
+import com.mebit.app.resources.ic_warning
+import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.data.BtcUnit
 import com.mebit.app.data.NodeSettings
 import com.mebit.app.data.passes
@@ -104,22 +113,40 @@ internal fun ownNodeLine(network: KeyNetwork): String = "Esplora ของ ${cha
 /** 7.2 / 7.2.1: the warning card's body. */
 internal fun nodeWarning(network: KeyNetwork): String = "ก่อนใช้โหนดใด แอปตรวจว่าเป็นเชน ${chainName(network)} จริง\nแต่โหนดที่ไม่สุจริตยังแสดงยอดผิดได้"
 
+/** Penpot 7.1.1: the sheet that asks before the app goes to mainnet. Switching back to Testnet4 asks nothing. */
+internal const val MAINNET_SHEET_TITLE = "เปลี่ยนเป็น Mainnet"
+internal const val MAINNET_SHEET_BODY = "Mainnet ใช้ Bitcoin จริง ส่งแล้วยกเลิกไม่ได้ กระเป๋าบน Testnet4 จะซ่อนไว้จนกว่าจะเปลี่ยนกลับ"
+
 /** What a typed URL is compared and kept as: the core drops spaces and a closing slash the same way. */
 internal fun typedBase(text: String): String = text.trim().trimEnd('/')
 
 /**
  * Penpot 7.1: the Bitcoin unit, then the connection group. Left out: language and theme, which are features of their own (every string
- * is inline Thai and there is one light palette). The network is Testnet4 with Mainnet drawn disabled.
+ * is inline Thai and there is one light palette). The network is [NodeSettings.network], and either side can be tapped ([networkTap]):
+ * Mainnet asks first (7.1.1), Testnet4 switches at once, and a [refusal] ([networkRefusal]) is shown under the card instead of switching.
+ * [onChooseNetwork] writes the choice, and the gate then opens the other network.
  */
 @Composable
 fun SettingsScreen(
     node: NodeSettings,
     unit: UnitSettings,
+    refusal: String?,
+    onChooseNetwork: (KeyNetwork) -> Unit,
     onOpenNode: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
 ) {
     var status by remember { mutableStateOf<NodeStatus?>(null) }
+    var asking by remember { mutableStateOf(false) }
+    var refused by remember { mutableStateOf(false) }
+    val tapped = { to: KeyNetwork ->
+        when (networkTap(node.network, to, refusal != null)) {
+            NetworkTap.Stay -> Unit
+            NetworkTap.Refuse -> refused = true
+            NetworkTap.Ask -> asking = true
+            NetworkTap.Switch -> onChooseNetwork(to)
+        }
+    }
     LaunchedEffect(node.current) {
         status = null
         status = withContext(Dispatchers.IO) { chainNodeStatus(node.network) }
@@ -143,10 +170,17 @@ fun SettingsScreen(
                     Text(networkLine(node.network), color = MbBody, fontSize = 12.sp, fontWeight = FontWeight.Light, lineHeight = 16.sp, modifier = Modifier.testTag("settings_net_line"))
                 }
                 TwoOptionSwitch(
-                    options = listOf(SwitchOption("Testnet4", "settings_net_testnet4"), SwitchOption("Mainnet", "settings_net_mainnet", enabled = false)),
-                    pickedAt = 0,
+                    options = listOf(
+                        SwitchOption("Testnet4", "settings_net_testnet4") { tapped(KeyNetwork.TEST) },
+                        SwitchOption("Mainnet", "settings_net_mainnet") { tapped(KeyNetwork.MAIN) },
+                    ),
+                    pickedAt = if (node.network == KeyNetwork.MAIN) 1 else 0,
                 )
             }
+        }
+        if (refused && refusal != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(refusal, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.padding(start = 4.dp).testTag("settings_net_refusal"))
         }
         Spacer(modifier = Modifier.height(16.dp))
         SettingsCard(Modifier.height(82.dp).clickable(role = Role.Button, onClick = onOpenNode).testTag("settings_node")) {
@@ -158,6 +192,17 @@ fun SettingsScreen(
                 }
                 Text(node.current.label(), color = MbNavy, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("settings_node_value"))
                 Text("›", color = MbBody, fontSize = 24.sp, modifier = Modifier.padding(start = 8.dp))
+            }
+        }
+    }
+    if (asking) {
+        ConfirmSheet(tag = "dialog_network_mainnet", title = MAINNET_SHEET_TITLE, body = MAINNET_SHEET_BODY, onCancel = { asking = false }, icon = Res.drawable.ic_warning) {
+            PrimaryCta(MAINNET_SHEET_TITLE, "cta_network_confirm", {
+                asking = false
+                onChooseNetwork(KeyNetwork.MAIN)
+            })
+            TextButton(onClick = { asking = false }, contentPadding = PaddingValues(0.dp), modifier = Modifier.fillMaxWidth().height(40.dp).testTag("cta_network_cancel")) {
+                Text("ยกเลิก", color = MbNavy, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -201,7 +246,7 @@ private fun UnitCard(unit: UnitSettings) {
 /** One side of a [TwoOptionSwitch]. With no [onPick] it cannot be tapped, and a disabled one is drawn grey. */
 private class SwitchOption(val label: String, val tag: String, val enabled: Boolean = true, val onPick: (() -> Unit)? = null)
 
-/** 7.1's switch, shared by the network card (Testnet4 picked, Mainnet disabled) and the unit card: a 126 by 38 track, radius 13, the picked side a navy pill inset 2 with radius 11. */
+/** 7.1's switch, shared by the network card and the unit card: a 126 by 38 track, radius 13, the picked side a navy pill inset 2 with radius 11. */
 @Composable
 private fun TwoOptionSwitch(options: List<SwitchOption>, pickedAt: Int) {
     val pill = RoundedCornerShape(11.dp)

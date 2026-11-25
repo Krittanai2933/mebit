@@ -609,6 +609,15 @@ class WalletsTest {
         assertEquals(SaveState.NotSaved, wallets.at(P1).session.saved)
         assertEquals(AddRefusal.NotSavedHere, wallets.addRefusal())
         assertNull(wallets.beginAdd())
+        assertEquals(true, wallets.wordsOnlyInMemory(), "a switch of network would lose these words")
+    }
+
+    @Test
+    fun noWordsAreOnlyInMemoryOnceTheyAreSavedOrThereAreNone(): Unit = runBlocking {
+        assertEquals(false, ShelfPhone().launch().wordsOnlyInMemory(), "no wallet")
+        val wallets = ShelfPhone().saved(P1, 1).unlocked()
+        assertEquals(1, wallets.listed.size, "the saved wallet is listed")
+        assertEquals(false, wallets.wordsOnlyInMemory(), "a saved wallet")
     }
 
     @Test

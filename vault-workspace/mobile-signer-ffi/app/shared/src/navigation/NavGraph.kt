@@ -63,6 +63,7 @@ import com.mebit.app.data.UNREADABLE_FILE
 import com.mebit.app.data.VaultsHealth
 import com.mebit.app.data.alreadyInAppLine
 import com.mebit.app.data.importReview
+import com.mebit.app.data.networkRefusal
 import com.mebit.app.data.problemOf
 import com.mebit.app.data.vaultsNoticeText
 import com.mebit.app.data.Replacement
@@ -174,6 +175,7 @@ import com.mebit.app.ui.components.coversScreen
 import com.mebit.app.ui.components.rememberFullSheetState
 import com.mebit.app.ui.theme.MbPage
 import com.mebit.ffi.signer.HotTx
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.WalletFileRead
 import com.mebit.ffi.signer.walletFileRead
 import com.mebit.ffi.signer.FoundWallet
@@ -207,6 +209,7 @@ internal fun MebitNavHost(
     pairings: Pairings? = null,
     nodeSettings: NodeSettings,
     unitSettings: UnitSettings = remember { UnitSettings(null) },
+    chooseNetwork: (KeyNetwork) -> Unit = {},
 ) {
     val backStack = remember { mutableStateListOf(start) }
     val current = backStack.last()
@@ -592,6 +595,8 @@ internal fun MebitNavHost(
                     MovieRoute.Settings -> SettingsScreen(
                         node = nodeSettings,
                         unit = unitSettings,
+                        refusal = networkRefusal(wallets.wordsOnlyInMemory(), vaults.health),
+                        onChooseNetwork = chooseNetwork,
                         onOpenNode = { navigate(MovieRoute.SettingsNode) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,

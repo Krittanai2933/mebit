@@ -1,6 +1,10 @@
 package com.mebit.app.feature.settings
 
+import com.mebit.app.data.NetworkTap
+import com.mebit.app.data.VaultsHealth
 import com.mebit.app.data.chainName
+import com.mebit.app.data.networkRefusal
+import com.mebit.app.data.networkTap
 import com.mebit.app.data.networkWord
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.NodeCheck
@@ -44,5 +48,25 @@ class SettingsTextTest {
         assertEquals("ไม่ผ่าน · โหนดนี้ไม่ใช่เชน Mainnet", checkLine(NodeCheck.OtherChain, main))
         assertEquals("ผ่าน · เป็นเชน Testnet4", checkLine(NodeCheck.Testnet4, test))
         assertEquals("ผ่าน · เป็นเชน Mainnet", checkLine(NodeCheck.Mainnet, main))
+    }
+
+    @Test
+    fun theSwitchStaysAsksOrSwitches() {
+        assertEquals(NetworkTap.Stay, networkTap(test, test, refused = false))
+        assertEquals(NetworkTap.Stay, networkTap(main, main, refused = true), "the picked side does nothing, even while refused")
+        assertEquals(NetworkTap.Ask, networkTap(test, main, refused = false), "mainnet asks first")
+        assertEquals(NetworkTap.Switch, networkTap(main, test, refused = false), "testnet switches straight away")
+        assertEquals(NetworkTap.Refuse, networkTap(test, main, refused = true))
+        assertEquals(NetworkTap.Refuse, networkTap(main, test, refused = true))
+    }
+
+    @Test
+    fun theSheetAndTheRefusalsAreTheApprovedTexts() {
+        assertEquals("เปลี่ยนเป็น Mainnet", MAINNET_SHEET_TITLE)
+        assertEquals("Mainnet ใช้ Bitcoin จริง ส่งแล้วยกเลิกไม่ได้ กระเป๋าบน Testnet4 จะซ่อนไว้จนกว่าจะเปลี่ยนกลับ", MAINNET_SHEET_BODY)
+        assertEquals(null, networkRefusal(false, VaultsHealth.Ok))
+        assertEquals("เครื่องนี้ยังบันทึกกระเป๋าไม่ได้ ตั้งรหัสล็อกหน้าจอก่อน จึงจะเปลี่ยนเครือข่ายได้", networkRefusal(true, VaultsHealth.Ok))
+        assertEquals("บันทึก Wallet และกุญแจล่าสุดไม่สำเร็จ ปิดแล้วเปิดแอปใหม่ก่อนเปลี่ยนเครือข่าย", networkRefusal(false, VaultsHealth.SaveFailed))
+        assertEquals("เครื่องนี้ยังบันทึกกระเป๋าไม่ได้ ตั้งรหัสล็อกหน้าจอก่อน จึงจะเปลี่ยนเครือข่ายได้", networkRefusal(true, VaultsHealth.SaveFailed), "words in memory come first")
     }
 }
