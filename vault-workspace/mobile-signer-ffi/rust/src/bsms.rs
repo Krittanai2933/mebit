@@ -503,6 +503,47 @@ mod tests {
         assert_eq!(tpub, WalletFileRead::WrongNetwork);
     }
 
+    // A mainnet wallet reads as one: xpub keys at m/48'/0'/a'/2', its first address a bc1 one, and the record the
+    // app writes reads back as it was. Each network refuses the other's keys, and a key at the other coin type.
+    #[test]
+    fn a_mainnet_record_is_read_with_xpub_keys_and_refused_on_testnet() {
+        let main = crate::script::tests::main_multisig(2, &[1, 2, 3]);
+        let shape = wallet_describe(main.clone(), KeyNetwork::Main).unwrap();
+        assert!(
+            shape.first_address.starts_with("bc1q"),
+            "{}",
+            shape.first_address
+        );
+        let record = wallet_bsms_record(main.clone(), KeyNetwork::Main).unwrap();
+        let WalletFileRead::Read { wallet } = wallet_file_read(record.clone(), KeyNetwork::Main)
+        else {
+            panic!("a mainnet record is read on mainnet");
+        };
+        assert_eq!(wallet.descriptor, main);
+        assert_eq!(wallet.shape.first_address, shape.first_address);
+        assert_eq!(wallet.stated_address, Some(shape.first_address));
+        assert_eq!(
+            wallet_file_read(record, KeyNetwork::Test),
+            WalletFileRead::WrongNetwork
+        );
+        // A bare descriptor line too, and a testnet record asked for on mainnet.
+        assert!(matches!(
+            wallet_file_read(main.clone(), KeyNetwork::Main),
+            WalletFileRead::Read { .. }
+        ));
+        let test_record = wallet_bsms_record(two_of_three(), NET).unwrap();
+        assert_eq!(
+            wallet_file_read(test_record, KeyNetwork::Main),
+            WalletFileRead::WrongNetwork
+        );
+        // An xpub at the testnet coin type is not this wallet's key.
+        let at_1 = main.replace("48'/0'/0'/2'", "48'/1'/0'/2'");
+        assert!(matches!(
+            wallet_file_read(at_1, KeyNetwork::Main),
+            WalletFileRead::Unreadable { .. }
+        ));
+    }
+
     #[test]
     fn other_kinds_name_themselves() {
         let found = |text: String| match wallet_file_read(text, NET) {
