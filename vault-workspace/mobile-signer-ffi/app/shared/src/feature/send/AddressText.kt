@@ -10,7 +10,12 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.sp
 import com.mebit.app.ui.theme.amountFontFamily
+
+/** The size of an address on the sign page's ticket and 5.2's navy card: at 14 sp eight groups of four, a 62-character address in two lines, fit a 393 pt iPhone with room for wide letters; AddressText drops to three lines only when they do not. */
+internal val ADDRESS_SIZE = 14.sp
+internal val ADDRESS_LINE = 20.sp
 
 /**
  * An address in Montserrat Bold, as many groups of four a line as the width it is given holds and the lines shared evenly

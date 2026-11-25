@@ -393,7 +393,7 @@ private fun PaymentCard(payment: VaultPayment, quote: com.mebit.app.data.FiatQuo
     val amount = payment.amountSats.toLong()
     val unit = LocalBtcUnit.current
     Column(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(MbNavy).padding(horizontal = 20.dp, vertical = 16.dp).testTag("m2_summary"),
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(MbNavy).padding(horizontal = 18.dp, vertical = 16.dp).testTag("m2_summary"),
     ) {
         Text("ส่ง", color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
         Row(verticalAlignment = Alignment.Bottom) {
@@ -409,7 +409,7 @@ private fun PaymentCard(payment: VaultPayment, quote: com.mebit.app.data.FiatQuo
         Spacer(modifier = Modifier.height(9.dp))
         Text("ถึง", color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
         Spacer(modifier = Modifier.height(2.dp))
-        AddressText(payment.destination, MbWhite, SummaryGold, 15.sp, 21.sp, Modifier.fillMaxWidth().testTag("m2_to"))
+        AddressText(payment.destination, MbWhite, SummaryGold, ADDRESS_SIZE, ADDRESS_LINE, Modifier.fillMaxWidth().testTag("m2_to"))
     }
 }
 

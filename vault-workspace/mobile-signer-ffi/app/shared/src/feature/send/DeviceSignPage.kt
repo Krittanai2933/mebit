@@ -532,7 +532,7 @@ internal fun MatchCard(review: SpendReview, walletName: String, unit: BtcUnit) {
         Spacer(modifier = Modifier.height(11.dp))
         Text("ปลายทาง", color = MbBody, fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 16.sp)
         review.payments.forEach { out ->
-            AddressText(out.address, MbNavyInk, MbEyebrow, 15.sp, 21.sp, Modifier.fillMaxWidth().padding(top = 4.dp).testTag("hw_sign_address"))
+            AddressText(out.address, MbNavyInk, MbEyebrow, ADDRESS_SIZE, ADDRESS_LINE, Modifier.fillMaxWidth().padding(top = 4.dp).testTag("hw_sign_address"))
         }
         Spacer(modifier = Modifier.height(18.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(MbBorder))
