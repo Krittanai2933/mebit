@@ -101,7 +101,7 @@ To use your own Esplora host, put it on one line in `vault-workspace/mobile-sign
 - [`docs/00-README.md`](docs/00-README.md) indexes everything else, including the lending specs.
 
 ## Contributing
-
+ 
 `AGENTS.md` holds the shared instructions for coding agents, and `CLAUDE.md` imports it. Module briefs live in `.claude/agents/` and shared skills in `.claude/skills/`. After editing any of them, run `python3 -I scripts/check-agent-context.py`.
 
 The policy engine in `vault-core` decides what a PSBT may pay before any key signs it. Changes to it need review from both `vault-core` owners and new adversarial tests.
