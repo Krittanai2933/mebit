@@ -12,7 +12,7 @@ A Jade or a Safe 7 key of a several-key wallet signs on its own screen from 5.2 
 - `hw-read-safe7` the read screen for a Safe 7: the code field only once it asks (2.3.4), the check and two lines when the phone kept its pairing (2.3.5), the orange title when it forgot this phone (2.3.6).
 - `hw-confirm` Confirm Key (2.4.1) saves the wallet, Wallet Created (3.5.2) shows it alone.
 - `hw-list` the card กระเป๋า Jade after the phone's wallets, its balance in the total, and on the รับ/ส่ง chooser.
-- `hw-home` Home 4.1.5 with the key on the device, and 4.1.5.1's row with the Jade or Trezor logo when opened. No upgrade card.
+- `hw-home` Home 4.1.5 with the key on the device, and 4.1.5.1's row with the Jade or Trezor logo when opened. No upgrade card. The X at the logo's right (`id:cta_vault_close`) and Android Back open the Wallet list. This is written from the code and has not been run yet.
 - `hw-receive` Receive with the wallet's address and no backup gate.
 - `hw-send` Send, Review 4.5.2 with เซ็นบน Jade, Sign 4.5.3 then 4.5.5 with ส่งธุรกรรม.
 - `hw-remove` the card's ⋯ removes it after 1.8.8's sheet and the owner check.

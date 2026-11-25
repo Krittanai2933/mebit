@@ -877,6 +877,7 @@ internal fun MebitNavHost(
                         onHistory = { navigate(MovieRoute.S7History) },
                         onOpenTx = openTx,
                         onOpenCatalog = openCatalog,
+                        onClose = { navigate(MovieRoute.VaultList) },
                     )
                     MovieRoute.S7History -> S7HistoryScreen(
                         history = singleSig.shownHistory(),
@@ -1096,6 +1097,7 @@ internal fun MebitNavHost(
                             onHistory = { navigate(MovieRoute.HardwareHistory) },
                             onOpenTx = openHardwareTx,
                             onOpenCatalog = openCatalog,
+                            onClose = { navigate(MovieRoute.VaultList) },
                         )
                     } ?: NoWallet(current.route, onBack, openCatalog)
                     MovieRoute.HardwareReceive -> shownHardware?.let { w ->

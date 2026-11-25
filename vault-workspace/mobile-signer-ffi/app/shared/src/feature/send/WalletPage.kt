@@ -138,11 +138,6 @@ internal fun WalletPage(
     }
 }
 
-/**
- * The navy block's content from the logo to the two pills, at the spacing 4.1 and 3.7 share. [goldLine] fills the 17 dp line under the
- * balance, which keeps its room when empty so nothing below it moves. [demo] adds Home's small marker after the balance. [onClose] draws
- * 3.7's X at the logo's right.
- */
 @Composable
 internal fun WalletHero(
     board: WalletBoard,
