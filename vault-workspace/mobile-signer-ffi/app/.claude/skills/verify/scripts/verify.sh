@@ -185,6 +185,16 @@ cmd_start() {
     app_resumed || fail "$PKG did not come to the front. Run verify.sh start again. What is in front: verify.sh adb shell dumpsys activity activities"
   fi
 
+  # With a PIN set, the keyguard can come up over the resumed app before stay-awake holds, and the app then counts as resumed while the
+  # lock screen has the focus. Unlock it with the run's PIN.
+  if [ "$lock" != none ] && adbs shell dumpsys window 2> /dev/null | grep -q 'mCurrentFocus=.*NotificationShade'; then
+    adbs shell input keyevent 82 > /dev/null 2>&1
+    adbs shell wm dismiss-keyguard > /dev/null 2>&1
+    adbs shell input text "$SCREEN_PIN" > /dev/null 2>&1
+    adbs shell input keyevent 66 > /dev/null 2>&1
+    for i in 1 2 3 4 5; do adbs shell dumpsys window 2> /dev/null | grep -q 'mCurrentFocus=.*NotificationShade' || break; sleep 1; done
+  fi
+
   # Ready means the UI answers and no "isn't responding" dialog is up. A starved guest can still show one. A dialog
   # that arrives after this point is not seen here, and doctor catches it.
   local ok='' f="$RUN/.poll.xml"
