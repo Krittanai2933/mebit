@@ -94,6 +94,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.isValidAddress
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.platform.LocalDensity
 
 private val Placeholder = Color(0xFFB4BAC4)
 private val SelectedFee = Color(0xFFFFF8EF)
@@ -396,24 +399,34 @@ private fun AmountCard(known: Boolean, spendableSats: Long, entry: AmountEntry, 
             Spacer(modifier = Modifier.height(14.dp))
             Text("จำนวน", color = MbSlate, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
             Spacer(modifier = Modifier.height(6.dp))
+            val measurer = rememberTextMeasurer()
+            val label = if (baht) "THB" else coin.label
+            val labelStyle = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Bold, lineHeight = 22.sp)
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            // 44 sp while the figure fits beside its unit; past that it shrinks to fit, down to 14 sp.
+            val shown = if (text.isEmpty()) (if (grouped) "0" else "0.0000") else if (grouped) groupDigits(text) else text
+            val room = constraints.maxWidth - measurer.measure(label, labelStyle).size.width - with(LocalDensity.current) { 14.dp.roundToPx() }
+            val full = measurer.measure(shown, amount).size.width
+            val fitted = if (full <= room) amount else amount.copy(fontSize = (44f * room / full).coerceAtLeast(14f).sp)
             Row(verticalAlignment = Alignment.Bottom) {
                 BasicTextField(
                     value = text,
                     onValueChange = { if (baht) entry.typeBaht(it, quote) else if (grouped) entry.typeSats(it) else entry.typeBtc(it) },
-                    textStyle = amount,
+                    textStyle = fitted,
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = if (grouped) KeyboardType.Number else KeyboardType.Decimal),
                     visualTransformation = if (grouped) ThousandsTransformation else VisualTransformation.None,
                     decorationBox = { inner ->
                         Box {
-                            if (text.isEmpty()) Text(if (grouped) "0" else "0.0000", style = amount.copy(color = Placeholder))
+                            if (text.isEmpty()) Text(if (grouped) "0" else "0.0000", style = fitted.copy(color = Placeholder))
                             inner()
                         }
                     },
                     modifier = Modifier.width(IntrinsicSize.Min).widthIn(min = 40.dp).keepsKeyboard().testTag("s4_amount"),
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(if (baht) "THB" else coin.label, color = MbSlate, fontSize = 16.sp, fontWeight = FontWeight.Bold, lineHeight = 22.sp, modifier = Modifier.padding(bottom = 12.dp))
+                Text(label, style = labelStyle, color = MbSlate, maxLines = 1, softWrap = false, modifier = Modifier.padding(bottom = 12.dp))
+            }
             }
             // The other unit's line has its room even when it shows nothing, so the divider keeps its place.
             Box(modifier = Modifier.fillMaxWidth().height(36.dp)) {

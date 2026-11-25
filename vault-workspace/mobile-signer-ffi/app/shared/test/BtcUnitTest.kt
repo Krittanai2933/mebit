@@ -55,4 +55,11 @@ class BtcUnitTest {
         settings.choose(BtcUnit.Sat)
         assertEquals(BtcUnit.Sat, settings.current)
     }
+
+    @Test
+    fun aNegativeAmountKeepsItsSignInFrontOfTheGrouping() {
+        assertEquals("-158", amountNumber(-158, BtcUnit.Sat))
+        assertEquals("-1,000", amountNumber(-1_000, BtcUnit.Sat))
+        assertEquals("-158,000", amountNumber(-158_000, BtcUnit.Sat))
+    }
 }
