@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.mebit.app.PlainFile
 import com.mebit.ffi.signer.KeyNetwork
+import com.mebit.ffi.signer.NodeCheck
 import com.mebit.ffi.signer.NodeChoice
 import com.mebit.ffi.signer.chainUseNode
 
@@ -35,6 +36,9 @@ internal fun decodeNodeSetting(text: String?): NodeSetting {
         else -> NodeSetting.Auto
     }
 }
+
+/** Whether a node check found the chain of [network], the only answer that lets an own node be chosen. */
+internal fun NodeCheck.passes(network: KeyNetwork): Boolean = this == if (network == KeyNetwork.MAIN) NodeCheck.Mainnet else NodeCheck.Testnet4
 
 internal fun NodeSetting.toChoice(): NodeChoice = when (this) {
     NodeSetting.Auto -> NodeChoice.Auto
@@ -70,7 +74,12 @@ private fun onTailnet(base: String): Boolean {
 }
 
 /** The node setting and its file. [file] is null where the phone has no place for it, and then a choice lasts until the app closes. */
-class NodeSettings internal constructor(private val file: PlainFile?, private val use: (NodeChoice) -> Unit = { chainUseNode(it, KeyNetwork.TEST) }) {
+class NodeSettings internal constructor(
+    private val file: PlainFile?,
+    /** The network this file and this choice are for: the core keeps one node choice per network. */
+    val network: KeyNetwork,
+    private val use: (NodeChoice) -> Unit = { chainUseNode(it, network) },
+) {
     var current: NodeSetting by mutableStateOf(NodeSetting.Auto)
         private set
 

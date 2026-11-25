@@ -204,9 +204,9 @@ internal fun MebitNavHost(
     wallets: Wallets,
     start: Stop,
     startNotice: StartNotice? = null,
-    vaults: SavedVaults = remember { SavedVaults.memoryOnly() },
+    vaults: SavedVaults,
     pairings: Pairings? = null,
-    nodeSettings: NodeSettings = remember { NodeSettings(null) },
+    nodeSettings: NodeSettings,
     unitSettings: UnitSettings = remember { UnitSettings(null) },
 ) {
     val backStack = remember { mutableStateListOf(start) }
