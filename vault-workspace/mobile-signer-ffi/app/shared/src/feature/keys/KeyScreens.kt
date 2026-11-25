@@ -429,18 +429,14 @@ fun KeyringScreen(
     }
 }
 
-/**
- * The mark in a key's tile, [height] tall, as Penpot draws them since 2026-11-23: the mebit mark for a key on a phone, this one or another,
- * else the Jade or Trezor logo.
- */
 @Composable
 internal fun KeyLogo(source: KeySourceLabel, height: Dp) {
-    val (logo, widthPerHeight) = when (source) {
-        KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> Res.drawable.ic_mebit_mark to 24f / 23.6f
-        KeySourceLabel.Jade -> Res.drawable.ic_jade_mark to 1f
-        KeySourceLabel.TrezorSafe7 -> Res.drawable.ic_trezor_mark to 17f / 24.355f
+    val (logo, widthPerHeight, scale) = when (source) {
+        KeySourceLabel.ThisDevice, KeySourceLabel.MebitOther -> Triple(Res.drawable.ic_mebit_mark, 1f, 23.56f / 24f)
+        KeySourceLabel.Jade -> Triple(Res.drawable.ic_jade_mark, 1f, 1f)
+        KeySourceLabel.TrezorSafe7 -> Triple(Res.drawable.ic_trezor_mark, 17f / 24.355f, 1f)
     }
-    Image(painterResource(logo), contentDescription = null, modifier = Modifier.height(height).aspectRatio(widthPerHeight))
+    Image(painterResource(logo), contentDescription = null, modifier = Modifier.height(height * scale).aspectRatio(widthPerHeight))
 }
 
 /**
@@ -460,7 +456,7 @@ private fun KeyCard(key: SavedKey, item: DeleteItem, onBackup: (() -> Unit)?, on
             .border(1.dp, MbBorder, shape),
     ) {
         Box(Modifier.matchParentSize().semantics(mergeDescendants = true) {}.testTag("key_${key.id}")) {
-            Box(Modifier.offset(x = 16.dp, y = 12.dp).size(38.dp).clip(RoundedCornerShape(12.dp)).background(MbIconWash), contentAlignment = Alignment.Center) {
+            Box(Modifier.offset(x = 16.dp, y = 12.dp).size(38.dp).clip(RoundedCornerShape(12.dp)).background(MbChip), contentAlignment = Alignment.Center) {
                 KeyLogo(key.source, 21.dp)
             }
             // 132 dp at the end is the ⋯, the pill and their gaps, so the texts are 164 dp wide on the board's 402 dp screen and end in … before the pill on a narrower one.
