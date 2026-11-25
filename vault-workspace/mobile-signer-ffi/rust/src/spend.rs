@@ -14,9 +14,7 @@ use bitcoin::psbt::{self, Psbt, SigningKeys, SigningKeysMap};
 use bitcoin::secp256k1::{All, Message, Secp256k1};
 use bitcoin::sighash::{EcdsaSighashType, Prevouts, SighashCache, TapSighashType};
 use bitcoin::transaction::{Version, predict_weight};
-use bitcoin::{
-    Address, Network, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness, ecdsa,
-};
+use bitcoin::{Address, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness, ecdsa};
 use miniscript::psbt::PsbtExt;
 use vault_core::keys::generate_seed;
 
@@ -24,7 +22,7 @@ use crate::chain::{ChainSource, EsploraSource, check_network};
 use crate::hot_wallet::{
     AddressSource, Chain, MAX_FEE_RATE, MAX_STANDARD_VSIZE, MIN_FEE_RATE, Payment, Plan,
     PreparedSend, SCAN_STORE, SendAmount, Signed, check_node_rate, checked, complete, dust_floor,
-    full_size, mnemonic_from, plan_from, prepared, proven_parents, testnet4, vsize,
+    esplora_http, full_size, mnemonic_from, plan_from, prepared, proven_parents, vsize,
 };
 use crate::scan::GAP;
 use crate::scan_store::ScanStore;
@@ -71,7 +69,7 @@ pub fn wallet_draft(
     fee_rate_sat_vb: u64,
 ) -> Result<SpendReview, MobileSignerError> {
     draft(
-        &EsploraSource(&testnet4()),
+        &EsploraSource(&esplora_http(network)),
         &descriptor,
         network,
         Payment {
@@ -94,7 +92,11 @@ pub fn wallet_review(
     psbt: String,
 ) -> Result<SpendReview, MobileSignerError> {
     check_network(network)?;
-    review(&Described::parse(&descriptor)?, &parse(&psbt)?, &SCAN_STORE)
+    review(
+        &Described::parse_on(&descriptor, network)?,
+        &parse(&psbt)?,
+        &SCAN_STORE,
+    )
 }
 
 /// The signed transaction for `hot_broadcast`, once `psbt` still pays what `unsigned_txid` named and at least
@@ -108,7 +110,7 @@ pub fn wallet_finish(
     unsigned_txid: String,
 ) -> Result<PreparedSend, MobileSignerError> {
     check_network(network)?;
-    let wallet = Described::parse(&descriptor)?;
+    let wallet = Described::parse_on(&descriptor, network)?;
     let shown = as_shown(&wallet, parse(&psbt)?, &unsigned_txid, &SCAN_STORE)?;
     let signed = finished(&wallet, &shown)?;
     Ok(PreparedSend {
@@ -133,7 +135,7 @@ pub fn wallet_sign_with_words(
     passphrase: String,
 ) -> Result<SpendReview, MobileSignerError> {
     check_network(network)?;
-    let wallet = Described::parse(&descriptor)?;
+    let wallet = Described::parse_on(&descriptor, network)?;
     let shown = as_shown(&wallet, parse(&psbt)?, &expected_txid, &SCAN_STORE)?;
     signed_with_words(&wallet, shown, &mnemonic_words, &passphrase, &SCAN_STORE)
         .map(Shown::into_review)
@@ -160,7 +162,7 @@ pub(crate) fn signed_with_words(
 ) -> Result<Shown, MobileSignerError> {
     let seed = generate_seed(&mnemonic_from(words)?, passphrase);
     let master = Held(
-        Xpriv::new_master(Network::Testnet4, &*seed)
+        Xpriv::new_master(wallet.network, &*seed)
             .map_err(|e| MobileSignerError::InvalidPsbtJson(e.to_string()))?,
     );
     drop(seed);
@@ -273,7 +275,7 @@ pub(crate) fn draft(
     clock: &dyn Fn() -> SystemTime,
     store: &ScanStore,
 ) -> Result<SpendReview, MobileSignerError> {
-    let wallet = Described::parse(descriptor)?;
+    let wallet = Described::parse_on(descriptor, network)?;
     let own = wallet.spend_weight();
     let dest = checked(payment, network, own)?;
     check_network(network)?;
@@ -511,7 +513,7 @@ fn review(
             )));
         }
         if *output == psbt::Output::default() {
-            let Ok(address) = Address::from_script(&txout.script_pubkey, Network::Testnet4) else {
+            let Ok(address) = Address::from_script(&txout.script_pubkey, wallet.network) else {
                 if on(Rule::Outputs) {
                     return Err(why("pays a script with no address"));
                 }
@@ -791,6 +793,7 @@ pub(crate) mod tests {
     use std::sync::{Mutex, OnceLock, mpsc};
     use std::time::{Duration, Instant};
 
+    use bitcoin::Network;
     use bitcoin::bip32::{ChildNumber, DerivationPath, KeySource, Xpriv, Xpub};
     use bitcoin::hashes::{Hash, sha256};
     use bitcoin::opcodes::all::OP_CHECKMULTISIG;
@@ -806,7 +809,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::address_type::AddressType;
     use crate::chain::Transport;
-    use crate::hot_wallet::tests::{Fake, SOMEONE, refused_as_mainnet};
+    use crate::hot_wallet::tests::{Fake, SOMEONE, refused_as_testnet_keys_on_mainnet};
     use crate::hot_wallet::vsize;
     use crate::scan_store::tests::Folder;
     use crate::script::tests::{
@@ -1843,10 +1846,10 @@ pub(crate) mod tests {
 
     // A mainnet destination passes the refusals that come before the network's, so the network is what refuses.
     #[test]
-    fn wallet_draft_refuses_mainnet_before_any_request() {
+    fn wallet_draft_refuses_testnet_keys_on_mainnet_before_any_request() {
         let descriptor = two_of_three();
         let fake = funded(&descriptor);
-        refused_as_mainnet(draft(
+        refused_as_testnet_keys_on_mainnet(draft(
             &EsploraSource(&WithMulti(&fake)),
             &descriptor,
             KeyNetwork::Main,
@@ -1864,8 +1867,8 @@ pub(crate) mod tests {
     // Review, signing and finishing ask no host. On mainnet they refuse before the PSBT is read, so text that is no PSBT
     // gets the same refusal.
     #[test]
-    fn wallet_review_refuses_mainnet_before_reading_the_psbt() {
-        refused_as_mainnet(wallet_review(
+    fn wallet_review_refuses_testnet_keys_on_mainnet_before_reading_the_psbt() {
+        refused_as_testnet_keys_on_mainnet(wallet_review(
             two_of_three(),
             KeyNetwork::Main,
             "not a psbt".into(),
@@ -1873,8 +1876,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn wallet_sign_with_words_refuses_mainnet_before_reading_the_psbt() {
-        refused_as_mainnet(wallet_sign_with_words(
+    fn wallet_sign_with_words_refuses_testnet_keys_on_mainnet_before_reading_the_psbt() {
+        refused_as_testnet_keys_on_mainnet(wallet_sign_with_words(
             two_of_three(),
             KeyNetwork::Main,
             "not a psbt".into(),
@@ -1885,8 +1888,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn wallet_finish_refuses_mainnet_before_reading_the_psbt() {
-        refused_as_mainnet(wallet_finish(
+    fn wallet_finish_refuses_testnet_keys_on_mainnet_before_reading_the_psbt() {
+        refused_as_testnet_keys_on_mainnet(wallet_finish(
             two_of_three(),
             KeyNetwork::Main,
             "not a psbt".into(),

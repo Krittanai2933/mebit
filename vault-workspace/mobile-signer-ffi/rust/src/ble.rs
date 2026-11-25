@@ -243,7 +243,7 @@ pub fn jade_wallet_registration(
     network: KeyNetwork,
 ) -> Result<Option<JadeRegistration>, MobileSignerError> {
     check_network(network)?;
-    let wallet = Described::parse(&descriptor)?;
+    let wallet = Described::parse_on(&descriptor, network)?;
     let registration = jade_registration(&wallet).map_err(|error| {
         MobileSignerError::InvalidPsbtJson(format!("Jade registration: {error}"))
     })?;

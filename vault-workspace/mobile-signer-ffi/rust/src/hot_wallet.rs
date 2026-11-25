@@ -176,7 +176,7 @@ impl Account {
         let secp = Secp256k1::new();
         let master = Xpriv::new_master(network, &mnemonic.to_seed(passphrase)).map_err(bad)?;
         let account = master
-            .derive_priv(&secp, &address_type.account_path())
+            .derive_priv(&secp, &address_type.account_path(network))
             .map_err(bad)?;
         let chain = |index| account.derive_priv(&secp, &[ChildNumber::Normal { index }]);
         let chains = [chain(0).map_err(bad)?, chain(1).map_err(bad)?];
@@ -234,15 +234,25 @@ fn anchor_of(network: KeyNetwork) -> Anchor {
 /// Every wallet's scan, in the folder `hot_use_state_dir` names once the app has called it.
 pub(crate) static SCAN_STORE: LazyLock<ScanStore> = LazyLock::new(ScanStore::default);
 
-/// The testnet4 hosts this wallet reads and posts through outside a sync. A GET that loses the host
-/// in use marks every wallet's picture stale, so the next call syncs on the host chosen next.
-static TESTNET4_HOSTS: Http = Http::new(mark_scans_stale);
+/// The hosts of each network this wallet reads and posts through outside a sync. A GET that loses the
+/// host in use marks every wallet's picture stale, so the next call syncs on the host chosen next.
+static TESTNET4_HOSTS: Http = Http::new(KeyNetwork::Test, mark_scans_stale);
+static MAINNET_HOSTS: Http = Http::new(KeyNetwork::Main, mark_scans_stale);
 static TESTNET4: EsploraSource = EsploraSource(&TESTNET4_HOSTS);
+static MAINNET: EsploraSource = EsploraSource(&MAINNET_HOSTS);
 
-/// The testnet4 hosts for one call that syncs. A host the scan catches lying is left for the next
+/// The shared source of `network`.
+fn source_of(network: KeyNetwork) -> &'static EsploraSource<'static> {
+    match network {
+        KeyNetwork::Test => &TESTNET4,
+        KeyNetwork::Main => &MAINNET,
+    }
+}
+
+/// The hosts of `network` for one call that syncs. A host the scan catches lying is left for the next
 /// one for the rest of the call.
-pub(crate) fn testnet4() -> Http {
-    Http::new(mark_scans_stale)
+pub(crate) fn esplora_http(network: KeyNetwork) -> Http {
+    Http::new(network, mark_scans_stale)
 }
 
 fn mark_scans_stale() {
@@ -785,11 +795,11 @@ pub fn hot_receive_address(
     Ok(account.key(Chain::External, index)?.address.to_string())
 }
 
-/// The account path the hot wallet derives `address_type`'s keys from, `m/{purpose}'/1'/0'` on either
-/// network, as the fingerprint sheets print it.
+/// The account path the hot wallet derives `address_type`'s keys from on `network`, `m/{purpose}'/0'/0'`
+/// on mainnet and `m/{purpose}'/1'/0'` on testnet4, as the fingerprint sheets print it.
 #[uniffi::export]
-pub fn hot_account_path(address_type: AddressType) -> String {
-    format!("m/{}", address_type.account_path())
+pub fn hot_account_path(address_type: AddressType, network: KeyNetwork) -> String {
+    format!("m/{}", address_type.account_path(network_of(network)))
 }
 
 /// Whether a wallet on `network` can take `address_type`, as every call that derives one of its keys
@@ -818,7 +828,7 @@ pub fn hot_wallet_snapshot(
     address_type: AddressType,
 ) -> Result<HotWalletSnapshot, MobileSignerError> {
     snapshot_from(
-        &EsploraSource(&testnet4()),
+        &EsploraSource(&esplora_http(network)),
         &mnemonic_words,
         &passphrase,
         network,
@@ -835,7 +845,7 @@ pub fn wallet_snapshot(
     network: KeyNetwork,
 ) -> Result<HotWalletSnapshot, MobileSignerError> {
     described_snapshot(
-        &EsploraSource(&testnet4()),
+        &EsploraSource(&esplora_http(network)),
         &descriptor,
         network,
         &SystemTime::now,
@@ -852,7 +862,7 @@ pub(crate) fn described_snapshot(
     store: &ScanStore,
 ) -> Result<HotWalletSnapshot, MobileSignerError> {
     check_network(network)?;
-    let wallet = Described::parse(descriptor)?;
+    let wallet = Described::parse_on(descriptor, network)?;
     snapshot_of(
         source,
         &wallet.synced(source, network, clock, store)?,
@@ -873,7 +883,7 @@ pub struct WalletBalance {
 
 /// The confirmed + mempool balance of the wallet `descriptor` describes, by the sync a read of it within ten seconds
 /// shares, with how far the scan got. It reads no coin list, so a list that shows balances pays for none, and a coin list
-/// a host fails or limits never blanks a balance. Testnet4 only. About 40 Esplora calls for a wallet nobody paid and a
+/// a host fails or limits never blanks a balance. About 40 Esplora calls for a wallet nobody paid and a
 /// routine sync's few after that, so call it off the main thread. No screen may show `balance_sats` unless `scan` is
 /// `Complete`.
 #[uniffi::export]
@@ -882,7 +892,7 @@ pub fn wallet_balance(
     network: KeyNetwork,
 ) -> Result<WalletBalance, MobileSignerError> {
     described_balance(
-        &EsploraSource(&testnet4()),
+        &EsploraSource(&esplora_http(network)),
         &descriptor,
         network,
         &SystemTime::now,
@@ -900,8 +910,8 @@ fn described_balance(
     store: &ScanStore,
 ) -> Result<WalletBalance, MobileSignerError> {
     check_network(network)?;
-    let wallet = Described::parse(descriptor)?;
-    let synced = sync_scan(source, &wallet, Anchor::Testnet4, clock, store)?;
+    let wallet = Described::parse_on(descriptor, network)?;
+    let synced = sync_scan(source, &wallet, anchor_of(network), clock, store)?;
     Ok(WalletBalance {
         balance_sats: held(&synced.scan.chains, &synced.balances)?,
         scan: HotScan::from(&synced.status),
@@ -1003,7 +1013,7 @@ pub fn hot_wallet_history(
     address_type: AddressType,
 ) -> Result<Vec<HotTx>, MobileSignerError> {
     history_of(
-        &EsploraSource(&testnet4()),
+        &EsploraSource(&esplora_http(network)),
         &mnemonic_words,
         &passphrase,
         network,
@@ -1020,7 +1030,7 @@ pub fn wallet_history(
     network: KeyNetwork,
 ) -> Result<Vec<HotTx>, MobileSignerError> {
     described_history(
-        &EsploraSource(&testnet4()),
+        &EsploraSource(&esplora_http(network)),
         &descriptor,
         network,
         &SystemTime::now,
@@ -1037,7 +1047,7 @@ pub(crate) fn described_history(
     store: &ScanStore,
 ) -> Result<Vec<HotTx>, MobileSignerError> {
     check_network(network)?;
-    let wallet = Described::parse(descriptor)?;
+    let wallet = Described::parse_on(descriptor, network)?;
     history_by(
         source,
         &complete(wallet.synced(source, network, clock, store)?)?,
@@ -1208,7 +1218,7 @@ pub fn hot_tx_detail(
     txid: String,
 ) -> Result<Option<HotTxDetail>, MobileSignerError> {
     detail_of(
-        &TESTNET4,
+        source_of(network),
         &mnemonic_words,
         &passphrase,
         network,
@@ -1225,7 +1235,7 @@ pub fn wallet_tx_detail(
     network: KeyNetwork,
     txid: String,
 ) -> Result<Option<HotTxDetail>, MobileSignerError> {
-    described_detail(&TESTNET4, &descriptor, network, &txid, &SCAN_STORE)
+    described_detail(source_of(network), &descriptor, network, &txid, &SCAN_STORE)
 }
 
 /// `detail_of` for the wallet `descriptor` describes, refusing in the same order.
@@ -1239,7 +1249,12 @@ pub(crate) fn described_detail(
     let txid = Txid::from_str(txid)
         .map_err(|e| tx_error(format!("txid is not 64 hex characters: {e}")))?;
     check_network(network)?;
-    detail_by(source, &Described::parse(descriptor)?, &txid, store)
+    detail_by(
+        source,
+        &Described::parse_on(descriptor, network)?,
+        &txid,
+        store,
+    )
 }
 
 /// Refuses a txid that is not 64 hex before any request. Then `/tx/{txid}` and, second so a block landing between the
@@ -1462,7 +1477,7 @@ pub fn hot_prepare_send_at_rate(
     fee_rate_sat_vb: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
     Ok(prepared(signed_send(
-        &EsploraSource(&testnet4()),
+        &EsploraSource(&esplora_http(network)),
         OneKeyWallet {
             words: &mnemonic_words,
             passphrase: &passphrase,
@@ -1520,7 +1535,7 @@ pub fn hot_prepare_send_all(
     fee_rate_sat_vb: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
     Ok(prepared(signed_send(
-        &EsploraSource(&testnet4()),
+        &EsploraSource(&esplora_http(network)),
         OneKeyWallet {
             words: &mnemonic_words,
             passphrase: &passphrase,
@@ -1566,7 +1581,7 @@ pub fn hot_quote_send(
     fee_rate_sat_vb: u64,
 ) -> Result<QuotedSend, MobileSignerError> {
     quoted(
-        &EsploraSource(&testnet4()),
+        &EsploraSource(&esplora_http(network)),
         OneKeyWallet {
             words: &mnemonic_words,
             passphrase: &passphrase,
@@ -1597,7 +1612,7 @@ pub fn hot_broadcast(
     txid: String,
 ) -> Result<HotSendResult, MobileSignerError> {
     check_network(network)?;
-    broadcast_via(&TESTNET4, &hex, &txid, &SCAN_STORE)
+    broadcast_via(source_of(network), &hex, &txid, &SCAN_STORE)
 }
 
 /// `source`'s broadcast. Once the payment is out, or may be, every wallet's picture is stale (the call
@@ -2422,7 +2437,7 @@ pub fn hot_prepare_fee_bump(
     fee_rate_sat_vb: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
     Ok(prepared(signed_replacement(
-        &EsploraSource(&testnet4()),
+        &EsploraSource(&esplora_http(network)),
         OneKeyWallet {
             words: &mnemonic_words,
             passphrase: &passphrase,
@@ -2453,7 +2468,7 @@ pub fn hot_prepare_cancel(
     fee_rate_sat_vb: u64,
 ) -> Result<PreparedSend, MobileSignerError> {
     Ok(prepared(signed_replacement(
-        &EsploraSource(&testnet4()),
+        &EsploraSource(&esplora_http(network)),
         OneKeyWallet {
             words: &mnemonic_words,
             passphrase: &passphrase,
@@ -2813,14 +2828,28 @@ const FEE_TIERS_TTL: Duration = Duration::from_secs(5 * 60);
 const FEE_FALLBACK_TTL: Duration = Duration::from_secs(30);
 
 type FeeCache = Mutex<Option<(FeeTiers, Instant)>>;
-static FEE_CACHE: FeeCache = Mutex::new(None);
+static TESTNET4_FEES: FeeCache = Mutex::new(None);
+static MAINNET_FEES: FeeCache = Mutex::new(None);
 
-/// The fee tiers for the Send screen, from the testnet4 host in use. One network call in the usual
+/// The fee cache of `network`, so a switch never answers with the other network's rates.
+fn fee_cache(network: KeyNetwork) -> &'static FeeCache {
+    match network {
+        KeyNetwork::Test => &TESTNET4_FEES,
+        KeyNetwork::Main => &MAINNET_FEES,
+    }
+}
+
+/// The fee tiers for the Send screen, from the host of `network` in use. One network call in the usual
 /// case, answered from memory for five minutes after. Never fails: when no host answers or the
 /// answer is unusable the fixed tiers 4, 8 and 15 come back with `live` false.
 #[uniffi::export]
 pub fn hot_fee_tiers(network: KeyNetwork) -> FeeTiers {
-    fee_tiers_from(&TESTNET4, network, Instant::now(), &FEE_CACHE)
+    fee_tiers_from(
+        source_of(network),
+        network,
+        Instant::now(),
+        fee_cache(network),
+    )
 }
 
 fn fee_tiers_from(
@@ -9818,8 +9847,12 @@ pub(crate) mod tests {
     #[test]
     fn each_type_prints_its_hot_wallet_account_path() {
         assert_eq!(
-            AddressType::ALL.map(hot_account_path),
+            AddressType::ALL.map(|t| hot_account_path(t, KeyNetwork::Test)),
             ["m/44'/1'/0'", "m/49'/1'/0'", "m/84'/1'/0'", "m/86'/1'/0'"]
+        );
+        assert_eq!(
+            AddressType::ALL.map(|t| hot_account_path(t, KeyNetwork::Main)),
+            ["m/44'/0'/0'", "m/49'/0'/0'", "m/84'/0'/0'", "m/86'/0'/0'"]
         );
     }
 
@@ -10534,7 +10567,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn both_endpoints_failing_gives_the_defaults_and_mainnet_asks_nothing() {
+    fn both_endpoints_failing_gives_the_defaults_and_mainnet_asks_its_own_host() {
         let host = FeeHost::new(NOT_FOUND, Err("esplora get: HTTP status 500"));
         assert_eq!(host.tiers(), DEFAULT_FEE_TIERS);
         assert_eq!(DEFAULT_FEE_TIERS, {
@@ -10553,8 +10586,8 @@ pub(crate) mod tests {
             *host.now.lock().unwrap(),
             &host.cache,
         );
-        assert_eq!(main, DEFAULT_FEE_TIERS);
-        assert_eq!(host.calls(), 0);
+        assert_eq!(main, live(4, 8, 15));
+        assert_eq!(host.calls(), 1);
     }
 
     #[test]
@@ -11275,7 +11308,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_txid_that_is_not_64_hex_or_a_network_with_no_host_is_refused_before_any_request() {
+    fn a_txid_that_is_not_64_hex_or_a_type_off_on_mainnet_is_refused_before_any_request() {
         let fake = Fake::new();
         let one = id('1');
         let bad = [
@@ -11300,7 +11333,7 @@ pub(crate) mod tests {
             &abandon_about(),
             "",
             KeyNetwork::Main,
-            AddressType::NativeSegwit,
+            AddressType::Legacy,
             &one,
             &ScanStore::default(),
         );
@@ -13620,21 +13653,23 @@ pub(crate) mod tests {
         }
     }
 
-    /// `answer` is the refusal of mainnet, which this build has no host for, word for word.
+    /// `answer` is the refusal of testnet keys asked for on mainnet, word for word.
     #[track_caller]
-    pub(crate) fn refused_as_mainnet<T: std::fmt::Debug>(answer: Result<T, MobileSignerError>) {
+    pub(crate) fn refused_as_testnet_keys_on_mainnet<T: std::fmt::Debug>(
+        answer: Result<T, MobileSignerError>,
+    ) {
         assert!(
             matches!(&answer, Err(MobileSignerError::InvalidPsbtJson(why))
-                if why == "mainnet Esplora is not enabled in this build"),
+                if why == "descriptor: its keys are testnet keys, and the wallet is on mainnet"),
             "{answer:?}"
         );
     }
 
-    // A described wallet on mainnet is refused before the store or any host hears of it, by each read the app makes.
+    // A testnet wallet asked for on mainnet is refused before the store or any host hears of it, by each read the app makes.
     #[test]
-    fn wallet_snapshot_refuses_mainnet_before_any_request() {
+    fn wallet_snapshot_refuses_testnet_keys_on_mainnet_before_any_request() {
         let fake = Fake::new();
-        refused_as_mainnet(described_snapshot(
+        refused_as_testnet_keys_on_mainnet(described_snapshot(
             &EsploraSource(&Reads(&|url| fake.get(url))),
             &crate::script::tests::two_of_three(),
             KeyNetwork::Main,
@@ -13645,9 +13680,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn wallet_balance_refuses_mainnet_before_any_request() {
+    fn wallet_balance_refuses_testnet_keys_on_mainnet_before_any_request() {
         let fake = Fake::new();
-        refused_as_mainnet(described_balance(
+        refused_as_testnet_keys_on_mainnet(described_balance(
             &EsploraSource(&Reads(&|url| fake.get(url))),
             &crate::script::tests::two_of_three(),
             KeyNetwork::Main,
@@ -13658,9 +13693,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn wallet_history_refuses_mainnet_before_any_request() {
+    fn wallet_history_refuses_testnet_keys_on_mainnet_before_any_request() {
         let fake = Fake::new();
-        refused_as_mainnet(described_history(
+        refused_as_testnet_keys_on_mainnet(described_history(
             &EsploraSource(&Reads(&|url| fake.get(url))),
             &crate::script::tests::two_of_three(),
             KeyNetwork::Main,
@@ -13671,9 +13706,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn wallet_tx_detail_refuses_mainnet_before_any_request() {
+    fn wallet_tx_detail_refuses_testnet_keys_on_mainnet_before_any_request() {
         let fake = Fake::new();
-        refused_as_mainnet(described_detail(
+        refused_as_testnet_keys_on_mainnet(described_detail(
             &EsploraSource(&Reads(&|url| fake.get(url))),
             &crate::script::tests::two_of_three(),
             KeyNetwork::Main,

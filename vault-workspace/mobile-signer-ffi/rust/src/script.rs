@@ -13,14 +13,14 @@ use bitcoin::psbt;
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::sighash::{EcdsaSighashType, TapSighashType};
 use bitcoin::transaction::InputWeightPrediction;
-use bitcoin::{Address, NetworkKind, Transaction};
+use bitcoin::{Address, Network, NetworkKind, Transaction};
 use miniscript::descriptor::{
     DefiniteDescriptorKey, DescriptorPublicKey, DescriptorXKey, ShInner, Wildcard, WshInner,
 };
 use miniscript::psbt::{PsbtInputExt, PsbtOutputExt};
 use miniscript::{Descriptor, Threshold};
 
-use crate::address_type::AddressType;
+use crate::address_type::{AddressType, coin_type};
 use crate::chain::{ChainSource, check_network};
 use crate::hot_wallet::{AddressSource, Chain, Owner, Wallet, synced_by, vsize};
 use crate::scan_store::{ScanStore, WalletId};
@@ -44,7 +44,7 @@ enum Shape {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AccountKey {
     pub(crate) fingerprint: Fingerprint,
-    /// `84'/1'/0'` for one Native SegWit key, `48'/1'/a'/2'` for a key of several.
+    /// `84'/c'/0'` for one Native SegWit key, `48'/c'/a'/2'` for a key of several, `c` the coin type of the wallet's network.
     pub(crate) path: DerivationPath,
     pub(crate) xpub: Xpub,
 }
@@ -52,6 +52,8 @@ pub(crate) struct AccountKey {
 /// A wallet the book describes, read from its descriptor text.
 pub(crate) struct Described {
     shape: Shape,
+    /// The network its keys name: mainnet for xpubs, testnet4 for tpubs.
+    pub(crate) network: Network,
     /// In the descriptor's order.
     keys: Vec<AccountKey>,
     /// The receive and the change descriptor, every key with its origin.
@@ -124,9 +126,23 @@ impl Described {
                 given.len()
             )));
         }
+        // The first key names the network; account_key refuses any key of the other.
+        let network = match given.first() {
+            Some(DescriptorPublicKey::XPub(x)) if x.xkey.network == NetworkKind::Main => {
+                Network::Bitcoin
+            }
+            _ => Network::Testnet4,
+        };
+        if let Shape::One(address_type) = shape
+            && !address_type.enabled_on(network)
+        {
+            return Err(refuse(format!(
+                "{address_type:?} is not enabled on mainnet in this build"
+            )));
+        }
         let mut keys: Vec<AccountKey> = Vec::with_capacity(given.len());
         for (i, key) in given.into_iter().enumerate() {
-            let key = account_key(i, key, shape)?;
+            let key = account_key(i, key, shape, network)?;
             // As `parse_and_check_xpubs`: whoever holds one private key signs for every xpub that carries its public key.
             if let Some(first) = keys
                 .iter()
@@ -151,9 +167,23 @@ impl Described {
         Ok(Self {
             id: id_of(shape, &keys)?,
             shape,
+            network,
             keys,
             chains,
         })
+    }
+
+    /// `parse`, then refuses a wallet whose keys belong to a network other than `network`: coins asked
+    /// for on one network never come from the other's keys.
+    pub(crate) fn parse_on(text: &str, network: KeyNetwork) -> Result<Self, MobileSignerError> {
+        let wallet = Self::parse(text)?;
+        if wallet.network != network.bitcoin() {
+            return Err(refuse(match network {
+                KeyNetwork::Main => "its keys are testnet keys, and the wallet is on mainnet",
+                KeyNetwork::Test => "its keys are mainnet keys, and the wallet is on testnet4",
+            }));
+        }
+        Ok(wallet)
     }
 
     /// The wallet at `chain`/`index`, every key derived there and named by its full origin.
@@ -302,7 +332,7 @@ impl Described {
 impl AddressSource for Described {
     fn address(&self, chain: Chain, index: u32) -> Result<Address, MobileSignerError> {
         self.at(chain, index)?
-            .address(bitcoin::Network::Testnet4)
+            .address(self.network)
             .map_err(|e| refuse(format!("{} index {index}: {e}", chain.name())))
     }
 
@@ -316,6 +346,7 @@ fn account_key(
     i: usize,
     key: &DescriptorPublicKey,
     shape: Shape,
+    network: Network,
 ) -> Result<AccountKey, MobileSignerError> {
     let refuse = |why: String| refuse(format!("key {i} {why}"));
     let suffix = || {
@@ -334,10 +365,11 @@ fn account_key(
     if !x.derivation_path.is_empty() || x.wildcard != Wildcard::None {
         return Err(suffix());
     }
-    if x.xkey.network != NetworkKind::Test {
-        return Err(refuse(
-            "is a mainnet key, and this build reads testnet4 wallets only".into(),
-        ));
+    if x.xkey.network != NetworkKind::from(network) {
+        return Err(refuse(match network {
+            Network::Bitcoin => "is a testnet key in a mainnet wallet".into(),
+            _ => "is a mainnet key in a testnet4 wallet".into(),
+        }));
     }
     if usize::from(x.xkey.depth) != path.len() || path.as_ref().last() != Some(&x.xkey.child_number)
     {
@@ -347,20 +379,20 @@ fn account_key(
     }
     let (fits, wanted) = match shape {
         Shape::One(address_type) => (
-            *path == address_type.account_path(),
-            format!("m/{}", address_type.account_path()),
+            *path == address_type.account_path(network),
+            format!("m/{}", address_type.account_path(network)),
         ),
         Shape::Multi { .. } => (
             matches!(
                 path.as_ref(),
                 [
                     ChildNumber::Hardened { index: 48 },
-                    ChildNumber::Hardened { index: 1 },
+                    ChildNumber::Hardened { index: coin },
                     ChildNumber::Hardened { .. },
                     ChildNumber::Hardened { index: 2 },
-                ]
+                ] if *coin == coin_type(network)
             ),
-            "m/48'/1'/<account>'/2'".into(),
+            format!("m/48'/{}'/<account>'/2'", coin_type(network)),
         ),
     };
     if !fits {
@@ -496,7 +528,7 @@ pub fn wallet_describe(
     network: KeyNetwork,
 ) -> Result<WalletShape, MobileSignerError> {
     check_network(network)?;
-    let wallet = Described::parse(&descriptor)?;
+    let wallet = Described::parse_on(&descriptor, network)?;
     let own = wallet.script_len();
     Ok(WalletShape {
         needed: wallet.needed() as u8,
@@ -562,6 +594,18 @@ pub(crate) mod tests {
         format!("wsh(sortedmulti({m},{}))", keys.join(","))
     }
 
+    /// `multisig` on mainnet: the same seeds as xprv keys at `m/48'/0'/0'/2'`.
+    pub(crate) fn main_multisig(m: usize, among: &[u8]) -> String {
+        let keys: Vec<String> = among
+            .iter()
+            .map(|&i| {
+                let master = Xpriv::new_master(Network::Bitcoin, &[i; 32]).unwrap();
+                account(&master, "m/48'/0'/0'/2'").0
+            })
+            .collect();
+        format!("wsh(sortedmulti({m},{}))", keys.join(","))
+    }
+
     pub(crate) fn abandon_master(network: Network) -> Xpriv {
         let words = abandon_about().join(" ");
         let seed = bip39::Mnemonic::parse_normalized(&words)
@@ -572,7 +616,7 @@ pub(crate) mod tests {
 
     /// The abandon-about account of `address_type`, as a hardware wallet of those words exports it.
     pub(crate) fn one_key(address_type: AddressType) -> String {
-        let path = format!("m/{}", address_type.account_path());
+        let path = format!("m/{}", address_type.account_path(Network::Testnet4));
         let key = account(&abandon_master(Network::Testnet4), &path).0;
         match address_type {
             AddressType::Legacy => format!("pkh({key})"),
@@ -884,9 +928,19 @@ pub(crate) mod tests {
             .unwrap()
             .to_string();
         let cases: Vec<(String, &str)> = vec![
+            // A mainnet key is read at coin type 0', so one at the testnet path is refused with the path it should have.
             (
                 format!("wpkh([{fp}/84'/1'/0']{mainnet})"),
-                "key 0 is a mainnet key",
+                "key 0 is at m/84'/1'/0', and this wallet's keys are at m/84'/0'/0'",
+            ),
+            // A wallet is one network's: its first key names it and a key of the other is refused.
+            (
+                format!(
+                    "wsh(sortedmulti(2,{},{}))",
+                    k(1),
+                    account(&abandon_master(Network::Bitcoin), "m/48'/0'/0'/2'").0
+                ),
+                "key 1 is a mainnet key in a testnet4 wallet",
             ),
             (format!("wpkh({bip84_xpub})"), "key 0 has no origin"),
             (
