@@ -79,11 +79,13 @@ fn refuse(why: impl std::fmt::Display) -> MobileSignerError {
 }
 
 impl Described {
-    /// Reads exactly `pkh([fp/44'/1'/0']tpub)`, `sh(wpkh([fp/49'/1'/0']tpub))`, `wpkh([fp/84'/1'/0']tpub)`,
-    /// `tr([fp/86'/1'/0']tpub)` and `wsh(sortedmulti(m,[fp/48'/1'/a'/2']tpub,...))` with at most 15 keys, a
-    /// checksum allowed. Every key a tpub with its origin, its depth and child number those of the origin's
-    /// path, no derivation suffix, no public key twice and no master fingerprint twice, since whoever holds a
-    /// phrase signs for every key it derives. Anything else is refused with a line that says why.
+    /// Reads exactly `pkh([fp/44'/c'/0']K)`, `sh(wpkh([fp/49'/c'/0']K))`, `wpkh([fp/84'/c'/0']K)`,
+    /// `tr([fp/86'/c'/0']K)` and `wsh(sortedmulti(m,[fp/48'/c'/a'/2']K,...))` with at most 15 keys, a checksum
+    /// allowed. The first key names the network: every key a tpub at coin type `c` = 1' (testnet4), or every key
+    /// an xpub at 0' (mainnet, where a one-key wallet is `wpkh` only). Every key with its origin, its depth and
+    /// child number those of the origin's path, no derivation suffix, no public key twice and no master
+    /// fingerprint twice, since whoever holds a phrase signs for every key it derives. Anything else is refused
+    /// with a line that says why. `parse_on` also refuses a wallet of another network than the one asked for.
     pub(crate) fn parse(text: &str) -> Result<Self, MobileSignerError> {
         if text.len() > MAX_DESCRIPTOR_BYTES {
             return Err(refuse(format!(

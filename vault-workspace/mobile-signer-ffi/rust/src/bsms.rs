@@ -1,6 +1,7 @@
 //! Reading and writing a several-key wallet as a BSMS record (BIP-129), a bare descriptor, or the
 //! app's own older `.bsms` layout. Whatever is read leaves as the stored form `script.rs` parses:
-//! `wsh(sortedmulti(m,[fp/48'/1'/0'/2']tpub,...))`, no key suffix, no checksum. Public data only.
+//! `wsh(sortedmulti(m,[fp/48'/1'/0'/2']tpub,...))` on testnet4, or xpub keys at `48'/0'` on mainnet, no key
+//! suffix, no checksum. Public data only.
 
 use std::str::FromStr;
 
