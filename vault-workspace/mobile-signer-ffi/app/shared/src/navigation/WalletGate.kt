@@ -32,6 +32,7 @@ import com.mebit.app.rememberSecureShelf
 import com.mebit.app.rememberVaultsStorage
 import com.mebit.app.ui.components.LocalCovered
 import com.mebit.app.ui.components.coversScreen
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.hotUseStateDir
 import kotlinx.coroutines.delay
 import kotlin.time.Duration.Companion.seconds
@@ -92,7 +93,7 @@ private val SAVE_RETRY_WAITS = listOf(0, 1, 2, 4, 8, 16).map { it.seconds }
 @Composable
 private fun OpenGate(lock: LockGate) {
     // Before any screen asks the core about a wallet, so its first sync after a restart reads the scan file.
-    val scanDir = rememberScanStateDir()
+    val scanDir = rememberScanStateDir(KeyNetwork.TEST)
     remember(scanDir) { scanDir?.let(::hotUseStateDir) }
     // Also before any chain read: the node the user chose in Settings is in force from the first request.
     val nodeSettings = remember(scanDir) { NodeSettings(scanDir?.let { plainFile("$it/node-choice") }).also { it.restore() } }
