@@ -4,6 +4,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.testTag
+import com.mebit.app.data.networkChip
+import com.mebit.app.ui.theme.amountFontFamily
+import com.mebit.ffi.signer.KeyNetwork
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -84,7 +87,10 @@ import com.mebit.app.rememberTestMode
 import com.mebit.app.resources.ic_warning
 import com.mebit.app.ui.components.IssueBanner
 
-/** [notice]: the one-time line after this launch's start erased or lost a wallet, null on every other launch. */
+/**
+ * [notice]: the one-time line after this launch's start erased or lost a wallet, null on every other launch. The chip at the top right
+ * (Penpot 1.1.1 and 1.1.2) names the [network] and opens Settings through [onNetwork], the only way to the switch while no wallet is listed.
+ */
 @Composable
 fun WelcomeScreen(
     onCreate: () -> Unit,
@@ -92,6 +98,8 @@ fun WelcomeScreen(
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
     notice: StartNotice? = null,
+    network: KeyNetwork = KeyNetwork.TEST,
+    onNetwork: () -> Unit = {},
 ) {
     // Penpot Organize > 1.1 Welcome: logo and card fan on top, text and CTAs at the bottom, 28dp margins.
     Column(
@@ -115,6 +123,14 @@ fun WelcomeScreen(
                 contentDescription = "mebit",
                 modifier = Modifier.size(width = 99.5.dp, height = 26.dp),
             )
+            Spacer(modifier = Modifier.weight(1f))
+            Box(
+                modifier = Modifier.height(30.dp).clip(RoundedCornerShape(999.dp)).border(1.5.dp, MbWhite.copy(alpha = 0.32f), RoundedCornerShape(999.dp))
+                    .clickable(role = Role.Button, onClick = onNetwork).padding(horizontal = 12.dp).testTag("welcome_network"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(networkChip(network), color = MbWhite, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, fontFamily = amountFontFamily(), maxLines = 1, softWrap = false)
+            }
         }
         // The fan keeps its design size, stays top-aligned and bleeds off the right edge; on a short screen it gives up its shadow tail first.
         Box(

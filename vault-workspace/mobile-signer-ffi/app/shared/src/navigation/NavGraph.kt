@@ -459,7 +459,8 @@ internal fun MebitNavHost(
     val debugBuild = rememberIsDebugBuild()
     val openCatalog = { if (debugBuild) catalogOpen = true }
 
-    val bar = current.route.bar
+    // No tab bar while no wallet is listed, so Settings opened from Welcome (Penpot 7.1.3) has none.
+    val bar = current.route.bar.takeIf { wallets.listed.isNotEmpty() }
     // A sheet that covers a tab screen, the wallet list's QR scanner, hides the bar and gives the screen its room.
     var barHidden by remember { mutableStateOf(false) }
     CompositionLocalProvider(
@@ -481,6 +482,8 @@ internal fun MebitNavHost(
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                         notice = startNotice,
+                        network = vaults.network,
+                        onNetwork = { navigate(MovieRoute.Settings) },
                     )
                     MovieRoute.KeySource -> KeySourceScreen(
                         session = session,

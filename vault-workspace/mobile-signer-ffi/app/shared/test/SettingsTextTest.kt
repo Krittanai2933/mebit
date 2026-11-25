@@ -3,6 +3,7 @@ package com.mebit.app.feature.settings
 import com.mebit.app.data.NetworkTap
 import com.mebit.app.data.VaultsHealth
 import com.mebit.app.data.chainName
+import com.mebit.app.data.networkChip
 import com.mebit.app.data.networkRefusal
 import com.mebit.app.data.networkTap
 import com.mebit.app.data.networkWord
@@ -22,6 +23,12 @@ class SettingsTextTest {
         assertEquals("mainnet", networkWord(main))
         assertEquals("Testnet4", chainName(test))
         assertEquals("Mainnet", chainName(main))
+    }
+
+    @Test
+    fun welcomesChipNamesTheNetworkAndAnArrow() {
+        assertEquals("Testnet4 ›", networkChip(test))
+        assertEquals("Mainnet ›", networkChip(main))
     }
 
     @Test

@@ -35,6 +35,9 @@ internal fun networkWord(network: KeyNetwork): String = if (network == KeyNetwor
 /** "Mainnet" or "Testnet4": the chain's name as the chip, the switch and the node texts print it. */
 internal fun chainName(network: KeyNetwork): String = if (network == KeyNetwork.MAIN) "Mainnet" else "Testnet4"
 
+/** The text of Welcome's chip, Penpot 1.1.1 and 1.1.2. */
+internal fun networkChip(network: KeyNetwork): String = chainName(network) + " ›"
+
 /**
  * The network whose storage the gate opens: [chosen], unless this build cannot read that network's records. Such a build would
  * find every record Broken, and the recovery screen's one button erases them, so it stays on testnet and never opens the other.
