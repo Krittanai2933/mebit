@@ -101,7 +101,7 @@ class Wallets internal constructor(
     /** The one-key pay-twice guard file, which the book's Jade and Trezor wallets share ([HardwareWallets]). */
     internal val payments: PendingPayments = PendingPayments(null),
     private val lastUsed: PlainFile? = null,
-    private val forgetBook: () -> Unit = {},
+    internal val forgetBook: () -> Unit = {},
     private val forgetScans: () -> Unit = { hotForgetScanState() },
     private val newKey: (String, KeyNetwork, UInt) -> SoftwareAccountKey = { p, n, a -> generateSoftwareMultisigKey(p, n, a) },
     private val restoreKey: (List<String>, String, KeyNetwork, UInt) -> SoftwareAccountKey = { w, p, n, a -> restoreSoftwareMultisigKey(w, p, n, a) },

@@ -29,6 +29,12 @@ class WalletGateState internal constructor(private val wallets: Wallets) {
     /** A one-time sentence for Welcome after the start erased or lost a wallet. */
     val notice: StartNotice? = started.notice
 
+    init {
+        // Welcome means this phone holds no wallet, so what the stores hold is nobody's now, as after a reinstall, which a Keychain item survives.
+        // Only this network's book and pairings: the other network's stores are never given to this gate.
+        if (boot == Boot.Onboarding) wallets.forgetBook()
+    }
+
     /** An unlock or a forget is running. They share it, so a second tap, or a Forget while the OS sheet is up, does nothing. */
     private var busy = false
 
