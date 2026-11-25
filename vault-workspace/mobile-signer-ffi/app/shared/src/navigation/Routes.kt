@@ -84,9 +84,9 @@ enum class MovieRoute(
     ),
     VerifyKey(
         "keys/verify",
-        "VERIFY KEY",
-        "ยืนยัน fingerprint",
-        "ตรง บันทึก · ไม่ตรง ไม่บันทึก",
+        "SAVE KEY",
+        "บันทึกกุญแจ",
+        "ตั้งชื่อ · บันทึก · ยกเลิกไม่บันทึก",
     ),
     Keyring(
         "keys/keyring",
@@ -357,9 +357,9 @@ enum class MovieRoute(
     ),
     HardwareConfirmKey(
         "vault/hw-confirm-key",
-        "VERIFY KEY",
-        "ยืนยัน fingerprint",
-        "เทียบ fingerprint กับที่แสดงบนอุปกรณ์ให้ตรงกันก่อนกดยืนยัน",
+        "SAVE KEY",
+        "บันทึกกุญแจ",
+        "กุญแจจากอุปกรณ์ · บันทึกเป็นกระเป๋า",
     ),
     HardwareCreated(
         "vault/hw-created",
