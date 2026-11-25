@@ -16,7 +16,7 @@ internal val PUBLIC_JADE_WALLET = HardwareWallet(
     kind = WalletKind.JADE,
     addressType = AddressType.NATIVE_SEGWIT,
     fingerprint = PUBLIC_FINGERPRINT,
-    xpub = PUBLIC_ACCOUNTS.getValue(AddressType.NATIVE_SEGWIT).tpub,
+    xpub = PUBLIC_ACCOUNTS.getValue(AddressType.NATIVE_SEGWIT).xpub,
     address = PUBLIC_ACCOUNTS.getValue(AddressType.NATIVE_SEGWIT).receive0,
     network = KeyNetwork.TEST,
 )

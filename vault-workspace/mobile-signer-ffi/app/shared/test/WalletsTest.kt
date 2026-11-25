@@ -581,7 +581,7 @@ class WalletsTest {
         val wallets = phone.unlocked()
         val storage = FakeVaultsStorage()
         val type = AddressType.NATIVE_SEGWIT
-        val key = HwAccountKey(PUBLIC_ACCOUNTS.getValue(type).tpub, PUBLIC_FINGERPRINT, oneKeyPath(type, KeyNetwork.TEST))
+        val key = HwAccountKey(PUBLIC_ACCOUNTS.getValue(type).xpub, PUBLIC_FINGERPRINT, oneKeyPath(type, KeyNetwork.TEST))
 
         val added = HardwareWallets(book(storage, wallets).apply { sync() }).add(WalletKind.JADE, type, key, wallets.phoneWallets())
         assertEquals(HardwareAdd.Unopened, added, "refused as a phone add is then")
@@ -1433,7 +1433,7 @@ class WalletsTest {
         assertTrue(phone.place(w.place).writes.isEmpty(), "and nothing is saved, so no second guard can cover those addresses")
 
         val taproot = PUBLIC_ACCOUNTS.getValue(AddressType.TAPROOT)
-        phone.bookHardware = listOf(PUBLIC_JADE_WALLET.copy(addressType = AddressType.TAPROOT, xpub = taproot.tpub, address = taproot.receive0))
+        phone.bookHardware = listOf(PUBLIC_JADE_WALLET.copy(addressType = AddressType.TAPROOT, xpub = taproot.xpub, address = taproot.receive0))
         w.session.restoreFromWords(PUBLIC_WORDS_12)
         assertNull(w.session.lastError, "with the Jade wallet in Taproot, Native SegWit has other addresses")
         assertEquals(PUBLIC_JADE_WALLET.name, w.session.takenBy(AddressType.TAPROOT))

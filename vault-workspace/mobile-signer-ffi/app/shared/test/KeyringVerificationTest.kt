@@ -7,6 +7,15 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class KeyringVerificationTest {
+    // A mock key has no words behind it, so on mainnet a wallet built on it could receive money no one can ever sign for.
+    @Test
+    fun theMockPairingMakesNothingOnMainnet() {
+        val store = KeyringStore(book = SavedVaults(null, com.mebit.ffi.signer.KeyNetwork.MAIN, owners = { null }))
+        store.startMebitOtherMock()
+        assertNull(store.pending)
+        assertNull(store.lastError)
+    }
+
     private fun staged(fingerprint: String = "abcd0123"): KeyringStore = KeyringStore().also {
         assertTrue(it.startMebitOtherFromPaste("$fingerprint\n$tpubA\nm/48'/1'/0'/2'"))
     }

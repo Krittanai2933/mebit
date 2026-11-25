@@ -1,5 +1,6 @@
 package com.mebit.app.feature.keys
 
+import com.mebit.ffi.signer.KeyNetwork
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.ui.Alignment
@@ -193,11 +194,13 @@ fun PairMebitOtherScreen(
             focus.clearFocus(force = true)
             if (store.startMebitOtherFromPaste(paste)) onPaired()
         })
-        Spacer(modifier = Modifier.height(8.dp))
-        SecondaryCta("จำลองจับคู่", "cta_pair_demo", {
-            store.startMebitOtherMock()
-            if (store.pending != null) onPaired()
-        })
+        if (store.network == KeyNetwork.TEST) {
+            Spacer(modifier = Modifier.height(8.dp))
+            SecondaryCta("จำลองจับคู่", "cta_pair_demo", {
+                store.startMebitOtherMock()
+                if (store.pending != null) onPaired()
+            })
+        }
         store.lastError?.let {
             Spacer(modifier = Modifier.height(12.dp))
             Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("error"))

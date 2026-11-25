@@ -74,7 +74,7 @@ class KeyringStore internal constructor(
     private val link = HardwareLink(pairings, book.network, openLink)
 
     /** The network of the book, which every key this store reads or makes is for. */
-    private val network: KeyNetwork get() = book.network
+    internal val network: KeyNetwork get() = book.network
 
     /** Every wallet's own key first, then every saved key, a key already saved showing once. Read-only, because only [SavedVaults] changes what is saved. */
     val keys: List<SavedKey>
@@ -125,9 +125,16 @@ class KeyringStore internal constructor(
         lastMismatch = false
     }
 
-    /** Real tpub for a CI run that has no pasted fixture. */
+    /**
+     * A key with no words behind it, for a CI run that has no pasted fixture. Testnet only: on mainnet a wallet built on it could
+     * receive real money that no one can ever sign for, so there it makes nothing.
+     */
     fun startMebitOtherMock() {
         clearError()
+        if (network != KeyNetwork.TEST) {
+            pending = null
+            return
+        }
         try {
             val key = generateSoftwareMultisigKey("", network, (keys.size + 17).toUInt())
             pending = PendingKey(

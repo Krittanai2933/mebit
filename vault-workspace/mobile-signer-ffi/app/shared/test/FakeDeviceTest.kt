@@ -41,7 +41,7 @@ class FakeDeviceTest {
         val jade = fake.scan(WalletKind.JADE).single()
         for (type in AddressType.entries) {
             val key = link.use(jade, oneKeyPath(type, KeyNetwork.TEST), expect = PUBLIC_FINGERPRINT, NO_CODES) { it.key }
-            assertEquals(PUBLIC_ACCOUNTS.getValue(type).tpub, key.xpub, "$type")
+            assertEquals(PUBLIC_ACCOUNTS.getValue(type).xpub, key.xpub, "$type")
         }
         val multisig = link.use(jade, TESTNET_MULTISIG_ACCOUNT, expect = null, NO_CODES) { it.key }
         assertEquals(PUBLIC_FINGERPRINT, multisig.masterFingerprint, "Add Key's key, read through the core from the same phrase")

@@ -301,7 +301,7 @@ class DescribedWalletTest {
     @Test
     fun eachHardwareWalletHasOneChainAndAListRefreshStopsAtAScanThatContinues(): Unit = runBlocking {
         val book = SavedVaults.memoryOnly()
-        val second = PUBLIC_JADE_WALLET.copy(id = "hw_2", addressType = AddressType.TAPROOT, xpub = PUBLIC_ACCOUNTS.getValue(AddressType.TAPROOT).tpub)
+        val second = PUBLIC_JADE_WALLET.copy(id = "hw_2", addressType = AddressType.TAPROOT, xpub = PUBLIC_ACCOUNTS.getValue(AddressType.TAPROOT).xpub)
         book.edit { it.copy(hardware = listOf(PUBLIC_JADE_WALLET, second)) }
         val read = mutableListOf<String>()
         var scan = HotScan.CONTINUING

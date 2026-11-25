@@ -29,7 +29,7 @@ internal val PUBLIC_WORDS_12: List<String> = List(11) { "abandon" } + "about"
 internal const val PUBLIC_FINGERPRINT = "73c5da0a"
 
 /** One account of [PUBLIC_WORDS_12] as a hardware wallet reads it: the key at the type's account path (a tpub on testnet, an xpub on mainnet), and receive address 0. */
-internal class PublicAccount(val tpub: String, val receive0: String)
+internal class PublicAccount(val xpub: String, val receive0: String)
 
 /**
  * [PUBLIC_WORDS_12]'s accounts at m/44', 49', 84' and 86' /1'/0', derived outside this app with rust-bitcoin 0.32 and bip39 2.2. The 84'
@@ -142,7 +142,7 @@ internal class FakeDevice(script: List<FakeBehaviour> = emptyList(), private val
 
         override suspend fun accountXpub(derivationPath: String): HwAccountKey {
             val accounts = if (network == KeyNetwork.MAIN) PUBLIC_MAIN_ACCOUNTS else PUBLIC_ACCOUNTS
-            val xpub = accounts.entries.firstOrNull { oneKeyPath(it.key, network) == derivationPath }?.value?.tpub
+            val xpub = accounts.entries.firstOrNull { oneKeyPath(it.key, network) == derivationPath }?.value?.xpub
                 ?: if (derivationPath == multisigAccount(network)) {
                     withContext(Dispatchers.Default) { restoreSoftwareMultisigKey(PUBLIC_WORDS_12, "", network, 0u).xpub }
                 } else {

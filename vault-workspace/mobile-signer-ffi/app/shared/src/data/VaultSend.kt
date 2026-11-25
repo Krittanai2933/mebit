@@ -107,7 +107,7 @@ class VaultSend internal constructor(
      * Rust's reading of BSMS line 2. Throws for a wallet the core cannot read, and for one it reads as another than the book's: another m,
      * other fingerprints or another order of them, or another receive address 0. So the guard, made from that address, the rows, made from
      * those fingerprints, and every Rust call name one wallet, and a device is read at the account path the descriptor gives its key
-     * (m/48'/1'/a'/2'), the one Rust checks the device against.
+     * (m/48'/c'/a'/2', c the network's coin type), the one Rust checks the device against.
      */
     private val shape: WalletShape = core.describe(descriptor, network).also { shape ->
         require(shape.needed.toInt() == vault.m && shape.keys.map { it.fingerprint.uppercase() } == fingerprints && shape.firstAddress == vault.address) {

@@ -214,7 +214,7 @@ class OnboardingSession(
      * the single write point: a Replace of the copy on the phone, so a restart keeps it, or with the rest of the record when
      * [acceptStagedKey] writes a staged import. The same type again writes nothing, and so does a type the core does not take on
      * [network] ([hotAddressTypeEnabled], on mainnet only Native SegWit) or one a hardware wallet of this key has ([takenBy]), so no path
-     * saves one. [SavedWallet] saves only TEST today, so a MAIN session meets that rule in tests alone. A failed Replace leaves the
+     * saves one. [SavedWallet] saves a record only into a store of its own network. A failed Replace leaves the
      * earlier copy on the phone, which [proveSavedCopy] catches at App Lock.
      */
     fun chooseAddressType(type: AddressType) {

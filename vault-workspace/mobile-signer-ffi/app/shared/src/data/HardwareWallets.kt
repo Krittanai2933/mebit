@@ -199,7 +199,7 @@ data class HardwareWallet(
     val addressType: AddressType,
     /** The key's master fingerprint, 8 lowercase hex. */
     val fingerprint: String,
-    /** The account key at [path], a tpub. */
+    /** The account key at [path]: a tpub on testnet, an xpub on mainnet. */
     val xpub: String,
     /** Receive address 0, a check value: the book refuses a stored copy whose descriptor no longer derives it. */
     val address: String,
