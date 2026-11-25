@@ -78,6 +78,15 @@ class HardwareWalletsTest {
         assertEquals(listOf(wallet), main.current.hardware)
     }
 
+    // Native: the real core refuses mainnet Taproot, which the fake device never reaches.
+    @Test
+    fun theCoreRefusesAMainnetTaprootKey(): Unit = runBlocking {
+        val main = SavedVaults(null, KeyNetwork.MAIN, owners = { null })
+        val key = HwAccountKey("xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ", PUBLIC_FINGERPRINT, "m/86'/0'/0'")
+        assertIs<HardwareAdd.Unreadable>(HardwareWallets(main).add(WalletKind.JADE, AddressType.TAPROOT, key, emptyList()))
+        assertEquals(emptyList(), main.current.hardware)
+    }
+
     @Test
     fun aWalletTakesTheNetworkOfItsBookAndAKeyReadAtTheOtherCoinTypeIsRefused(): Unit = runBlocking {
         val main = SavedVaults(null, KeyNetwork.MAIN, owners = { null })

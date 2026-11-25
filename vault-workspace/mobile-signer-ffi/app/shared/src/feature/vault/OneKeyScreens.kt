@@ -124,7 +124,7 @@ fun ChooseKeyScreen(
 
 /**
  * Penpot 3.3.2, the address type of a one-key hardware wallet: the four types, Native SegWit the default, and under the button the line
- * that the next step reads this type's key from [device]. The rows give testnet's prefixes, as Address Type 1.5.1 does on testnet.
+ * that the next step reads this type's key from [device]. The rows give the prefixes of the network of [draft], as Address Type 1.5.1 does.
  */
 @Composable
 fun HardwareAddressTypeScreen(

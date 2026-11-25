@@ -299,6 +299,31 @@ class WalletsTest {
         testnet.noteTestnetKeys()
         assertEquals(listOf(check(words(1)), check(words(2))), list.text!!.lines(), "each listed wallet's fingerprint, one a line")
 
+        val writes = list.writes
+        testnet.noteTestnetKeys()
+        assertEquals(writes, list.writes, "nothing changed, so nothing is written")
+        list.unreadable = true
+        testnet.noteTestnetKeys()
+        assertEquals(writes + 1, list.writes, "an unreadable file counts as empty, so the list is written")
+        list.unreadable = false
+
+        val earlier = FakePlainFile()
+        val replaced = ShelfPhone().saved(P1, testRecord(words = words(1), fingerprint = check(words(1)), backupConfirmed = true, earlierFingerprints = listOf("aaaa1111"))).saved(P2, 2).launch(testnetKeys = earlier)
+        assertIs<Every.Open>(replaced.unlockEvery("test"))
+        assertEquals(listOf(check(words(1)), "aaaa1111", check(words(2))), replaced.testnetKeyList(), "earlier fingerprints are listed")
+        replaced.noteTestnetKeys()
+        assertEquals(replaced.testnetKeyList(), earlier.text!!.lines())
+        val book = book(FakeVaultsStorage(), replaced).apply { sync() }
+        book.edit { it.copy(keys = listOf(HARDWARE)) }
+        assertEquals(WalletRemoval.Removed, replaced.remove(replaced.at(P2), book, "test") {})
+        replaced.noteTestnetKeys()
+        assertEquals(listOf(check(words(1)), "aaaa1111", check(words(2))), earlier.text!!.lines(), "a removed wallet's fingerprint stays in the file")
+        val forgotten = ShelfPhone().launch(testnetKeys = earlier)
+        val before = earlier.writes
+        forgotten.noteTestnetKeys()
+        assertEquals(before, earlier.writes, "a forget lists nothing and keeps every entry")
+        assertEquals(3, earlier.text!!.lines().size)
+
         val unsure = FakePlainFile()
         val damaged = ShelfPhone().saved(P1, 1).saved(P2, 2)
         damaged.place(P2).read = ReadResult.Unavailable(Why.TryLater)

@@ -20,7 +20,7 @@ import com.mebit.ffi.signer.restoreSoftwareMultisigKey
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
 
-/** Whether the wallet saved on this phone holds this session's key. Staged is a passphrase import waiting for its fingerprint check. */
+/** Whether the wallet saved on this phone holds this session's key. Staged is an import waiting for its fingerprint check (a passphrase) or its testnet-words warning (mainnet). */
 enum class SaveState { NotSaved, Staged, Saved }
 
 /**
@@ -101,7 +101,7 @@ class OnboardingSession(
         /** No copy of this key is known to be on the phone. */
         data object Nothing : Held
 
-        /** A passphrase import waiting for its fingerprint check. */
+        /** An import not written yet: a passphrase import waiting for its fingerprint check, or mainnet words the warning has not cleared. */
         data object Staged : Held
 
         /** A copy of this wallet is on the phone, the one this session's next save replaces. */
@@ -251,7 +251,7 @@ class OnboardingSession(
 
     /**
      * An imported key counts as backed up: the user typed the words from their own record. [accepted] is false for a
-     * passphrase import: the key is staged until the fingerprint matches ([acceptStagedKey]). Refused while the session holds a key, unless it is staged.
+     * passphrase import, and for mainnet words that are this phone's testnet words: the key is staged until the fingerprint matches or the warning is accepted ([acceptStagedKey]). Refused while the session holds a key, unless it is staged.
      */
     fun restoreFromWords(words: List<String>, passphrase: String = "", accepted: Boolean = passphrase.isEmpty()) {
         lastError = null
@@ -281,7 +281,7 @@ class OnboardingSession(
         if (accepted && !testnetWords) persist(fresh = true) else held = Held.Staged
     }
 
-    /** The fingerprint sheet said "matches". Nothing was written before this. */
+    /** The fingerprint sheet said "matches", or the testnet-words warning was accepted. Nothing was written before this. */
     fun acceptStagedKey() {
         if (held != Held.Staged) return
         held = Held.Nothing

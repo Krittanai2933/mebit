@@ -524,12 +524,23 @@ class Wallets internal constructor(
     private var lastNoted: Place? = null
 
     /**
-     * Testnet only: lists each listed wallet's fingerprint and its earlier ones, so a mainnet import of the same words can warn. No secret.
+     * Testnet's list: each listed wallet's fingerprint, its earlier ones and the key the phone holds for it ([OnboardingSession.vaultsOwner]),
+     * which after a failed passphrase Replace is an earlier key. [noteTestnetKeys] adds exactly this to the file, so it is also the effect's key.
+     */
+    fun testnetKeyList(): List<String> =
+        listed.flatMap { listOf(it.session.fingerprint) + it.session.earlierVaultsOwners() + listOfNotNull(it.session.vaultsOwner()) }.distinct()
+
+    /**
+     * Testnet only: adds [testnetKeyList] to the file, never dropping an entry, so a mainnet import of words of a wallet since removed or forgotten
+     * still warns. No secret. An unreadable file counts as empty. Writes only when the union differs from the file.
      * Skipped while a place that did not open may still open, as its fingerprint is unknown and a short list would hide a match.
      */
     fun noteTestnetKeys() {
         if (network != KeyNetwork.TEST || unreadMayOpen) return
-        testnetKeys?.write(listed.flatMap { listOf(it.session.fingerprint) + it.session.earlierVaultsOwners() }.distinct().joinToString("\n"))
+        val file = testnetKeys ?: return
+        val old = file.read()
+        val text = (old.orEmpty().lines().filter { it.isNotBlank() } + testnetKeyList()).distinct().joinToString("\n")
+        if (old != text) file.write(text)
     }
 
     /** Mainnet only: whether testnet's list holds [fingerprint]. A missing or unreadable list holds none, so no warning. */

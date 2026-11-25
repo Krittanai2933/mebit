@@ -268,8 +268,8 @@ internal fun MebitNavHost(
     }
     // Keyed on words too, so a wallet added in this run is noted once its key exists.
     LaunchedEffect(current.place, session.words.isNotEmpty()) { if (session.words.isNotEmpty()) wallets.noteUsed(current.place) }
-    // Testnet's list of its keys, for the mainnet import warning. Keyed on the listed fingerprints, so a wallet added or removed is noted.
-    LaunchedEffect(wallets.listed.map { it.session.fingerprint }) { wallets.noteTestnetKeys() }
+    // Testnet's list of its keys, for the mainnet import warning. Keyed on the list it writes, so a wallet added or removed, or an earlier key that changed, is noted.
+    LaunchedEffect(wallets.testnetKeyList()) { wallets.noteTestnetKeys() }
     // This host exists only once the wallets are open or there are none, so the book is read after the owner check. Keyed on the owners so keys added before a Create in this run are saved when it lands.
     LaunchedEffect(vaults, wallets.vaultOwners()) { withContext(Dispatchers.Default) { vaults.sync() } }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { scope.launch(Dispatchers.Default) { vaults.sync() } }

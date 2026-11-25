@@ -85,7 +85,7 @@ internal fun createFingerprintDue(session: OnboardingSession): Boolean =
 /**
  * Penpot 1.5.1, the same screen at 1.5.3, 1.3.2, 1B.4.5 and 1B.4.6, in first setup after the key is made or imported, and after a
  * restart that left the type unconfirmed. A row tap saves that type as the tentative pick. "ต่อไป" then shows a staged passphrase
- * import's fingerprint to compare (1B.4.4), or a new key's to write down when [createFingerprintDue], and leaving forward confirms the
+ * import's fingerprint to compare (1B.4.4), or the testnet-words warning of a staged mainnet import, or a new key's to write down when [createFingerprintDue], and leaving forward confirms the
  * type before [onContinue]. Rejecting the import's fingerprint clears the session and [onRejectImport] goes back to Import Seed;
  * rejecting the new key's goes to [onEditPassphrase] with the type still unconfirmed.
  */
