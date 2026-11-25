@@ -98,8 +98,8 @@ private fun OpenGate(lock: LockGate) {
     // Also before any chain read: the node the user chose in Settings is in force from the first request.
     val nodeSettings = remember(scanDir) { NodeSettings(scanDir?.let { plainFile("$it/node-choice") }).also { it.restore() } }
     val unitSettings = remember(scanDir) { UnitSettings(scanDir?.let { plainFile("$it/btc-unit") }).also { it.restore() } }
-    val storage = rememberVaultsStorage()
-    val shelf = rememberSecureShelf()
+    val storage = rememberVaultsStorage(KeyNetwork.TEST)
+    val shelf = rememberSecureShelf(KeyNetwork.TEST)
     val pairings = rememberPairings()
     // The pay-twice guard files, one-key and several-key, and the last-used wallet sit beside the scan files. Built together, because
     // each asks the other: the book is saved for the wallets' keys, and a wallet's clear of a damaged guard file names the book's wallets.

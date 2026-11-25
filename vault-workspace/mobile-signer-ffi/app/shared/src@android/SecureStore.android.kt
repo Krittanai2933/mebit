@@ -35,9 +35,13 @@ import javax.crypto.spec.PSource
 import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.mebit.ffi.signer.KeyNetwork
 
-/** The one Keystore alias of the wallet's key pair. Nothing ever lists aliases. */
+/** The Keystore alias of testnet's key pair, which stays as it always was. Nothing ever lists aliases. */
 private const val ALIAS = "com.mebit.app.wallet"
+
+/** [network]'s alias: mainnet has a pair of its own, so deleting one network's key never deletes the other's. */
+internal fun walletAlias(network: KeyNetwork): String = network.alias(ALIAS)
 
 private const val RSA_OAEP = "RSA/ECB/OAEPWithSHA-256AndMGF1Padding"
 
@@ -60,33 +64,33 @@ private val ENVELOPE_HEADER = byteArrayOf(0x4D, 0x57, 1)
 private val storeLock = Any()
 
 /**
- * Which copy each place's file holds, as this process counts it. Guarded by [storeLock]. Top level, never a field of [KeystoreShelf],
- * which has one instance per Context: a counter per instance would let a stale Replace from another instance through.
+ * What this process keeps for one network's wallets, guarded by [storeLock]. Top level, one per network and never a field of
+ * [KeystoreShelf], which has one instance per Context: a counter per instance would let a stale Replace from another instance through.
+ * - [copies]: which copy each place's file holds, as this process counts it.
+ * - [phoneKey]: the data key every envelope of the network carries, with its RSA-wrapped copy. One prompt unwraps one key (measured
+ *   3 Nov), so one wrapped key in every envelope is what makes one prompt open every wallet. [PhoneKey.wrapped] is the 256 bytes the layout
+ *   always had. Minted at a fresh phone's first write, from the public half, with no prompt. On a phone that already holds a wallet it
+ *   is adopted from the envelope the first prompt unwrapped, so that wallet's file is never rewritten to get a shared key and an
+ *   older build can still open it. Lives beside the words in memory, for the same lifetime.
+ * - [keyJob]: the running or last key generation, and what it threw.
  */
-private val copies: Map<Place, CopyCounter> = Place.all.associateWith { CopyCounter() }
+private class NetworkState {
+    val copies: Map<Place, CopyCounter> = Place.all.associateWith { CopyCounter() }
+    var phoneKey: PhoneKey? = null
+    var keyJob: Future<Throwable?>? = null
+}
 
-/**
- * The data key every envelope on this phone carries, with its RSA-wrapped copy. One prompt unwraps one key (measured 3 Nov), so
- * one wrapped key in every envelope is what makes one prompt open every wallet. [wrapped] is the 256 bytes the layout always had.
- * Minted at a fresh phone's first write, from the public half, with no prompt. On a phone that already holds a wallet it is adopted
- * from the envelope the first prompt unwrapped, so that wallet's file is never rewritten to get a shared key and an older build can
- * still open it. Lives beside the words in memory, for the same lifetime.
- */
 internal class PhoneKey(val dataKey: ByteArray, val wrapped: ByteArray)
 
-/** Guarded by [storeLock]. Top level for the reason [copies] is: one per process across every Context. */
-private var phoneKey: PhoneKey? = null
+private val networkStates: Map<KeyNetwork, NetworkState> = listOf(KeyNetwork.TEST, KeyNetwork.MAIN).associateWith { NetworkState() }
 
 /** One background thread for key generation, which may take seconds in a TEE or StrongBox. */
 private val keyMaker = Executors.newSingleThreadExecutor { Thread(it, "mebit-wallet-key").apply { isDaemon = true } }
 
-/** The running or last key generation, and what it threw. Guarded by [storeLock]. */
-private var keyJob: Future<Throwable?>? = null
-
 /**
  * The wallets in this phone's Keystore, one place per wallet. `noBackupFilesDir/wallet` for place 1 and `wallet.n` for the rest
  * each hold one envelope ([sealEnvelope]) written through `AtomicFile`, so a reader sees the old copy or the new one, never half.
- * Their AES key is wrapped by an RSA-2048 pair under [ALIAS] that needs the owner (a strong biometric or the screen lock) for every use of its
+ * Their AES key is wrapped by an RSA-2048 pair under [walletAlias] that needs the owner (a strong biometric or the screen lock) for every use of its
  * private half, needs an unlocked phone, and is made in StrongBox when the phone has one. A write uses only the public half, so
  * it never prompts. A read shows one framework sheet with the private half as its `CryptoObject`. With `allowBackup=false` and
  * `noBackupFilesDir` the files stay out of backups, and the key never leaves the Keystore, so a copy on another phone opens nothing.
@@ -95,7 +99,11 @@ private var keyJob: Future<Throwable?>? = null
  * write that finds none or finds it invalidated, never over a stored wallet's working key. A write that arrives before it is
  * ready answers TryLater, and the session saves again at its next write point or when the gate retries. Logs nothing.
  */
-private class KeystoreShelf(private val context: Context) : SecureShelf {
+private class KeystoreShelf(private val context: Context, network: KeyNetwork) : SecureShelf {
+    private val alias = walletAlias(network)
+    private val state = networkStates.getValue(network)
+    private val walletPaths = Place.all.associateWith { walletPath(network, it) }
+
     private val files: Map<Place, AtomicFile> = Place.all.associateWith { walletFile(it) }
 
     private val stores: Map<Place, SecureStore> = Place.all.associateWith { KeystorePlace(it) }
@@ -135,8 +143,8 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
                     synchronized(storeLock) {
                         val (results, unwrapped) = openWithOneUnwrap(group.map { it.bytes to it.version }, cipher::doFinal, ::keystoreCode)
                         group.zip(results) { e, r -> out[e.place] = r }
-                        if (phoneKey == null && unwrapped != null) {
-                            phoneKey = PhoneKey(unwrapped, wrappedKeyOf(group.first().bytes)!!)
+                        if (state.phoneKey == null && unwrapped != null) {
+                            state.phoneKey = PhoneKey(unwrapped, wrappedKeyOf(group.first().bytes)!!)
                         } else {
                             unwrapped?.fill(0)
                         }
@@ -151,9 +159,9 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
 
     /** Every place's file, then the key pair, then a fresh key for the next wallet, as a Forget has always done. A crash midway reads as KeyGone and recovery offers Forget again. */
     override fun eraseEvery(): Boolean = synchronized(storeLock) {
-        copies.values.forEach { it.advance() }
+        state.copies.values.forEach { it.advance() }
         try {
-            keyStore().deleteEntry(ALIAS)
+            keyStore().deleteEntry(alias)
         } catch (e: Exception) {
             // A key left without its files reads as Empty and is reused by the next write, so the files decide.
         }
@@ -164,7 +172,7 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
         nothingLeft
     }
 
-    private fun walletFile(place: Place) = AtomicFile(File(context.noBackupFilesDir, walletFileName(place)))
+    private fun walletFile(place: Place) = AtomicFile(File(context.noBackupFilesDir, walletPaths.getValue(place)))
 
     /** Whether [place]'s file is there, counting the backup `AtomicFile` restores after a write that died midway. */
     private fun walletFileExists(place: Place): Boolean = files.getValue(place).baseFile.let { it.exists() || File(it.path + ".bak").exists() }
@@ -175,7 +183,7 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
     private fun startEveryRead(): EveryStart {
         val held = Place.all.filter(::walletFileExists)
         val fileExists = held.isNotEmpty()
-        androidReadRefusal(fileExists, if (fileExists) aliasPresent() else false)?.let { refusal ->
+        androidReadRefusal(fileExists, if (fileExists) aliasPresent(alias) else false)?.let { refusal ->
             return EveryStart.Done(
                 when (refusal) {
                     ReadResult.NotFound -> EveryRead.Found(emptyMap())
@@ -185,14 +193,14 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
             )
         }
         val privateKey = try {
-            keyStore().getKey(ALIAS, null) as? PrivateKey ?: return EveryStart.Done(EveryRead.Found(held.associateWith { ReadResult.KeyGone }))
+            keyStore().getKey(alias, null) as? PrivateKey ?: return EveryStart.Done(EveryRead.Found(held.associateWith { ReadResult.KeyGone }))
         } catch (e: Exception) {
             return EveryStart.Done(EveryRead.Found(held.associateWith { androidInitOutcome(e) }))
         }
         val already = mutableMapOf<Place, ReadResult>()
         val envelopes = held.mapNotNull { place ->
             try {
-                Envelope(place, files.getValue(place).readFully(), copies.getValue(place).current) // taken with the envelope, so a write during the sheet makes both stale together
+                Envelope(place, files.getValue(place).readFully(), state.copies.getValue(place).current) // taken with the envelope, so a write during the sheet makes both stale together
             } catch (e: IOException) {
                 already[place] = ReadResult.Unavailable(Why.TryLater)
                 null
@@ -203,9 +211,9 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
 
     /** What a write answers while the key is missing, starting its generation when none is running. Holds [storeLock]. */
     private fun keyNotReady(): WriteResult {
-        val job = keyJob
+        val job = state.keyJob
         if (job != null && !job.isDone) return WriteResult.Unavailable(Why.TryLater)
-        keyJob = null
+        state.keyJob = null
         job?.get()?.let { return androidGenerationOutcome(it) } // the next write starts again
         startKey()
         return WriteResult.Unavailable(Why.TryLater)
@@ -213,24 +221,24 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
 
     /** Starts making the key in the background unless a generation is running. Holds [storeLock]. */
     private fun startKey() {
-        if (keyJob?.isDone == false) return
-        keyJob = keyMaker.submit(Callable { generateKeyIfMissing() })
+        if (state.keyJob?.isDone == false) return
+        state.keyJob = keyMaker.submit(Callable { generateKeyIfMissing(alias) })
     }
 
     /** Holds [storeLock]. */
     private fun forgetPhoneKey() {
-        phoneKey?.dataKey?.fill(0)
-        phoneKey = null
+        state.phoneKey?.dataKey?.fill(0)
+        state.phoneKey = null
     }
 
     private inner class KeystorePlace(private val place: Place) : SecureStore {
         private val file = files.getValue(place)
-        private val copy = copies.getValue(place)
+        private val copy = state.copies.getValue(place)
 
         override fun probe(): StoreProbe = synchronized(storeLock) {
             val fileExists = Place.all.any(::walletFileExists)
-            val alias = if (fileExists) aliasPresent() else false
-            val probe = androidProbeOutcome(fileExists, alias, if (alias == true) privateHalfFailure() else null, deviceSecure())
+            val present = if (fileExists) aliasPresent(alias) else false
+            val probe = androidProbeOutcome(fileExists, present, if (present == true) privateHalfFailure() else null, deviceSecure())
             if (probe == StoreProbe.Empty) startKey()
             probe
         }
@@ -249,7 +257,7 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
             copy.refuse(mode)?.let { return it } // a stale Replace touches neither the key nor the file
             androidWriteRefusal(walletFileExists(place), deviceSecure(), mode)?.let { return it }
             val certificate = try {
-                keyStore().getCertificate(ALIAS)
+                keyStore().getCertificate(alias)
             } catch (e: Exception) {
                 return WriteResult.Unavailable(Why.TryLater)
             }
@@ -267,11 +275,12 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
             }
             val envelope = try {
                 // A software copy of the public half, so the wrap runs outside the Keystore and never needs the owner.
-                val key = phoneKey ?: mintPhoneKey(KeyFactory.getInstance("RSA").generatePublic(X509EncodedKeySpec(certificate.publicKey.encoded))).also { phoneKey = it }
+                val key = state.phoneKey ?: mintPhoneKey(KeyFactory.getInstance("RSA").generatePublic(X509EncodedKeySpec(certificate.publicKey.encoded))).also { state.phoneKey = it }
                 sealEnvelope(bytes, key)
             } catch (e: Exception) {
                 return WriteResult.Unavailable(Why.Other)
             }
+            file.baseFile.parentFile?.mkdirs() // mainnet's folder is not there until its first wallet
             val out = try {
                 file.startWrite()
             } catch (e: IOException) {
@@ -304,14 +313,14 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
         /** The file, the key and an initialised cipher, or why a read stops before the sheet. */
         private fun startRead(): ReadStart {
             val fileExists = walletFileExists(place)
-            androidReadRefusal(fileExists, if (fileExists) aliasPresent() else false)?.let { return ReadStart.Done(it) }
+            androidReadRefusal(fileExists, if (fileExists) aliasPresent(alias) else false)?.let { return ReadStart.Done(it) }
             val envelope = try {
                 file.readFully()
             } catch (e: IOException) {
                 return ReadStart.Done(ReadResult.Unavailable(Why.TryLater))
             }
             return try {
-                val key = keyStore().getKey(ALIAS, null) as? PrivateKey ?: return ReadStart.Done(ReadResult.KeyGone)
+                val key = keyStore().getKey(alias, null) as? PrivateKey ?: return ReadStart.Done(ReadResult.KeyGone)
                 ReadStart.Ask(envelope, unwrapCipher(key), copy.current) // taken with the envelope, so a write during the sheet makes both stale together
             } catch (e: Exception) {
                 envelope.fill(0)
@@ -323,6 +332,9 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
 
 /** [place]'s file under `noBackupFilesDir`. Place 1 keeps today's file, so the wallet already on a phone is read from where it is, and each later place has its own. */
 internal fun walletFileName(place: Place): String = if (place == Place.FIRST) "wallet" else "wallet.${place.number}"
+
+/** [place]'s path under `noBackupFilesDir`: testnet's file where it always was, mainnet's under `main/`, where an older build never looks. */
+internal fun walletPath(network: KeyNetwork, place: Place): String = network.folder(walletFileName(place))
 
 /** Where a read stands before the sheet. */
 private sealed interface ReadStart {
@@ -344,9 +356,9 @@ private sealed interface EveryStart {
 
 /** The Keystore shelf over this Context, which the read's sheet needs. Every instance shares [storeLock] and the files. */
 @Composable
-internal actual fun rememberSecureShelf(): SecureShelf {
+internal actual fun rememberSecureShelf(network: KeyNetwork): SecureShelf {
     val context = LocalContext.current
-    return remember(context) { KeystoreShelf(context) }
+    return remember(context, network) { KeystoreShelf(context, network) }
 }
 
 private fun keyStore(): KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
@@ -363,19 +375,19 @@ private fun privateHalfFailure(): Throwable? = try {
 }
 
 /** Whether the alias exists, or null when the Keystore could not answer. */
-private fun aliasPresent(): Boolean? = try {
-    keyStore().containsAlias(ALIAS)
+private fun aliasPresent(alias: String): Boolean? = try {
+    keyStore().containsAlias(alias)
 } catch (e: Exception) {
     null
 }
 
 /** Makes the pair unless it exists, StrongBox first. Runs on [keyMaker] without [storeLock]. Returns what it threw. */
-private fun generateKeyIfMissing(): Throwable? = try {
-    if (aliasPresent() != true) {
+private fun generateKeyIfMissing(alias: String): Throwable? = try {
+    if (aliasPresent(alias) != true) {
         try {
-            generateKey(strongBox = true)
+            generateKey(alias, strongBox = true)
         } catch (e: StrongBoxUnavailableException) {
-            generateKey(strongBox = false)
+            generateKey(alias, strongBox = false)
         }
     }
     null
@@ -383,8 +395,8 @@ private fun generateKeyIfMissing(): Throwable? = try {
     e
 }
 
-private fun generateKey(strongBox: Boolean) {
-    val spec = KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+private fun generateKey(alias: String, strongBox: Boolean) {
+    val spec = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
         .setKeySize(WRAPPED_SIZE * 8)
         .setDigests(KeyProperties.DIGEST_SHA256)
         .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_OAEP)

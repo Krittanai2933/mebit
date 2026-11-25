@@ -1,6 +1,7 @@
 package com.mebit.app
 
 import androidx.compose.runtime.Composable
+import com.mebit.ffi.signer.KeyNetwork
 
 /** One small text saved by the OS's secret store and replaced whole. Never throws. */
 internal interface VaultsStorage {
@@ -14,6 +15,6 @@ internal interface VaultsStorage {
     fun delete(): Boolean
 }
 
-/** This platform's store for the saved vaults. */
+/** This platform's store for [network]'s saved vaults. */
 @Composable
-internal expect fun rememberVaultsStorage(): VaultsStorage
+internal expect fun rememberVaultsStorage(network: KeyNetwork): VaultsStorage

@@ -1,10 +1,12 @@
 package com.mebit.app
 
 import com.mebit.app.data.ANY_VERSION
+import com.mebit.ffi.signer.KeyNetwork
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -254,6 +256,22 @@ class KeychainMappingTest {
         assertEquals("wallet.10.b", Place.parse(10)!!.account(Slot.B))
         val every = Place.all.flatMap { p -> Slot.entries.map { p.account(it) } }
         assertEquals(every.size, every.toSet().size, "two places share an account")
+    }
+
+    @Test
+    fun testnetKeychainNamesAreWhereTheyAlwaysWere() {
+        assertEquals("com.mebit.app.wallet", walletService(KeyNetwork.TEST))
+        assertEquals("com.mebit.app.vaults", vaultsService(KeyNetwork.TEST))
+        assertEquals("wallet-marker", markerName(KeyNetwork.TEST))
+    }
+
+    @Test
+    fun mainnetKeychainNamesAreOutsideEveryTestnetOne() {
+        assertEquals("com.mebit.app.wallet.main", walletService(KeyNetwork.MAIN))
+        assertEquals("com.mebit.app.vaults.main", vaultsService(KeyNetwork.MAIN))
+        assertEquals("main/wallet-marker", markerName(KeyNetwork.MAIN))
+        assertNotEquals(walletService(KeyNetwork.TEST), walletService(KeyNetwork.MAIN))
+        assertNotEquals(vaultsService(KeyNetwork.TEST), vaultsService(KeyNetwork.MAIN))
     }
 
     @Test

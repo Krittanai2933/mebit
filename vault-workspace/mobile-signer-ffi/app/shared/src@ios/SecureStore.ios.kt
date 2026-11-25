@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import cnames.structs.__CFArray
 import cnames.structs.__CFData
 import cnames.structs.__CFDictionary
+import com.mebit.ffi.signer.KeyNetwork
 import kotlin.coroutines.resume
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.CPointer
@@ -104,8 +105,14 @@ import platform.UIKit.UIApplicationState
 import platform.darwin.dispatch_get_main_queue
 import platform.darwin.dispatch_sync
 
-/** The Keychain service every item of the wallet lives under. */
+/** The Keychain service every item of testnet's wallet lives under, which stays as it was. */
 private const val SERVICE = "com.mebit.app.wallet"
+
+/** [network]'s service. Items are matched by service exactly, so mainnet's are outside an older build's probe, list and delete. */
+internal fun walletService(network: KeyNetwork): String = network.alias(SERVICE)
+
+/** The marker file's name under Application Support/mebit: mainnet's sits under `main/`. */
+internal fun markerName(network: KeyNetwork): String = network.folder("wallet-marker")
 
 /** What the marker file holds for each marker it can hold. No other marker is ever written. */
 private val MARKER_CONTENT = mapOf(Marker.Empty to "empty", Marker.Kept to "kept")
@@ -136,9 +143,11 @@ private const val EVALUATE_BEFORE_READ = true
  * - a read evaluates its LAContext before the Keychain read and hands it in, so the sheet shows on a simulator too; if that
  *   gives two sheets on the iPhone, not one, [EVALUATE_BEFORE_READ] returns to the Keychain's own sheet.
  *
- * One object and one lock per process. Logs nothing.
+ * One instance and one lock per network and process. Logs nothing.
  */
-private object KeychainShelf : SecureShelf {
+private class KeychainShelf(network: KeyNetwork, private val vaults: KeychainVaults) : SecureShelf {
+    private val service = walletService(network)
+
     /**
      * Taken by every call, so a write's adds and deletes never interleave with another call. A read takes it for its Keychain
      * calls only, never while its owner check's card is up, so the card never blocks a probe or a flush on the main thread.
@@ -150,9 +159,9 @@ private object KeychainShelf : SecureShelf {
 
     private val stores: Map<Place, SecureStore> = Place.all.associateWith { KeychainPlace(it) }
 
-    /** Application Support/mebit/wallet-marker. Application Support is in backups, which the reinstall rule needs. */
+    /** Application Support/mebit/wallet-marker (testnet) or mebit/main/wallet-marker. Application Support is in backups, which the reinstall rule needs. */
     private val markerFile =
-        (NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, true).first() as String) + "/mebit/wallet-marker"
+        (NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, true).first() as String) + "/mebit/" + markerName(network)
 
     override fun store(place: Place): SecureStore = stores.getValue(place)
 
@@ -170,7 +179,7 @@ private object KeychainShelf : SecureShelf {
     /** One SecItemDelete of the whole service, the call that already passed on the iPhone. */
     override fun eraseEvery(): Boolean = locked {
         copies.values.forEach { it.advance() }
-        delete(null).let { it == errSecSuccess || it == errSecItemNotFound }
+        delete(service, null).let { it == errSecSuccess || it == errSecItemNotFound }
     }
 
     /** Asks for the owner on [context] and gives the book the same context. Null when the owner passed, else what the read answers. */
@@ -178,7 +187,7 @@ private object KeychainShelf : SecureShelf {
         if (!EVALUATE_BEFORE_READ) return null
         if (!awaitActive()) return ReadResult.Cancelled
         ownerCheck(context, reason)?.let { return it }
-        KeychainVaults.ownerPassed(context)
+        vaults.ownerPassed(context)
         return null
     }
 
@@ -209,20 +218,20 @@ private object KeychainShelf : SecureShelf {
      */
     private fun readSlots(place: Place, context: LAContext): ReadResult {
         val version = copies.getValue(place).current
-        val reads = Slot.entries.associateWith { readData(place.account(it), context, version) }
+        val reads = Slot.entries.associateWith { readData(service, place.account(it), context, version) }
         val result = slotsOutcome(reads) {
             // Two copies mean a write's delete did not happen, so the older copy is deleted here, best effort. The counter does not
             // advance: both copies are this process's own writer's, and advancing would give that writer a false Conflict.
-            pickNewest(Slot.entries.associateWith { creationDate(place.account(it), context) }).also { delete(place.account(it.other)) }
+            pickNewest(Slot.entries.associateWith { creationDate(service, place.account(it), context) }).also { delete(service, place.account(it.other)) }
         }
         reads.values.forEach { if (it !== result) (it as? ReadResult.Bytes)?.bytes?.fill(0) }
         return result
     }
 
-    private class KeychainPlace(private val place: Place) : SecureStore {
+    private inner class KeychainPlace(private val place: Place) : SecureStore {
         override fun probe(): StoreProbe {
             val unlocked = protectedDataAvailable()
-            return locked { silentProbe(unlocked) }
+            return locked { silentProbe(service, unlocked) }
         }
 
         override suspend fun read(reason: String): ReadResult {
@@ -235,9 +244,9 @@ private object KeychainShelf : SecureShelf {
             val copy = copies.getValue(place)
             copy.refuse(mode)?.let { return@locked it } // a stale Replace makes no Keychain call
             val status = if (mode == WriteMode.Create) {
-                createInBothSlots({ add(place.account(it), bytes) }, { delete(place.account(it)) })
+                createInBothSlots({ add(service, place.account(it), bytes) }, { delete(service, place.account(it)) })
             } else {
-                replaceInFreeSlot(place, bytes)
+                replaceInFreeSlot(service, place, bytes)
             }
             // An add that succeeded advances even if its delete of the other slot failed, because the phone did change.
             writeRefusal(status, mode, passcodeSet()) ?: WriteResult.Written(copy.advance())
@@ -246,7 +255,7 @@ private object KeychainShelf : SecureShelf {
         /** Deletes this place's two accounts by name, so the other places' items are not touched. */
         override fun erase(): EraseResult = locked {
             val version = copies.getValue(place).advance()
-            val statuses = Slot.entries.map { delete(place.account(it)) }
+            val statuses = Slot.entries.map { delete(service, place.account(it)) }
             eraseOutcome(statuses.firstOrNull { it != errSecSuccess && it != errSecItemNotFound } ?: errSecSuccess, version)
         }
 
@@ -267,19 +276,22 @@ private object KeychainShelf : SecureShelf {
     }
 }
 
-/** The Keychain shelf. One per process, so every caller shares its lock. */
+/** One shelf per network and process, so every caller of a network shares its lock. */
+private val shelves: Map<KeyNetwork, KeychainShelf> = listOf(KeyNetwork.TEST, KeyNetwork.MAIN).associateWith { KeychainShelf(it, keychainVaults.getValue(it)) }
+
+/** The Keychain shelf of [network]'s wallets. */
 @Composable
-internal actual fun rememberSecureShelf(): SecureShelf = KeychainShelf
+internal actual fun rememberSecureShelf(network: KeyNetwork): SecureShelf = shelves.getValue(network)
 
 /**
  * The status of a listing of every item under the service, and their accounts. Never prompts. A simulator lists the wallet's
  * item; an iPhone answers errSecInteractionNotAllowed and lists nothing while the item is there (2 Nov 2026).
  */
-private fun list(): Pair<Int, List<String>> = memScoped {
+private fun list(service: String): Pair<Int, List<String>> = memScoped {
     val out = alloc<CFTypeRefVar>()
     val silent = LAContext().apply { interactionNotAllowed = true }
     val status = SecItemCopyMatching(
-        query(null, kSecReturnAttributes to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitAll, kSecUseAuthenticationContext to owned(CFBridgingRetain(silent))),
+        query(service, null, kSecReturnAttributes to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitAll, kSecUseAuthenticationContext to owned(CFBridgingRetain(silent))),
         out.ptr,
     )
     val items = owned(out.value)?.reinterpret<__CFArray>() ?: return@memScoped status to emptyList()
@@ -291,8 +303,8 @@ private fun accountOf(item: COpaquePointer?): String =
     CFDictionaryGetValue(item?.reinterpret<__CFDictionary>(), kSecAttrAccount)?.let { CFBridgingRelease(CFRetain(it)) as? String } ?: ""
 
 /** What the silent [list] says the store holds. [unlocked] comes from [protectedDataAvailable]. Never prompts. */
-private fun silentProbe(unlocked: Boolean): StoreProbe {
-    val (status, accounts) = list()
+private fun silentProbe(service: String, unlocked: Boolean): StoreProbe {
+    val (status, accounts) = list(service)
     return probeOutcome(status, accounts, passcodeSet(), unlocked)
 }
 
@@ -309,10 +321,10 @@ private fun protectedDataAvailable(): Boolean {
 }
 
 /** A data-only read of [account] with [context]: the query an iPhone answered with no second sheet once the context had passed. */
-private fun readData(account: String, context: LAContext, version: StoreVersion): ReadResult = memScoped {
+private fun readData(service: String, account: String, context: LAContext, version: StoreVersion): ReadResult = memScoped {
     val out = alloc<CFTypeRefVar>()
     val status = SecItemCopyMatching(
-        query(account, kSecReturnData to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne, kSecUseAuthenticationContext to owned(CFBridgingRetain(context))),
+        query(service, account, kSecReturnData to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne, kSecUseAuthenticationContext to owned(CFBridgingRetain(context))),
         out.ptr,
     )
     val data = owned(out.value)?.reinterpret<__CFData>()
@@ -320,10 +332,10 @@ private fun readData(account: String, context: LAContext, version: StoreVersion)
 }
 
 /** When [account]'s item was added, in seconds from 1 Jan 2001, by an attributes-only read with [context], or null if unreadable. */
-private fun creationDate(account: String, context: LAContext): Double? = memScoped {
+private fun creationDate(service: String, account: String, context: LAContext): Double? = memScoped {
     val out = alloc<CFTypeRefVar>()
     SecItemCopyMatching(
-        query(account, kSecReturnAttributes to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne, kSecUseAuthenticationContext to owned(CFBridgingRetain(context))),
+        query(service, account, kSecReturnAttributes to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne, kSecUseAuthenticationContext to owned(CFBridgingRetain(context))),
         out.ptr,
     )
     val item = owned(out.value)?.reinterpret<__CFDictionary>() ?: return@memScoped null
@@ -335,29 +347,29 @@ private fun creationDate(account: String, context: LAContext): Double? = memScop
  * then deletes the other slot, which held the copy this one replaces, best effort. Never SecItemUpdate, which may prompt
  * for an item with this access control.
  */
-private tailrec fun replaceInFreeSlot(place: Place, bytes: ByteArray, taken: Set<Slot> = emptySet()): Int {
+private tailrec fun replaceInFreeSlot(service: String, place: Place, bytes: ByteArray, taken: Set<Slot> = emptySet()): Int {
     val slot = slotToAdd(taken) ?: return errSecDuplicateItem
-    val added = add(place.account(slot), bytes)
-    if (added == errSecDuplicateItem) return replaceInFreeSlot(place, bytes, taken + slot)
-    if (added == errSecSuccess) delete(place.account(slot.other))
+    val added = add(service, place.account(slot), bytes)
+    if (added == errSecDuplicateItem) return replaceInFreeSlot(service, place, bytes, taken + slot)
+    if (added == errSecSuccess) delete(service, place.account(slot.other))
     return added
 }
 
 /** Adds [bytes] as [account] under the access control, without copying them: the caller zeroes its array afterwards. */
-private fun add(account: String, bytes: ByteArray): Int {
+private fun add(service: String, account: String, bytes: ByteArray): Int {
     if (bytes.isEmpty()) return errSecParam // pinning needs an element, and no wallet record is empty
     return bytes.usePinned { pinned ->
         memScoped {
             val access = owned(SecAccessControlCreateWithFlags(null, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, kSecAccessControlUserPresence, null))
                 ?: return@memScoped errSecParam
             val data = owned(CFDataCreateWithBytesNoCopy(null, pinned.addressOf(0).reinterpret(), bytes.size.toLong(), kCFAllocatorNull))
-            SecItemAdd(query(account, kSecAttrAccessControl to access, kSecValueData to data), null)
+            SecItemAdd(query(service, account, kSecAttrAccessControl to access, kSecValueData to data), null)
         }
     }
 }
 
 /** Deletes [account], or every item under the service when it is null. */
-private fun delete(account: String?): Int = memScoped { SecItemDelete(query(account)) }
+private fun delete(service: String, account: String?): Int = memScoped { SecItemDelete(query(service, account)) }
 
 /** Whether this phone has a passcode, without which an item of this class cannot exist. Never prompts. */
 private fun passcodeSet(): Boolean = LAContext().canEvaluatePolicy(LAPolicyDeviceOwnerAuthentication, null)
@@ -386,10 +398,10 @@ private suspend fun ownerCheck(context: LAContext, reason: String): ReadResult? 
 }
 
 /** A query with what every query carries (generic password, the service, never synchronizable), [account] when given, and [extra]. */
-private fun MemScope.query(account: String?, vararg extra: Pair<CFStringRef?, CFTypeRef?>): CFDictionaryRef? {
+private fun MemScope.query(service: String, account: String?, vararg extra: Pair<CFStringRef?, CFTypeRef?>): CFDictionaryRef? {
     val query = owned(CFDictionaryCreateMutable(null, 0, kCFTypeDictionaryKeyCallBacks.ptr, kCFTypeDictionaryValueCallBacks.ptr))
     CFDictionaryAddValue(query, kSecClass, kSecClassGenericPassword)
-    CFDictionaryAddValue(query, kSecAttrService, cfString(SERVICE))
+    CFDictionaryAddValue(query, kSecAttrService, cfString(service))
     CFDictionaryAddValue(query, kSecAttrSynchronizable, kCFBooleanFalse)
     if (account != null) CFDictionaryAddValue(query, kSecAttrAccount, cfString(account))
     extra.forEach { (key, value) -> CFDictionaryAddValue(query, key, value) }

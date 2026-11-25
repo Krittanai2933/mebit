@@ -6,6 +6,7 @@ import android.util.AtomicFile
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import com.mebit.ffi.signer.KeyNetwork
 import java.io.File
 import java.io.IOException
 import java.security.KeyStore
@@ -14,25 +15,30 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-/** The one Keystore alias of the saved vaults' key. Nothing ever lists aliases. */
+/** Testnet's Keystore alias of the saved vaults' key, which stays as it was. Nothing ever lists aliases. */
 private const val ALIAS = "mebit_vaults_v1"
+
+/** Where each network keeps its book, under `noBackupFilesDir`, and under which alias. */
+internal fun vaultsPath(network: KeyNetwork): String = network.folder("vaults/book")
+
+internal fun vaultsAlias(network: KeyNetwork): String = network.alias(ALIAS)
 
 private const val AES_GCM = "AES/GCM/NoPadding"
 private const val IV_SIZE = 12
 private const val TAG_BITS = 128
 
-/** One lock for every [KeystoreVaults], because they all share the one file and key. */
+/** One lock for every [KeystoreVaults], one per network and one more is harmless: a write takes it for a moment. */
 private val vaultsFileLock = Any()
 
 /** The file holds the IV, then the AES-256-GCM ciphertext and tag. Its key needs an unlocked phone but no owner check, because the wallet's key prompts at every use and this read must not. */
-private class KeystoreVaults(path: File) : VaultsStorage {
+private class KeystoreVaults(path: File, private val alias: String) : VaultsStorage {
     private val file = AtomicFile(path)
 
     override fun read(): String? = synchronized(vaultsFileLock) {
         if (!fileExists()) return ""
         try {
             val sealed = file.readFully()
-            val key = keyStore().getKey(ALIAS, null) as? SecretKey ?: return null
+            val key = keyStore().getKey(alias, null) as? SecretKey ?: return null
             val aes = Cipher.getInstance(AES_GCM).apply { init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, sealed, 0, IV_SIZE)) }
             aes.doFinal(sealed, IV_SIZE, sealed.size - IV_SIZE).decodeToString()
         } catch (e: Exception) {
@@ -42,7 +48,7 @@ private class KeystoreVaults(path: File) : VaultsStorage {
 
     override fun write(text: String): Boolean = synchronized(vaultsFileLock) {
         val sealed = try {
-            val aes = Cipher.getInstance(AES_GCM).apply { init(Cipher.ENCRYPT_MODE, keyStore().getKey(ALIAS, null) as? SecretKey ?: newKey()) }
+            val aes = Cipher.getInstance(AES_GCM).apply { init(Cipher.ENCRYPT_MODE, keyStore().getKey(alias, null) as? SecretKey ?: newKey(alias)) }
             check(aes.iv.size == IV_SIZE) { "unexpected GCM IV size" }
             aes.iv + aes.doFinal(text.encodeToByteArray())
         } catch (e: Exception) {
@@ -68,7 +74,7 @@ private class KeystoreVaults(path: File) : VaultsStorage {
     override fun delete(): Boolean = synchronized(vaultsFileLock) {
         file.delete()
         try {
-            keyStore().deleteEntry(ALIAS)
+            keyStore().deleteEntry(alias)
         } catch (e: Exception) {
             // A key left without its file is harmless, because the next write reuses it, so the file decides.
         }
@@ -79,15 +85,15 @@ private class KeystoreVaults(path: File) : VaultsStorage {
 }
 
 @Composable
-internal actual fun rememberVaultsStorage(): VaultsStorage {
+internal actual fun rememberVaultsStorage(network: KeyNetwork): VaultsStorage {
     val context = LocalContext.current
-    return remember(context) { KeystoreVaults(File(context.noBackupFilesDir, "vaults/book")) }
+    return remember(context, network) { KeystoreVaults(File(context.noBackupFilesDir, vaultsPath(network)), vaultsAlias(network)) }
 }
 
 private fun keyStore(): KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
-private fun newKey(): SecretKey {
-    val spec = KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+private fun newKey(alias: String): SecretKey {
+    val spec = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
         .setKeySize(256)
         .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
         .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
