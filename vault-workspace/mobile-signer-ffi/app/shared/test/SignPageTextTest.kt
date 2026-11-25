@@ -70,10 +70,18 @@ class SignPageTextTest {
     }
 
     @Test
-    fun theAddressBreaksAfterFiveGroupsAsTheBoardDoes() {
-        assertEquals("bc1q 9h7a 2kxv 7tq3 5zcd\nw0lf p8xr 4e8s m4kz", addressLines("bc1q9h7a2kxv7tq35zcdw0lfp8xr4e8sm4kz"))
-        val p2wsh = "tb1q" + "x".repeat(58)
-        assertEquals(listOf(5, 5, 5, 1), addressLines(p2wsh).lines().map { it.split(" ").size })
+    fun theAddressTakesTheFewestEvenLinesOfSixGroups() {
+        // The boards' 36-character sample reads as 5.3.2 draws it.
+        assertEquals("bc1q 9h7a 2kxv 7tq3 5zcd\nw0lf p8xr 4e8s m4kz", addressLines("bc1q9h7a2kxv7tq35zcdw0lfp8xr4e8sm4kz", 6))
+        val groups = { address: String -> addressLines(address, 6).lines().map { it.split(" ").size } }
+        assertEquals(listOf(6, 5), groups("bc1q89e2jlze5xa6ls0tyfxj06duy5el2s5lnxm4kz"))
+        assertEquals(listOf(6, 6, 4), groups("tb1q" + "x".repeat(58)))
+        assertEquals(listOf(4), groups("bc1q" + "x".repeat(12)))
+        assertEquals(listOf(6), groups("bc1q" + "x".repeat(20)))
+        assertEquals(listOf(4, 3), groups("bc1q" + "x".repeat(24)))
+        // A wider card takes more groups a line: a 62-character address in two even lines.
+        assertEquals(listOf(8, 8), addressLines("tb1q" + "x".repeat(58), 8).lines().map { it.split(" ").size })
+        assertEquals(listOf(1, 1), addressLines("bc1qxxxx", 0).lines().map { it.split(" ").size })
     }
 
     /** The characters [addressAccents] picks out, in order. */
@@ -98,9 +106,10 @@ class SignPageTextTest {
     @Test
     fun theAccentedAddressReadsAsTheGroupedLines() {
         val address = "bc1q9h7a2kxv7tq35zcdw0lfp8xr4e8sm4kz"
-        assertEquals(addressLines(address), accentedAddress(address, ink, accent, perLine = 5).text)
-        assertEquals(address.chunked(4).joinToString(" "), accentedAddress(address, ink, accent).text)
-        val gold = accentedAddress(address, ink, accent).spanStyles.filter { it.item.color == accent }
+        assertEquals(addressLines(address, 6), accentedAddress(address, ink, accent, 6).text)
+        val p2wsh = "tb1qfmf43t295jj97d9qestlyfdfxnqkg8crvcksymnte0u42qsrwymsur7agn"
+        assertEquals(addressLines(p2wsh, 6), accentedAddress(p2wsh, ink, accent, 6).text)
+        val gold = accentedAddress(address, ink, accent, 6).spanStyles.filter { it.item.color == accent }
         assertEquals(10, gold.size)
     }
 

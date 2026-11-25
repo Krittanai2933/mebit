@@ -409,14 +409,7 @@ private fun PaymentCard(payment: VaultPayment, quote: com.mebit.app.data.FiatQuo
         Spacer(modifier = Modifier.height(9.dp))
         Text("ถึง", color = MbWhite.copy(alpha = 0.7f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, lineHeight = 16.sp)
         Spacer(modifier = Modifier.height(2.dp))
-        Text(
-            accentedAddress(payment.destination, MbWhite, SummaryGold),
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = amountFontFamily(),
-            lineHeight = 21.sp,
-            modifier = Modifier.testTag("m2_to"),
-        )
+        AddressText(payment.destination, MbWhite, SummaryGold, 15.sp, 21.sp, Modifier.fillMaxWidth().testTag("m2_to"))
     }
 }
 

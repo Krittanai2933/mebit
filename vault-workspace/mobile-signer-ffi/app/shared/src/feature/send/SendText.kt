@@ -26,11 +26,28 @@ internal fun addressAccents(address: String): Set<Int> {
     return ((start until minOf(start + 4, address.length)) + (maxOf(start, address.length - 6) until address.length)).toSet()
 }
 
-/** [address] in groups of four, [perLine] groups a line or one run that wraps when null, its [addressAccents] in [accent] and the rest in [ink]. */
-internal fun accentedAddress(address: String, ink: Color, accent: Color, perLine: Int? = null): AnnotatedString = buildAnnotatedString {
+/**
+ * Pure. How many groups of four go on each line so [address] takes the fewest lines of at most [maxPerLine] groups, shared evenly: 16
+ * groups at most 6 a line read 6, 6, 4 and 11 read 6, 5, never with one group left alone on the last line.
+ */
+internal fun groupsPerLine(address: String, maxPerLine: Int): Int {
+    val groups = (address.length + 3) / 4
+    val most = maxPerLine.coerceAtLeast(1)
+    if (groups == 0) return most
+    val lines = (groups + most - 1) / most
+    return (groups + lines - 1) / lines
+}
+
+/** Pure. [address] in groups of four, [groupsPerLine] a line. */
+internal fun addressLines(address: String, maxPerLine: Int): String =
+    address.chunked(4).chunked(groupsPerLine(address, maxPerLine)).joinToString("\n") { it.joinToString(" ") }
+
+/** [addressLines] with the [addressAccents] in [accent] and the rest in [ink]. */
+internal fun accentedAddress(address: String, ink: Color, accent: Color, maxPerLine: Int): AnnotatedString = buildAnnotatedString {
     val accents = addressAccents(address)
+    val perLine = groupsPerLine(address, maxPerLine)
     address.forEachIndexed { i, c ->
-        if (i > 0 && i % 4 == 0) append(if (perLine != null && i % (4 * perLine) == 0) '\n' else ' ')
+        if (i > 0 && i % 4 == 0) append(if (i % (4 * perLine) == 0) '\n' else ' ')
         withStyle(SpanStyle(color = if (i in accents) accent else ink)) { append(c) }
     }
 }

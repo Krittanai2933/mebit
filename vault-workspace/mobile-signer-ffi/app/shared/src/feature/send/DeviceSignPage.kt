@@ -492,8 +492,8 @@ private fun Check(color: Color) {
 
 /**
  * 5.6.1 Variant 11's receipt ticket, the details the signer must show the same: the wallet it pays from, the amount large in the middle,
- * each address five groups of four a line with its ends in amber ([addressAccents]), then the change and the fee.
- * Amounts are in [unit]: a Jade or Trezor shows BTC, so its page passes BTC whatever the setting, and the amounts to compare read the same
+ * each address in as many groups of four a line as the card holds ([AddressText]) with its ends in amber, then the change and the fee.
+ * The amount, the change and the fee are all in [unit]: a Jade or Trezor shows BTC, so its page passes BTC whatever the setting, and the amounts to compare read the same
  * on both screens.
  */
 @Composable
@@ -532,15 +532,7 @@ internal fun MatchCard(review: SpendReview, walletName: String, unit: BtcUnit) {
         Spacer(modifier = Modifier.height(11.dp))
         Text("ปลายทาง", color = MbBody, fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 16.sp)
         review.payments.forEach { out ->
-            Text(
-                accentedAddress(out.address, MbNavyInk, MbEyebrow, perLine = 5),
-                color = MbNavyInk,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = amountFont,
-                lineHeight = 25.sp,
-                modifier = Modifier.padding(top = 4.dp).testTag("hw_sign_address"),
-            )
+            AddressText(out.address, MbNavyInk, MbEyebrow, 15.sp, 21.sp, Modifier.fillMaxWidth().padding(top = 4.dp).testTag("hw_sign_address"))
         }
         Spacer(modifier = Modifier.height(18.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(MbBorder))
@@ -549,13 +541,10 @@ internal fun MatchCard(review: SpendReview, walletName: String, unit: BtcUnit) {
             MatchRow("เงินทอน", amountText(review.changeSats.toLong(), unit, ::formatBtc), "hw_sign_change")
             Spacer(modifier = Modifier.height(8.dp))
         }
-        MatchRow("ค่าธรรมเนียม", "${thousands(review.feeSats.toLong())} sat", "hw_sign_fee")
+        MatchRow("ค่าธรรมเนียม", amountText(review.feeSats.toLong(), unit, ::formatBtc), "hw_sign_fee")
         Spacer(modifier = Modifier.height(22.dp))
     }
 }
-
-/** Pure. [address] in groups of four, five groups a line, as 5.3.2 breaks it: a 62-character address reads in four lines. */
-internal fun addressLines(address: String): String = address.chunked(4).chunked(5).joinToString("\n") { it.joinToString(" ") }
 
 /** 5.3.2.0's card in the place of the details while a Jade registers the wallet: its name, m of n, each signer's fingerprint in the Jade's order, and the derivation. */
 @Composable
