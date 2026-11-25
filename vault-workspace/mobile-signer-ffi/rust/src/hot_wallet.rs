@@ -9856,6 +9856,45 @@ pub(crate) mod tests {
         );
     }
 
+    // Only Native SegWit is enabled on mainnet for a one-key wallet; every type is on testnet4.
+    #[test]
+    fn only_native_segwit_is_enabled_on_mainnet_and_each_type_has_its_path_on_both_networks() {
+        for t in AddressType::ALL {
+            assert!(hot_address_type_enabled(t, KeyNetwork::Test), "{t:?}");
+            assert_eq!(
+                hot_address_type_enabled(t, KeyNetwork::Main),
+                t == AddressType::NativeSegwit,
+                "{t:?}"
+            );
+            let on_main =
+                hot_receive_address(abandon_about(), String::new(), KeyNetwork::Main, t, 0);
+            assert_eq!(on_main.is_ok(), t == AddressType::NativeSegwit, "{t:?}");
+        }
+    }
+
+    // A switch never answers with the other network's rates or reuses its proof anchor.
+    #[test]
+    fn each_network_keeps_its_own_fee_cache_source_and_anchor() {
+        assert!(!std::ptr::eq(
+            fee_cache(KeyNetwork::Main),
+            fee_cache(KeyNetwork::Test)
+        ));
+        assert!(!std::ptr::eq(
+            source_of(KeyNetwork::Main),
+            source_of(KeyNetwork::Test)
+        ));
+        assert!(matches!(anchor_of(KeyNetwork::Main), Anchor::Mainnet));
+        assert!(matches!(anchor_of(KeyNetwork::Test), Anchor::Testnet4));
+        assert_eq!(
+            source_of(KeyNetwork::Main).0.canonical(),
+            "https://blockstream.info/api"
+        );
+        assert_eq!(
+            source_of(KeyNetwork::Test).0.canonical(),
+            "https://blockstream.info/testnet4/api"
+        );
+    }
+
     // The published first mainnet address of `abandon_about` at m/{purpose}'/0'/0'/0/0, which embit reproduces too.
     #[test]
     fn each_type_derives_its_published_mainnet_vector() {

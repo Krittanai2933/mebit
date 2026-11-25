@@ -1113,6 +1113,118 @@ pub(crate) mod tests {
         assert!(main.unwrap_err().to_string().contains("mainnet"));
     }
 
+    /// The abandon-about account of `address_type` at `path` on mainnet, as a one-key descriptor.
+    fn main_one_key(address_type: AddressType, path: &str) -> String {
+        let key = account(&abandon_master(Network::Bitcoin), path).0;
+        match address_type {
+            AddressType::Legacy => format!("pkh({key})"),
+            AddressType::NestedSegwit => format!("sh(wpkh({key}))"),
+            AddressType::NativeSegwit => format!("wpkh({key})"),
+            AddressType::Taproot => format!("tr({key})"),
+        }
+    }
+
+    // BIP84's published first address, at coin type 0'. Only Native SegWit is read on mainnet, hardware wallets included.
+    #[test]
+    fn a_mainnet_one_key_wallet_is_read_at_coin_type_0_and_only_as_native_segwit() {
+        for t in AddressType::ALL {
+            let path = format!("m/{}", t.account_path(Network::Bitcoin));
+            let read = Described::parse(&main_one_key(t, &path));
+            match t {
+                AddressType::NativeSegwit => {
+                    let wallet = read.unwrap();
+                    assert_eq!(wallet.network, Network::Bitcoin);
+                    assert_eq!(path, "m/84'/0'/0'");
+                    assert_eq!(
+                        wallet.address(Chain::External, 0).unwrap().to_string(),
+                        "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+                    );
+                }
+                _ => assert!(
+                    read.err()
+                        .unwrap()
+                        .to_string()
+                        .contains("not enabled on mainnet"),
+                    "{t:?}"
+                ),
+            }
+        }
+        // Coin type 1' on a mainnet key is another wallet's path.
+        let refused = Described::parse(&main_one_key(AddressType::NativeSegwit, "m/84'/1'/0'"));
+        assert!(
+            refused
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("this wallet's keys are at m/84'/0'/0'")
+        );
+        // And a testnet wallet keeps coin type 1', as it was.
+        for t in AddressType::ALL {
+            assert_eq!(
+                format!("m/{}", t.account_path(Network::Testnet4)),
+                format!("m/{}'/1'/0'", t.purpose())
+            );
+            assert!(Described::parse(&one_key(t)).is_ok(), "{t:?}");
+        }
+    }
+
+    #[test]
+    fn a_mainnet_several_key_wallet_is_read_at_m_48_0_a_2_and_derives_bc1_addresses() {
+        let descriptor = main_multisig(2, &[1, 2, 3]);
+        let wallet = Described::parse(&descriptor).unwrap();
+        assert_eq!(wallet.network, Network::Bitcoin);
+        assert!(
+            wallet
+                .keys()
+                .iter()
+                .all(|k| k.path.to_string() == "48'/0'/0'/2'")
+        );
+        let first = wallet.address(Chain::External, 0).unwrap().to_string();
+        assert!(first.starts_with("bc1q"), "{first}");
+        assert_eq!(
+            wallet_describe(descriptor.clone(), KeyNetwork::Main)
+                .unwrap()
+                .first_address,
+            first
+        );
+        // A mainnet key at the testnet coin type is refused, with the path it should have.
+        let at_1 = descriptor.replace("48'/0'/0'/2'", "48'/1'/0'/2'");
+        let refused = Described::parse(&at_1).err().unwrap().to_string();
+        assert!(refused.contains("m/48'/0'/<account>'/2'"), "{refused}");
+        // A testnet key at the mainnet coin type is refused the same way.
+        let at_0 = two_of_three().replace("48'/1'/0'/2'", "48'/0'/0'/2'");
+        let refused = Described::parse(&at_0).err().unwrap().to_string();
+        assert!(refused.contains("m/48'/1'/<account>'/2'"), "{refused}");
+    }
+
+    // The network asked for must be the keys' own, both ways, so coins are never read or sent on the wrong chain.
+    #[test]
+    fn a_wallet_asked_for_on_the_other_network_is_refused_both_ways() {
+        let main = main_multisig(2, &[1, 2, 3]);
+        let test = two_of_three();
+        for (descriptor, asked, said) in [
+            (
+                &main,
+                KeyNetwork::Test,
+                "its keys are mainnet keys, and the wallet is on testnet4",
+            ),
+            (
+                &test,
+                KeyNetwork::Main,
+                "its keys are testnet keys, and the wallet is on mainnet",
+            ),
+        ] {
+            let refused = Described::parse_on(descriptor, asked)
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(refused.contains(said), "{refused}");
+            assert!(wallet_describe(descriptor.clone(), asked).is_err());
+        }
+        assert!(Described::parse_on(&main, KeyNetwork::Main).is_ok());
+        assert!(Described::parse_on(&test, KeyNetwork::Test).is_ok());
+    }
+
     // The scan is script-agnostic: a P2WSH and a P2TR wallet are proven used, block by block, through the real
     // `prove_use` and `scan::step`, as the phone wallet is.
     #[test]

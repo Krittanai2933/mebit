@@ -2932,6 +2932,11 @@ pub(crate) mod tests {
     /// `wallet`'s unsigned payment of the 1,000,000 sats one parent pays its receive 0: 600,000 to `SOMEONE` and 399,000
     /// change to change 0, every field as `drafted` writes it.
     fn payment_of(wallet: &Described) -> Psbt {
+        payment_to(wallet, script_of(SOMEONE))
+    }
+
+    /// `payment_of` paying `destination`.
+    fn payment_to(wallet: &Described, destination: ScriptBuf) -> Psbt {
         let parent = Transaction {
             version: Version::TWO,
             lock_time: LockTime::ZERO,
@@ -2956,7 +2961,7 @@ pub(crate) mod tests {
             output: vec![
                 TxOut {
                     value: Amount::from_sat(600_000),
-                    script_pubkey: script_of(SOMEONE),
+                    script_pubkey: destination,
                 },
                 TxOut {
                     value: Amount::from_sat(399_000),
@@ -2969,6 +2974,27 @@ pub(crate) mod tests {
         psbt.outputs[1] = wallet.change(0).unwrap();
         psbt.xpub = wallet.global_xpubs();
         psbt
+    }
+
+    // The review renders each payment's address on the wallet's network: a mainnet wallet's shows bc1, where the
+    // testnet4 rendering the review once had would have shown tb1 for a payment that goes to bc1.
+    #[test]
+    fn a_mainnet_review_shows_the_payment_as_a_bc1_address() {
+        let to = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+        let descriptor = crate::script::tests::main_multisig(2, &[1, 2, 3]);
+        let wallet = Described::parse(&descriptor).unwrap();
+        let psbt = payment_to(&wallet, script_of(to)).to_string();
+        let review = wallet_review(descriptor.clone(), KeyNetwork::Main, psbt.clone()).unwrap();
+        assert_eq!(review.payments.len(), 1);
+        assert_eq!(review.payments[0].address, to);
+        assert_eq!(review.change_sats, 399_000);
+        // The same wallet asked for as testnet is refused, whatever its payments.
+        refused_as_testnet_keys_on_mainnet(wallet_review(
+            two_of_three(),
+            KeyNetwork::Main,
+            psbt.clone(),
+        ));
+        assert!(wallet_review(descriptor, KeyNetwork::Test, psbt).is_err());
     }
 
     // A key of several kept on this phone signs through `wallet_sign_with_words` with its own phrase, each key once and
