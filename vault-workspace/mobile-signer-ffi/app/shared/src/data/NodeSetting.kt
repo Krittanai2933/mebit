@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.mebit.app.PlainFile
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.NodeChoice
 import com.mebit.ffi.signer.chainUseNode
 
@@ -43,7 +44,7 @@ internal fun NodeSetting.toChoice(): NodeChoice = when (this) {
 }
 
 /** The node setting and its file. [file] is null where the phone has no place for it, and then a choice lasts until the app closes. */
-class NodeSettings internal constructor(private val file: PlainFile?, private val use: (NodeChoice) -> Unit = ::chainUseNode) {
+class NodeSettings internal constructor(private val file: PlainFile?, private val use: (NodeChoice) -> Unit = { chainUseNode(it, KeyNetwork.TEST) }) {
     var current: NodeSetting by mutableStateOf(NodeSetting.Auto)
         private set
 

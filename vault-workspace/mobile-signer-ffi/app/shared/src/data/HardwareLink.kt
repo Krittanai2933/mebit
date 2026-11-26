@@ -4,6 +4,7 @@ import com.mebit.app.Pairings
 import com.mebit.ffi.signer.BleException
 import com.mebit.ffi.signer.FoundWallet
 import com.mebit.ffi.signer.HwAccountKey
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.PairingCodes
 import com.mebit.ffi.signer.WalletKind
 import com.mebit.ffi.signer.WalletLink
@@ -49,7 +50,7 @@ internal class HardwareLink(private val pairings: Pairings?, private val open: (
         try {
             val kept = if (found.kind == WalletKind.TREZOR_SAFE7) expect?.let { pairings?.read(it) } else null
             val fresh = try {
-                link.connect(codes, kept)
+                link.connect(codes, kept, KeyNetwork.TEST)
             } finally {
                 kept?.fill(0)
             }

@@ -287,7 +287,7 @@ public interface WalletLinkInterface {
     public suspend fun `accountXpub`(`derivationPath`: kotlin.String): HwAccountKey
     
     /**
-     * Connects to the wallet, pairs if it must, and checks the wallet is what it says.
+     * Connects to the wallet on `network`, pairs if it must, and checks the wallet is what it says.
      * Cancelling while it runs leaves nothing that closing the link cannot end: measured with a
      * Jade, unit-tested with a fake central for a Safe 7. A Jade that fails disconnects in the
      * background, a Safe 7 before this returns.
@@ -299,7 +299,7 @@ public interface WalletLinkInterface {
      * Keystore. A Jade ignores `pairing` and returns null.
      */
     @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
-    public suspend fun `connect`(`codes`: PairingCodes, `pairing`: kotlin.ByteArray?): kotlin.ByteArray?
+    public suspend fun `connect`(`codes`: PairingCodes, `pairing`: kotlin.ByteArray?, `network`: KeyNetwork): kotlin.ByteArray?
     
     /**
      * Ends the link and waits until it is down, also when a failure or another call is
@@ -320,7 +320,8 @@ public interface WalletLinkInterface {
      * Signs `psbt_base64`, a payment of the wallet `descriptor` whose unsigned id is
      * `unsigned_txid` (the payment the user was shown), with the key of that wallet this device
      * holds, and returns what the PSBT says after it. Before anything reaches the device, it
-     * refuses a descriptor `wallet_describe` refuses, a PSBT `wallet_review` refuses, and a PSBT
+     * refuses a descriptor `wallet_describe` refuses on the network `connect` was given (a wallet
+     * of the other network included), a PSBT `wallet_review` refuses, and a PSBT
      * whose id is another ("changed since shown"). `WrongKey` means the device holds no key of the
      * wallet, and nothing showed on it. When that key has already signed, the review comes back
      * without asking the device to sign, and `steps` hears nothing. Else a Jade must hold a
@@ -397,7 +398,7 @@ public expect open class WalletLink: Disposable, WalletLinkInterface {
     public override suspend fun `accountXpub`(`derivationPath`: kotlin.String): HwAccountKey
     
     /**
-     * Connects to the wallet, pairs if it must, and checks the wallet is what it says.
+     * Connects to the wallet on `network`, pairs if it must, and checks the wallet is what it says.
      * Cancelling while it runs leaves nothing that closing the link cannot end: measured with a
      * Jade, unit-tested with a fake central for a Safe 7. A Jade that fails disconnects in the
      * background, a Safe 7 before this returns.
@@ -409,7 +410,7 @@ public expect open class WalletLink: Disposable, WalletLinkInterface {
      * Keystore. A Jade ignores `pairing` and returns null.
      */
     @Throws(BleException::class, kotlin.coroutines.cancellation.CancellationException::class)
-    public override suspend fun `connect`(`codes`: PairingCodes, `pairing`: kotlin.ByteArray?): kotlin.ByteArray?
+    public override suspend fun `connect`(`codes`: PairingCodes, `pairing`: kotlin.ByteArray?, `network`: KeyNetwork): kotlin.ByteArray?
     
     /**
      * Ends the link and waits until it is down, also when a failure or another call is
@@ -430,7 +431,8 @@ public expect open class WalletLink: Disposable, WalletLinkInterface {
      * Signs `psbt_base64`, a payment of the wallet `descriptor` whose unsigned id is
      * `unsigned_txid` (the payment the user was shown), with the key of that wallet this device
      * holds, and returns what the PSBT says after it. Before anything reaches the device, it
-     * refuses a descriptor `wallet_describe` refuses, a PSBT `wallet_review` refuses, and a PSBT
+     * refuses a descriptor `wallet_describe` refuses on the network `connect` was given (a wallet
+     * of the other network included), a PSBT `wallet_review` refuses, and a PSBT
      * whose id is another ("changed since shown"). `WrongKey` means the device holds no key of the
      * wallet, and nothing showed on it. When that key has already signed, the review comes back
      * without asking the device to sign, and `steps` hears nothing. Else a Jade must hold a
@@ -1146,8 +1148,7 @@ public enum class JadeState {
 
 
 /**
- * Bitcoin mainnet, or testnet4. Testnet4 matches the network the Bluetooth
- * link already uses.
+ * Bitcoin mainnet, or testnet4.
  */
 
 
@@ -1305,6 +1306,13 @@ public sealed class NodeCheck {
         val `reason`: kotlin.String,
     ) : NodeCheck() {
     }
+    
+    /**
+     * It answered, and its block 0 is the Bitcoin mainnet's.
+     */
+    
+    public object Mainnet : NodeCheck() 
+    
     
 }
 
@@ -1595,21 +1603,22 @@ public expect fun `bip39LastWordCandidates`(`firstWords`: List<kotlin.String>): 
 public expect fun `bip39Suggest`(`prefix`: kotlin.String, `limit`: kotlin.UInt): List<kotlin.String>
 
 /**
- * The genesis probe on `base`, for the "ทดสอบ" button. Blocks up to a few seconds.
+ * The genesis probe on `base` for `network`, for the "ทดสอบ" button. Blocks up to a few seconds.
  */
-public expect fun `chainCheckNode`(`base`: kotlin.String): NodeCheck
+public expect fun `chainCheckNode`(`base`: kotlin.String, `network`: KeyNetwork): NodeCheck
 
 /**
- * The host the wallet reads from now, probing the list if none is trusted yet. Blocks up to a few
- * seconds.
+ * The host the wallet reads from now on `network`, probing the list if none is trusted yet. Blocks
+ * up to a few seconds.
  */
-public expect fun `chainNodeStatus`(): NodeStatus
+public expect fun `chainNodeStatus`(`network`: KeyNetwork): NodeStatus
 
 /**
- * Chooses the node every later request goes to. Call it before the first one at start-up.
+ * Chooses the node every later request of `network` goes to. The other network keeps its own choice.
+ * Call it before the first request at start-up.
  */
 @Throws(MobileSignerException::class)
-public expect fun `chainUseNode`(`choice`: NodeChoice)
+public expect fun `chainUseNode`(`choice`: NodeChoice, `network`: KeyNetwork)
 
 /**
  * Is `words` a valid BIP-39 English mnemonic, and if not, why? Nothing is retained.
@@ -1669,10 +1678,10 @@ public expect fun `fetchBtcThb`(): BtcPrice
 public expect fun `generateSoftwareMultisigKey`(`passphrase`: kotlin.String, `network`: KeyNetwork, `account`: kotlin.UInt): SoftwareAccountKey
 
 /**
- * The account path the hot wallet derives `address_type`'s keys from, `m/{purpose}'/1'/0'` on either
- * network, as the fingerprint sheets print it.
+ * The account path the hot wallet derives `address_type`'s keys from on `network`, `m/{purpose}'/0'/0'`
+ * on mainnet and `m/{purpose}'/1'/0'` on testnet4, as the fingerprint sheets print it.
  */
-public expect fun `hotAccountPath`(`addressType`: AddressType): kotlin.String
+public expect fun `hotAccountPath`(`addressType`: AddressType, `network`: KeyNetwork): kotlin.String
 
 /**
  * Whether a wallet on `network` can take `address_type`, as every call that derives one of its keys
@@ -1693,7 +1702,7 @@ public expect fun `hotAddressTypeEnabled`(`addressType`: AddressType, `network`:
 public expect fun `hotBroadcast`(`network`: KeyNetwork, `hex`: kotlin.String, `txid`: kotlin.String): HotSendResult
 
 /**
- * The fee tiers for the Send screen, from the testnet4 host in use. One network call in the usual
+ * The fee tiers for the Send screen, from the host of `network` in use. One network call in the usual
  * case, answered from memory for five minutes after. Never fails: when no host answers or the
  * answer is unusable the fixed tiers 4, 8 and 15 come back with `live` false.
  */
@@ -1846,7 +1855,7 @@ public expect fun `isValidAddress`(`address`: kotlin.String, `network`: KeyNetwo
 
 /**
  * What a Jade registers for the wallet `descriptor` before it signs for it, null for a one-key
- * wallet, which a Jade signs as it is. Pure: no device, no network. Refuses mainnet, a
+ * wallet, which a Jade signs as it is. Pure: no device, no network. Refuses a wallet of the other network, a
  * descriptor `wallet_describe` refuses, and a several-key wallet a Jade cannot register (more
  * than seven signers). Signing builds the same registration from the same descriptor.
  */
@@ -1887,7 +1896,7 @@ public expect fun `signPsbt`(`psbtJson`: kotlin.String, `borrowerPubkey`: kotlin
 /**
  * The confirmed + mempool balance of the wallet `descriptor` describes, by the sync a read of it within ten seconds
  * shares, with how far the scan got. It reads no coin list, so a list that shows balances pays for none, and a coin list
- * a host fails or limits never blanks a balance. Testnet4 only. About 40 Esplora calls for a wallet nobody paid and a
+ * a host fails or limits never blanks a balance. About 40 Esplora calls for a wallet nobody paid and a
  * routine sync's few after that, so call it off the main thread. No screen may show `balance_sats` unless `scan` is
  * `Complete`.
  */

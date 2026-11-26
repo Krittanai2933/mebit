@@ -120,13 +120,11 @@ pub(crate) struct Utxo {
     pub(crate) confirmed: bool,
 }
 
-/// Refuses mainnet, which this build has no host for.
+/// The one gate every chain call passes. Both networks have hosts, so it takes both; a call that
+/// reaches it with a network the build lacks would fail here, in one place.
 pub(crate) fn check_network(network: KeyNetwork) -> Result<(), MobileSignerError> {
     match network {
-        KeyNetwork::Test => Ok(()),
-        KeyNetwork::Main => Err(MobileSignerError::InvalidPsbtJson(
-            "mainnet Esplora is not enabled in this build".into(),
-        )),
+        KeyNetwork::Test | KeyNetwork::Main => Ok(()),
     }
 }
 
@@ -142,8 +140,8 @@ pub(crate) fn tx_error(what: String) -> MobileSignerError {
 // public explorer.
 pub(crate) const WINDOW: usize = 10;
 
-/// Esplora's REST API over a `Transport`. Every URL is built on `ESPLORA_TESTNET4`, which `Http` moves
-/// to the host in use.
+/// Esplora's REST API over a `Transport`. Every URL is built on the transport's `canonical` base (its
+/// network's), which `Http` moves to the host in use.
 pub(crate) struct EsploraSource<'a>(pub(crate) &'a dyn Transport);
 
 impl EsploraSource<'_> {
@@ -154,7 +152,7 @@ impl EsploraSource<'_> {
         unknown: impl FnOnce() -> String,
     ) -> Result<String, NotProven> {
         self.0
-            .get(&format!("{ESPLORA_TESTNET4}{path}"))
+            .get(&format!("{}{path}", self.0.canonical()))
             .map_err(|error| match answered_404(&error, path) {
                 true => NotProven::Gone(unknown()),
                 false => NotProven::from(error),
@@ -188,7 +186,7 @@ impl ChainSource for EsploraSource<'_> {
     fn summaries(&self, addresses: &[&Address]) -> Result<Vec<Summary>, MobileSignerError> {
         let urls: Vec<String> = addresses
             .iter()
-            .map(|address| format!("{ESPLORA_TESTNET4}/address/{address}"))
+            .map(|address| format!("{}/address/{address}", self.0.canonical()))
             .collect();
         self.get_all(&urls)?
             .iter()
@@ -203,30 +201,30 @@ impl ChainSource for EsploraSource<'_> {
         // shortcut: first page only per address, upgrade when a full History screen exists
         let urls: Vec<String> = addresses
             .iter()
-            .map(|address| format!("{ESPLORA_TESTNET4}/address/{address}/txs"))
+            .map(|address| format!("{}/address/{address}/txs", self.0.canonical()))
             .collect();
         let pages = self.get_all(&urls)?;
         let tip = self
             .0
-            .get(&format!("{ESPLORA_TESTNET4}/blocks/tip/height"))?;
+            .get(&format!("{}/blocks/tip/height", self.0.canonical()))?;
         read_history(&pages, &tip)
     }
 
     fn tx(&self, txid: &Txid) -> Result<Option<(TxView, u64)>, MobileSignerError> {
-        let body = match self.0.get(&format!("{ESPLORA_TESTNET4}/tx/{txid}")) {
+        let body = match self.0.get(&format!("{}/tx/{txid}", self.0.canonical())) {
             Err(e) if is_not_found(&e, txid) => return Ok(None),
             answer => answer?,
         };
         let tip = self
             .0
-            .get(&format!("{ESPLORA_TESTNET4}/blocks/tip/height"))?;
+            .get(&format!("{}/blocks/tip/height", self.0.canonical()))?;
         read_tx(&body, &tip, txid).map(Some)
     }
 
     fn spends_from(&self, txids: &[Txid]) -> Result<Vec<Vec<String>>, MobileSignerError> {
         let urls: Vec<String> = txids
             .iter()
-            .map(|txid| format!("{ESPLORA_TESTNET4}/tx/{txid}"))
+            .map(|txid| format!("{}/tx/{txid}", self.0.canonical()))
             .collect();
         let answers = self.get_all(&urls)?;
         txids
@@ -239,7 +237,7 @@ impl ChainSource for EsploraSource<'_> {
     fn utxos(&self, addresses: &[&Address]) -> Result<Vec<Vec<Utxo>>, MobileSignerError> {
         let urls: Vec<String> = addresses
             .iter()
-            .map(|address| format!("{ESPLORA_TESTNET4}/address/{address}/utxo"))
+            .map(|address| format!("{}/address/{address}/utxo", self.0.canonical()))
             .collect();
         let mut seen = HashSet::new();
         let mut lists = Vec::with_capacity(urls.len());
@@ -267,7 +265,7 @@ impl ChainSource for EsploraSource<'_> {
     /// gives a usable rate.
     fn fee_tiers(&self) -> Option<FeeTiers> {
         let get = |path: &str, estimates: fn(&Value) -> Vec<(u32, &Value)>| {
-            let body = self.0.get(&format!("{ESPLORA_TESTNET4}{path}")).ok()?;
+            let body = self.0.get(&format!("{}{path}", self.0.canonical())).ok()?;
             let json: Value = serde_json::from_str(&body).ok()?;
             tiers_from(&estimates(&json))
         };
@@ -778,7 +776,11 @@ pub(crate) fn broadcast_matching(
 
 /// What an `EsploraSource` sends. `Http` is the real one, and a test scripts its own.
 pub(crate) trait Transport: Sync {
-    /// One GET of a URL built on `ESPLORA_TESTNET4`, the whole body as text.
+    /// The base every URL of this transport is built on. A test's transport stands for testnet4.
+    fn canonical(&self) -> &'static str {
+        ESPLORA_TESTNET4
+    }
+    /// One GET of a URL built on `canonical`, the whole body as text.
     fn get(&self, url: &str) -> Result<String, MobileSignerError>;
     /// Runs `broadcast_on` against the host a payment goes to.
     fn broadcast(&self, hex: &str, txid: &str) -> Result<String, MobileSignerError>;
@@ -796,6 +798,7 @@ pub(crate) trait Transport: Sync {
 /// retry, and the limit a host's 429 sets. `lost` runs each time a GET leaves the host in use forgotten. A host it skipped after a lie is
 /// never read again through it, so a scan makes one `Http` per pass.
 pub(crate) struct Http {
+    network: KeyNetwork,
     lost: fn(),
     hosts: Mutex<Skips>,
 }
@@ -807,8 +810,9 @@ struct Skips {
 }
 
 impl Http {
-    pub(crate) const fn new(lost: fn()) -> Self {
+    pub(crate) const fn new(network: KeyNetwork, lost: fn()) -> Self {
         Http {
+            network,
             lost,
             hosts: Mutex::new(Skips {
                 skipped: Vec::new(),
@@ -826,14 +830,16 @@ impl Http {
     /// The host to read from, probing the list when none is cached, never one this source skipped.
     fn host(&self) -> Result<&'static HostSpec, MobileSignerError> {
         let skipped = self.skips().skipped.clone();
-        let hosts = current_hosts();
-        let index = pick_host(
+        let net = net_of(self.network);
+        let hosts = net.current_hosts();
+        let index = pick_host_on(
+            self.network,
             hosts,
             &probe_genesis,
             Instant::now(),
-            &CHOSEN_HOST,
+            &net.chosen,
             &skipped,
-            &LIMITS,
+            &net.limits,
         )?;
         self.skips().last = Some(index);
         Ok(&hosts[index])
@@ -847,18 +853,19 @@ impl Http {
 impl Transport for Http {
     fn get(&self, url: &str) -> Result<String, MobileSignerError> {
         let base = self.base()?;
-        let url = on_host(url, base);
+        let url = on_host_from(canonical_base(self.network), url, base);
+        let net = net_of(self.network);
         get_forgetting(
             &|| {
                 attempt_unless_limited(
                     base,
                     &|| classify(AGENT.get(&url).call()),
-                    &LIMITS,
+                    &net.limits,
                     &Instant::now,
                 )
             },
             &std::thread::sleep,
-            &CHOSEN_HOST,
+            &net.chosen,
             &self.lost,
         )
     }
@@ -887,16 +894,21 @@ impl Transport for Http {
             }
             skips.skipped.clone()
         };
-        let hosts = current_hosts();
-        pick_host(
-            hosts,
+        let net = net_of(self.network);
+        pick_host_on(
+            self.network,
+            net.current_hosts(),
             &probe_genesis,
             Instant::now(),
-            &CHOSEN_HOST,
+            &net.chosen,
             &skipped,
-            &LIMITS,
+            &net.limits,
         )
         .is_ok()
+    }
+
+    fn canonical(&self) -> &'static str {
+        canonical_base(self.network)
     }
 
     fn operator(&self) -> Result<Operator, MobileSignerError> {
@@ -913,7 +925,7 @@ pub(crate) enum Operator {
     MempoolSpace,
 }
 
-/// One testnet4 Esplora host and who runs it.
+/// One Esplora host and who runs it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct HostSpec {
     pub(crate) base: &'static str,
@@ -950,18 +962,96 @@ pub(crate) const PUBLIC_TESTNET4_HOSTS: [HostSpec; 2] = [
         operator: Operator::MempoolSpace,
     },
 ];
+/// The public mainnet Esplora hosts, in the order they are tried. mempool.space is last for the same
+/// reason as on testnet4.
+pub(crate) const PUBLIC_MAINNET_HOSTS: [HostSpec; 2] = [
+    HostSpec {
+        base: ESPLORA_MAINNET,
+        operator: Operator::Blockstream,
+    },
+    HostSpec {
+        base: "https://mempool.space/api",
+        operator: Operator::MempoolSpace,
+    },
+];
+
+/// The public hosts of `network`.
+fn public_hosts(network: KeyNetwork) -> [HostSpec; 2] {
+    match network {
+        KeyNetwork::Test => PUBLIC_TESTNET4_HOSTS,
+        KeyNetwork::Main => PUBLIC_MAINNET_HOSTS,
+    }
+}
+
+/// The base every URL of `network` is built on, and its first public host. `Http` rewrites it to the
+/// host in use.
+pub(crate) fn canonical_base(network: KeyNetwork) -> &'static str {
+    match network {
+        KeyNetwork::Test => ESPLORA_TESTNET4,
+        KeyNetwork::Main => ESPLORA_MAINNET,
+    }
+}
+
+/// Hash of block 0 of `network`, and its name for error texts.
+fn genesis_of(network: KeyNetwork) -> (&'static str, &'static str) {
+    match network {
+        KeyNetwork::Test => (TESTNET4_GENESIS, "testnet4"),
+        KeyNetwork::Main => (MAINNET_GENESIS, "mainnet"),
+    }
+}
+
+/// What one network keeps apart from the other, so a switch never reuses the other's host, its limits
+/// or its trust: the hosts in use, the host last chosen, and the hosts that answered 429.
+pub(crate) struct NetState {
+    hosts: LazyLock<HostList>,
+    pub(crate) chosen: HostChoice,
+    pub(crate) limits: Limits,
+}
+
+impl NetState {
+    pub(crate) fn current_hosts(&self) -> &'static [HostSpec] {
+        *self
+            .hosts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+static TEST_NET: NetState = NetState {
+    hosts: LazyLock::new(|| {
+        Mutex::new(Box::leak(
+            hosts_with_on(KeyNetwork::Test, OWN_NODE).into_boxed_slice(),
+        ))
+    }),
+    chosen: Mutex::new(None),
+    limits: Mutex::new(Vec::new()),
+};
+static MAIN_NET: NetState = NetState {
+    hosts: LazyLock::new(|| {
+        Mutex::new(Box::leak(
+            hosts_with_on(KeyNetwork::Main, OWN_NODE).into_boxed_slice(),
+        ))
+    }),
+    chosen: Mutex::new(None),
+    limits: Mutex::new(Vec::new()),
+};
+
+pub(crate) fn net_of(network: KeyNetwork) -> &'static NetState {
+    match network {
+        KeyNetwork::Test => &TEST_NET,
+        KeyNetwork::Main => &MAIN_NET,
+    }
+}
+
 /// The hosts in use, in the order they are tried. Auto until `chain_use_node` says otherwise. A choice
 /// is leaked once so the hosts stay `'static` like the public ones: it happens only when the user picks
 /// a node. Passing the genesis check does not make a host honest about balances, which every host here
 /// is trusted with alike. Only a proof moves a scan, see `crate::scan`.
 type HostList = Mutex<&'static [HostSpec]>;
-static ESPLORA_TESTNET4_HOSTS: LazyLock<HostList> =
-    LazyLock::new(|| Mutex::new(Box::leak(hosts_with(OWN_NODE).into_boxed_slice())));
 
+#[cfg(test)]
 pub(crate) fn current_hosts() -> &'static [HostSpec] {
-    *ESPLORA_TESTNET4_HOSTS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    TEST_NET.current_hosts()
 }
 
 /// Which hosts the wallet reads from and posts to.
@@ -988,6 +1078,8 @@ pub enum NodeCheck {
     Unreachable {
         reason: String,
     },
+    /// It answered, and its block 0 is the Bitcoin mainnet's.
+    Mainnet,
 }
 
 /// The host in use for the settings screen, its name only. When none passes the probe, `reachable` is
@@ -1029,12 +1121,21 @@ fn host_name(base: &str) -> String {
     rest.split(['/', ':']).next().unwrap_or(rest).to_string()
 }
 
-/// The host list a choice stands for. Every host still passes the genesis probe before use.
+#[cfg(test)]
 pub(crate) fn hosts_for(choice: &NodeChoice) -> Result<Vec<HostSpec>, MobileSignerError> {
+    hosts_for_on(KeyNetwork::Test, choice)
+}
+
+/// The host list a choice stands for on `network`. Every host still passes the genesis probe before use.
+pub(crate) fn hosts_for_on(
+    network: KeyNetwork,
+    choice: &NodeChoice,
+) -> Result<Vec<HostSpec>, MobileSignerError> {
+    let public = public_hosts(network);
     Ok(match choice {
-        NodeChoice::Auto => hosts_with(OWN_NODE),
-        NodeChoice::Blockstream => vec![PUBLIC_TESTNET4_HOSTS[0]],
-        NodeChoice::MempoolSpace => vec![PUBLIC_TESTNET4_HOSTS[1]],
+        NodeChoice::Auto => hosts_with_on(network, OWN_NODE),
+        NodeChoice::Blockstream => vec![public[0]],
+        NodeChoice::MempoolSpace => vec![public[1]],
         NodeChoice::Own { base } => vec![HostSpec {
             base: Box::leak(own_node_url(base)?.into_boxed_str()),
             operator: Operator::Mebit,
@@ -1043,31 +1144,46 @@ pub(crate) fn hosts_for(choice: &NodeChoice) -> Result<Vec<HostSpec>, MobileSign
 }
 
 /// Sets `list` to `choice` and drops the trusted host in `cache`, so the next request probes the new list.
+#[cfg(test)]
 pub(crate) fn switch_hosts(
     choice: &NodeChoice,
     list: &HostList,
     cache: &HostChoice,
 ) -> Result<(), MobileSignerError> {
-    let hosts: &'static [HostSpec] = Box::leak(hosts_for(choice)?.into_boxed_slice());
+    switch_hosts_on(KeyNetwork::Test, choice, list, cache)
+}
+
+pub(crate) fn switch_hosts_on(
+    network: KeyNetwork,
+    choice: &NodeChoice,
+    list: &HostList,
+    cache: &HostChoice,
+) -> Result<(), MobileSignerError> {
+    let hosts: &'static [HostSpec] = Box::leak(hosts_for_on(network, choice)?.into_boxed_slice());
     *list.lock().unwrap_or_else(|p| p.into_inner()) = hosts;
     *cache.lock().unwrap_or_else(|p| p.into_inner()) = None;
     Ok(())
 }
 
-/// Chooses the node every later request goes to. Call it before the first one at start-up.
+/// Chooses the node every later request of `network` goes to. The other network keeps its own choice.
+/// Call it before the first request at start-up.
 #[uniffi::export]
-pub fn chain_use_node(choice: NodeChoice) -> Result<(), MobileSignerError> {
-    switch_hosts(&choice, &ESPLORA_TESTNET4_HOSTS, &CHOSEN_HOST)
+pub fn chain_use_node(choice: NodeChoice, network: KeyNetwork) -> Result<(), MobileSignerError> {
+    let net = net_of(network);
+    switch_hosts_on(network, &choice, &net.hosts, &net.chosen)
 }
 
-/// The genesis probe on `base`, for the "ทดสอบ" button. Blocks up to a few seconds.
+/// The genesis probe on `base` for `network`, for the "ทดสอบ" button. Blocks up to a few seconds.
 #[uniffi::export]
-pub fn chain_check_node(base: String) -> NodeCheck {
-    let Ok(hosts) = hosts_for(&NodeChoice::Own { base }) else {
+pub fn chain_check_node(base: String, network: KeyNetwork) -> NodeCheck {
+    let Ok(hosts) = hosts_for_on(network, &NodeChoice::Own { base }) else {
         return NodeCheck::BadUrl;
     };
     match probe_genesis(&hosts[0]) {
-        Ok(body) if body.trim() == TESTNET4_GENESIS => NodeCheck::Testnet4,
+        Ok(body) if body.trim() == genesis_of(network).0 => match network {
+            KeyNetwork::Test => NodeCheck::Testnet4,
+            KeyNetwork::Main => NodeCheck::Mainnet,
+        },
         Ok(_) => NodeCheck::OtherChain,
         // Short fixed words: the failure's own text names the URL.
         Err(failure) => NodeCheck::Unreachable {
@@ -1082,18 +1198,20 @@ pub fn chain_check_node(base: String) -> NodeCheck {
     }
 }
 
-/// The host the wallet reads from now, probing the list if none is trusted yet. Blocks up to a few
-/// seconds.
+/// The host the wallet reads from now on `network`, probing the list if none is trusted yet. Blocks
+/// up to a few seconds.
 #[uniffi::export]
-pub fn chain_node_status() -> NodeStatus {
-    let hosts = current_hosts();
-    let picked = pick_host(
+pub fn chain_node_status(network: KeyNetwork) -> NodeStatus {
+    let net = net_of(network);
+    let hosts = net.current_hosts();
+    let picked = pick_host_on(
+        network,
         hosts,
         &probe_genesis,
         Instant::now(),
-        &CHOSEN_HOST,
+        &net.chosen,
         &[],
-        &LIMITS,
+        &net.limits,
     );
     let index = picked.as_ref().copied().unwrap_or(0);
     NodeStatus {
@@ -1102,20 +1220,32 @@ pub fn chain_node_status() -> NodeStatus {
     }
 }
 
-/// The hosts of a build whose private node is `own`. Cleartext `http://` is acceptable for a private
-/// host, which Tailscale already encrypts, and for no other.
+#[cfg(test)]
 pub(crate) fn hosts_with(own: Option<&'static str>) -> Vec<HostSpec> {
+    hosts_with_on(KeyNetwork::Test, own)
+}
+
+/// The hosts of a build whose private node is `own`. Cleartext `http://` is acceptable for a private
+/// host, which Tailscale already encrypts, and for no other. The build's own node is a testnet4
+/// node, so mainnet never lists it.
+pub(crate) fn hosts_with_on(network: KeyNetwork, own: Option<&'static str>) -> Vec<HostSpec> {
+    let own = own.filter(|_| network == KeyNetwork::Test);
     own.map(|base| HostSpec {
         base,
         operator: Operator::Mebit,
     })
     .into_iter()
-    .chain(PUBLIC_TESTNET4_HOSTS)
+    .chain(public_hosts(network))
     .collect()
 }
-/// The base every URL is built on, and the first public host. `Http` rewrites it to the host in
-/// use.
+/// The testnet4 base every URL is built on, and the first public host. `Http` rewrites it to the host
+/// in use.
 pub(crate) const ESPLORA_TESTNET4: &str = "https://blockstream.info/testnet4/api";
+/// The mainnet base, the same way.
+pub(crate) const ESPLORA_MAINNET: &str = "https://blockstream.info/api";
+/// Hash of the Bitcoin mainnet's block 0, checked the same way.
+pub(crate) const MAINNET_GENESIS: &str =
+    "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f";
 /// Hash of testnet4 block 0. A host whose `/block-height/0` says anything else serves another
 /// chain, and a balance or a broadcast there would be wrong, so it is never used.
 pub(crate) const TESTNET4_GENESIS: &str =
@@ -1164,13 +1294,11 @@ pub(crate) enum HostVerdict {
     NoneReachable(Instant, String),
 }
 pub(crate) type HostChoice = Mutex<Option<HostVerdict>>;
-static CHOSEN_HOST: HostChoice = Mutex::new(None);
 
 /// The hosts that answered 429, each with when its latest limit ends. One entry per host, so it never
 /// grows past the host list. An entry stays after its limit ends, because `pick_host` reads it as the
 /// evidence that a host came back. In memory only, so a restart asks a limited host once more.
 pub(crate) type Limits = Mutex<Vec<(&'static str, Instant)>>;
-static LIMITS: Limits = Mutex::new(Vec::new());
 /// How long a 429 without a usable Retry-After limits its host. It is also the wait before Home's first
 /// ask after a sync that stopped short, so that ask finds the host free.
 pub(crate) const LIMIT_DEFAULT: Duration = Duration::from_secs(60);
@@ -1320,6 +1448,7 @@ pub(crate) fn classify(answer: Result<ureq::Response, ureq::Error>) -> Result<St
 /// probed, the cached host included. An earlier host that came out of a limit after the cached verdict
 /// was made wins back: the verdict is dropped and the list is probed from the top, so the own node
 /// returns at the cost of one probe. A probe's 429 limits its host like a GET's, from when it answered.
+#[cfg(test)]
 pub(crate) fn pick_host(
     hosts: &[HostSpec],
     probe: &dyn Fn(&HostSpec) -> Result<String, GetError>,
@@ -1328,6 +1457,20 @@ pub(crate) fn pick_host(
     skipped: &[usize],
     limits: &Limits,
 ) -> Result<usize, MobileSignerError> {
+    pick_host_on(KeyNetwork::Test, hosts, probe, now, cache, skipped, limits)
+}
+
+/// `pick_host` for the chain of `network`: its genesis hash is the one a host must answer.
+pub(crate) fn pick_host_on(
+    network: KeyNetwork,
+    hosts: &[HostSpec],
+    probe: &dyn Fn(&HostSpec) -> Result<String, GetError>,
+    now: Instant,
+    cache: &HostChoice,
+    skipped: &[usize],
+    limits: &Limits,
+) -> Result<usize, MobileSignerError> {
+    let (genesis, name) = genesis_of(network);
     let mut verdict = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1388,13 +1531,13 @@ pub(crate) fn pick_host(
             continue;
         }
         match probe(host) {
-            Ok(body) if body.trim() == TESTNET4_GENESIS => {
+            Ok(body) if body.trim() == genesis => {
                 *verdict = Some(HostVerdict::Chosen(host.base, now));
                 return Ok(index);
             }
             Ok(body) => {
                 let shown: String = body.trim().chars().take(24).collect();
-                failures.push(format!("{}: block 0 is {shown:?}, not testnet4", host.base));
+                failures.push(format!("{}: block 0 is {shown:?}, not {name}", host.base));
             }
             Err(GetError::Throttled { retry_after, .. }) => {
                 // This probe and the ones before it may have taken seconds.
@@ -1406,7 +1549,7 @@ pub(crate) fn pick_host(
         }
     }
     let error = format!(
-        "esplora get: no testnet4 host is reachable ({})",
+        "esplora get: no {name} host is reachable ({})",
         failures.join("; ")
     );
     *verdict = Some(HostVerdict::NoneReachable(now, error.clone()));
@@ -1429,9 +1572,14 @@ pub(crate) fn forget_host_if_unreachable(
     }
 }
 
-/// `url` with the canonical base swapped for `base`. Any other URL is returned as it is.
+#[cfg(test)]
 pub(crate) fn on_host(url: &str, base: &str) -> String {
-    match url.strip_prefix(ESPLORA_TESTNET4) {
+    on_host_from(ESPLORA_TESTNET4, url, base)
+}
+
+/// `url` with the `canonical` base swapped for `base`. Any other URL is returned as it is.
+pub(crate) fn on_host_from(canonical: &str, url: &str, base: &str) -> String {
+    match url.strip_prefix(canonical) {
         Some(rest) => format!("{base}{rest}"),
         None => url.to_string(),
     }
@@ -1659,5 +1807,157 @@ mod node_choice_tests {
         assert!(switch_hosts(&bad, &list, &cache).is_err());
         assert_eq!(list.lock().unwrap().len(), 1);
         assert!(cache.lock().unwrap().is_some());
+    }
+
+    fn main_bases(choice: &NodeChoice) -> Vec<&'static str> {
+        hosts_for_on(KeyNetwork::Main, choice)
+            .unwrap()
+            .iter()
+            .map(|h| h.base)
+            .collect()
+    }
+
+    #[test]
+    fn each_network_has_its_own_hosts_and_the_build_node_is_testnet_only() {
+        assert_eq!(
+            main_bases(&NodeChoice::Auto),
+            ["https://blockstream.info/api", "https://mempool.space/api"]
+        );
+        assert_eq!(
+            main_bases(&NodeChoice::Blockstream),
+            ["https://blockstream.info/api"]
+        );
+        assert_eq!(
+            main_bases(&NodeChoice::MempoolSpace),
+            ["https://mempool.space/api"]
+        );
+        let own = NodeChoice::Own {
+            base: "https://n.example.org/api/".into(),
+        };
+        assert_eq!(main_bases(&own), ["https://n.example.org/api"]);
+        // The build's private node serves testnet4: mainnet never lists it.
+        let with_own = hosts_with_on(KeyNetwork::Main, Some(OWN_NODE_FIXTURE));
+        assert_eq!(with_own, PUBLIC_MAINNET_HOSTS);
+        let with_own = hosts_with_on(KeyNetwork::Test, Some(OWN_NODE_FIXTURE));
+        assert_eq!(with_own[0].base, OWN_NODE_FIXTURE);
+        assert_eq!(&with_own[1..], PUBLIC_TESTNET4_HOSTS);
+    }
+
+    const OWN_NODE_FIXTURE: &str = "http://100.64.0.1:3002/api";
+
+    #[test]
+    fn a_url_is_built_on_its_networks_base_and_moves_only_from_that_base() {
+        assert_eq!(
+            canonical_base(KeyNetwork::Main),
+            "https://blockstream.info/api"
+        );
+        assert_eq!(
+            Http::new(KeyNetwork::Main, || {}).canonical(),
+            ESPLORA_MAINNET
+        );
+        assert_eq!(
+            Http::new(KeyNetwork::Test, || {}).canonical(),
+            ESPLORA_TESTNET4
+        );
+        let other = "https://mempool.space/api";
+        assert_eq!(
+            on_host_from(ESPLORA_MAINNET, &format!("{ESPLORA_MAINNET}/tx/ab"), other),
+            "https://mempool.space/api/tx/ab"
+        );
+        // A testnet URL on the mainnet transport is not rewritten onto a mainnet host.
+        let testnet = format!("{ESPLORA_TESTNET4}/tx/ab");
+        assert_eq!(on_host_from(ESPLORA_MAINNET, &testnet, other), testnet);
+    }
+
+    // A transport standing for mainnet that records the URLs `EsploraSource` builds.
+    struct MainnetTransport(Mutex<Vec<String>>);
+    impl Transport for MainnetTransport {
+        fn canonical(&self) -> &'static str {
+            ESPLORA_MAINNET
+        }
+        fn get(&self, url: &str) -> Result<String, MobileSignerError> {
+            self.0.lock().unwrap().push(url.to_string());
+            Err(MobileSignerError::Network("recorded".into()))
+        }
+        fn broadcast(&self, _: &str, _: &str) -> Result<String, MobileSignerError> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn the_source_builds_every_request_on_the_transports_network_base() {
+        let transport = MainnetTransport(Mutex::new(Vec::new()));
+        let source = EsploraSource(&transport);
+        let address: Address = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+            .parse::<Address<_>>()
+            .unwrap()
+            .assume_checked();
+        let txid = Txid::from_str(&"11".repeat(32)).unwrap();
+        let _ = source.summaries(&[&address]);
+        let _ = source.history(&[&address]);
+        let _ = source.utxos(&[&address]);
+        let _ = source.tx(&txid);
+        let _ = source.spends_from(&[txid]);
+        let _ = source.fee_tiers();
+        let _ = source.raw_tx(&txid);
+        let urls = transport.0.lock().unwrap();
+        assert!(!urls.is_empty());
+        for url in urls.iter() {
+            assert!(url.starts_with("https://blockstream.info/api/"), "{url}");
+        }
+    }
+
+    #[test]
+    fn a_host_must_answer_its_networks_genesis_and_no_other() {
+        let hosts = [HostSpec {
+            base: "https://a.example/api",
+            operator: Operator::Blockstream,
+        }];
+        let says = |genesis: &'static str| {
+            move |_: &HostSpec| -> Result<String, GetError> { Ok(format!("{genesis}\n")) }
+        };
+        let pick = |network, genesis| {
+            pick_host_on(
+                network,
+                &hosts,
+                &says(genesis),
+                Instant::now(),
+                &Mutex::new(None),
+                &[],
+                &Limits::default(),
+            )
+        };
+        assert_eq!(pick(KeyNetwork::Main, MAINNET_GENESIS).unwrap(), 0);
+        assert_eq!(pick(KeyNetwork::Test, TESTNET4_GENESIS).unwrap(), 0);
+        let wrong = pick(KeyNetwork::Main, TESTNET4_GENESIS)
+            .unwrap_err()
+            .to_string();
+        assert!(wrong.contains("no mainnet host is reachable"), "{wrong}");
+        assert!(wrong.contains("not mainnet"), "{wrong}");
+        let wrong = pick(KeyNetwork::Test, MAINNET_GENESIS)
+            .unwrap_err()
+            .to_string();
+        assert!(wrong.contains("not testnet4"), "{wrong}");
+        assert_eq!(
+            MAINNET_GENESIS,
+            "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+        );
+    }
+
+    #[test]
+    fn a_switch_on_one_network_leaves_the_other_hosts_trust_and_limits_alone() {
+        let main = net_of(KeyNetwork::Main);
+        let test = net_of(KeyNetwork::Test);
+        assert!(!std::ptr::eq(main, test));
+        let before = test.current_hosts();
+        *test.chosen.lock().unwrap() =
+            Some(HostVerdict::Chosen("https://t.example", Instant::now()));
+        chain_use_node(NodeChoice::Blockstream, KeyNetwork::Main).unwrap();
+        assert_eq!(main.current_hosts(), [PUBLIC_MAINNET_HOSTS[0]]);
+        assert_eq!(test.current_hosts(), before);
+        assert!(test.chosen.lock().unwrap().is_some());
+        *test.chosen.lock().unwrap() = None;
+        chain_use_node(NodeChoice::Auto, KeyNetwork::Main).unwrap();
+        assert_eq!(main.current_hosts(), PUBLIC_MAINNET_HOSTS);
     }
 }

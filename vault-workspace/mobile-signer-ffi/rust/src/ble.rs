@@ -9,7 +9,6 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use bitcoin::Network;
 use bitcoin::bip32::{DerivationPath, Xpub};
 use miniscript::Descriptor;
 use tokio::sync::{mpsc, oneshot};
@@ -234,7 +233,7 @@ pub struct JadeRegistration {
 }
 
 /// What a Jade registers for the wallet `descriptor` before it signs for it, null for a one-key
-/// wallet, which a Jade signs as it is. Pure: no device, no network. Refuses mainnet, a
+/// wallet, which a Jade signs as it is. Pure: no device, no network. Refuses a wallet of the other network, a
 /// descriptor `wallet_describe` refuses, and a several-key wallet a Jade cannot register (more
 /// than seven signers). Signing builds the same registration from the same descriptor.
 #[uniffi::export]
@@ -243,7 +242,7 @@ pub fn jade_wallet_registration(
     network: KeyNetwork,
 ) -> Result<Option<JadeRegistration>, MobileSignerError> {
     check_network(network)?;
-    let wallet = Described::parse(&descriptor)?;
+    let wallet = Described::parse_on(&descriptor, network)?;
     let registration = jade_registration(&wallet).map_err(|error| {
         MobileSignerError::InvalidPsbtJson(format!("Jade registration: {error}"))
     })?;
@@ -261,8 +260,7 @@ pub fn jade_wallet_registration(
 /// What a Jade registers for `wallet`: none for a one-key wallet, which a Jade signs as it is.
 fn jade_registration(wallet: &Described) -> Result<Option<WalletRegistration>, JadeError> {
     match wallet.receive() {
-        // Testnet4 only: `Described` reads tpubs alone.
-        Descriptor::Wsh(_) => WalletRegistration::of(wallet.receive(), Network::Testnet4).map(Some),
+        Descriptor::Wsh(_) => WalletRegistration::of(wallet.receive(), wallet.network).map(Some),
         _ => Ok(None),
     }
 }
@@ -291,6 +289,8 @@ pub async fn scan_wallets(kind: WalletKind) -> Result<Vec<FoundWallet>, BleError
 pub struct WalletLink {
     wallet: FoundWallet,
     claimed: AtomicBool,
+    /// The network `connect` pinned the device's session to. Set before `running`, so a running link has it.
+    network: OnceLock<KeyNetwork>,
     running: OnceLock<Running>,
 }
 
@@ -364,11 +364,12 @@ impl WalletLink {
         Arc::new(Self {
             wallet,
             claimed: AtomicBool::new(false),
+            network: OnceLock::new(),
             running: OnceLock::new(),
         })
     }
 
-    /// Connects to the wallet, pairs if it must, and checks the wallet is what it says.
+    /// Connects to the wallet on `network`, pairs if it must, and checks the wallet is what it says.
     /// Cancelling while it runs leaves nothing that closing the link cannot end: measured with a
     /// Jade, unit-tested with a fake central for a Safe 7. A Jade that fails disconnects in the
     /// background, a Safe 7 before this returns.
@@ -382,11 +383,12 @@ impl WalletLink {
         &self,
         codes: Arc<dyn PairingCodes>,
         pairing: Option<Vec<u8>>,
+        network: KeyNetwork,
     ) -> Result<Option<Vec<u8>>, BleError> {
         platform::ble_ready()?;
-        self.attach(async {
+        self.attach(network, async {
             platform::forget_seen_devices().await?;
-            backend::connect(&self.wallet, codes, pairing).await
+            backend::connect(&self.wallet, codes, pairing, network.bitcoin()).await
         })
         .await
     }
@@ -424,7 +426,8 @@ impl WalletLink {
     /// Signs `psbt_base64`, a payment of the wallet `descriptor` whose unsigned id is
     /// `unsigned_txid` (the payment the user was shown), with the key of that wallet this device
     /// holds, and returns what the PSBT says after it. Before anything reaches the device, it
-    /// refuses a descriptor `wallet_describe` refuses, a PSBT `wallet_review` refuses, and a PSBT
+    /// refuses a descriptor `wallet_describe` refuses on the network `connect` was given (a wallet
+    /// of the other network included), a PSBT `wallet_review` refuses, and a PSBT
     /// whose id is another ("changed since shown"). `WrongKey` means the device holds no key of the
     /// wallet, and nothing showed on it. When that key has already signed, the review comes back
     /// without asking the device to sign, and `steps` hears nothing. Else a Jade must hold a
@@ -442,7 +445,8 @@ impl WalletLink {
         steps: Arc<dyn SignSteps>,
     ) -> Result<SpendReview, BleError> {
         let refused = |error| BleError::Refused(said(error));
-        let wallet = Described::parse(&descriptor).map_err(refused)?;
+        let network = *self.network.get().ok_or_else(closed)?;
+        let wallet = Described::parse_on(&descriptor, network).map_err(refused)?;
         let psbt = spend::parse(&psbt_base64).map_err(refused)?;
         let shown = spend::as_shown(&wallet, psbt, &unsigned_txid, &SCAN_STORE).map_err(refused)?;
         self.running
@@ -468,6 +472,7 @@ impl WalletLink {
     /// Hands back the pairing credential `connecting` made, if any.
     async fn attach(
         &self,
+        network: KeyNetwork,
         connecting: impl Future<Output = Result<(Running, Option<Vec<u8>>), BleError>>,
     ) -> Result<Option<Vec<u8>>, BleError> {
         if self.claimed.swap(true, Ordering::SeqCst) {
@@ -476,7 +481,8 @@ impl WalletLink {
             ));
         }
         let (running, credential) = connecting.await?;
-        // One caller got past `claimed`, so nothing else has set it.
+        // One caller got past `claimed`, so nothing else has set either.
+        let _ = self.network.set(network);
         let _ = self.running.set(running);
         Ok(credential)
     }
@@ -777,6 +783,7 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
+    use bitcoin::Network;
     use bitcoin::Psbt;
     use bitcoin::bip32::{Fingerprint, Xpriv};
     use bitcoin::secp256k1::Secp256k1;
@@ -877,9 +884,11 @@ mod tests {
     async fn fake_where(link_goes_down: Option<oneshot::Receiver<()>>) -> Fake {
         let (wallet, answer, log) = fake_wallet(link_goes_down);
         let link = WalletLink::new(found());
-        link.attach(async { Ok((Running::spawn(wallet), None)) })
-            .await
-            .unwrap();
+        link.attach(KeyNetwork::Test, async {
+            Ok((Running::spawn(wallet), None))
+        })
+        .await
+        .unwrap();
         (link, answer, log)
     }
 
@@ -1022,12 +1031,16 @@ mod tests {
         let link = WalletLink::new(found());
         assert!(matches!(link.info().await, Err(BleError::Disconnected(_))));
         assert_eq!(link.disconnect().await, Ok(()));
-        link.attach(async { Ok((Running::spawn(wallet), None)) })
-            .await
-            .unwrap();
+        link.attach(KeyNetwork::Test, async {
+            Ok((Running::spawn(wallet), None))
+        })
+        .await
+        .unwrap();
         let (second, _answer, _log) = fake_wallet(None);
         let again = link
-            .attach(async { Ok((Running::spawn(second), None)) })
+            .attach(KeyNetwork::Test, async {
+                Ok((Running::spawn(second), None))
+            })
             .await;
         assert!(matches!(again, Err(BleError::Refused(_))));
     }
@@ -1038,7 +1051,9 @@ mod tests {
             let (wallet, _answer, _log) = fake_wallet(None);
             let link = WalletLink::new(found());
             let handed = link
-                .attach(async { Ok((Running::spawn(wallet), made.clone())) })
+                .attach(KeyNetwork::Test, async {
+                    Ok((Running::spawn(wallet), made.clone()))
+                })
                 .await;
             assert_eq!(handed, Ok(made));
         }
@@ -1048,12 +1063,16 @@ mod tests {
     async fn a_failed_connect_spends_the_link() {
         let link = WalletLink::new(found());
         let refused = link
-            .attach(async { Err(BleError::Timeout("timed out waiting for the Jade".into())) })
+            .attach(KeyNetwork::Test, async {
+                Err(BleError::Timeout("timed out waiting for the Jade".into()))
+            })
             .await;
         assert!(matches!(refused, Err(BleError::Timeout(_))));
         let (wallet, _answer, _log) = fake_wallet(None);
         let again = link
-            .attach(async { Ok((Running::spawn(wallet), None)) })
+            .attach(KeyNetwork::Test, async {
+                Ok((Running::spawn(wallet), None))
+            })
             .await;
         assert!(matches!(again, Err(BleError::Refused(_))));
         assert!(matches!(link.info().await, Err(BleError::Disconnected(_))));
@@ -1281,9 +1300,11 @@ mod tests {
     async fn link_to(device: Holding) -> (Arc<WalletLink>, Log) {
         let log = device.log.clone();
         let link = WalletLink::new(found());
-        link.attach(async { Ok((Running::spawn(device), None)) })
-            .await
-            .unwrap();
+        link.attach(KeyNetwork::Test, async {
+            Ok((Running::spawn(device), None))
+        })
+        .await
+        .unwrap();
         (link, log)
     }
 
@@ -1350,6 +1371,28 @@ mod tests {
                 "{refused:?}"
             );
         }
+        assert!(
+            logged(&log).is_empty(),
+            "the device was asked {:?}",
+            logged(&log)
+        );
+    }
+
+    // A link connected for testnet refuses a mainnet wallet before the device hears anything. The same seed makes a key
+    // on each network, so this Jade holds a key of the wallet, and its testnet session would show bc1 payments as tb1.
+    #[tokio::test]
+    async fn a_wallet_of_another_network_than_the_link_never_reaches_the_device() {
+        let descriptor = crate::script::tests::main_multisig(2, &[1, 2, 3]);
+        let wallet = Described::parse(&descriptor).unwrap();
+        let to = crate::spend::tests::script_of("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
+        let psbt = crate::spend::tests::payment_to(&wallet, to);
+        let txid = psbt.unsigned_tx.compute_txid().to_string();
+        let (link, log) = jade(soft_master(1), &Registry::default()).await;
+        let refused = sign(&link, &descriptor, &psbt.to_string(), &txid, &log).await;
+        assert!(
+            matches!(&refused, Err(BleError::Refused(text)) if text.contains("its keys are mainnet keys, and the wallet is on testnet4")),
+            "{refused:?}"
+        );
         assert!(
             logged(&log).is_empty(),
             "the device was asked {:?}",
@@ -1604,7 +1647,7 @@ mod tests {
     }
 
     // The export names what a Jade registers: nothing for a one-key wallet, and for a 2-of-3 its name, m and signers in
-    // the Jade's order, by fingerprint. Mainnet and a wallet of eight signers are refused.
+    // the Jade's order, by fingerprint. A wallet of the other network and a wallet of eight signers are refused.
     #[test]
     fn the_registration_export_names_what_a_jade_registers() {
         for &t in AddressType::ALL.iter() {
@@ -1637,6 +1680,25 @@ mod tests {
             jade_wallet_registration(multisig(2, &[1, 2, 3, 4, 5, 6, 7, 8]), KeyNetwork::Test),
             Err(MobileSignerError::InvalidPsbtJson(text)) if text.contains("seven")
         ));
+    }
+
+    // A mainnet wallet registers on the Jade as a mainnet wallet: the network is the wallet's, not a constant.
+    #[test]
+    fn a_mainnet_wallet_is_registered_as_a_mainnet_wallet() {
+        let wallet = crate::script::tests::main_multisig(2, &[1, 2, 3]);
+        let named = jade_wallet_registration(wallet.clone(), KeyNetwork::Main)
+            .unwrap()
+            .unwrap();
+        assert_eq!((named.threshold, named.signers.len()), (2, 3));
+        assert!(named.name.starts_with("mebit2of3-"), "{}", named.name);
+        let refused = jade_wallet_registration(wallet, KeyNetwork::Test);
+        assert!(matches!(
+            refused,
+            Err(MobileSignerError::InvalidPsbtJson(text)) if text.contains("mainnet keys")
+        ));
+        let parsed = Described::parse(&crate::script::tests::main_multisig(2, &[1, 2, 3])).unwrap();
+        let registration = jade_registration(&parsed).unwrap().unwrap();
+        assert_eq!(registration.threshold(), 2);
     }
 
     // The vendor clients check what a device signed, and the answer is read again here: one without the device's

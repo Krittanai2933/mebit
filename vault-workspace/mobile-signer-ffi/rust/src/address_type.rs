@@ -38,6 +38,11 @@ pub(crate) struct Spend {
     pub(crate) witness: Witness,
 }
 
+/// The BIP-44 coin type: 0 for Bitcoin, 1 for every test network.
+pub(crate) fn coin_type(network: Network) -> u32 {
+    u32::from(network != Network::Bitcoin)
+}
+
 impl AddressType {
     #[cfg(test)]
     pub(crate) const ALL: [AddressType; 4] = [
@@ -55,7 +60,7 @@ impl AddressType {
         network != Network::Bitcoin || self == Self::NativeSegwit
     }
 
-    /// The BIP-43 purpose. The coin type stays 1' on both networks.
+    /// The BIP-43 purpose.
     pub(crate) const fn purpose(self) -> u32 {
         match self {
             Self::Legacy => 44,
@@ -65,9 +70,9 @@ impl AddressType {
         }
     }
 
-    /// `m/{purpose}'/1'/0'`.
-    pub(crate) fn account_path(self) -> DerivationPath {
-        [self.purpose(), 1, 0]
+    /// `m/{purpose}'/{coin}'/0'`: coin type 0' on mainnet, 1' on every test network.
+    pub(crate) fn account_path(self, network: Network) -> DerivationPath {
+        [self.purpose(), coin_type(network), 0]
             .map(|index| ChildNumber::Hardened { index })
             .as_ref()
             .into()

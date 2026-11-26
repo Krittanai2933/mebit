@@ -63,6 +63,7 @@ import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.app.navigation.MovieRoute
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.NodeCheck
 import com.mebit.ffi.signer.NodeStatus
 import com.mebit.ffi.signer.chainCheckNode
@@ -85,6 +86,7 @@ internal fun checkLine(found: NodeCheck?): String = when (found) {
     null -> "เลือกตัวเลือกนี้ได้เมื่อทดสอบผ่าน"
     NodeCheck.Testnet4 -> "ผ่าน · เป็นเชน Testnet4"
     NodeCheck.OtherChain -> "ไม่ผ่าน · โหนดนี้ไม่ใช่เชน Testnet4"
+    NodeCheck.Mainnet -> "ผ่าน · เป็นเชน Mainnet"
     NodeCheck.BadUrl -> "ใช้ https:// เท่านั้น (http:// ได้เฉพาะที่อยู่ Tailscale)"
     is NodeCheck.Unreachable -> "ไม่ผ่าน · ต่อโหนดไม่ได้"
 }
@@ -107,7 +109,7 @@ fun SettingsScreen(
     var status by remember { mutableStateOf<NodeStatus?>(null) }
     LaunchedEffect(node.current) {
         status = null
-        status = withContext(Dispatchers.IO) { chainNodeStatus() }
+        status = withContext(Dispatchers.IO) { chainNodeStatus(KeyNetwork.TEST) }
     }
     MebitScreen(
         eyebrow = MovieRoute.Settings.eyebrow,
@@ -258,7 +260,7 @@ fun NodeScreen(
                 val asked = typed
                 testing = true
                 scope.launch {
-                    val result = withContext(Dispatchers.IO) { chainCheckNode(asked) }
+                    val result = withContext(Dispatchers.IO) { chainCheckNode(asked, KeyNetwork.TEST) }
                     found = result
                     tested = if (result == NodeCheck.Testnet4) asked else null
                     testing = false
