@@ -1963,6 +1963,63 @@ mod node_choice_tests {
         );
     }
 
+    /// How long a change of the host choice may take while a probe hangs. The probe never answers
+    /// until it is let go, so any bound tells waiting on it from not waiting.
+    const SWITCH_BOUND: Duration = Duration::from_millis(200);
+
+    /// Runs `change` on its own thread while a pick over blockstream.info alone, through `cache`, is
+    /// in its probe, then lets the probe answer `answer` (a body, or a failure). Returns how long
+    /// `change` took if it returned inside `SWITCH_BOUND`, and the pick's own result.
+    fn while_a_probe_hangs(
+        cache: &HostChoice,
+        answer: Result<&'static str, &'static str>,
+        change: impl FnOnce() + Send,
+    ) -> (Option<Duration>, Result<usize, MobileSignerError>) {
+        let (entered, in_probe) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let released = Mutex::new(released);
+        let probe = |_: &HostSpec| -> Result<String, GetError> {
+            entered.send(()).unwrap();
+            let _ = released.lock().unwrap().recv();
+            answer
+                .map(String::from)
+                .map_err(|why| GetError::Unreachable(why.into()))
+        };
+        let limits = Limits::default();
+        std::thread::scope(|s| {
+            let pick = s.spawn(|| {
+                let old = &PUBLIC_TESTNET4_HOSTS[..1];
+                pick_host(old, &probe, Instant::now(), cache, &[], &limits)
+            });
+            in_probe.recv().unwrap();
+            let (done, finished) = std::sync::mpsc::channel();
+            s.spawn(move || {
+                let start = Instant::now();
+                change();
+                let _ = done.send(start.elapsed());
+            });
+            let took = finished.recv_timeout(SWITCH_BOUND).ok();
+            drop(release);
+            (took, pick.join().unwrap())
+        })
+    }
+
+    // A tap on the node page ran `chain_use_node` on the main thread, where it waited out a 4-5 s
+    // probe of a host it was about to drop (ANR, 2026-11-26).
+    #[test]
+    fn a_switch_while_a_probe_hangs_returns_without_waiting_for_it() {
+        let list: HostList = Mutex::new(&[]);
+        let cache = HostChoice::default();
+        let (took, _) = while_a_probe_hangs(&cache, Ok(TESTNET4_GENESIS), || {
+            switch_hosts(&NodeChoice::MempoolSpace, &list, &cache).unwrap();
+        });
+        assert!(
+            took.is_some(),
+            "the switch waited on the probe: no return inside {SWITCH_BOUND:?}"
+        );
+        assert_eq!(list.lock().unwrap()[0].operator, Operator::MempoolSpace);
+    }
+
     #[test]
     fn a_switch_on_one_network_leaves_the_other_hosts_trust_and_limits_alone() {
         let main = net_of(KeyNetwork::Main);
