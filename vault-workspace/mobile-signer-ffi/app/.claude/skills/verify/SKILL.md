@@ -84,7 +84,7 @@ The API 37.2 image with 16 KB pages boots in 18 to 21 s on HVF (page size 16384,
 
 ## Doctor
 
-`verify.sh doctor` is read-only and returns 0 when everything it checks is fine. Run it first when anything looks off. It checks the tools, then for an active run:
+`verify.sh doctor` is read-only and returns 0 when everything it checks is fine. Run it first when anything looks off. It checks the tools, and that the last built APK packs the same Rust library as `androidApp/jniLibs`. The Toolchain does not count `jniLibs` as an input, so a build after a hand-copied `.so` keeps the old one, and the app then runs old Rust without any error. `scripts/ffi.sh` deletes the packaged APK each time it changes a copy. Then, for an active run:
 
 - the emulator process is the one this skill started, and it owns the port
 - the emulator answers `adb shell` within 8 s. A frozen emulator does not, and `doctor` then reports that one line and skips the checks that need the device, so it takes about 10 s instead of minutes

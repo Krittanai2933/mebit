@@ -82,6 +82,17 @@ ANDROID_HOME=$T/sdk "$V" stop > "$T/stop2.txt" 2>&1; rc=$?
 check "stop succeeds once the process is gone" "$rc" 0
 check "stop removes the state file then" "$([ -f "$APP/build/verify/android.env" ] && echo kept || echo removed)" removed
 
+# doctor compares the built APK's Rust library with androidApp/jniLibs, because a build after a hand-copied .so keeps the old one.
+mkdir -p "$APP/build/tasks/_androidApp_buildAndroidDebug" "$APP/androidApp/jniLibs/x86_64" "$T/apk/lib/x86_64"
+echo old > "$T/apk/lib/x86_64/libmobile_signer_ffi.so"
+(cd "$T/apk" && zip -qr "$APP/build/tasks/_androidApp_buildAndroidDebug/gradle-project-debug.apk" lib)
+echo new > "$APP/androidApp/jniLibs/x86_64/libmobile_signer_ffi.so"
+ANDROID_HOME=$T/sdk "$V" doctor > "$T/doctor-libs.txt" 2>&1
+check "doctor flags an APK that packs a different Rust library" "$(grep -c '^FAIL  the built APK packs a different Rust library than androidApp/jniLibs (x86_64)' "$T/doctor-libs.txt")" 1
+echo old > "$APP/androidApp/jniLibs/x86_64/libmobile_signer_ffi.so"
+ANDROID_HOME=$T/sdk "$V" doctor > "$T/doctor-libs.txt" 2>&1
+check "doctor passes an APK that packs the jniLibs library" "$(grep -c '^ok    the built APK packs the same Rust libraries as androidApp/jniLibs' "$T/doctor-libs.txt")" 1
+
 # A frozen emulator keeps its adb transport listed, and every adb command then blocks. doctor, see and stop
 # must answer in seconds, say that the emulator does not answer, and not claim the app is missing.
 mkdir -p "$T/sdk-hung/platform-tools" "$T/sdk-hung/emulator"
