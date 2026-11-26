@@ -1,5 +1,6 @@
 package com.mebit.app.data
 
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.WalletFileFormat
 import com.mebit.ffi.signer.WalletFileRead
 import com.mebit.ffi.signer.WalletImport
@@ -46,7 +47,7 @@ class WalletImportTextTest {
 
     @Test
     fun theReviewNamesTheWalletAndTicksEveryCheck() {
-        val review = importReview(wallet(), "Family vault", emptyList())
+        val review = importReview(wallet(), "Family vault", emptyList(), KeyNetwork.TEST)
         assertEquals("Family vault · 2-of-3", review.title)
         assertEquals("Native SegWit · testnet · ต้องเซ็น 2 จาก 3 กุญแจ", review.sub)
         assertEquals(
@@ -58,15 +59,22 @@ class WalletImportTextTest {
     }
 
     @Test
+    fun theMainnetReviewChangesOnlyTheNetworkWord() {
+        val review = importReview(wallet(), "Family vault", emptyList(), KeyNetwork.MAIN)
+        assertEquals("Native SegWit · mainnet · ต้องเซ็น 2 จาก 3 กุญแจ", review.sub)
+        assertEquals("เครือข่าย mainnet ตรงกับแอป", review.rows[1].text)
+    }
+
+    @Test
     fun aDescriptorFileIsReadAsADescriptor() {
-        assertEquals("อ่าน descriptor ได้", importReview(wallet(WalletFileFormat.DESCRIPTOR), "x", emptyList()).rows.first().text)
-        assertEquals("อ่านไฟล์ BSMS 1.0 ได้", importReview(wallet(WalletFileFormat.APP_BSMS), "x", emptyList()).rows.first().text)
+        assertEquals("อ่าน descriptor ได้", importReview(wallet(WalletFileFormat.DESCRIPTOR), "x", emptyList(), KeyNetwork.TEST).rows.first().text)
+        assertEquals("อ่านไฟล์ BSMS 1.0 ได้", importReview(wallet(WalletFileFormat.APP_BSMS), "x", emptyList(), KeyNetwork.TEST).rows.first().text)
     }
 
     @Test
     fun onlyAKeyOfThisPhoneWithTheSameXpubIsThisPhonesKey() {
         val phone = saved("p", KeySourceLabel.ThisDevice, 2)
-        val row = { keyring: List<SavedKey> -> importReview(wallet(), "x", keyring).rows.last() }
+        val row = { keyring: List<SavedKey> -> importReview(wallet(), "x", keyring, KeyNetwork.TEST).rows.last() }
         assertEquals(ReviewRow("มีกุญแจของเครื่องนี้ · aaaa 0002", true, "import_row_mine"), row(listOf(phone)))
         assertEquals(false, row(listOf(saved("p", KeySourceLabel.ThisDevice, 2, xpub = "other"))).ticked, "same fingerprint, other xpub")
         assertEquals(false, row(listOf(saved("j", KeySourceLabel.Jade, 2))).ticked, "a device key is not this phone")
@@ -74,13 +82,22 @@ class WalletImportTextTest {
 
     @Test
     fun everyRefusalHasItsWords() {
-        assertNull(problemOf(WalletFileRead.Read(wallet())))
-        assertEquals(ImportProblem("เครือข่ายไม่ตรงกัน", "Wallet นี้อยู่บนเครือข่าย mainnet (xpub)\nแต่แอปนี้ใช้ testnet (tpub) เท่านั้น"), problemOf(WalletFileRead.WrongNetwork))
-        assertEquals(ImportProblem("ที่อยู่แรกไม่ตรงกับกุญแจ", "ไฟล์นี้อาจถูกแก้ไข mebit จึงไม่นำเข้า"), problemOf(WalletFileRead.AddressMismatch("a", "b")))
-        assertEquals(ImportProblem("อ่านไฟล์นี้ไม่ได้", "ต้องเป็นไฟล์ BSMS 1.0 หรือ descriptor"), problemOf(WalletFileRead.Unreadable("why")))
+        val test = KeyNetwork.TEST
+        assertNull(problemOf(WalletFileRead.Read(wallet()), test))
+        // 3.9.4's text, which replaced the one adapted from open item 110 (3).
+        assertEquals(
+            ImportProblem("เครือข่ายไม่ตรงกัน", "Wallet นี้อยู่บนเครือข่าย mainnet (xpub)\nแต่แอปนี้ตั้งไว้ที่ testnet (tpub)\nโปรดเปลี่ยนเครือข่ายในหน้าตั้งค่า แล้วลองใหม่"),
+            problemOf(WalletFileRead.WrongNetwork, test),
+        )
+        assertEquals(
+            ImportProblem("เครือข่ายไม่ตรงกัน", "Wallet นี้อยู่บนเครือข่าย testnet (tpub)\nแต่แอปนี้ตั้งไว้ที่ mainnet (xpub)\nโปรดเปลี่ยนเครือข่ายในหน้าตั้งค่า แล้วลองใหม่"),
+            problemOf(WalletFileRead.WrongNetwork, KeyNetwork.MAIN),
+        )
+        assertEquals(ImportProblem("ที่อยู่แรกไม่ตรงกับกุญแจ", "ไฟล์นี้อาจถูกแก้ไข mebit จึงไม่นำเข้า"), problemOf(WalletFileRead.AddressMismatch("a", "b"), test))
+        assertEquals(ImportProblem("อ่านไฟล์นี้ไม่ได้", "ต้องเป็นไฟล์ BSMS 1.0 หรือ descriptor"), problemOf(WalletFileRead.Unreadable("why"), test))
         assertEquals(
             ImportProblem("รูปแบบนี้ยังไม่รองรับ", "รองรับเฉพาะ wsh(sortedmulti(…))\nไฟล์นี้เป็น tr(…)"),
-            problemOf(WalletFileRead.Unsupported("tr")),
+            problemOf(WalletFileRead.Unsupported("tr"), test),
         )
     }
 

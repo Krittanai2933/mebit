@@ -419,7 +419,8 @@ mod tests {
         let error = pinned.check_usable(Network::Bitcoin).unwrap_err();
         let refused = BleError::from(JadeBleError::Jade(error));
         assert!(
-            matches!(&refused, BleError::Refused(text) if text.contains("pinned to test networks")),
+            // The app tells this refusal from a locked Jade by its "Jade: network mismatch" prefix (isJadeOtherNetwork in VaultSend.kt).
+            matches!(&refused, BleError::Refused(text) if text.starts_with("Jade: network mismatch") && text.contains("pinned to test networks")),
             "{refused:?}"
         );
     }

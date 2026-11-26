@@ -1,5 +1,6 @@
 package com.mebit.app.data
 
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.WalletFileFormat
 import com.mebit.ffi.signer.WalletFileRead
 import com.mebit.ffi.signer.WalletImport
@@ -46,20 +47,20 @@ data class ReviewRow(val text: String, val ticked: Boolean, val tag: String)
 data class ImportReview(val title: String, val sub: String, val rows: List<ReviewRow>, val firstAddress: String)
 
 /** Pure. Penpot 3.9.3's card and rows for [wallet] named [name]. The row of this phone's key never blocks: it is a tick or plain information. */
-internal fun importReview(wallet: WalletImport, name: String, keyring: List<SavedKey>): ImportReview {
+internal fun importReview(wallet: WalletImport, name: String, keyring: List<SavedKey>, network: KeyNetwork): ImportReview {
     val shape = wallet.shape
     val m = shape.needed.toInt()
     val n = shape.keys.size
     val mine = keyringMatches(wallet, keyring.filter { it.source == KeySourceLabel.ThisDevice }).firstNotNullOfOrNull { it }
     val rows = listOf(
         ReviewRow(if (wallet.format == WalletFileFormat.DESCRIPTOR) "อ่าน descriptor ได้" else "อ่านไฟล์ BSMS 1.0 ได้", true, "import_row_read"),
-        ReviewRow("เครือข่าย testnet ตรงกับแอป", true, "import_row_network"),
+        ReviewRow("เครือข่าย ${networkWord(network)} ตรงกับแอป", true, "import_row_network"),
         ReviewRow("รูปแบบ wsh(sortedmulti) · $m-of-$n", true, "import_row_shape"),
         ReviewRow("กุญแจ $n ดอก ไม่ซ้ำกัน", true, "import_row_keys"),
         if (mine != null) ReviewRow("มีกุญแจของเครื่องนี้ · ${fingerprintGroups(mine.fingerprint)}", true, "import_row_mine")
         else ReviewRow("ไม่มีกุญแจของเครื่องนี้", false, "import_row_mine"),
     )
-    return ImportReview("$name · $m-of-$n", "Native SegWit · testnet · ต้องเซ็น $m จาก $n กุญแจ", rows, addressGroups(shape.firstAddress))
+    return ImportReview("$name · $m-of-$n", "Native SegWit · ${networkWord(network)} · ต้องเซ็น $m จาก $n กุญแจ", rows, addressGroups(shape.firstAddress))
 }
 
 /** What 3.9.4 and 3.9.5 and their two siblings say: a [title] and a [body] of lines. */
@@ -67,10 +68,19 @@ data class ImportProblem(val title: String, val body: String)
 
 internal val UNREADABLE_FILE = ImportProblem("อ่านไฟล์นี้ไม่ได้", "ต้องเป็นไฟล์ BSMS 1.0 หรือ descriptor")
 
-/** Pure. Null for a file that was read, else the dialog's words. */
-internal fun problemOf(read: WalletFileRead): ImportProblem? = when (read) {
+/** The prefix a several-key wallet's keys have on [network]. */
+private fun keyPrefix(network: KeyNetwork) = if (network == KeyNetwork.MAIN) "xpub" else "tpub"
+
+/** Pure. Null for a file that was read, else the dialog's words, for an app set to [network]. 3.9.4 shows the testnet side; the mainnet side mirrors it. */
+internal fun problemOf(read: WalletFileRead, network: KeyNetwork): ImportProblem? = when (read) {
     is WalletFileRead.Read -> null
-    WalletFileRead.WrongNetwork -> ImportProblem("เครือข่ายไม่ตรงกัน", "Wallet นี้อยู่บนเครือข่าย mainnet (xpub)\nแต่แอปนี้ใช้ testnet (tpub) เท่านั้น")
+    WalletFileRead.WrongNetwork -> {
+        val other = if (network == KeyNetwork.MAIN) KeyNetwork.TEST else KeyNetwork.MAIN
+        ImportProblem(
+            "เครือข่ายไม่ตรงกัน",
+            "Wallet นี้อยู่บนเครือข่าย ${networkWord(other)} (${keyPrefix(other)})\nแต่แอปนี้ตั้งไว้ที่ ${networkWord(network)} (${keyPrefix(network)})\nโปรดเปลี่ยนเครือข่ายในหน้าตั้งค่า แล้วลองใหม่",
+        )
+    }
     is WalletFileRead.Unsupported -> ImportProblem("รูปแบบนี้ยังไม่รองรับ", "รองรับเฉพาะ wsh(sortedmulti(…))\n${unsupportedLine(read.found)}")
     is WalletFileRead.AddressMismatch -> ImportProblem("ที่อยู่แรกไม่ตรงกับกุญแจ", "ไฟล์นี้อาจถูกแก้ไข mebit จึงไม่นำเข้า")
     is WalletFileRead.Unreadable -> UNREADABLE_FILE

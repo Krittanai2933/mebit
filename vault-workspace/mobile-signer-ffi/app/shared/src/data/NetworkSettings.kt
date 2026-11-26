@@ -29,8 +29,45 @@ class NetworkSettings internal constructor(private val file: PlainFile?) {
     }
 }
 
+/** "testnet" or "mainnet": the word the app's lower-case lines use. */
+internal fun networkWord(network: KeyNetwork): String = if (network == KeyNetwork.MAIN) "mainnet" else "testnet"
+
+/** "Mainnet" or "Testnet4": the chain's name as the chip, the switch and the node texts print it. */
+internal fun chainName(network: KeyNetwork): String = if (network == KeyNetwork.MAIN) "Mainnet" else "Testnet4"
+
+/** The text of Welcome's chip, Penpot 1.1.1 and 1.1.2. */
+internal fun networkChip(network: KeyNetwork): String = chainName(network) + " ›"
+
 /**
  * The network whose storage the gate opens: [chosen], unless this build cannot read that network's records. Such a build would
  * find every record Broken, and the recovery screen's one button erases them, so it stays on testnet and never opens the other.
  */
 internal fun openableNetwork(chosen: KeyNetwork): KeyNetwork = if (chosen in SavedWallet.NETWORKS) chosen else KeyNetwork.TEST
+
+/** What a tap on one side of 7.1's network switch does. */
+enum class NetworkTap { Stay, Refuse, Ask, Switch }
+
+/**
+ * Pure. The picked side does nothing. A switch while [refused] shows the reason. Mainnet asks first (7.1.1), and Testnet4 is
+ * taken straight away.
+ */
+fun networkTap(current: KeyNetwork, tapped: KeyNetwork, refused: Boolean): NetworkTap = when {
+    tapped == current -> NetworkTap.Stay
+    refused -> NetworkTap.Refuse
+    tapped == KeyNetwork.MAIN -> NetworkTap.Ask
+    else -> NetworkTap.Switch
+}
+
+/** What keeps words only in this process's memory, as far as a switch cares: the phone cannot hold a wallet, or some other cause. */
+enum class SwitchHold { Clear, PhoneCannotHold, Unsaved }
+
+/**
+ * Pure. Why the network cannot change now, or null. A switch drops every wallet's words from memory, so it waits while some are
+ * only in memory, a wallet's last save failed or a save is still owed ([hold], [Wallets.switchHold]), or the book's last save failed. Only a phone that
+ * cannot hold a wallet is told to set a screen lock. Awaiting design review, no board.
+ */
+internal fun networkRefusal(hold: SwitchHold, book: VaultsHealth): String? = when {
+    hold == SwitchHold.PhoneCannotHold -> "เครื่องนี้ยังบันทึกกระเป๋าไม่ได้ ตั้งรหัสล็อกหน้าจอก่อน จึงจะเปลี่ยนเครือข่ายได้"
+    hold == SwitchHold.Unsaved || book == VaultsHealth.SaveFailed -> "บันทึก Wallet และกุญแจล่าสุดไม่สำเร็จ ปิดแล้วเปิดแอปใหม่ก่อนเปลี่ยนเครือข่าย"
+    else -> null
+}

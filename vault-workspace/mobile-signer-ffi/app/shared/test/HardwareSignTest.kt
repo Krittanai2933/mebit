@@ -1,8 +1,11 @@
 package com.mebit.app.feature.send
 
 import com.mebit.app.data.AnswerRefused
+import com.mebit.app.data.NOT_READY_NOTE
+import com.mebit.app.data.jadeOtherNetworkLine
 import com.mebit.app.data.SeveralDevices
 import com.mebit.ffi.signer.BleException
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.MobileSignerException
 import com.mebit.ffi.signer.SpendOutput
 import com.mebit.ffi.signer.SpendReview
@@ -36,6 +39,28 @@ class HardwareSignTest {
             signStepLabels("Jade", registers = true),
         )
         assertEquals(3, signStepLabels("Trezor", registers = false).size)
+    }
+
+    @Test
+    fun aJadePinnedToTheOtherNetworkIsNamedAtConnectingOnly() {
+        // The text vault-core gives a Jade whose first unlock pinned the other network (rust vendors.rs pins the prefix).
+        val pinned = BleException.Refused("Jade: network mismatch: this Jade's wallet is pinned to main networks; asked for testnet4")
+        assertEquals(DeviceFailure.OtherNetwork, deviceFailure(pinned, SignStep.Connecting))
+        assertEquals(DeviceFailure.RegistrationDeclined, deviceFailure(pinned, SignStep.Registering), "later steps keep their meaning")
+        assertEquals(DeviceFailure.NotReady, deviceFailure(BleException.Refused("the Jade is locked"), SignStep.Connecting), "a plain refusal stays not ready")
+        assertEquals(DeviceFailure.NotReady, deviceFailure(BleException.Refused("Trezor: network mismatch: coin"), SignStep.Connecting), "a Trezor's mismatch is not the Jade's")
+        assertEquals(DeviceFailure.Lost, deviceFailure(BleException.Timeout("Jade: network mismatch"), SignStep.Connecting), "only a refusal counts")
+        val text = deviceFailureText(DeviceFailure.OtherNetwork, "Jade")
+        assertEquals("Jade ใช้กับเครือข่ายนี้ไม่ได้", text.title)
+        assertEquals("Jade เครื่องนี้ผูกกับอีกเครือข่ายตั้งแต่ปลดล็อกครั้งแรก", text.subtitle)
+        assertEquals("ไม่ได้", text.pill)
+        assertEquals(NOT_READY_NOTE, text.line)
+    }
+
+    @Test
+    fun addingAJadeOfTheOtherNetworkSaysWhichNetworkItCannotUse() {
+        assertEquals("Jade เครื่องนี้ผูกกับ Mainnet ตั้งแต่ปลดล็อกครั้งแรก จึงใช้กับ Testnet4 ไม่ได้", jadeOtherNetworkLine(KeyNetwork.TEST))
+        assertEquals("Jade เครื่องนี้ผูกกับเครือข่ายทดสอบตั้งแต่ปลดล็อกครั้งแรก จึงใช้กับ Mainnet ไม่ได้", jadeOtherNetworkLine(KeyNetwork.MAIN))
     }
 
     @Test

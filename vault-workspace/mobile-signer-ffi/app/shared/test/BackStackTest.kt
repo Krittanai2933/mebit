@@ -262,4 +262,12 @@ class BackStackTest {
         }
         assertEquals(p2, stopFor(created, MovieRoute.KeyCreated, p2).place, "a place given wins")
     }
+
+    @Test
+    fun noBarOnlyOverWelcome() {
+        assertEquals(false, barShown(MovieRoute.Welcome), "Welcome, then Settings or its node screen")
+        for (bottom in listOf(MovieRoute.Keyring, MovieRoute.VaultList)) assertEquals(true, barShown(bottom), "${bottom.name} at the bottom")
+        val hardwareFirst = stackAfterAdd(stops(p1, MovieRoute.Welcome, MovieRoute.KeySource, MovieRoute.HardwareWallet, MovieRoute.VerifyKey), MovieRoute.Keyring)
+        assertEquals(true, barShown(hardwareFirst.first().route), "a hardware-first first run lands on the Keyring with its bar")
+    }
 }

@@ -180,7 +180,7 @@ private val singleKeyPurpose = Regex("^m/(44|49|84|86)'(/|$)")
 /**
  * Why a pasted key is not a key of a several-key wallet, or null when it is one. On testnet that key is a tpub at m/48'/1'/N'/2',
  * on mainnet an xpub at m/48'/0'/N'/2', BIP48's Native SegWit (P2WSH) script type, the rule script.rs holds such a key to, so the
- * paste refuses what Choose Keys could never make into a wallet. The mainnet lines mirror the testnet ones and are drafts for the wording phase.
+ * paste refuses what Choose Keys could never make into a wallet. The mainnet lines mirror the testnet ones.
  */
 private fun bip48Refusal(path: String, xpub: String, network: KeyNetwork): String? {
     val prefix = xpub.take(4)

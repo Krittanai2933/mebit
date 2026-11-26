@@ -29,6 +29,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.ImportReview
 import com.mebit.app.data.importEyebrow
+import com.mebit.app.data.networkWord
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.app.feature.send.ConfirmSheet
 import com.mebit.app.rememberCopier
 import com.mebit.app.ui.components.MebitScreen
@@ -54,11 +56,11 @@ internal fun AddWalletSheet(onNew: () -> Unit, onImport: () -> Unit, onCancel: (
 
 /** Penpot 3.9.1: pick a file, or scan a QR (Penpot 3.9.2). */
 @Composable
-internal fun ImportWalletSheet(onPick: () -> Unit, onScan: () -> Unit, onCancel: () -> Unit) {
+internal fun ImportWalletSheet(network: KeyNetwork, onPick: () -> Unit, onScan: () -> Unit, onCancel: () -> Unit) {
     ConfirmSheet(
         tag = "dialog_import_wallet",
         title = "นำเข้า Wallet หลายกุญแจ",
-        body = "ตรวจไฟล์ก่อนสร้าง · รองรับ wsh(sortedmulti) บน testnet",
+        body = "ตรวจไฟล์ก่อนสร้าง · รองรับ wsh(sortedmulti) บน ${networkWord(network)}",
         onCancel = onCancel,
     ) {
         SheetRow("เลือกไฟล์ BSMS/Descriptor", "ไฟล์ .bsms หรือไฟล์ descriptor จากแอปนี้หรือแอปอื่น", "cta_import_pick", onClick = onPick)

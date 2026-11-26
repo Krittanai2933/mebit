@@ -145,7 +145,7 @@ fun ImportSeedScreen(
 
     fun restore() {
         session.restoreFromWords(draft.words(), draft.passphrase)
-        // A passphrase import goes on staged: Address Type shows its fingerprint, the only check of a mistyped passphrase.
+        // A passphrase import, or mainnet words that are this phone's testnet words, goes on staged: Address Type shows its fingerprint (the only check of a mistyped passphrase) or the warning.
         if (session.lastError == null) onRestored() // else shown under the grid
     }
 
@@ -614,6 +614,17 @@ internal val ImportFingerprintCopy = FingerprintCopy(
     body = "เทียบกับกระเป๋าเดิมของคุณ (ถ้ามีค่านี้) ถ้าไม่ตรง แปลว่า passphrase หรือ 24 คำยังไม่ถูก",
     ok = "ตรงกัน · ไปต่อ",
     reject = "ไม่ตรง · แก้ไข",
+)
+
+/**
+ * The sheet for words that are also this phone's testnet key, shown on mainnet in place of [ImportFingerprintCopy]. Penpot proposal
+ * 1B.4.4.1 "Import Seed · same words as testnet · mainnet": the layout of 1B.4.4 with this copy. Awaiting design review.
+ */
+internal val TestnetWordsCopy = FingerprintCopy(
+    title = "คำชุดนี้เคยใช้กับเงินทดสอบในเครื่องนี้",
+    body = "คำชุดนี้เคยใช้กับกระเป๋า Testnet ในเครื่องนี้ ใครที่เคยเห็นคำชุดนี้จะเอาเงินจริงในกระเป๋านี้ไปได้ ถ้าจะเก็บเงินจริง ให้สร้างกุญแจใหม่แทน",
+    ok = "เข้าใจแล้ว · ใช้คำชุดนี้ต่อ",
+    reject = "ไม่ใช้ · กลับไปแก้",
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

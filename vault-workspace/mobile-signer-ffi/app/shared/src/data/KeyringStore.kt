@@ -267,7 +267,7 @@ class KeyringStore internal constructor(
             pending = null
             return EnrollResult.Failed
         } catch (e: Exception) {
-            lastError = e.message ?: "เชื่อมต่อไม่สำเร็จ"
+            lastError = if (isJadeOtherNetwork(e)) jadeOtherNetworkLine(network) else e.message ?: "เชื่อมต่อไม่สำเร็จ"
             pending = null
             return EnrollResult.Failed
         } finally {

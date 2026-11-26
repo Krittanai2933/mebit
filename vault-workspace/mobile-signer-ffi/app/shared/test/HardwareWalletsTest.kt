@@ -59,6 +59,34 @@ class HardwareWalletsTest {
         assertEquals(main.receive0, hotReceiveAddress(PUBLIC_WORDS_12, "", KeyNetwork.MAIN, AddressType.NATIVE_SEGWIT, 0u))
     }
 
+    // Native: the core reads the descriptor of the key the fake device gives on mainnet.
+    @Test
+    fun aMainnetJadeWalletIsNativeSegwitAtCoinType0(): Unit = runBlocking {
+        val fake = FakeDevice()
+        val main = SavedVaults(null, KeyNetwork.MAIN, owners = { null })
+        val hardware = HardwareWallets(main, openLink = fake::open, scan = fake::scan)
+        val link = HardwareLink(null, KeyNetwork.MAIN, fake::open)
+        val jade = fake.scan(WalletKind.JADE).single()
+        val native = link.use(jade, oneKeyPath(AddressType.NATIVE_SEGWIT, KeyNetwork.MAIN), expect = null, NO_CODES) { it.key }
+        assertEquals("m/84'/0'/0'", native.derivationPath)
+        val wallet = assertIs<HardwareAdd.Added>(hardware.add(WalletKind.JADE, AddressType.NATIVE_SEGWIT, native, emptyList())).wallet
+        assertEquals("bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu", wallet.address)
+        assertFailsWith<BleException.Refused>("the fake device holds no mainnet Taproot key") { link.use(jade, oneKeyPath(AddressType.TAPROOT, KeyNetwork.MAIN), expect = null, NO_CODES) { it.key } }
+        assertFailsWith<BleException.Refused>("nor one at coin type 1'") { link.use(jade, oneKeyPath(AddressType.NATIVE_SEGWIT, KeyNetwork.TEST), expect = null, NO_CODES) { it.key } }
+        val atTestnet = native.copy(derivationPath = oneKeyPath(AddressType.NATIVE_SEGWIT, KeyNetwork.TEST))
+        assertIs<HardwareAdd.Unreadable>(hardware.add(WalletKind.JADE, AddressType.NATIVE_SEGWIT, atTestnet, emptyList()), "a key read at m/84'/1'/0' is not mainnet's")
+        assertEquals(listOf(wallet), main.current.hardware)
+    }
+
+    // Native: the real core refuses mainnet Taproot, which the fake device never reaches.
+    @Test
+    fun theCoreRefusesAMainnetTaprootKey(): Unit = runBlocking {
+        val main = SavedVaults(null, KeyNetwork.MAIN, owners = { null })
+        val key = HwAccountKey("xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ", PUBLIC_FINGERPRINT, "m/86'/0'/0'")
+        assertIs<HardwareAdd.Unreadable>(HardwareWallets(main).add(WalletKind.JADE, AddressType.TAPROOT, key, emptyList()))
+        assertEquals(emptyList(), main.current.hardware)
+    }
+
     @Test
     fun aWalletTakesTheNetworkOfItsBookAndAKeyReadAtTheOtherCoinTypeIsRefused(): Unit = runBlocking {
         val main = SavedVaults(null, KeyNetwork.MAIN, owners = { null })

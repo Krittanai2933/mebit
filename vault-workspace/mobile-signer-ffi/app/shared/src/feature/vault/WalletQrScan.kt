@@ -96,7 +96,7 @@ internal fun WalletQrScanSheet(network: KeyNetwork, onWallet: (WalletImport) -> 
             done = true
             onWallet(read.wallet)
         } else {
-            problem = read?.let(::problemOf) ?: UNREADABLE_FILE
+            problem = read?.let { problemOf(it, network) } ?: UNREADABLE_FILE
         }
     }
     val feed = { text: String ->

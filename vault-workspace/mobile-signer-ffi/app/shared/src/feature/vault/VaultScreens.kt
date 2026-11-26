@@ -304,6 +304,7 @@ fun VaultListScreen(
     }
     if (importing) {
         ImportWalletSheet(
+            network = vaults.network,
             onPick = {
                 importing = false
                 picker.pick()

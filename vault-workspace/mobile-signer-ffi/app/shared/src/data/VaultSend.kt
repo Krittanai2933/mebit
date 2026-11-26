@@ -9,6 +9,7 @@ import com.mebit.app.data.SingleSigWallet.Unsettled
 import com.mebit.app.sha256
 import com.mebit.ffi.signer.FoundWallet
 import com.mebit.ffi.signer.HotScan
+import com.mebit.ffi.signer.BleException
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.MobileSignerException
 import com.mebit.ffi.signer.PairingCodes
@@ -513,6 +514,17 @@ internal const val SEVERAL_DEVICES_NOTE = "ยังไม่มีอะไร�
 internal fun notReadyLine(word: String): String =
     if (word == "Jade") "ปลดล็อก Jade ด้วย PIN บนตัวเครื่อง และให้มือถือต่ออินเทอร์เน็ต แล้วลองใหม่" else "ปลดล็อก $word บนตัวเครื่อง แล้วลองใหม่"
 internal const val NOT_READY_NOTE = "ไม่มีลายเซ็นถูกบันทึก · เงินยังไม่ถูกส่ง"
+
+/**
+ * Whether [error] is a Jade saying its wallet is pinned to the other network, which its first unlock sets for good. vault-core words it
+ * "Jade: network mismatch: …" (`jade.rs`), and a Trezor's mismatch says "Trezor: …", so this matches the Jade's prefix only.
+ */
+internal fun isJadeOtherNetwork(error: Throwable): Boolean = error is BleException.Refused && error.message.orEmpty().startsWith("Jade: network mismatch")
+
+/** Adding a key from a Jade that is pinned to the other network. Awaiting design review, no board. */
+internal fun jadeOtherNetworkLine(network: KeyNetwork): String =
+    if (network == KeyNetwork.MAIN) "Jade เครื่องนี้ผูกกับเครือข่ายทดสอบตั้งแต่ปลดล็อกครั้งแรก จึงใช้กับ Mainnet ไม่ได้"
+    else "Jade เครื่องนี้ผูกกับ Mainnet ตั้งแต่ปลดล็อกครั้งแรก จึงใช้กับ Testnet4 ไม่ได้"
 
 /** The device answered, and mebit refused the answer: not the device's refusal. */
 internal const val ANSWER_REFUSED_LINE = "ลายเซ็นที่อุปกรณ์ส่งกลับมาไม่ตรงกับรายการที่คุณเห็น mebit จึงไม่นับ"

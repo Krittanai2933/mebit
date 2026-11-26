@@ -72,8 +72,8 @@ private fun recordOf(n: Int, addressTypeConfirmed: Boolean = true, backupConfirm
     testRecord(words = words(n), fingerprint = check(words(n)), backupConfirmed = backupConfirmed, addressTypeConfirmed = addressTypeConfirmed)
 
 /** What the phone holds and what the fakes around [Wallets] saw. [launch] starts a new process over it. */
-private class ShelfPhone {
-    val shelf = FakeShelf()
+private class ShelfPhone(network: KeyNetwork = KeyNetwork.TEST) {
+    val shelf = FakeShelf(network = network)
     val guards = FakePlainFile()
     val last = FakePlainFile()
     var booksForgotten = 0
@@ -130,10 +130,11 @@ private class ShelfPhone {
     fun place(p: Place): FakeSecureStore = shelf.places.getValue(p)
 
     /** The [Wallets] of a new process. */
-    fun launch(lastFile: PlainFile = last): Wallets = Wallets(
+    fun launch(lastFile: PlainFile = last, testnetKeys: PlainFile? = null): Wallets = Wallets(
         shelf,
         PendingPayments(guards),
         lastFile,
+        testnetKeys = testnetKeys,
         forgetBook = { booksForgotten++ },
         forgetScans = { scansForgotten++ },
         newKey = { _, _, _ -> key(nextWords, "") },
@@ -288,6 +289,67 @@ class WalletsTest {
         assertNull(Place.parse(0))
         assertNull(Place.parse(Place.COUNT + 1))
         assertEquals(Place.COUNT, Place.all.size)
+    }
+
+    @Test
+    fun onlyTestnetListsItsKeysAndOnlyMainnetAsks(): Unit = runBlocking {
+        val list = FakePlainFile()
+        val testnet = ShelfPhone().saved(P1, 1).saved(P2, 2).launch(testnetKeys = list)
+        assertIs<Every.Open>(testnet.unlockEvery("test"))
+        testnet.noteTestnetKeys()
+        assertEquals(listOf(check(words(1)), check(words(2))), list.text!!.lines(), "each listed wallet's fingerprint, one a line")
+
+        val writes = list.writes
+        testnet.noteTestnetKeys()
+        assertEquals(writes, list.writes, "nothing changed, so nothing is written")
+        list.unreadable = true
+        testnet.noteTestnetKeys()
+        assertEquals(writes + 1, list.writes, "an unreadable file counts as empty, so the list is written")
+        list.unreadable = false
+
+        val earlier = FakePlainFile()
+        val replaced = ShelfPhone().saved(P1, testRecord(words = words(1), fingerprint = check(words(1)), backupConfirmed = true, earlierFingerprints = listOf("aaaa1111"))).saved(P2, 2).launch(testnetKeys = earlier)
+        assertIs<Every.Open>(replaced.unlockEvery("test"))
+        assertEquals(listOf(check(words(1)), "aaaa1111", check(words(2))), replaced.testnetKeyList(), "earlier fingerprints are listed")
+        replaced.noteTestnetKeys()
+        assertEquals(replaced.testnetKeyList(), earlier.text!!.lines())
+        val book = book(FakeVaultsStorage(), replaced).apply { sync() }
+        book.edit { it.copy(keys = listOf(HARDWARE)) }
+        assertEquals(WalletRemoval.Removed, replaced.remove(replaced.at(P2), book, "test") {})
+        replaced.noteTestnetKeys()
+        assertEquals(listOf(check(words(1)), "aaaa1111", check(words(2))), earlier.text!!.lines(), "a removed wallet's fingerprint stays in the file")
+        val forgotten = ShelfPhone().launch(testnetKeys = earlier)
+        val before = earlier.writes
+        forgotten.noteTestnetKeys()
+        assertEquals(before, earlier.writes, "a forget lists nothing and keeps every entry")
+        assertEquals(3, earlier.text!!.lines().size)
+
+        val unsure = FakePlainFile()
+        val damaged = ShelfPhone().saved(P1, 1).saved(P2, 2)
+        damaged.place(P2).read = ReadResult.Unavailable(Why.TryLater)
+        val partial = damaged.launch(testnetKeys = unsure)
+        assertIs<Every.Open>(partial.unlockEvery("test"))
+        partial.noteTestnetKeys()
+        assertEquals(0, unsure.writes, "a place that may still open could hold a key the list would miss")
+
+        val main = ShelfPhone(KeyNetwork.MAIN).launch(testnetKeys = list)
+        main.noteTestnetKeys()
+        assertEquals(listOf(check(words(1)), check(words(2))), list.text!!.lines(), "mainnet never writes the list")
+        val session = main.at(P1).session
+        session.restoreFromWords(words(2))
+        assertTrue(session.testnetWords, "a testnet wallet of this phone has these words")
+        session.clear()
+        session.restoreFromWords(words(3))
+        assertFalse(session.testnetWords)
+        assertEquals(SaveState.Saved, session.saved)
+
+        list.unreadable = true
+        val blind = ShelfPhone(KeyNetwork.MAIN).launch(testnetKeys = list).at(P1).session
+        blind.restoreFromWords(words(2))
+        assertFalse(blind.testnetWords, "an unreadable list shows no warning")
+        val askedOnTestnet = ShelfPhone().launch(testnetKeys = FakePlainFile().apply { text = check(words(2)) }).at(P1).session
+        askedOnTestnet.restoreFromWords(words(2))
+        assertFalse(askedOnTestnet.testnetWords, "testnet never asks")
     }
 
     @Test
@@ -547,6 +609,53 @@ class WalletsTest {
         assertEquals(SaveState.NotSaved, wallets.at(P1).session.saved)
         assertEquals(AddRefusal.NotSavedHere, wallets.addRefusal())
         assertNull(wallets.beginAdd())
+        assertEquals(true, wallets.wordsOnlyInMemory(), "a switch of network would lose these words")
+    }
+
+    @Test
+    fun aSwitchIsHeldForTheCauseOfEachUnsavedWallet(): Unit = runBlocking {
+        assertEquals(SwitchHold.Clear, ShelfPhone().saved(P1, 1).unlocked().switchHold(), "a saved wallet")
+        for ((why, hold) in listOf(
+            Why.NoScreenLock to SwitchHold.PhoneCannotHold,
+            Why.NotWired to SwitchHold.Unsaved,
+            Why.TryLater to SwitchHold.Unsaved,
+            Why.Other to SwitchHold.Unsaved,
+        )) {
+            val phone = ShelfPhone()
+            phone.place(P1).write = WriteResult.Unavailable(why)
+            val wallets = phone.launch()
+            wallets.at(P1).session.generateThisDevice()
+            assertEquals(hold, wallets.switchHold(), "a Create the phone refused for $why")
+        }
+        val phone = ShelfPhone().saved(P1, 1)
+        val wallets = phone.unlocked()
+        phone.place(P1).write = WriteResult.Unavailable(Why.Other)
+        wallets.at(P1).session.markBackupConfirmed()
+        assertEquals(SaveState.Saved, wallets.at(P1).session.saved)
+        assertEquals(false, wallets.wordsOnlyInMemory(), "the earlier copy is on the phone")
+        assertEquals(SwitchHold.Unsaved, wallets.switchHold(), "a failed Replace still loses its change when the words are dropped")
+    }
+
+    // The lock went away, so the saved copy is sealed to a dead key and the wallet owes a save, though it is still Saved and no save has
+    // failed yet. A switch now would drop the words that save needs, so it waits until the save lands.
+    @Test
+    fun aSwitchIsHeldWhileASaveIsOwed(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P1, 1)
+        val wallets = phone.unlocked()
+        wallets.lockRead(lockPresent = false)
+        assertEquals(SaveState.Saved, wallets.at(P1).session.saved)
+        assertFalse(wallets.at(P1).session.lastSaveFailed, "a save failed")
+        assertEquals(SwitchHold.Unsaved, wallets.switchHold(), "a switch while the copy waits to be saved again")
+        assertFalse(wallets.lockRead(lockPresent = true), "a save still owed once the lock is back")
+        assertEquals(SwitchHold.Clear, wallets.switchHold(), "the save landed")
+    }
+
+    @Test
+    fun noWordsAreOnlyInMemoryOnceTheyAreSavedOrThereAreNone(): Unit = runBlocking {
+        assertEquals(false, ShelfPhone().launch().wordsOnlyInMemory(), "no wallet")
+        val wallets = ShelfPhone().saved(P1, 1).unlocked()
+        assertEquals(1, wallets.listed.size, "the saved wallet is listed")
+        assertEquals(false, wallets.wordsOnlyInMemory(), "a saved wallet")
     }
 
     @Test

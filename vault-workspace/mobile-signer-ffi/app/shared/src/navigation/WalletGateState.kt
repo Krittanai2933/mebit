@@ -11,9 +11,10 @@ import com.mebit.app.data.Wallets
 
 /**
  * The cold-start gate as plain state with no UI. It holds where the app starts and the two ways off the unlock screen,
- * [unlock] and [forget]. Making one runs this process's cold start ([Wallets.start]), which may erase wallets a
- * deleted install left behind and writes the marker, so make one per process. A gate that starts at Welcome also deletes this
- * network's book and pairings: with no wallet of this network here, they are nobody's.
+ * [unlock] and [forget]. Making one runs the cold start of its network ([Wallets.start]), which may erase wallets a
+ * deleted install left behind and writes the marker. WalletGate makes one at launch and another each time Settings switches the network,
+ * on that network's stores: stores it already marked are not erased again, so a switch back finds the wallets as they were. A gate that
+ * starts at Welcome also deletes this network's book and pairings: with no wallet of this network here, they are nobody's.
  */
 class WalletGateState internal constructor(private val wallets: Wallets) {
     /** The probe [boot] starts from and the notice, read without a prompt. */

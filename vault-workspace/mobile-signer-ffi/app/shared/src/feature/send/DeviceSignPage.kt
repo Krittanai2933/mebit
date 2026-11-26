@@ -45,6 +45,7 @@ import com.mebit.app.data.BAD_ANSWER_NOTE
 import com.mebit.app.data.CANNOT_REGISTER_NOTE
 import com.mebit.app.data.FieldPairingCodes
 import com.mebit.app.data.NOT_READY_NOTE
+import com.mebit.app.data.isJadeOtherNetwork
 import com.mebit.app.data.REGISTRATION_DECLINED_LINE
 import com.mebit.app.data.REGISTRATION_DECLINED_NOTE
 import com.mebit.app.data.SEVERAL_DEVICES_LINE
@@ -97,9 +98,10 @@ import com.mebit.app.ui.theme.amountFontFamily
 /**
  * How signing on the device went wrong: 5.3.2.1's refusal, 5.3.3.1's lost link, no device to reach, or a device that holds another key, and
  * the states of the approved proposal boards: several devices of the kind in range, a device not ready before it showed anything, an answer
- * mebit refused, a declined registration, and a Jade that cannot register the wallet.
+ * mebit refused, a declined registration, and a Jade that cannot register the wallet. [OtherNetwork] is a Jade pinned to the other
+ * network at its first unlock, which no board draws yet (awaiting design review).
  */
-internal enum class DeviceFailure { Rejected, Lost, WrongKey, NotFound, BluetoothOff, Several, NotReady, BadAnswer, RegistrationDeclined, RegistrationRefused }
+internal enum class DeviceFailure { Rejected, Lost, WrongKey, NotFound, BluetoothOff, Several, NotReady, BadAnswer, RegistrationDeclined, RegistrationRefused, OtherNetwork }
 
 /** How far a device signature got, which decides what a refusal means: nothing shown yet, the Jade's registration screen, or the payment. */
 internal enum class SignStep { Connecting, Registering, Showing }
@@ -155,7 +157,7 @@ internal fun signStepLabels(word: String, registers: Boolean): List<String> =
  */
 internal fun deviceFailure(error: Throwable, at: SignStep): DeviceFailure = when (error) {
     is BleException.Refused -> when (at) {
-        SignStep.Connecting -> DeviceFailure.NotReady
+        SignStep.Connecting -> if (isJadeOtherNetwork(error)) DeviceFailure.OtherNetwork else DeviceFailure.NotReady
         SignStep.Registering -> DeviceFailure.RegistrationDeclined
         SignStep.Showing -> DeviceFailure.Rejected
     }
@@ -209,6 +211,7 @@ internal fun deviceFailureText(failure: DeviceFailure, word: String, registratio
     DeviceFailure.BadAnswer -> DeviceFailureText("mebit ไม่นับลายเซ็นนี้", ANSWER_REFUSED_LINE, "ไม่นับ", null, BAD_ANSWER_NOTE)
     DeviceFailure.RegistrationDeclined -> DeviceFailureText("ยังไม่ได้ลงทะเบียน Wallet", REGISTRATION_DECLINED_LINE, "ปฏิเสธ", null, REGISTRATION_DECLINED_NOTE)
     DeviceFailure.RegistrationRefused -> DeviceFailureText("ลงทะเบียนบน Jade ไม่ได้", cannotRegisterLine(registrationName), "ไม่ได้", null, CANNOT_REGISTER_NOTE)
+    DeviceFailure.OtherNetwork -> DeviceFailureText("Jade ใช้กับเครือข่ายนี้ไม่ได้", "Jade เครื่องนี้ผูกกับอีกเครือข่ายตั้งแต่ปลดล็อกครั้งแรก", "ไม่ได้", null, NOT_READY_NOTE)
 }
 
 /**

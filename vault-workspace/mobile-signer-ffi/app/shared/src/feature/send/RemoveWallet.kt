@@ -1,15 +1,22 @@
 package com.mebit.app.feature.send
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -22,9 +29,12 @@ import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
 import com.mebit.app.ui.components.rememberFullSheetState
 import com.mebit.app.ui.theme.MbBody
+import com.mebit.app.ui.theme.MbIconWash
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.ffi.signer.WalletKind
+import org.jetbrains.compose.resources.DrawableResource
+import org.jetbrains.compose.resources.painterResource
 
 /**
  * Pure. Penpot 2.1.A1 to A4's item for a key. Every wallet that still uses the key is named: its own one-key wallet ([ownWalletName]) first,
@@ -109,10 +119,13 @@ internal fun deleteKeyBody(source: KeySourceLabel): String = when (source) {
 /** Pure. Penpot 1.8.9's line: the coins stay on the network, and the BSMS file and [m] of the [n] keys, all still on the Keyring, spend them. */
 internal fun removeVaultBody(m: Int, n: Int) = "เหรียญยังอยู่บนเครือข่าย · ใช้จ่ายได้ด้วยไฟล์ BSMS กับกุญแจ $m จาก $n · กุญแจทั้ง $n ยังอยู่ในคลังกุญแจ"
 
-/** Penpot 4.1.1.2's sheet, which every delete from a card's menu confirms in: [title], [body], then [buttons]. A swipe down or a tap outside is [onCancel]. */
+/**
+ * Penpot 4.1.1.2's sheet, which every delete from a card's menu confirms in: [title], [body], then [buttons]. A swipe down or a tap outside is [onCancel].
+ * An [icon] is drawn on a tile above the title, as 7.1.1's warning is.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun ConfirmSheet(tag: String, title: String, body: String, onCancel: () -> Unit, buttons: @Composable ColumnScope.() -> Unit) {
+internal fun ConfirmSheet(tag: String, title: String, body: String, onCancel: () -> Unit, icon: DrawableResource? = null, buttons: @Composable ColumnScope.() -> Unit) {
     CoverableSheet(
         onDismissRequest = onCancel,
         sheetState = rememberFullSheetState(),
@@ -120,6 +133,12 @@ internal fun ConfirmSheet(tag: String, title: String, body: String, onCancel: ()
         modifier = Modifier.testTag(tag),
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 24.dp)) {
+            if (icon != null) {
+                Box(Modifier.size(56.dp).clip(RoundedCornerShape(16.dp)).background(MbIconWash), contentAlignment = Alignment.Center) {
+                    Image(painterResource(icon), contentDescription = null, modifier = Modifier.size(28.dp))
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+            }
             Text(title, color = MbNavyInk, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             Spacer(modifier = Modifier.height(12.dp))
             Text(body, color = MbBody, fontSize = 13.sp, lineHeight = 19.5.sp)

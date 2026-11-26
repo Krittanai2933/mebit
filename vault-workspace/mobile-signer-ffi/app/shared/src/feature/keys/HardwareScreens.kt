@@ -331,20 +331,23 @@ fun HardwareWalletScreen(
         // The board leaves the rest of the first viewport empty; in test mode the simulator controls remain below it in the scroll.
         Spacer(Modifier.height(240.dp))
         Text("โหมดจำลอง · สำหรับ emulator / simulator ไม่ได้เชื่อมต่ออุปกรณ์", color = MbBody, fontSize = 11.5.sp)
-        Spacer(Modifier.height(8.dp))
-        SecondaryCta("จำลอง Jade", "cta_hw_demo_jade", {
-            if (!demoDisabled) {
-                store.startHardwareMock(KeySourceLabel.Jade)
-                if (store.pending != null) onEnrolled()
-            }
-        })
-        Spacer(Modifier.height(8.dp))
-        SecondaryCta("จำลอง Trezor Safe 7", "cta_hw_demo_trezor", {
-            if (!demoDisabled) {
-                store.startHardwareMock(KeySourceLabel.TrezorSafe7)
-                if (store.pending != null) onEnrolled()
-            }
-        })
+        // A simulated device's key has no words behind it, so, as the pairing mock, it exists only on testnet.
+        if (store.network == KeyNetwork.TEST) {
+            Spacer(Modifier.height(8.dp))
+            SecondaryCta("จำลอง Jade", "cta_hw_demo_jade", {
+                if (!demoDisabled) {
+                    store.startHardwareMock(KeySourceLabel.Jade)
+                    if (store.pending != null) onEnrolled()
+                }
+            })
+            Spacer(Modifier.height(8.dp))
+            SecondaryCta("จำลอง Trezor Safe 7", "cta_hw_demo_trezor", {
+                if (!demoDisabled) {
+                    store.startHardwareMock(KeySourceLabel.TrezorSafe7)
+                    if (store.pending != null) onEnrolled()
+                }
+            })
+        }
         Spacer(Modifier.height(8.dp))
         SecondaryCta("จำลองรุ่นอื่น (Unsupported)", "cta_hw_unsupported", { if (!demoDisabled) onUnsupported(DEMO_UNSUPPORTED_MODEL) })
     }

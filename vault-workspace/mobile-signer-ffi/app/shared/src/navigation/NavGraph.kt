@@ -63,6 +63,7 @@ import com.mebit.app.data.UNREADABLE_FILE
 import com.mebit.app.data.VaultsHealth
 import com.mebit.app.data.alreadyInAppLine
 import com.mebit.app.data.importReview
+import com.mebit.app.data.networkRefusal
 import com.mebit.app.data.problemOf
 import com.mebit.app.data.vaultsNoticeText
 import com.mebit.app.data.Replacement
@@ -174,6 +175,7 @@ import com.mebit.app.ui.components.coversScreen
 import com.mebit.app.ui.components.rememberFullSheetState
 import com.mebit.app.ui.theme.MbPage
 import com.mebit.ffi.signer.HotTx
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.WalletFileRead
 import com.mebit.ffi.signer.walletFileRead
 import com.mebit.ffi.signer.FoundWallet
@@ -207,6 +209,7 @@ internal fun MebitNavHost(
     pairings: Pairings? = null,
     nodeSettings: NodeSettings,
     unitSettings: UnitSettings = remember { UnitSettings(null) },
+    chooseNetwork: (KeyNetwork) -> String? = { null },
 ) {
     val backStack = remember { mutableStateListOf(start) }
     val current = backStack.last()
@@ -268,6 +271,8 @@ internal fun MebitNavHost(
     }
     // Keyed on words too, so a wallet added in this run is noted once its key exists.
     LaunchedEffect(current.place, session.words.isNotEmpty()) { if (session.words.isNotEmpty()) wallets.noteUsed(current.place) }
+    // Testnet's list of its keys, for the mainnet import warning. Keyed on the list it writes, so a wallet added or removed, or an earlier key that changed, is noted.
+    LaunchedEffect(wallets.testnetKeyList()) { wallets.noteTestnetKeys() }
     // This host exists only once the wallets are open or there are none, so the book is read after the owner check. Keyed on the owners so keys added before a Create in this run are saved when it lands.
     LaunchedEffect(vaults, wallets.vaultOwners()) { withContext(Dispatchers.Default) { vaults.sync() } }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { scope.launch(Dispatchers.Default) { vaults.sync() } }
@@ -454,7 +459,7 @@ internal fun MebitNavHost(
     val debugBuild = rememberIsDebugBuild()
     val openCatalog = { if (debugBuild) catalogOpen = true }
 
-    val bar = current.route.bar
+    val bar = current.route.bar.takeIf { barShown(backStack.first().route) }
     // A sheet that covers a tab screen, the wallet list's QR scanner, hides the bar and gives the screen its room.
     var barHidden by remember { mutableStateOf(false) }
     CompositionLocalProvider(
@@ -476,6 +481,8 @@ internal fun MebitNavHost(
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                         notice = startNotice,
+                        network = vaults.network,
+                        onNetwork = { navigate(MovieRoute.Settings) },
                     )
                     MovieRoute.KeySource -> KeySourceScreen(
                         session = session,
@@ -590,6 +597,8 @@ internal fun MebitNavHost(
                     MovieRoute.Settings -> SettingsScreen(
                         node = nodeSettings,
                         unit = unitSettings,
+                        refusal = networkRefusal(wallets.switchHold(), vaults.health),
+                        onChooseNetwork = chooseNetwork,
                         onOpenNode = { navigate(MovieRoute.SettingsNode) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -745,7 +754,7 @@ internal fun MebitNavHost(
                                             importing = ImportPending(pick.name, read.wallet)
                                             navigate(MovieRoute.WalletImport)
                                         } else {
-                                            importProblem = read?.let(::problemOf) ?: UNREADABLE_FILE
+                                            importProblem = read?.let { problemOf(it, vaults.network) } ?: UNREADABLE_FILE
                                         }
                                     }
                                 }
@@ -811,7 +820,7 @@ internal fun MebitNavHost(
                     MovieRoute.WalletImport -> importing?.let { pending ->
                         WalletImportScreen(
                             fileName = pending.fileName,
-                            review = importReview(pending.wallet, createDraft.importName(pending.fileName), keyring.keys),
+                            review = importReview(pending.wallet, createDraft.importName(pending.fileName), keyring.keys, vaults.network),
                             address = pending.wallet.shape.firstAddress,
                             line = importLine,
                             onImport = {

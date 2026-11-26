@@ -20,7 +20,7 @@ import com.mebit.ffi.signer.restoreSoftwareMultisigKey
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
 
-/** Whether the wallet saved on this phone holds this session's key. Staged is a passphrase import waiting for its fingerprint check. */
+/** Whether the wallet saved on this phone holds this session's key. Staged is an import waiting for its fingerprint check (a passphrase) or its testnet-words warning (mainnet). */
 enum class SaveState { NotSaved, Staged, Saved }
 
 /**
@@ -30,7 +30,7 @@ enum class SaveState { NotSaved, Staged, Saved }
  * guards outlive it. [newKey] and [restoreKey] make the key, and [forgetScans] drops the core's scan of every wallet, and tests
  * replace them because the host JVM has no native library.
  * [place] is this wallet's place on the phone, read only for its name, because [wallet] is already bound to that place.
- * [onPhone] says whether another wallet on the phone holds a fingerprint. [startsLocked] is App Lock as the phone has it when this
+ * [onPhone] says whether another wallet on the phone holds a fingerprint. [onTestnet] says whether a testnet wallet of this phone does, asked on mainnet only. [startsLocked] is App Lock as the phone has it when this
  * wallet is added, which its first save carries and [clear] returns to. [others] gives the other wallets' fingerprints, for the clear
  * of a damaged guard file, null while a wallet this run could not read may be on the phone. [hardwareWith] names the Jade or Trezor
  * wallet with a fingerprint in an address type, whose addresses a phone wallet of that key and type would share, or gives null.
@@ -44,6 +44,7 @@ class OnboardingSession(
     private val forgetVaults: () -> Unit = {},
     val place: Place = Place.FIRST,
     private val onPhone: (String) -> Boolean = { false },
+    private val onTestnet: (String) -> Boolean = { false },
     private val startsLocked: Boolean = false,
     private val others: () -> List<String>? = { emptyList() },
     private val hardwareWith: (fingerprint: String, type: AddressType) -> String? = { _, _ -> null },
@@ -100,7 +101,7 @@ class OnboardingSession(
         /** No copy of this key is known to be on the phone. */
         data object Nothing : Held
 
-        /** A passphrase import waiting for its fingerprint check. */
+        /** An import not written yet: a passphrase import waiting for its fingerprint check, or mainnet words the warning has not cleared. */
         data object Staged : Held
 
         /** A copy of this wallet is on the phone, the one this session's next save replaces. */
@@ -124,6 +125,10 @@ class OnboardingSession(
     }
 
     private var held: Held by mutableStateOf(Held.Nothing)
+
+    /** True while a staged mainnet import has the words of a testnet wallet of this phone: Address Type warns, and nothing is saved until the user goes on. */
+    var testnetWords: Boolean by mutableStateOf(false)
+        private set
 
     /** NotSaved is today's memory-only state. Screens read it to say "saved on this phone" only when it is true. */
     val saved: SaveState
@@ -246,7 +251,7 @@ class OnboardingSession(
 
     /**
      * An imported key counts as backed up: the user typed the words from their own record. [accepted] is false for a
-     * passphrase import: the key is staged until the fingerprint matches ([acceptStagedKey]). Refused while the session holds a key, unless it is staged.
+     * passphrase import, and for mainnet words that are this phone's testnet words: the key is staged until the fingerprint matches or the warning is accepted ([acceptStagedKey]). Refused while the session holds a key, unless it is staged.
      */
     fun restoreFromWords(words: List<String>, passphrase: String = "", accepted: Boolean = passphrase.isEmpty()) {
         lastError = null
@@ -268,13 +273,15 @@ class OnboardingSession(
             return
         }
         applyKey(key, passphrase)
+        testnetWords = onTestnet(key.masterFingerprint)
         backupConfirmed = true
         imported = true
         inFirstSetup = true
-        if (accepted) persist(fresh = true) else held = Held.Staged
+        // Staged, not saved, for the warning too: the first mainnet wallet could not be removed once saved.
+        if (accepted && !testnetWords) persist(fresh = true) else held = Held.Staged
     }
 
-    /** The fingerprint sheet said "matches". Nothing was written before this. */
+    /** The fingerprint sheet said "matches", or the testnet-words warning was accepted. Nothing was written before this. */
     fun acceptStagedKey() {
         if (held != Held.Staged) return
         held = Held.Nothing
@@ -332,8 +339,12 @@ class OnboardingSession(
         return result
     }
 
-    /** Forget the key, for an import the user rejected at the fingerprint check. Memory only: a saved wallet is erased by [forgetSavedWallet] and nothing else. */
-    fun clear() {
+    /**
+     * Forget the key, for an import the user rejected at the fingerprint check, and for a network switch. Memory only: a saved wallet is
+     * erased by [forgetSavedWallet] and nothing else. Under [persistLock], so a [persist] on another thread never writes a half-cleared
+     * record. The lock is reentrant (the JVM monitor, and atomicfu's native lock counts re-entries), and [persist] calls this holding it.
+     */
+    fun clear(): Unit = synchronized(persistLock) {
         words = emptyList()
         fingerprint = ""
         xpub = ""
@@ -348,6 +359,7 @@ class OnboardingSession(
         addressTypeConfirmed = true
         recordGuard = null
         held = Held.Nothing
+        testnetWords = false
         notSavedBecause = null
         lastSaveFailed = false
         pendingSave = false
@@ -552,6 +564,7 @@ class OnboardingSession(
         addressType = AddressType.NATIVE_SEGWIT
         addressTypeConfirmed = false
         held = Held.Nothing
+        testnetWords = false
     }
 
     private companion object {

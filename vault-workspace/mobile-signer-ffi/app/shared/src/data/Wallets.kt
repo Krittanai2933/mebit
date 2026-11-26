@@ -8,6 +8,7 @@ import androidx.compose.runtime.snapshots.Snapshot
 import com.mebit.app.EveryRead
 import com.mebit.app.Marker
 import com.mebit.app.Place
+import com.mebit.app.Why
 import com.mebit.app.PlainFile
 import com.mebit.app.SecureShelf
 import com.mebit.app.StoreProbe
@@ -115,6 +116,8 @@ class Wallets internal constructor(
     private val bookGuardKeys: () -> List<String>? = { emptyList() },
     /** The book's Jade and Trezor wallets, whose key and address type no phone wallet may take. */
     private val bookHardware: () -> List<HardwareWallet> = { emptyList() },
+    /** Testnet's fingerprints, one a line, in the app folder both networks can reach ([noteTestnetKeys]). Null where the phone has no such folder. */
+    private val testnetKeys: PlainFile? = null,
 ) {
     /** The network of this phone's shelf, which every wallet and read here follows. */
     val network: KeyNetwork get() = shelf.network
@@ -131,6 +134,7 @@ class Wallets internal constructor(
             payments = payments,
             forgetVaults = {}, // the book is the phone's, and only forgetEvery erases it
             place = place,
+            onTestnet = { fingerprint -> onTestnet(fingerprint) },
             onPhone = { fingerprint -> all.any { it.place != place && it.session.fingerprint.equals(fingerprint, ignoreCase = true) } },
             startsLocked = locked,
             others = { guardKeysBut(place) },
@@ -299,9 +303,26 @@ class Wallets internal constructor(
         return true
     }
 
+    /** Some listed wallet holds words the phone has not kept, so leaving this network or adding a wallet would lose or mix them. */
+    fun wordsOnlyInMemory(): Boolean = listed.any { it.session.saved != SaveState.Saved }
+
+    /**
+     * What stops a switch of network for the listed wallets' sessions. Their [OnboardingSession.notSavedBecause] tells a phone that cannot hold
+     * a wallet from the rest. A save still owed ([savesPending]) holds the switch too, as after the lock went away: the switch would drop the
+     * words that save needs.
+     */
+    fun switchHold(): SwitchHold {
+        val unsaved = listed.filter { it.session.saved != SaveState.Saved }
+        return when {
+            unsaved.any { it.session.notSavedBecause == Why.NoScreenLock } -> SwitchHold.PhoneCannotHold
+            unsaved.isNotEmpty() || listed.any { it.session.lastSaveFailed } || savesPending -> SwitchHold.Unsaved
+            else -> SwitchHold.Clear
+        }
+    }
+
     /** Null when a wallet can be added. */
     fun addRefusal(): AddRefusal? = when {
-        listed.any { it.session.saved != SaveState.Saved } -> AddRefusal.NotSavedHere
+        wordsOnlyInMemory() -> AddRefusal.NotSavedHere
         listed.any { !it.session.addressTypeConfirmed } -> AddRefusal.SetupUnfinished
         unreadMayOpen -> AddRefusal.Unopened
         all.none(::isEmptyEntry) && firstFreePlace() == null -> AddRefusal.Full
@@ -519,6 +540,30 @@ class Wallets internal constructor(
     }
 
     private var lastNoted: Place? = null
+
+    /**
+     * Testnet's list: each listed wallet's fingerprint, its earlier ones and the key the phone holds for it ([OnboardingSession.vaultsOwner]),
+     * which after a failed passphrase Replace is an earlier key. [noteTestnetKeys] adds exactly this to the file, so it is also the effect's key.
+     */
+    fun testnetKeyList(): List<String> =
+        listed.flatMap { listOf(it.session.fingerprint) + it.session.earlierVaultsOwners() + listOfNotNull(it.session.vaultsOwner()) }.distinct()
+
+    /**
+     * Testnet only: adds [testnetKeyList] to the file, never dropping an entry, so a mainnet import of words of a wallet since removed or forgotten
+     * still warns. No secret. An unreadable file counts as empty. Writes only when the union differs from the file.
+     * Skipped while a place that did not open may still open, as its fingerprint is unknown and a short list would hide a match.
+     */
+    fun noteTestnetKeys() {
+        if (network != KeyNetwork.TEST || unreadMayOpen) return
+        val file = testnetKeys ?: return
+        val old = file.read()
+        val text = (old.orEmpty().lines().filter { it.isNotBlank() } + testnetKeyList()).distinct().joinToString("\n")
+        if (old != text) file.write(text)
+    }
+
+    /** Mainnet only: whether testnet's list holds [fingerprint]. A missing or unreadable list holds none, so no warning. */
+    private fun onTestnet(fingerprint: String): Boolean =
+        network == KeyNetwork.MAIN && testnetKeys?.read()?.lines()?.any { it.isNotBlank() && it.equals(fingerprint, ignoreCase = true) } == true
 
     /** Remembers the wallet in use for the next cold start, as a plain number, so the rule that plain files hold no key, address or amount stands. Writes only on a change. */
     fun noteUsed(place: Place) {

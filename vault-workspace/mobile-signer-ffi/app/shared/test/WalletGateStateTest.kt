@@ -383,7 +383,7 @@ class WalletGateStateTest {
         test.lastUsed.write("1")
         val before = test.snapshot()
 
-        // Mainnet boots on stores of its own, wired as WalletGate wires one network, and starts at Welcome.
+        // Mainnet's gate, made on stores of its own as WalletGate makes one per network (at launch, or when Settings switches to it), starts at Welcome.
         val main = NetworkPhone(FakeSecureStore())
         assertEquals(Boot.Onboarding, main.gate.boot)
         assertEquals(1, main.book.deletes, "mainnet's own book")
@@ -392,6 +392,7 @@ class WalletGateStateTest {
         assertEquals(Claim.Written, PendingPayments(main.guards).claim(TEST_CHECK, pending), "the same words' guard on mainnet is not testnet's")
 
         assertEquals(before, test.snapshot(), "testnet's stores after mainnet booted and saved")
+        // The switch back to testnet makes a new gate on the stores testnet already marked: it erases nothing and boots Locked.
         val reopened = NetworkPhone(test.store, test.book, test.pairings, test.guards, test.lastUsed)
         assertEquals(Boot.Locked, reopened.gate.boot)
         reopened.gate.unlock("test")
