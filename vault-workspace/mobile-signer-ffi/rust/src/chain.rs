@@ -795,10 +795,9 @@ pub(crate) fn broadcast_matching(
 
 /// What an `EsploraSource` sends. `Http` is the real one, and a test scripts its own.
 pub(crate) trait Transport: Sync {
-    /// The base every URL of this transport is built on. A test's transport stands for testnet4.
-    fn canonical(&self) -> &'static str {
-        ESPLORA_TESTNET4
-    }
+    /// The base every URL of this transport is built on, its network's [`canonical_base`]. Required, so a
+    /// transport never falls back to testnet4 by leaving it out.
+    fn canonical(&self) -> &'static str;
     /// One GET of a URL built on `canonical`, the whole body as text.
     fn get(&self, url: &str) -> Result<String, MobileSignerError>;
     /// Runs `broadcast_on` against the host a payment goes to.

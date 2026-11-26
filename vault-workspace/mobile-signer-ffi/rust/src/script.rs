@@ -744,6 +744,9 @@ pub(crate) mod tests {
     pub(crate) struct WithMulti<'a>(pub(crate) &'a Fake);
 
     impl Transport for WithMulti<'_> {
+        fn canonical(&self) -> &'static str {
+            crate::chain::ESPLORA_TESTNET4
+        }
         fn get(&self, url: &str) -> Result<String, MobileSignerError> {
             let path = url.strip_prefix(ESPLORA_TESTNET4).expect("a testnet4 URL");
             MULTI.serve(path).map_or_else(|| self.0.get(url), Ok)
