@@ -63,20 +63,13 @@ internal fun realFeeText(feeSats: Long, quote: FiatQuote?): String =
 internal fun keptText(balanceSats: Long?, totalSats: Long?, unit: BtcUnit = BtcUnit.Btc): String =
     if (balanceSats != null && totalSats != null) amountText((balanceSats - totalSats).coerceAtLeast(0), unit) else "—"
 
-/** The fee on the slip, such as `1,128 sat ≈ ฿41`; just the sats without a price. The rate sits beside it. */
-internal fun slipFeeText(feeSats: Long, quote: FiatQuote?): String =
-    listOfNotNull("${thousands(feeSats)} sat", bahtText(feeSats, quote)).joinToString(" ≈ ")
+/** Baht as the 5.9.2 slip writes it, such as `18,010 บาท`. Null when there is no price. */
+internal fun slipBaht(sats: Long, quote: FiatQuote?): String? = bahtText(sats, quote)?.removePrefix("฿")?.let { "$it บาท" }
+
+/** The fee on the slip with the rate the user picked, such as `41 บาท · 8 sat/vB`; the sats in place of the baht without a price. */
+internal fun slipFeeText(feeSats: Long, rateSatVb: Long, quote: FiatQuote?): String =
+    "${slipBaht(feeSats, quote) ?: "${thousands(feeSats)} sat"} · $rateSatVb sat/vB"
 
 /** [text] in groups of four, [perLine] groups to a line, such as `bc1q xy2k gdyg\njrsq tzq2`. */
 internal fun groupedLines(text: String, perLine: Int): String =
     text.chunked(4).chunked(perLine).joinToString("\n") { it.joinToString(" ") }
-
-/** What the address itself proves about its type, or null when it proves nothing worth naming. */
-internal fun addressTypeLine(address: String): String? {
-    val a = address.lowercase()
-    return when {
-        Regex("^(bc|tb|bcrt)1q").containsMatchIn(a) -> "Native SegWit"
-        Regex("^(bc|tb|bcrt)1p").containsMatchIn(a) -> "Taproot"
-        else -> null
-    }
-}
