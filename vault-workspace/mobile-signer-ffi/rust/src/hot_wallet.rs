@@ -1160,11 +1160,12 @@ fn history_over(
 const BELIEVED_DEPTH: u64 = 6;
 
 /// Forgets the block of each of `txs` that sits fewer than `BELIEVED_DEPTH` blocks deep at `tip` when the source's best
-/// chain has another block at that height, or none. A reorg took that block, yet a host can still name it for the
-/// transaction while its own `/block-height` names the new one (testnet4, 25 Nov 2026), so the transaction reads as
-/// unconfirmed, as it is. One read per distinct height, and none when every block is deeper. The source's word stands
-/// for a block it gave no id for, a block above `tip` (a host behind a load balancer can read the tip from a backend a
-/// block behind), and every block when the look fails, so the look never costs the history it checks.
+/// chain names another block at that height. A reorg took that block, yet a host can still name it for the transaction
+/// while its own `/block-height` names the new one (testnet4, 25 Nov 2026), so the transaction reads as unconfirmed, as
+/// it is. One read per distinct height, and none when every block is deeper. Only another block counts as proof: the
+/// source's word stands for a block it gave no id for, a block above `tip`, a height it answers it has no block at (a
+/// backend behind a load balancer can lag a block behind the one that gave the tip), and every block when the look
+/// fails, so the look never costs the history it checks.
 fn forget_lost_blocks<'a>(
     source: &dyn ChainSource,
     txs: impl IntoIterator<Item = &'a mut TxView>,
@@ -1188,11 +1189,9 @@ fn forget_lost_blocks<'a>(
     };
     let best: HashMap<u64, Option<BlockHash>> = heights.iter().copied().zip(found).collect();
     for tx in txs {
-        if tx
-            .confirmed
-            .as_ref()
-            .is_some_and(|block| best[&block.height] != block.block_hash)
-        {
+        if tx.confirmed.as_ref().is_some_and(|block| {
+            best[&block.height].is_some_and(|hash| Some(hash) != block.block_hash)
+        }) {
             tx.confirmed = None;
         }
     }
@@ -4125,6 +4124,9 @@ pub(crate) mod tests {
         /// What `/block-height/{h}` answers where it is not `PROOF`'s block: the best chain's block at that height. A
         /// height above the tip answers 404.
         best: HashMap<u64, BlockHash>,
+        /// Heights at or below the tip whose `/block-height/{h}` answers 404, as a backend behind a load balancer that has
+        /// not reached that block yet does.
+        missing_heights: HashSet<u64>,
         calls: Mutex<Vec<String>>,
         now: Mutex<SystemTime>,
         pub(crate) store: ScanStore,
@@ -4144,6 +4146,7 @@ pub(crate) mod tests {
                 raw: HashMap::new(),
                 tip: TIP.into(),
                 best: HashMap::new(),
+                missing_heights: HashSet::new(),
                 calls: Mutex::new(Vec::new()),
                 now: Mutex::new(UNIX_EPOCH + Duration::from_secs(1_762_300_000)),
                 store: ScanStore::default(),
@@ -4285,7 +4288,7 @@ pub(crate) mod tests {
                     )));
                 }
                 let height: u64 = height.parse().expect("a height");
-                if height > self.tip.parse().unwrap() {
+                if height > self.tip.parse().unwrap() || self.missing_heights.contains(&height) {
                     return Err(MobileSignerError::InvalidPsbtJson(format!(
                         "esplora get: {url}: status code 404"
                     )));
@@ -11472,15 +11475,20 @@ pub(crate) mod tests {
     // A failed look, or a block above the tip read from a backend a block behind, keeps the host's word, as before the
     // look.
     #[test]
-    fn a_failed_look_or_a_block_above_the_tip_keeps_the_hosts_word() {
+    fn a_failed_look_a_404_or_a_block_above_the_tip_keeps_the_hosts_word() {
         let mut failing = Fake::new();
         failing.failing.insert("/block-height/104".into());
-        let (found, calls) = detail_in_block(&mut failing, 104);
-        assert_eq!((found.tx.confirmations, found.block_height), (2, Some(104)));
-        assert_eq!(
-            calls.last().unwrap(),
-            &format!("{ESPLORA_TESTNET4}/block-height/104")
-        );
+        // A backend behind a load balancer that has not reached block 104 yet answers 404 below the tip.
+        let mut behind = Fake::new();
+        behind.missing_heights.insert(104);
+        for mut fake in [failing, behind] {
+            let (found, calls) = detail_in_block(&mut fake, 104);
+            assert_eq!((found.tx.confirmations, found.block_height), (2, Some(104)));
+            assert_eq!(
+                calls.last().unwrap(),
+                &format!("{ESPLORA_TESTNET4}/block-height/104")
+            );
+        }
         // The tip is 105.
         let (found, calls) = detail_in_block(&mut Fake::new(), 106);
         assert_eq!((found.tx.confirmations, found.block_height), (1, Some(106)));
