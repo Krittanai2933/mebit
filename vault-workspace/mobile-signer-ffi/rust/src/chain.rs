@@ -30,7 +30,8 @@ pub(crate) trait ChainSource {
     -> Result<(Vec<Vec<TxView>>, u64), MobileSignerError>;
     /// `txid` and the tip height, read after it, or None when the source does not know `txid`.
     fn tx(&self, txid: &Txid) -> Result<Option<(TxView, u64)>, MobileSignerError>;
-    /// The block at each height on the source's best chain, in the order asked, or None for a height above its tip.
+    /// The block at each height on the source's best chain, in the order asked, or None for a height the source
+    /// answers it has no block at (404), such as one above its tip.
     fn best_blocks(&self, heights: &[u64]) -> Result<Vec<Option<BlockHash>>, MobileSignerError>;
     /// The addresses whose coins each transaction spends.
     fn spends_from(&self, txids: &[Txid]) -> Result<Vec<Vec<String>>, MobileSignerError>;
@@ -102,7 +103,8 @@ pub(crate) struct Confirmed {
     pub(crate) height: u64,
     /// Unix seconds as the source gave them, unchecked.
     pub(crate) time: Option<u64>,
-    /// The block's id, or None when the source gave none that reads as one. Only a proof needs it.
+    /// The block's id, or None when the source gave none that reads as one. A proof needs it, and so does the history's
+    /// check that a shallow block is still on the source's best chain (`hot_wallet::forget_lost_blocks`).
     pub(crate) block_hash: Option<BlockHash>,
 }
 
