@@ -223,7 +223,6 @@ impl ChainSource for EsploraSource<'_> {
         read_tx(&body, &tip, txid).map(Some)
     }
 
-    // One at a time, since a history asks for a few heights at most.
     fn best_blocks(&self, heights: &[u64]) -> Result<Vec<Option<BlockHash>>, MobileSignerError> {
         heights
             .iter()

@@ -1094,7 +1094,8 @@ pub(crate) fn history_by<K: Owner>(
 
 /// The latest transactions of the `used` addresses, each once and read against `own`, every address the wallet counts:
 /// the mempool first, then confirmed transactions newest first. No request when nothing is used, else one page per used
-/// address, the tip and `forget_lost_blocks`'s looks. The tail a one-key wallet and a several-key wallet share, so both net and order by one rule.
+/// address, the tip and `forget_lost_blocks`'s looks. The tail a one-key wallet and a several-key wallet share, so both
+/// net and order by one rule.
 fn history_over(
     source: &dyn ChainSource,
     used: &[&Address],
@@ -1104,7 +1105,7 @@ fn history_over(
         return Ok(Vec::new());
     }
     let (mut pages, tip) = source.history(used)?;
-    forget_lost_blocks(source, pages.iter_mut().flatten(), tip)?;
+    forget_lost_blocks(source, pages.iter_mut().flatten(), tip);
     let own: Vec<&str> = own.iter().map(String::as_str).collect();
     merge_history(&pages, tip, &own)
 }
@@ -1113,16 +1114,18 @@ fn history_over(
 const BELIEVED_DEPTH: u64 = 6;
 
 /// Forgets the block of each of `txs` that sits fewer than `BELIEVED_DEPTH` blocks deep at `tip` when the source's best
-/// chain has another block at that height, or none. A reorg took that block, and a host whose index missed the reorg
-/// still names it (testnet4, 26 Nov 2026), so the transaction reads as unconfirmed, as it is. One read per distinct
-/// height, and none when every block is deeper. A block the source gave no id for is believed.
+/// chain has another block at that height, or none. A reorg took that block, yet a host can still name it for the
+/// transaction while its own `/block-height` names the new one (testnet4, 25 Nov 2026), so the transaction reads as
+/// unconfirmed, as it is. One read per distinct height, and none when every block is deeper. The source's word stands
+/// for a block it gave no id for, a block above `tip` (a host behind a load balancer can read the tip from a backend a
+/// block behind), and every block when the look fails, so the look never costs the history it checks.
 fn forget_lost_blocks<'a>(
     source: &dyn ChainSource,
     txs: impl IntoIterator<Item = &'a mut TxView>,
     tip: u64,
-) -> Result<(), MobileSignerError> {
+) {
     let shallow = |block: &Confirmed| {
-        block.block_hash.is_some() && tip.saturating_sub(block.height) + 1 < BELIEVED_DEPTH
+        block.block_hash.is_some() && block.height <= tip && tip - block.height < BELIEVED_DEPTH - 1
     };
     let txs: Vec<&mut TxView> = txs
         .into_iter()
@@ -1134,11 +1137,10 @@ fn forget_lost_blocks<'a>(
         .collect();
     heights.sort_unstable();
     heights.dedup();
-    let best: HashMap<u64, Option<BlockHash>> = heights
-        .iter()
-        .copied()
-        .zip(source.best_blocks(&heights)?)
-        .collect();
+    let Ok(found) = source.best_blocks(&heights) else {
+        return;
+    };
+    let best: HashMap<u64, Option<BlockHash>> = heights.iter().copied().zip(found).collect();
     for tx in txs {
         if tx
             .confirmed
@@ -1148,7 +1150,6 @@ fn forget_lost_blocks<'a>(
             tx.confirmed = None;
         }
     }
-    Ok(())
 }
 
 fn merge_history(
@@ -1329,7 +1330,7 @@ pub(crate) fn detail_by(
     let Some((mut tx, tip)) = source.tx(txid)? else {
         return Ok(None);
     };
-    forget_lost_blocks(source, [&mut tx], tip)?;
+    forget_lost_blocks(source, [&mut tx], tip);
     hot_detail(&tx, tip, txid, &own_addresses(addresses, store)?).map(Some)
 }
 
@@ -4223,6 +4224,11 @@ pub(crate) mod tests {
                 return Ok(self.tip.clone());
             }
             if let Some(height) = path.strip_prefix("/block-height/") {
+                if self.failing.contains(path) {
+                    return Err(MobileSignerError::InvalidPsbtJson(format!(
+                        "esplora get: {url}: timed out"
+                    )));
+                }
                 let height: u64 = height.parse().expect("a height");
                 if height > self.tip.parse().unwrap() {
                     return Err(MobileSignerError::InvalidPsbtJson(format!(
@@ -11211,9 +11217,9 @@ pub(crate) mod tests {
         );
     }
 
-    // testnet4, 26 Nov 2026: a host whose index missed a reorg still listed a payment in the block the reorg took, two
-    // blocks deep, while its best chain held another block at that height and the payment was back in the mempool. The
-    // history said ยืนยัน 2 บล็อก.
+    // testnet4, 25 Nov 2026: a host's `/tx` status still named the block a reorg took, two blocks deep, while its own
+    // `/block-height` named another block at that height and the payment was back in the mempool. The history said
+    // ยืนยัน 2 บล็อก.
     #[test]
     fn payments_in_a_block_the_best_chain_lost_read_as_unconfirmed_after_one_look_at_that_height() {
         let (ext0, int0) = (addr(Chain::External, 0), addr(Chain::Internal, 0));
@@ -11287,22 +11293,39 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_detail_in_a_block_the_best_chain_lost_or_never_reached_reads_as_unconfirmed() {
-        let mut lost = Fake::new();
-        lost.best.insert(104, BlockHash::all_zeros());
-        // The tip is 105, so the host's best chain has no block 106.
-        for (mut fake, height) in [(lost, 104), (Fake::new(), 106)] {
-            let (found, _) = detail_in_block(&mut fake, height);
-            assert_eq!(
-                (
-                    found.tx.confirmations,
-                    found.tx.block_time,
-                    found.block_height
-                ),
-                (0, None, None),
-                "{height}"
-            );
-        }
+    fn a_detail_in_a_block_the_best_chain_lost_reads_as_unconfirmed() {
+        let mut fake = Fake::new();
+        fake.best.insert(104, BlockHash::all_zeros());
+        let (found, _) = detail_in_block(&mut fake, 104);
+        assert_eq!(
+            (
+                found.tx.confirmations,
+                found.tx.block_time,
+                found.block_height
+            ),
+            (0, None, None)
+        );
+    }
+
+    // A failed look, or a block above the tip read from a backend a block behind, keeps the host's word, as before the
+    // look.
+    #[test]
+    fn a_failed_look_or_a_block_above_the_tip_keeps_the_hosts_word() {
+        let mut failing = Fake::new();
+        failing.failing.insert("/block-height/104".into());
+        let (found, calls) = detail_in_block(&mut failing, 104);
+        assert_eq!((found.tx.confirmations, found.block_height), (2, Some(104)));
+        assert_eq!(
+            calls.last().unwrap(),
+            &format!("{ESPLORA_TESTNET4}/block-height/104")
+        );
+        // The tip is 105.
+        let (found, calls) = detail_in_block(&mut Fake::new(), 106);
+        assert_eq!((found.tx.confirmations, found.block_height), (1, Some(106)));
+        assert!(
+            !calls.iter().any(|url| url.contains("/block-height/")),
+            "{calls:?}"
+        );
     }
 
     #[test]
