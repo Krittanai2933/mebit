@@ -717,6 +717,9 @@ pub(crate) mod tests {
         /// What a source answers about this block, or None for what it does not hold.
         fn serve(&self, path: &str) -> Option<String> {
             let at = |txid: &str| self.txids.iter().position(|t| t.to_string() == txid);
+            if path == format!("/block-height/{MULTI_HEIGHT}") {
+                return Some(self.header.block_hash().to_string());
+            }
             if let Some(rest) = path.strip_prefix("/tx/") {
                 if let Some(pos) = rest.strip_suffix("/hex").and_then(at) {
                     return Some(serialize_hex(&self.txs[pos]));
