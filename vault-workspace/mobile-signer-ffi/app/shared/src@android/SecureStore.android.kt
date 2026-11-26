@@ -21,6 +21,7 @@ import java.security.KeyStore
 import java.security.PrivateKey
 import java.security.PublicKey
 import java.security.SecureRandom
+import java.security.cert.Certificate
 import java.security.UnrecoverableKeyException
 import java.security.spec.MGF1ParameterSpec
 import java.security.spec.X509EncodedKeySpec
@@ -238,7 +239,7 @@ private class KeystoreShelf(private val context: Context, network: KeyNetwork) :
         override fun probe(): StoreProbe = synchronized(storeLock) {
             val fileExists = Place.all.any(::walletFileExists)
             val present = if (fileExists) aliasPresent(alias) else false
-            val probe = androidProbeOutcome(fileExists, present, if (present == true) privateHalfFailure() else null, deviceSecure())
+            val probe = androidProbeOutcome(fileExists, present, if (present == true) privateHalfFailure(alias) else null, deviceSecure())
             if (probe == StoreProbe.Empty) startKey()
             probe
         }
@@ -257,19 +258,12 @@ private class KeystoreShelf(private val context: Context, network: KeyNetwork) :
             copy.refuse(mode)?.let { return it } // a stale Replace touches neither the key nor the file
             androidWriteRefusal(walletFileExists(place), deviceSecure(), mode)?.let { return it }
             val certificate = try {
-                keyStore().getCertificate(alias)
+                sealingCertificate(alias)
             } catch (e: Exception) {
                 return WriteResult.Unavailable(Why.TryLater)
             }
-            if (androidKeyMustBeRemade(certificate != null, if (certificate != null) privateHalfFailure() else null)) {
+            if (certificate == null) {
                 // The pair is gone or invalidated, as after a screen lock was removed, so the phone key's wrapped copy can never be opened again. A new key must not reuse it.
-                if (certificate != null) {
-                    try {
-                        keyStore().deleteEntry(ALIAS) // a dead pair under the alias would stop the new key from being made
-                    } catch (e: Exception) {
-                        return WriteResult.Unavailable(Why.TryLater)
-                    }
-                }
                 forgetPhoneKey()
                 return keyNotReady()
             }
@@ -367,11 +361,24 @@ private fun keyStore(): KeyStore = KeyStore.getInstance("AndroidKeyStore").apply
  * What an unwrap cipher threw when it took the private half, or null. Taking it needs no owner, only using it does, so this never
  * prompts. The probe does the same, and a read before its sheet ([androidInitOutcome]).
  */
-private fun privateHalfFailure(): Throwable? = try {
-    (keyStore().getKey(ALIAS, null) as? PrivateKey)?.let(::unwrapCipher)
+private fun privateHalfFailure(alias: String): Throwable? = try {
+    (keyStore().getKey(alias, null) as? PrivateKey)?.let(::unwrapCipher)
     null
 } catch (e: Exception) {
     e
+}
+
+/**
+ * The certificate of the pair under [alias] that a write seals to, or null when that pair is gone or invalidated ([androidKeyMustBeRemade])
+ * and a new one must be made first. An invalidated pair is deleted here, because a dead pair under the alias would stop the new key from
+ * being made. Only [alias] is read or deleted, so one network's write never judges or deletes the other's key. Throws when the Keystore
+ * cannot answer or delete, and the write tries later.
+ */
+internal fun sealingCertificate(alias: String): Certificate? {
+    val certificate = keyStore().getCertificate(alias)
+    if (!androidKeyMustBeRemade(certificate != null, if (certificate != null) privateHalfFailure(alias) else null)) return certificate
+    if (certificate != null) keyStore().deleteEntry(alias)
+    return null
 }
 
 /** Whether the alias exists, or null when the Keystore could not answer. */

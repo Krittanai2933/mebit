@@ -14,16 +14,32 @@ import com.mebit.app.androidKeyMustBeRemade
 import com.mebit.app.androidProbeOutcome
 import com.mebit.app.navigation.Boot
 import com.mebit.app.navigation.WalletGateState
+import com.mebit.app.sealingCertificate
+import com.mebit.app.walletAlias
 import com.mebit.ffi.signer.HotScan
 import com.mebit.ffi.signer.HotWalletSnapshot
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.SoftwareAccountKey
+import java.io.InputStream
+import java.io.OutputStream
+import java.security.Key
+import java.security.KeyPair
+import java.security.KeyPairGenerator
 import java.security.KeyStoreException
+import java.security.KeyStoreSpi
+import java.security.Provider
+import java.security.PublicKey
+import java.security.Security
 import java.security.UnrecoverableKeyException
+import java.security.cert.Certificate
+import java.util.Date
+import java.util.Enumeration
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** Twelve test words for wallet [n]. Never a real wallet, and never printed. */
@@ -65,6 +81,81 @@ private class Api30Shelf(val inner: FakeShelf) : SecureShelf {
 
 /** What API 30's getKey throws once removing the screen lock invalidated the key: the invalidation's message and no cause. */
 private fun api30Invalidated() = UnrecoverableKeyException("User changed or deleted their auth credentials")
+
+/**
+ * The phone's "AndroidKeyStore" as JCA sees it, with an RSA pair per alias, so the shelf's own Keystore calls run on the JVM. Taking the
+ * private half of an [invalidated] alias throws API 30's invalidation. [touched] is every alias a call named.
+ */
+private class FakeAndroidKeyStore : KeyStoreSpi() {
+    val pairs = mutableMapOf<String, KeyPair>()
+    val invalidated = mutableSetOf<String>()
+    val touched = mutableSetOf<String>()
+
+    fun add(alias: String, invalid: Boolean = false) {
+        pairs[alias] = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+        if (invalid) invalidated += alias
+    }
+
+    /** Runs [block] with this store as the JVM's only "AndroidKeyStore", and removes it after. */
+    fun <T> use(block: () -> T): T {
+        val spi = this
+        val provider = object : Provider("MebitTestAndroidKeyStore", 1.0, "test only") {
+            init {
+                putService(object : Provider.Service(this, "KeyStore", "AndroidKeyStore", FakeAndroidKeyStore::class.java.name, null, null) {
+                    override fun newInstance(constructorParameter: Any?): Any = spi
+                })
+            }
+        }
+        Security.insertProviderAt(provider, 1)
+        try {
+            return block()
+        } finally {
+            Security.removeProvider(provider.name)
+        }
+    }
+
+    override fun engineGetKey(alias: String, password: CharArray?): Key? {
+        touched += alias
+        if (alias in invalidated) throw api30Invalidated()
+        return pairs[alias]?.private
+    }
+
+    override fun engineGetCertificate(alias: String): Certificate? {
+        touched += alias
+        val publicHalf = pairs[alias]?.public ?: return null
+        return object : Certificate("X.509") {
+            override fun getPublicKey(): PublicKey = publicHalf
+            override fun getEncoded(): ByteArray = publicHalf.encoded
+            override fun verify(key: PublicKey) = Unit
+            override fun verify(key: PublicKey, sigProvider: String) = Unit
+            override fun toString() = "test certificate"
+        }
+    }
+
+    override fun engineDeleteEntry(alias: String) {
+        touched += alias
+        pairs -= alias
+        invalidated -= alias
+    }
+
+    override fun engineContainsAlias(alias: String): Boolean {
+        touched += alias
+        return alias in pairs
+    }
+
+    override fun engineLoad(stream: InputStream?, password: CharArray?) = Unit
+    override fun engineGetCertificateChain(alias: String): Array<Certificate>? = throw UnsupportedOperationException()
+    override fun engineGetCreationDate(alias: String): Date? = throw UnsupportedOperationException()
+    override fun engineSetKeyEntry(alias: String, key: Key, password: CharArray?, chain: Array<Certificate>?) = throw UnsupportedOperationException()
+    override fun engineSetKeyEntry(alias: String, key: ByteArray, chain: Array<Certificate>?) = throw UnsupportedOperationException()
+    override fun engineSetCertificateEntry(alias: String, cert: Certificate) = throw UnsupportedOperationException()
+    override fun engineAliases(): Enumeration<String> = throw UnsupportedOperationException()
+    override fun engineSize(): Int = throw UnsupportedOperationException()
+    override fun engineIsKeyEntry(alias: String): Boolean = throw UnsupportedOperationException()
+    override fun engineIsCertificateEntry(alias: String): Boolean = throw UnsupportedOperationException()
+    override fun engineGetCertificateAlias(cert: Certificate): String? = throw UnsupportedOperationException()
+    override fun engineStore(stream: OutputStream?, password: CharArray?) = throw UnsupportedOperationException()
+}
 
 private fun walletsOver(shelf: SecureShelf) = Wallets(
     shelf,
@@ -128,5 +219,24 @@ class InvalidatedKeyAndroidTest {
         val gate = WalletGateState(walletsOver(shelf))
         assertEquals(Cause.KeyGone, assertIs<Boot.Broken>(gate.boot, "the cold start").cause)
         assertEquals(0, shelf.remade, "a cold start replaced the key")
+    }
+
+    // One lock removal kills both networks' keys, and testnet's was made again first. A mainnet write must judge mainnet's own key, and
+    // never testnet's: judging testnet's live key would seal mainnet's copy to its dead one, and deleting testnet's would lose testnet's wallets.
+    @Test
+    fun aMainnetWriteChecksAndRemakesOnlyTheMainnetKey() {
+        val main = walletAlias(KeyNetwork.MAIN)
+        val test = walletAlias(KeyNetwork.TEST)
+
+        val remadeTestnet = FakeAndroidKeyStore().apply { add(test); add(main, invalid = true) }
+        assertNull(remadeTestnet.use { sealingCertificate(main) }, "mainnet's dead key was sealed to")
+        assertFalse(main in remadeTestnet.pairs, "mainnet's dead key stays and blocks its new one")
+        assertTrue(test in remadeTestnet.pairs, "testnet's key was deleted")
+        assertEquals(setOf(main), remadeTestnet.touched, "a mainnet write named another alias")
+
+        val deadTestnet = FakeAndroidKeyStore().apply { add(test, invalid = true); add(main) }
+        assertEquals(deadTestnet.pairs.getValue(main).public, deadTestnet.use { sealingCertificate(main) }?.publicKey, "mainnet's live key")
+        assertTrue(test in deadTestnet.pairs, "a mainnet write deleted testnet's key")
+        assertEquals(setOf(main), deadTestnet.touched, "a mainnet write named another alias")
     }
 }
