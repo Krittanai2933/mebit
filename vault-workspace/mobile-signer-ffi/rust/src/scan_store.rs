@@ -67,7 +67,7 @@ pub(crate) struct Last {
     pub(crate) status: ScanStatus,
 }
 
-/// Every wallet's scan, with the folder its files go to.
+/// Every wallet's scan, each with the folder its file goes to.
 #[derive(Default)]
 pub(crate) struct ScanStore {
     wallets: Mutex<Wallets>,
@@ -77,6 +77,7 @@ pub(crate) struct ScanStore {
 
 #[derive(Default)]
 struct Wallets {
+    /// The folder a wallet opened now reads its file from and keeps.
     dir: Option<PathBuf>,
     open: HashMap<WalletId, Open>,
 }
@@ -85,6 +86,9 @@ struct Open {
     entry: Arc<Mutex<Entry>>,
     /// `ScanStore::change_proof`, outside `entry`, whose lock a sync holds across the network.
     change_proof: Option<u32>,
+    /// The folder named when the wallet opened, else the first one named when it saved. Its saves go there whatever
+    /// folder `use_dir` names later.
+    dir: Option<PathBuf>,
 }
 
 impl Wallets {
@@ -102,6 +106,7 @@ impl Wallets {
                     scan,
                     ..Entry::default()
                 })),
+                dir: dir.clone(),
             }
         })
     }
@@ -112,7 +117,9 @@ impl ScanStore {
         self.wallets.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Keeps each wallet's file in `dir` from now on. A wallet already open is written there at its next sync.
+    /// Each wallet opened from now on reads its file from `dir` and keeps it there. A wallet already open keeps the folder
+    /// named when it opened, so a sync still running when the app names another network's folder saves into the
+    /// wallet's own folder. One opened while no folder was named takes `dir` at its next sync.
     pub(crate) fn use_dir(&self, dir: PathBuf) {
         self.wallets().dir = Some(dir);
     }
@@ -138,11 +145,12 @@ impl ScanStore {
         self.epoch.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// Writes `scan` to the file of `id` when a folder is set, and keeps its change proof for `change_proof`, both
-    /// only while `entry` is still the wallet open, so a sync that ends after `forget` leaves nothing behind. A
-    /// failed write leaves the last file, which is only older.
+    /// Writes `scan` to the file of `id` in the wallet's folder, as `use_dir` says, and keeps its change proof for
+    /// `change_proof`, both only while `entry` is still the wallet open, so a sync that ends after `forget` leaves
+    /// nothing behind. A failed write leaves the last file, which is only older.
     pub(crate) fn save(&self, id: &WalletId, entry: &Arc<Mutex<Entry>>, scan: &WalletScan) {
         let mut wallets = self.wallets();
+        let named = wallets.dir.clone();
         let Some(open) = wallets.open.get_mut(id) else {
             return;
         };
@@ -150,7 +158,10 @@ impl ScanStore {
             return;
         }
         open.change_proof = change_proof(scan);
-        let Some(dir) = &wallets.dir else {
+        if open.dir.is_none() {
+            open.dir = named;
+        }
+        let Some(dir) = &open.dir else {
             return;
         };
         // A temp file renamed into place, so a crash mid-write leaves the old file or the new one, never half.
@@ -161,7 +172,7 @@ impl ScanStore {
             .and_then(|()| fs::rename(&temp, &path));
     }
 
-    /// Every wallet's scan gone, from memory and from the folder.
+    /// Every wallet's scan gone from memory, and every scan file gone from the folder named now, but from no other.
     pub(crate) fn forget(&self) {
         let mut wallets = self.wallets();
         wallets.open.clear();
@@ -443,6 +454,86 @@ pub(crate) mod tests {
         assert_eq!(
             without_folder.wallet(&ID).lock().unwrap().scan,
             WalletScan::default()
+        );
+    }
+
+    // The mentor's note on PR #91, seen on an Android emulator on 26 Nov 2026: a testnet wallet's sync still ran when
+    // the app switched to mainnet, and its save put the testnet scan in mainnet's folder.
+    #[test]
+    fn a_wallet_opened_under_one_folder_saves_there_after_another_is_named() {
+        let (opened_under, named_later) = (Folder::new("opened-under"), Folder::new("named-later"));
+        let store = ScanStore::default();
+        store.use_dir(opened_under.0.clone());
+        let entry = store.wallet(&ID);
+        store.use_dir(named_later.0.clone());
+        store.save(&ID, &entry, &scan());
+        assert_eq!(
+            (opened_under.files(), named_later.files()),
+            (vec![file_name(&ID)], vec![])
+        );
+    }
+
+    // `use_dir` still moves every wallet opened after it, so the network switched to keeps its own wallets in its folder.
+    #[test]
+    fn a_wallet_opened_after_another_folder_is_named_saves_into_that_one() {
+        let (named_first, named_later) = (Folder::new("after-first"), Folder::new("after-later"));
+        let store = ScanStore::default();
+        store.use_dir(named_first.0.clone());
+        store.use_dir(named_later.0.clone());
+        let entry = store.wallet(&ID);
+        store.save(&ID, &entry, &scan());
+        assert_eq!(
+            (named_first.files(), named_later.files()),
+            (vec![], vec![file_name(&ID)])
+        );
+    }
+
+    // As before folders were kept per wallet, a wallet opened before the app names any folder is written to the first
+    // one named. From then on it keeps that folder.
+    #[test]
+    fn a_wallet_opened_before_any_folder_is_named_keeps_the_first_one_a_save_finds() {
+        let (named_first, named_later) = (Folder::new("before-first"), Folder::new("before-later"));
+        let store = ScanStore::default();
+        let entry = store.wallet(&ID);
+        store.save(&ID, &entry, &scan());
+        store.use_dir(named_first.0.clone());
+        store.save(&ID, &entry, &scan());
+        store.use_dir(named_later.0.clone());
+        store.save(&ID, &entry, &scan());
+        assert_eq!(
+            (named_first.files(), named_later.files()),
+            (vec![file_name(&ID)], vec![])
+        );
+    }
+
+    // Forget erases the folder named now and no other, so with a folder per network an erase leaves the other network's
+    // scans. A wallet open from another folder leaves memory with the rest, so a sync of it that ends after the forget
+    // writes nothing anywhere.
+    #[test]
+    fn forget_leaves_other_folders_and_a_sync_of_a_wallet_from_one_writes_nothing_after_it() {
+        let (opened_under, named_now) = (
+            Folder::new("forget-opened-under"),
+            Folder::new("forget-named-now"),
+        );
+        let store = ScanStore::default();
+        store.use_dir(opened_under.0.clone());
+        let entry = store.wallet(&ID);
+        store.save(&ID, &entry, &scan());
+        store.use_dir(named_now.0.clone());
+        let other = store.wallet(&[9; 32]);
+        store.save(&[9; 32], &other, &scan());
+        store.forget();
+        store.save(&ID, &entry, &WalletScan::default());
+        assert_eq!(
+            (opened_under.files(), named_now.files()),
+            (vec![file_name(&ID)], vec![])
+        );
+        let restarted = ScanStore::default();
+        restarted.use_dir(opened_under.0.clone());
+        assert_eq!(
+            restarted.wallet(&ID).lock().unwrap().scan,
+            scan(),
+            "the save after the forget left the file as it was"
         );
     }
 

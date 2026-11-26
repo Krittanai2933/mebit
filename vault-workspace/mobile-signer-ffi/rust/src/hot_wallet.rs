@@ -7450,6 +7450,40 @@ pub(crate) mod tests {
         );
     }
 
+    // The race of the mentor's note on PR #91, as an Android emulator showed it on 26 Nov 2026: the app named mainnet's
+    // folder while a testnet wallet's sync ran, and the sync saved the testnet scan there.
+    #[test]
+    fn a_sync_running_when_the_app_names_another_folder_saves_into_the_one_it_started_in() {
+        use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+        let fake = three_used();
+        let (started_in, named_during) = (
+            Folder::new("sync-started-in"),
+            Folder::new("sync-named-during"),
+        );
+        fake.store.use_dir(started_in.0.clone());
+        let first = AtomicBool::new(true);
+        let switching = |url: &str| {
+            if first.swap(false, SeqCst) {
+                fake.store.use_dir(named_during.0.clone());
+            }
+            fake.get(url)
+        };
+        snapshot_from(
+            &EsploraSource(&Reads(&switching)),
+            &abandon_about(),
+            "",
+            KeyNetwork::Test,
+            AddressType::NativeSegwit,
+            &|| fake.now(),
+            &fake.store,
+        )
+        .unwrap();
+        assert_eq!(
+            (started_in.files().len(), named_during.files()),
+            (1, Vec::<String>::new())
+        );
+    }
+
     #[test]
     fn a_restart_reads_the_scan_file_proves_each_chains_index_again_and_makes_a_routine_sync() {
         let fake = three_used();
