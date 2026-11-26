@@ -104,8 +104,21 @@ class OnboardingSession(
         /** A passphrase import waiting for its fingerprint check. */
         data object Staged : Held
 
+        /** A copy of this wallet is on the phone, the one this session's next save replaces. */
+        sealed interface OnPhone : Held {
+            val version: StoreVersion
+            val fingerprint: String
+            val earlier: List<String>
+        }
+
         /** The phone held this copy, of the key [fingerprint] and naming the wallet's [earlier] keys, at our last read or write. */
-        class Copy(val version: StoreVersion, val fingerprint: String, val earlier: List<String>) : Held
+        class Copy(override val version: StoreVersion, override val fingerprint: String, override val earlier: List<String>) : OnPhone
+
+        /**
+         * The copy is still on the phone but no key opens it, as after its screen lock was removed: Android deletes the key and keeps
+         * the file. Not saved. The next save replaces it, and the store makes a new key for it. A Create would meet it forever.
+         */
+        class Lost(override val version: StoreVersion, override val fingerprint: String, override val earlier: List<String>) : OnPhone
 
         /** Another instance changed the phone since. This session never writes again in this run. */
         data object Stale : Held
@@ -116,7 +129,7 @@ class OnboardingSession(
     /** NotSaved is today's memory-only state. Screens read it to say "saved on this phone" only when it is true. */
     val saved: SaveState
         get() = when (held) {
-            Held.Nothing, Held.Stale -> SaveState.NotSaved
+            Held.Nothing, Held.Stale, is Held.Lost -> SaveState.NotSaved
             Held.Staged -> SaveState.Staged
             is Held.Copy -> SaveState.Saved
         }
@@ -149,8 +162,11 @@ class OnboardingSession(
      */
     private var recordGuard: SingleSigWallet.UnconfirmedSend? = null
 
-    /** A save that failed and has not been repeated yet. [flushPendingSave] and the next write point repeat it. */
-    private var pendingSave = false
+    /** A save that failed and has not been repeated yet. [flushPendingSave] and the next write point repeat it. State, so the gate sees it. */
+    private var pendingSave by mutableStateOf(false)
+
+    /** Whether a save waits for [flushPendingSave]. */
+    internal val savePending: Boolean get() = pendingSave
 
     /** Saved before it returns, so a crash can never lose a key whose words were shown. Refused while the session holds a key, unless it is staged. */
     fun generateThisDevice(passphrase: String = "", network: KeyNetwork = KeyNetwork.TEST) {
@@ -274,10 +290,15 @@ class OnboardingSession(
      * the right check value and would pass, then fail to open at the next cold start. The caller marks the lock on
      * when this returns Verified. A mismatch marks the wallet not saved and keeps the key in memory. A phone that could
      * not save reports why, and the screen keeps today's Biometrics scan.
+     * A copy that cannot be proved yet answers TryLater and stays this wallet's ([holdsCopy]): a save still owed after the flush, which
+     * reads nothing, because the copy on the phone may be sealed to a key the store has replaced since, and a copy whose key is gone,
+     * which the next save replaces under a new key. The user taps again after that save.
      */
     internal suspend fun proveSavedCopy(reason: String): UnlockResult {
         val w = wallet ?: return UnlockResult.Unavailable(Why.NotWired)
+        flushPendingSave()
         if (saved != SaveState.Saved) return UnlockResult.Unavailable(notSavedBecause ?: Why.Other)
+        if (pendingSave) return UnlockResult.Unavailable(Why.TryLater)
         return when (val r = w.open(reason)) {
             // r.version is not adopted: it may name a newer copy another instance wrote, which this session's older flags must never overwrite.
             is UnlockResult.Opened -> if (holdsThisKey(r.record)) UnlockResult.Verified else notSaved(UnlockResult.Broken(Cause.Corrupt))
@@ -286,12 +307,27 @@ class OnboardingSession(
         }
     }
 
+    /** A copy of this wallet is on the phone, saved or waiting for a save to replace it. App Lock reads it back, and gives up on it only when this turns false. */
+    internal val holdsCopy: Boolean get() = held is Held.OnPhone
+
     private fun holdsThisKey(record: WalletRecord) =
         record.fingerprint == fingerprint && record.network == network && record.words == words && record.passphrase == passphrase &&
             record.addressType == addressType
 
-    /** The copy on the phone is not this wallet or cannot be opened, so this wallet is not saved after all. The key stays in memory. */
+    /**
+     * The copy on the phone is not this wallet or cannot be opened, so this wallet is not saved after all. The key stays in memory. A copy
+     * whose key is gone is still this wallet's, so the session keeps its version and saves again over it ([Held.Lost]). Any other cause
+     * may be another wallet's copy or a newer one, which no save of this session may replace. A lost copy answers TryLater, since
+     * nothing about the copy itself is wrong.
+     */
     private fun notSaved(result: UnlockResult): UnlockResult {
+        val copy = held as? Held.Copy
+        if (copy != null && result is UnlockResult.Broken && result.cause == Cause.KeyGone) {
+            held = Held.Lost(copy.version, copy.fingerprint, copy.earlier)
+            notSavedBecause = Why.TryLater
+            pendingSave = true
+            return UnlockResult.Unavailable(Why.TryLater)
+        }
         held = Held.Nothing
         notSavedBecause = Why.Other
         return result
@@ -379,7 +415,11 @@ class OnboardingSession(
             }
             is EraseResult.Failed -> {
                 // The copy is still on the phone, but the erase advanced the store's counter, so the session's Replace must expect the new version or every later save is a Conflict.
-                (held as? Held.Copy)?.let { held = Held.Copy(r.version, it.fingerprint, it.earlier) }
+                when (val h = held) {
+                    is Held.Copy -> held = Held.Copy(r.version, h.fingerprint, h.earlier)
+                    is Held.Lost -> held = Held.Lost(r.version, h.fingerprint, h.earlier)
+                    else -> Unit
+                }
                 false
             }
         }
@@ -432,7 +472,7 @@ class OnboardingSession(
         val mode = when (val h = held) {
             Held.Staged, Held.Stale -> return@synchronized false
             Held.Nothing -> WriteMode.Create
-            is Held.Copy -> WriteMode.Replace(h.version)
+            is Held.OnPhone -> WriteMode.Replace(h.version)
         }
         val record = toRecord()
         when (val r = w.save(record, mode)) {
@@ -462,14 +502,9 @@ class OnboardingSession(
                 }
             }
             is SaveResult.NotSaved -> {
-                // A failed Replace leaves the earlier copy on the phone, so the wallet stays Saved under the same version and only a
-                // failed Create is not saved. Downgrading it would make every later write a Create, which meets that copy and is lost for good.
-                if (mode == WriteMode.Create) {
-                    held = Held.Nothing
-                    notSavedBecause = r.why
-                } else {
-                    lastSaveFailed = true
-                }
+                // A failed Replace leaves the earlier copy on the phone under the same version, so a Copy stays Saved and a Lost stays
+                // Lost. Downgrading either would make every later write a Create, which meets that copy and is lost for good.
+                if (held is Held.Copy) lastSaveFailed = true else notSavedBecause = r.why
                 // A store that can never keep it here has nothing to retry, and a foreground flush would only encode the record again.
                 pendingSave = r.why != Why.NotWired
             }
@@ -480,6 +515,15 @@ class OnboardingSession(
     /** Tries a save that failed again, for example when the app comes back to the foreground. Does nothing unless one is pending. */
     fun flushPendingSave() {
         if (pendingSave) persist()
+    }
+
+    /**
+     * The phone's lock went away, which deletes or invalidates the key the saved copy is sealed to, so that copy may no longer open. The
+     * next flush saves the same record again, and the store seals it under a new key once the lock is back. A wallet with no copy has
+     * nothing to save again.
+     */
+    internal fun saveAgainLater() {
+        if (held is Held.Copy) pendingSave = true
     }
 
     /** Create and Import never drop a key the user may have written down. Only a Staged import, which nothing has shown as final yet, gives way. */
@@ -495,7 +539,7 @@ class OnboardingSession(
     // The key the phone holds joins the earlier ones when this save changes it, because the book may stay saved under it.
     private fun toRecord() = WalletRecord(
         words, passphrase, network, fingerprint, backupConfirmed, imported, appLockEnabled, addressType, addressTypeConfirmed,
-        earlierFingerprints = (held as? Held.Copy)?.let { it.earlier + it.fingerprint - fingerprint }.orEmpty(),
+        earlierFingerprints = (held as? Held.OnPhone)?.let { it.earlier + it.fingerprint - fingerprint }.orEmpty(),
     )
 
     private fun applyKey(key: SoftwareAccountKey, passphrase: String, network: KeyNetwork) {

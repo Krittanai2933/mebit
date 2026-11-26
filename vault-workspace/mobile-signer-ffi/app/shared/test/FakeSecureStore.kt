@@ -112,8 +112,12 @@ internal class FakeShelf(var marker: Marker = Marker.Kept) : SecureShelf {
         private set
     var refuse: ReadResult? = null
 
+    /** The probe every place answers instead of Present or Empty, as KeyGone for files whose key is gone. */
+    var probe: StoreProbe? = null
+
     override fun store(place: Place): SecureStore = object : SecureStore by places.getValue(place) {
-        override fun probe(): StoreProbe = if (places.values.any { it.probe == StoreProbe.Present }) StoreProbe.Present else StoreProbe.Empty
+        override fun probe(): StoreProbe =
+            this@FakeShelf.probe ?: if (places.values.any { it.probe == StoreProbe.Present }) StoreProbe.Present else StoreProbe.Empty
 
         override fun marker(): Marker = this@FakeShelf.marker
 

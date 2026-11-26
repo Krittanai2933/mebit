@@ -4,7 +4,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -31,6 +33,8 @@ import com.mebit.app.rememberVaultsStorage
 import com.mebit.app.ui.components.LocalCovered
 import com.mebit.app.ui.components.coversScreen
 import com.mebit.ffi.signer.hotUseStateDir
+import kotlinx.coroutines.delay
+import kotlin.time.Duration.Companion.seconds
 
 /** What the gate does about the phone's own screen lock. */
 enum class LockGate {
@@ -73,7 +77,7 @@ fun WalletGate() {
         NoScreenLockScreen(rememberScreenLockSettingsOpener())
     } else {
         // Open and Covered compose the app in the same place, so a lock that comes and goes keeps every wallet and screen.
-        CompositionLocalProvider(LocalCovered provides (lock == LockGate.Covered)) { OpenGate() }
+        CompositionLocalProvider(LocalCovered provides (lock == LockGate.Covered)) { OpenGate(lock) }
         if (lock == LockGate.Covered) {
             // Composed after the app, so this SystemBack wins over its screens' and Back sends the app to the background.
             SystemBack(rememberLeaveApp())
@@ -82,8 +86,11 @@ fun WalletGate() {
     }
 }
 
+/** The waits before each flush of [OpenGate]: at once, then for a key that may take seconds to make in a TEE or StrongBox. */
+private val SAVE_RETRY_WAITS = listOf(0, 1, 2, 4, 8, 16).map { it.seconds }
+
 @Composable
-private fun OpenGate() {
+private fun OpenGate(lock: LockGate) {
     // Before any screen asks the core about a wallet, so its first sync after a restart reads the scan file.
     val scanDir = rememberScanStateDir()
     remember(scanDir) { scanDir?.let(::hotUseStateDir) }
@@ -121,11 +128,24 @@ private fun OpenGate() {
         }
     }
 
-    // A failed save is tried again when the app comes back, for example once the user has set a passcode. Not while Locked or
-    // Broken: a session with nothing in it has nothing to flush there, and if the iOS store ever falls back to the Keychain's
-    // own sheet, a read holds the store's lock while that sheet is up, so a flush would block the main thread until it closes.
-    LifecycleEventEffect(Lifecycle.Event.ON_START) {
-        if (gate.boot is Boot.Open || gate.boot == Boot.Onboarding) wallets.flushPendingSaves()
+    // A failed save is tried again when the app comes back, for example once the user has set a passcode, and when the lock comes
+    // back after Covered marked every saved wallet ([Wallets.lockRead]). Keyed on the lock this composition read, never on one read
+    // in the ON_START callback, which may run before the gate's own read. While a save is still owed, as while a new Keystore key is
+    // being made, it tries again a few times with growing waits. Not while Locked or Broken: a session with nothing in it has
+    // nothing to flush there, and if the iOS store ever falls back to the Keychain's own sheet, a read holds the store's lock while
+    // that sheet is up, so a flush would block the main thread until it closes.
+    var returns by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { returns++ }
+    LaunchedEffect(returns, lock, wallets.savesPending) {
+        if (lock == LockGate.Covered) {
+            wallets.lockRead(lockPresent = false)
+            return@LaunchedEffect
+        }
+        for (wait in SAVE_RETRY_WAITS) {
+            delay(wait)
+            if (gate.boot !is Boot.Open && gate.boot != Boot.Onboarding) return@LaunchedEffect
+            if (!wallets.lockRead(lockPresent = true)) return@LaunchedEffect
+        }
     }
 
     when (val boot = gate.boot) {

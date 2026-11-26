@@ -168,7 +168,7 @@ class PassphraseBookTest {
             assertTrue(w.session.lastSaveFailed, "the Replace failed, so the phone still holds the first key")
             vaults.sync()
             assertEquals(FIRST_KEY, phone.store.owner(), "${phone.store.name}: the book is never saved for a key the phone does not hold")
-            assertIs<UnlockResult.Broken>(phone.appLock(w), "the read-back finds the first key, so the wallet is not saved")
+            assertIs<UnlockResult.Unavailable>(phone.appLock(w), "App Lock accepted the first key's copy while the passphrase's save is owed")
             vaults.sync() // NavGraph's, because the owners changed
             assertEquals(listOf(FIRST_KEY) to BOOK, phone.nextLaunch(), phone.store.name)
         }

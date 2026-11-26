@@ -1,5 +1,7 @@
 package com.mebit.app.data
 
+import com.mebit.app.Why
+import com.mebit.app.WriteResult
 import com.mebit.ffi.signer.SoftwareAccountKey
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -74,15 +76,20 @@ class CreatePassphraseTest {
 
     @Test
     fun aFailedReplaceKeepsTheEarlierCopyAndTheReadBackCatchesIt() {
-        val store = FakeSecureStore(failWrite = 2)
+        val store = FakeSecureStore()
         val session = session(store)
         session.generateThisDevice()
+        store.write = WriteResult.Unavailable(Why.Other) // every later write fails, the read-back's own retry included
         session.changeNewKeyPassphrase(PASSPHRASE)
         assertTrue(session.lastSaveFailed, "a failed Replace went unreported")
         assertTrue(store.savedCopy().passphrase.isEmpty(), "the earlier copy is not on the phone")
-        assertIs<UnlockResult.Broken>(runBlocking { session.proveSavedCopy("test") }, "App Lock accepted a copy without the passphrase")
-        assertEquals(SaveState.NotSaved, session.saved, "the wallet still says saved")
+        // The save is still owed, so the read-back reads nothing and keeps the earlier copy for the next Replace, never a Create.
+        assertEquals(Why.TryLater, assertIs<UnlockResult.Unavailable>(runBlocking { session.proveSavedCopy("test") }, "App Lock accepted a copy without the passphrase").why)
+        assertTrue(session.lastSaveFailed, "the notice no longer says the last save failed")
         assertEquals(PASSPHRASE, session.passphrase, "the key left memory")
+        store.write = null
+        assertEquals(UnlockResult.Verified, runBlocking { session.proveSavedCopy("test") }, "the read-back once the store saves")
+        assertEquals(PASSPHRASE, store.savedCopy().passphrase, "the copy on the phone")
     }
 
     @Test

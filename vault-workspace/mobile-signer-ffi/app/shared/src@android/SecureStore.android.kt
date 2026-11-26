@@ -21,6 +21,7 @@ import java.security.KeyStore
 import java.security.PrivateKey
 import java.security.PublicKey
 import java.security.SecureRandom
+import java.security.UnrecoverableKeyException
 import java.security.spec.MGF1ParameterSpec
 import java.security.spec.X509EncodedKeySpec
 import java.util.concurrent.Callable
@@ -91,8 +92,8 @@ private var keyJob: Future<Throwable?>? = null
  * `noBackupFilesDir` the files stay out of backups, and the key never leaves the Keystore, so a copy on another phone opens nothing.
  *
  * The key is made off the main thread, when the probe finds no wallet on a phone with a screen lock, after an erase, or at a
- * write that finds none, never over a stored wallet's key. A write that arrives before it is ready answers TryLater, and
- * the session saves again at its next write point or when the app returns. Logs nothing.
+ * write that finds none or finds it invalidated, never over a stored wallet's working key. A write that arrives before it is
+ * ready answers TryLater, and the session saves again at its next write point or when the gate retries. Logs nothing.
  */
 private class KeystoreShelf(private val context: Context) : SecureShelf {
     private val files: Map<Place, AtomicFile> = Place.all.associateWith { walletFile(it) }
@@ -228,7 +229,8 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
 
         override fun probe(): StoreProbe = synchronized(storeLock) {
             val fileExists = Place.all.any(::walletFileExists)
-            val probe = androidProbeOutcome(fileExists, if (fileExists) aliasPresent() else false, deviceSecure())
+            val alias = if (fileExists) aliasPresent() else false
+            val probe = androidProbeOutcome(fileExists, alias, if (alias == true) privateHalfFailure() else null, deviceSecure())
             if (probe == StoreProbe.Empty) startKey()
             probe
         }
@@ -251,8 +253,15 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
             } catch (e: Exception) {
                 return WriteResult.Unavailable(Why.TryLater)
             }
-            if (certificate == null) {
-                // The pair is gone, as after a screen lock was removed, so the phone key's wrapped copy can never be opened again. A new key must not reuse it.
+            if (androidKeyMustBeRemade(certificate != null, if (certificate != null) privateHalfFailure() else null)) {
+                // The pair is gone or invalidated, as after a screen lock was removed, so the phone key's wrapped copy can never be opened again. A new key must not reuse it.
+                if (certificate != null) {
+                    try {
+                        keyStore().deleteEntry(ALIAS) // a dead pair under the alias would stop the new key from being made
+                    } catch (e: Exception) {
+                        return WriteResult.Unavailable(Why.TryLater)
+                    }
+                }
                 forgetPhoneKey()
                 return keyNotReady()
             }
@@ -342,6 +351,17 @@ internal actual fun rememberSecureShelf(): SecureShelf {
 
 private fun keyStore(): KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
+/**
+ * What an unwrap cipher threw when it took the private half, or null. Taking it needs no owner, only using it does, so this never
+ * prompts. The probe does the same, and a read before its sheet ([androidInitOutcome]).
+ */
+private fun privateHalfFailure(): Throwable? = try {
+    (keyStore().getKey(ALIAS, null) as? PrivateKey)?.let(::unwrapCipher)
+    null
+} catch (e: Exception) {
+    e
+}
+
 /** Whether the alias exists, or null when the Keystore could not answer. */
 private fun aliasPresent(): Boolean? = try {
     keyStore().containsAlias(ALIAS)
@@ -384,12 +404,13 @@ private fun keystoreCode(t: Throwable): Int? {
 }
 
 /**
- * A file without its key is KeyGone even with no screen lock, because removing the lock deletes the key and keeps the file. [aliasPresent]
- * is null when the Keystore threw, and is not read without a file.
+ * A file without a working key is KeyGone even with no screen lock, because removing the lock keeps the file and kills the key: API 30
+ * keeps the alias and invalidates the key, newer images delete it. [aliasPresent] is null when the Keystore threw, and is not read
+ * without a file. [privateHalfFailure] is what taking the private half threw, read only beside an alias.
  */
-internal fun androidProbeOutcome(fileExists: Boolean, aliasPresent: Boolean?, deviceSecure: Boolean): StoreProbe = when {
+internal fun androidProbeOutcome(fileExists: Boolean, aliasPresent: Boolean?, privateHalfFailure: Throwable?, deviceSecure: Boolean): StoreProbe = when {
     fileExists -> when (aliasPresent) {
-        true -> StoreProbe.Present
+        true -> if (privateHalfFailure != null && androidKeyInvalidated(privateHalfFailure)) StoreProbe.KeyGone else StoreProbe.Present
         false -> StoreProbe.KeyGone
         null -> StoreProbe.Unavailable(Why.TryLater)
     }
@@ -405,9 +426,21 @@ internal fun androidReadRefusal(fileExists: Boolean, aliasPresent: Boolean?): Re
     else -> null
 }
 
+/**
+ * Whether [t], thrown while taking the private half, says the key is permanently invalidated. A write deletes a key only when this
+ * holds ([androidKeyMustBeRemade]). API 30's `AndroidKeyStoreSpi.engineGetKey` rethrows the invalidation as an
+ * UnrecoverableKeyException with this message and no cause. Every other getKey failure there, a locked phone included, has a
+ * message of its own and a cause.
+ */
+internal fun androidKeyInvalidated(t: Throwable): Boolean = generateSequence(t) { it.cause }.any {
+    it is KeyPermanentlyInvalidatedException || (it is UnrecoverableKeyException && it.cause == null && it.message == API30_INVALIDATED)
+}
+
+private const val API30_INVALIDATED = "User changed or deleted their auth credentials"
+
 /** A cipher that will not take the private half. Only an invalidated key is gone; a locked phone and the rest try again. */
 internal fun androidInitOutcome(t: Throwable): ReadResult =
-    if (t is KeyPermanentlyInvalidatedException) ReadResult.KeyGone else ReadResult.Unavailable(Why.TryLater)
+    if (androidKeyInvalidated(t)) ReadResult.KeyGone else ReadResult.Unavailable(Why.TryLater)
 
 /**
  * The sheet's error code. Cancel, a system cancel and five wrong PINs all arrive as a cancel (measured: 10), so the unlock
@@ -430,6 +463,14 @@ private const val NEGATIVE_BUTTON = 13
  */
 internal fun androidUnwrapOutcome(t: Throwable, keystoreCode: Int?): ReadResult =
     if (t is BadPaddingException || keystoreCode == 10) ReadResult.Unreadable else ReadResult.Unavailable(Why.TryLater)
+
+/**
+ * Whether a write must make a new pair before it seals anything: the pair is gone ([certificatePresent] false), or taking its private half
+ * threw an invalidation ([privateHalfFailure], [androidKeyInvalidated]). Sealing to that public half would write a copy no key opens.
+ * Any other failure, as on a locked phone, goes on, because the write needs only the public half.
+ */
+internal fun androidKeyMustBeRemade(certificatePresent: Boolean, privateHalfFailure: Throwable?): Boolean =
+    !certificatePresent || (privateHalfFailure != null && androidKeyInvalidated(privateHalfFailure))
 
 /** Why a write stops before the key is touched, or null to go on. A Create meets any wallet file, readable or not. */
 internal fun androidWriteRefusal(fileExists: Boolean, deviceSecure: Boolean, mode: WriteMode): WriteResult? = when {

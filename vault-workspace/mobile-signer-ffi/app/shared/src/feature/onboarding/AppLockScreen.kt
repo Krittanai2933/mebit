@@ -39,7 +39,6 @@ import com.mebit.app.BiometricResult
 import com.mebit.app.Biometrics
 import com.mebit.app.getPlatform
 import com.mebit.app.data.OnboardingSession
-import com.mebit.app.data.SaveState
 import com.mebit.app.resources.Res
 import com.mebit.app.resources.face_id
 import com.mebit.app.resources.ic_check
@@ -89,15 +88,15 @@ fun AppLockScreen(
         busy = true
         scope.launch {
             val reason = if (enable) "เปิดล็อกแอป mebit" else "ปลดล็อก mebit"
-            // A saved wallet's one prompt reads its copy back, so a copy that cannot open shows up while the words can still be written down.
-            val readBack = enable && session.saved == SaveState.Saved
+            // A wallet's copy is read back in its one prompt, so a copy that cannot open shows up while the words can still be written down.
+            val readBack = enable && session.holdsCopy
             val result = if (readBack) {
                 readBackScan(session.proveSavedCopy(reason))
             } else {
                 biometrics.authenticate(reason = reason, allowPasscode = allowPasscode)
             }
             busy = false
-            if (scanOpens(result, enable, allowPasscode, readBack, session.saved)) {
+            if (scanOpens(result, enable, allowPasscode, copyGivenUp = readBack && !session.holdsCopy)) {
                 if (enable && result == BiometricResult.Success) session.markAppLockEnabled()
                 onDone()
                 return@launch
