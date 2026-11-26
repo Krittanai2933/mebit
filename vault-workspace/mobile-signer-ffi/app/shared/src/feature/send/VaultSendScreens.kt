@@ -586,6 +586,7 @@ fun VaultSentScreen(send: VaultSend?, quotes: QuoteCache, node: NodeSetting, onH
         destination = sent.payment.destination,
         walletName = send.vault.name,
         node = node,
+        network = KeyNetwork.TEST,
         quotes = quotes,
         onHome = onHome,
         onOpenCatalog = onOpenCatalog,

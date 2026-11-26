@@ -44,17 +44,22 @@ internal fun NodeSetting.toChoice(): NodeChoice = when (this) {
 }
 
 /**
- * The explorer page of [txid] on this node, which the slip's QR opens. Auto names blockstream.info, the first public host it tries: the
+ * The explorer page of [txid] on [network] at this node, which the slip's QR opens. Auto names blockstream.info, the first public host it tries: the
  * build's own node, which Auto may try first, is private, and a slip is shared with people who cannot reach it. An own node on Tailscale
  * names blockstream.info too, for the same reason.
  */
-fun NodeSetting.txPageUrl(txid: String): String = when (this) {
-    NodeSetting.Auto, NodeSetting.Blockstream -> "https://blockstream.info/testnet4/tx/$txid"
-    NodeSetting.MempoolSpace -> "https://mempool.space/testnet4/tx/$txid"
+fun NodeSetting.txPageUrl(txid: String, network: KeyNetwork): String = when (this) {
+    NodeSetting.Auto, NodeSetting.Blockstream -> "https://blockstream.info/${explorerPath(network)}tx/$txid"
+    NodeSetting.MempoolSpace -> "https://mempool.space/${explorerPath(network)}tx/$txid"
     is NodeSetting.Own ->
-        if (onTailnet(base)) NodeSetting.Blockstream.txPageUrl(txid)
+        if (onTailnet(base)) NodeSetting.Blockstream.txPageUrl(txid, network)
         // shortcut: assumes the node serves its explorer's web pages beside its /api, as Esplora and mempool do; an API-only node gives a dead link. Add a page URL to the setting when one shows up.
         else base.trimEnd('/').removeSuffix("/api") + "/tx/$txid"
+}
+
+private fun explorerPath(network: KeyNetwork): String = when (network) {
+    KeyNetwork.MAIN -> ""
+    KeyNetwork.TEST -> "testnet4/"
 }
 
 /** A host only the user's own tailnet reaches: 100.64.0.0/10 or `*.ts.net`, the Tailscale addresses the core lets an own node use. */

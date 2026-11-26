@@ -1156,6 +1156,7 @@ internal fun MebitNavHost(
                             destination = draft.destination,
                             walletName = w.name,
                             node = nodeSettings.current,
+                            network = KeyNetwork.TEST,
                             quotes = quotes,
                             onHome = { land(stackAfterSlipHome(backStack, MovieRoute.HardwareHome)) },
                             onOpenCatalog = openCatalog,
