@@ -31,6 +31,8 @@ test-dependencies@android:
   - net.java.dev.jna:jna:5.18.1
 
 settings:
+  android:
+    minSdk: 30
   compose:
     enabled: true
     resources:

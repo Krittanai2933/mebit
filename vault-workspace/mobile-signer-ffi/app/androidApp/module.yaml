@@ -11,4 +11,6 @@ settings:
   android:
     namespace: com.mebit.app
     applicationId: com.mebit.app
+    # Android 11: the Keystore's owner check, which every gate of the app needs, starts there (open item 79).
+    minSdk: 30
     abiFilters: [ arm64-v8a, x86_64 ]

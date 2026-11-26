@@ -22,9 +22,7 @@ class NotSavedNoticeTest {
 
     @Test
     fun aPhoneThatCannotSaveYetIsToldToWriteTheWordsDown() {
-        for (why in listOf(Why.NotWired, Why.OsTooOld)) {
-            assertEquals("เครื่องนี้ยังบันทึกกุญแจไว้ไม่ได้ · จด 24 คำไว้ให้ดี", notSavedText(why), "$why")
-        }
+        assertEquals("เครื่องนี้ยังบันทึกกุญแจไว้ไม่ได้ · จด 24 คำไว้ให้ดี", notSavedText(Why.NotWired))
     }
 
     @Test

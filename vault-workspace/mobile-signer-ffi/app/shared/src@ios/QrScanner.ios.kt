@@ -161,10 +161,9 @@ actual fun rememberQrPhotoPicker(onResult: (PhotoQr) -> Unit): () -> Unit {
             config.selectionLimit = 1
             val picker = PHPickerViewController(configuration = config)
             picker.delegate = delegate
-            // Only Cancel or a pick can close it, so the delegate always answers and the sheet never waits in Picking.
+            // Only Cancel, a pick or a block over the app can close it, and each one answers, so the sheet never waits in Picking.
             picker.modalInPresentation = true
-            val top = topViewController()
-            if (top == null) currentOnResult(PhotoQr.Cancelled) else top.presentViewController(picker, animated = true, completion = null)
+            if (!NativeSheets.present(picker, onCovered = { currentOnResult(PhotoQr.Cancelled) })) currentOnResult(PhotoQr.Cancelled)
         }
         open
     }
@@ -172,6 +171,7 @@ actual fun rememberQrPhotoPicker(onResult: (PhotoQr) -> Unit): () -> Unit {
 
 private class PhotoPickerDelegate(private val onResult: (PhotoQr) -> Unit) : NSObject(), PHPickerViewControllerDelegateProtocol {
     override fun picker(picker: PHPickerViewController, didFinishPicking: List<*>) {
+        if (!NativeSheets.answered(picker)) return
         picker.dismissViewControllerAnimated(true, completion = null)
         val provider = (didFinishPicking.firstOrNull() as? PHPickerResult)?.itemProvider
         if (provider == null) {

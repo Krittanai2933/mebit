@@ -108,8 +108,7 @@ fun S1HomeSingleSigScreen(
     onHistory: () -> Unit,
     onOpenTx: (HotTx) -> Unit,
     onOpenCatalog: () -> Unit,
-    onChangePin: (() -> Unit)? = null,
-) = SingleSigHome(wallet, session, quotes, onReceive, onSend, onHistory, onOpenTx, onOpenCatalog, tag = "screen_send/s1", onChangePin = onChangePin)
+) = SingleSigHome(wallet, session, quotes, onReceive, onSend, onHistory, onOpenTx, onOpenCatalog, tag = "screen_send/s1")
 
 /** The phone wallet's home, so the backup gate can show it dimmed behind its sheet under a tag of its own. */
 @Composable
@@ -123,7 +122,6 @@ internal fun SingleSigHome(
     onOpenTx: (HotTx) -> Unit,
     onOpenCatalog: () -> Unit,
     tag: String,
-    onChangePin: (() -> Unit)? = null,
 ) = OneKeyHome(
     wallet = wallet,
     walletName = session.walletName,
@@ -148,19 +146,7 @@ internal fun SingleSigHome(
         keys = listOf(KeyRowText(THIS_PHONE_KEY_NAME, "mebit บนเครื่องนี้ · " + session.fingerprint.chunked(4).joinToString(" ").ifBlank { "—" }, "key_fingerprint")),
         expanded = keyDetails,
         onToggle = { keyDetails = !keyDetails },
-    ) {
-        // A link under the key's row where the session Spending PIN guards spending, which no board has yet.
-        onChangePin?.let {
-            Text(
-                text = "เปลี่ยน PIN",
-                color = MbNavy,
-                fontSize = 12.5.sp,
-                fontWeight = FontWeight.SemiBold,
-                lineHeight = 17.sp,
-                modifier = Modifier.padding(start = 62.dp, bottom = 14.dp).clickable(role = Role.Button, onClick = it).testTag("cta_change_pin"),
-            )
-        }
-    }
+    )
     NotSavedNotice(session, Modifier.padding(top = 12.dp))
 }
 

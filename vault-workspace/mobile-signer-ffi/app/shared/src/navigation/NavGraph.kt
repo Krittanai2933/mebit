@@ -4,6 +4,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.clearAndSetSemantics
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -17,7 +18,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -32,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mebit.app.BiometricResult
+import com.mebit.app.CloseNativeSheetsWhileCovered
 import com.mebit.app.Pairings
 import com.mebit.app.Place
 import com.mebit.app.SystemBack
@@ -53,7 +54,6 @@ import com.mebit.app.data.KeyringStore
 import com.mebit.app.data.THIS_PHONE_KEY_NAME
 import com.mebit.app.data.hardwareKind
 import com.mebit.app.data.oneKeyChoices
-import com.mebit.app.data.OwnerCheck
 import com.mebit.app.FilePick
 import com.mebit.app.data.CreatedVault
 import com.mebit.app.data.ImportPending
@@ -106,8 +106,6 @@ import com.mebit.app.feature.onboarding.ImportSeedScreen
 import com.mebit.app.feature.onboarding.KeyCreatedScreen
 import com.mebit.app.feature.onboarding.KeySourceScreen
 import com.mebit.app.feature.onboarding.LockMode
-import com.mebit.app.feature.onboarding.PinSheet
-import com.mebit.app.feature.onboarding.SpendingPinScreen
 import com.mebit.app.feature.onboarding.VerifyWordsScreen
 import com.mebit.app.feature.onboarding.WelcomeScreen
 import com.mebit.app.feature.vault.CREATE_FAILED_LINE
@@ -166,6 +164,8 @@ import com.mebit.app.rememberBiometrics
 import com.mebit.app.rememberFakeDeviceScript
 import com.mebit.app.rememberFakeDeviceSwitch
 import com.mebit.app.rememberIsDebugBuild
+import com.mebit.app.ui.components.CoverableSheet
+import com.mebit.app.ui.components.LocalCovered
 import com.mebit.app.ui.components.LocalDebugLinkLift
 import com.mebit.app.ui.components.MebitBottomBar
 import com.mebit.app.ui.components.MebitScreen
@@ -242,9 +242,7 @@ internal fun MebitNavHost(
     // the import goes on to the lock step or the user leaves Import Seed by its back chip. Memory only: never rememberSaveable,
     // which Android writes to disk.
     var importDraft by remember { mutableStateOf(ffiImportSeedDraft()) }
-    val phone = rememberBiometrics()
-    // The gates' owner check, which is the phone's own or, on a phone without one, the Spending PIN (open item 79).
-    val biometrics = remember(phone, session) { OwnerCheck(phone, session) }
+    val biometrics = rememberBiometrics()
     val appLock = remember { AppLockState() }
     val scope = rememberCoroutineScope()
     var addLine by remember { mutableStateOf<String?>(null) }
@@ -260,9 +258,8 @@ internal fun MebitNavHost(
     // The row a tap opened, whole, so the detail draws at once. The catalog opens the demo row until a tap.
     var openedTx by remember { mutableStateOf(DEMO_TX) }
 
-    // More than a minute away locks the app again, once the user turned the lock on or where the Spending PIN guards it.
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { appLock.onBackground() }
-    LifecycleEventEffect(Lifecycle.Event.ON_START) { appLock.onForeground(biometrics.locksWhenAway) }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { appLock.onForeground(session.appLockEnabled) }
 
     LaunchedEffect(current) {
         addLine = null
@@ -333,13 +330,7 @@ internal fun MebitNavHost(
     }
 
     // App Lock is one setting for the phone, so only the wallet that made the phone's first choice runs this step.
-    // After the first wallet's create or import comes App Lock on a phone with an owner check, else the Spending PIN, set before the list.
-    // A later wallet's setup ends on the list here.
-    fun lockStep() = when {
-        wallets.listed.size >= 2 -> finishAdd(endSetup(session))
-        biometrics.needsPin -> navigate(MovieRoute.SpendingPin)
-        else -> navigate(MovieRoute.AppLock)
-    }
+    fun lockStep() = if (wallets.listed.size >= 2) finishAdd(endSetup(session)) else navigate(MovieRoute.AppLock)
 
     // The create flow goes on to the address type. A later backup returns to the screen that opened it.
     fun afterBackup() = land(stackAfterBackup(backStack, session.inFirstSetup))
@@ -402,11 +393,10 @@ internal fun MebitNavHost(
         }
     }
 
-    // 1.8.8's confirm came first. The phone's own owner sheet, as a several-key wallet's removal asks, and never the Spending PIN.
     fun removeHardware(w: HardwareWallet) {
         scope.launch {
             removeLine = null
-            when (hardware.remove(w.id) { phone.authenticate(removeReason(w.name), allowPasscode = true) == BiometricResult.Success }) {
+            when (hardware.remove(w.id) { biometrics.authenticate(removeReason(w.name), allowPasscode = true) == BiometricResult.Success }) {
                 HardwareRemoval.Removed, HardwareRemoval.Refused -> Unit
                 HardwareRemoval.NotSaved -> removeLine = REMOVE_FAILED_LINE
             }
@@ -426,10 +416,8 @@ internal fun MebitNavHost(
         }
     }
 
-    // Once onboarding is over the words open past the Spending PIN where it guards the session, and as before elsewhere. They are the
-    // words of the wallet at [place]: the one in use, or the one whose key the Keyring's ⋯ backs up.
     fun openWords(place: Place = backStack.last().place) {
-        scope.launch { if (biometrics.guardWords("ดู 24 คำสำรอง")) navigate(MovieRoute.BackupWords, place) }
+        if (appLock.canShowWords(biometrics)) navigate(MovieRoute.BackupWords, place)
     }
 
     val openTx: (HotTx) -> Unit = { tx ->
@@ -470,8 +458,15 @@ internal fun MebitNavHost(
     val bar = current.route.bar
     // A sheet that covers a tab screen, the wallet list's QR scanner, hides the bar and gives the screen its room.
     var barHidden by remember { mutableStateOf(false) }
-    CompositionLocalProvider(LocalDebugLinkLift provides if (bar != null && !barHidden) 22.dp else 0.dp, LocalBtcUnit provides unitSettings.current) {
-        Box(Modifier.fillMaxSize().background(MbPage)) {
+    CompositionLocalProvider(
+        LocalDebugLinkLift provides if (bar != null && !barHidden) 22.dp else 0.dp,
+        LocalBtcUnit provides unitSettings.current,
+        LocalCovered provides (LocalCovered.current || appLock.locked),
+    ) {
+        CloseNativeSheetsWhileCovered()
+        // While a block covers them, the screens leave the accessibility tree, so a screen reader cannot read a balance or an address behind it.
+        val hidden = if (LocalCovered.current) Modifier.clearAndSetSemantics {} else Modifier
+        Box(Modifier.fillMaxSize().background(MbPage).then(hidden)) {
             val inset = if (bar != null && !barHidden) bottomBarHeight() else 0.dp
             Box(Modifier.fillMaxSize().padding(bottom = inset).consumeWindowInsets(PaddingValues(bottom = inset))) {
                 // Keyed on the wallet, so a wallet's screens never inherit another wallet's remembered state, such as its retries, its open key details and its pull.
@@ -538,13 +533,6 @@ internal fun MebitNavHost(
                         session = session,
                         biometrics = biometrics,
                         mode = LockMode.Enable,
-                        // A lock removed while this screen showed leaves the phone with no owner check, so its PIN comes before the list.
-                        onDone = { if (biometrics.needsPin) navigate(MovieRoute.SpendingPin) else finishAdd(endSetup(session)) },
-                        onBack = onBack,
-                        onOpenCatalog = openCatalog,
-                    )
-                    MovieRoute.SpendingPin -> SpendingPinScreen(
-                        session = session,
                         onDone = { finishAdd(endSetup(session)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -735,11 +723,10 @@ internal fun MebitNavHost(
                             onOpenSpending = { place -> openWallet(place) { MovieRoute.S1HomeSingleSig } },
                             onRemoveSpending = { place -> removeWallet(wallets.at(place)) },
                             onOpenDetail = { navigate(MovieRoute.VaultDetail) },
-                            // The phone's own owner sheet, which a one-key wallet's removal shows as it opens the wallet's saved copy, and never the Spending PIN.
                             onRemoveVault = { vault ->
                                 scope.launch {
                                     removeLine = null
-                                    if (phone.authenticate(removeReason(vault.name), allowPasscode = true) != BiometricResult.Success) return@launch
+                                    if (biometrics.authenticate(removeReason(vault.name), allowPasscode = true) != BiometricResult.Success) return@launch
                                     if (!vaultDraft.remove(vault.id)) removeLine = REMOVE_FAILED_LINE
                                 }
                             },
@@ -890,7 +877,6 @@ internal fun MebitNavHost(
                         onHistory = { navigate(MovieRoute.S7History) },
                         onOpenTx = openTx,
                         onOpenCatalog = openCatalog,
-                        onChangePin = if (session.pin.isSet) ({ scope.launch { biometrics.changePin("เปลี่ยน PIN") } }) else null,
                     )
                     MovieRoute.S7History -> S7HistoryScreen(
                         history = singleSig.shownHistory(),
@@ -1208,79 +1194,77 @@ internal fun MebitNavHost(
                 )
             }
         }
-    }
 
-    if (catalogOpen) {
-        ModalBottomSheet(
-            onDismissRequest = { catalogOpen = false },
-            sheetState = rememberFullSheetState(),
-            modifier = Modifier.testTag("route_catalog"),
-        ) {
-            Text(
-                text = "MOVIE PAGE ROUTES",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-            )
-            LazyColumn(modifier = Modifier.padding(bottom = 32.dp)) {
-                items(MovieRoute.entries, key = { it.path }) { route ->
-                    Text(
-                        text = route.eyebrow + " · " + route.titleTh +
-                            if (route in ImplementedRoutes) " ✓" else "",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                catalogOpen = false
-                                deviceSample = null
-                                phoneSample = null
-                                navigate(route)
-                            }
-                            .padding(horizontal = 24.dp, vertical = 12.dp)
-                            .testTag("catalog_" + route.path),
-                    )
-                }
-                // The states of 5.3.1, 5.4.1 and 5.3.1.1 with the boards' sample data, so each can be set beside its board with no payment.
-                items(PhoneSample.entries, key = { "sample_" + it.tag }) { sample ->
-                    Text(
-                        text = "SIGN SAMPLE · " + sample.label,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                catalogOpen = false
-                                phoneSample = sample
-                                navigate(MovieRoute.M3SignOnPhone)
-                            }
-                            .padding(horizontal = 24.dp, vertical = 12.dp)
-                            .testTag("catalog_sign_" + sample.tag),
-                    )
-                }
-                // The states of 5.3.2 to 5.7.3 with the boards' sample data, so each can be set beside its board with no device.
-                items(DeviceSample.entries, key = { "sample_" + it.tag }) { sample ->
-                    Text(
-                        text = "SIGN SAMPLE · " + sample.label,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                catalogOpen = false
-                                deviceSample = sample
-                                navigate(MovieRoute.M3SignOnDevice)
-                            }
-                            .padding(horizontal = 24.dp, vertical = 12.dp)
-                            .testTag("catalog_sign_" + sample.tag),
-                    )
+        if (catalogOpen) {
+            CoverableSheet(
+                onDismissRequest = { catalogOpen = false },
+                sheetState = rememberFullSheetState(),
+                modifier = Modifier.testTag("route_catalog"),
+            ) {
+                Text(
+                    text = "MOVIE PAGE ROUTES",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                )
+                LazyColumn(modifier = Modifier.padding(bottom = 32.dp)) {
+                    items(MovieRoute.entries, key = { it.path }) { route ->
+                        Text(
+                            text = route.eyebrow + " · " + route.titleTh +
+                                if (route in ImplementedRoutes) " ✓" else "",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    catalogOpen = false
+                                    deviceSample = null
+                                    phoneSample = null
+                                    navigate(route)
+                                }
+                                .padding(horizontal = 24.dp, vertical = 12.dp)
+                                .testTag("catalog_" + route.path),
+                        )
+                    }
+                    // The states of 5.3.1, 5.4.1 and 5.3.1.1 with the boards' sample data, so each can be set beside its board with no payment.
+                    items(PhoneSample.entries, key = { "sample_" + it.tag }) { sample ->
+                        Text(
+                            text = "SIGN SAMPLE · " + sample.label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    catalogOpen = false
+                                    phoneSample = sample
+                                    navigate(MovieRoute.M3SignOnPhone)
+                                }
+                                .padding(horizontal = 24.dp, vertical = 12.dp)
+                                .testTag("catalog_sign_" + sample.tag),
+                        )
+                    }
+                    // The states of 5.3.2 to 5.7.3 with the boards' sample data, so each can be set beside its board with no device.
+                    items(DeviceSample.entries, key = { "sample_" + it.tag }) { sample ->
+                        Text(
+                            text = "SIGN SAMPLE · " + sample.label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    catalogOpen = false
+                                    deviceSample = sample
+                                    navigate(MovieRoute.M3SignOnDevice)
+                                }
+                                .padding(horizontal = 24.dp, vertical = 12.dp)
+                                .testTag("catalog_sign_" + sample.tag),
+                        )
+                    }
                 }
             }
         }
     }
 
     if (appLock.locked) {
-        // A phone the Spending PIN guards unlocks only through the PIN sheet drawn over this cover, never through a check it lacks.
-        val pinLock = biometrics.usesPin
-        // Covers everything, swallows taps, and goes away only on Face ID, the device passcode or the PIN. Composed after the screens, so this
-        // SystemBack wins over their arrows' and Back sends the app to the background: the lock stays and no screen under it pops.
+        // Composed after the screens, so this SystemBack wins over their arrows' and Back sends the app to the background: the lock
+        // stays and no screen under it pops.
         SystemBack(rememberLeaveApp())
         Box(
             modifier = Modifier
@@ -1288,21 +1272,16 @@ internal fun MebitNavHost(
                 .background(MbPage)
                 .coversScreen(),
         ) {
-            if (!pinLock) {
-                AppLockScreen(
-                    session = session,
-                    biometrics = biometrics,
-                    mode = LockMode.Unlock,
-                    onDone = { appLock.unlock() },
-                    onBack = null,
-                    onOpenCatalog = {},
-                )
-            }
+            AppLockScreen(
+                session = session,
+                biometrics = biometrics,
+                mode = LockMode.Unlock,
+                onDone = { appLock.unlock() },
+                onBack = null,
+                onOpenCatalog = {},
+            )
         }
-        if (pinLock) LaunchedEffect(Unit) { if (biometrics.unlock("ปลดล็อก mebit")) appLock.unlock() }
     }
-
-    biometrics.asking?.let { PinSheet(it, session.pin) }
 }
 
 /** A hardware wallet's screen with no wallet to show: only the debug catalog opens one so, before any is saved or once it is removed. */

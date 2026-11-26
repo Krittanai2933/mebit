@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -30,6 +29,7 @@ import com.mebit.app.data.UnlockResult
 import com.mebit.app.navigation.Boot
 import com.mebit.app.navigation.WalletGateState
 import com.mebit.app.ui.components.BottomActions
+import com.mebit.app.ui.components.CoverableSheet
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.rememberFullSheetState
@@ -179,7 +179,7 @@ internal fun UnlockScreen(gate: WalletGateState) {
                 )
             },
         ) {
-            Spacer(modifier = Modifier.height(65.dp))
+            Spacer(modifier = Modifier.height(NavyTileTopGap))
             FaceIdTile(failed = failed, words = words)
             Spacer(modifier = Modifier.height(50.dp))
             when (view) {
@@ -212,7 +212,7 @@ internal fun UnlockScreen(gate: WalletGateState) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ForgetSheet(newerApp: Boolean, onConfirm: () -> Unit, onCancel: () -> Unit) {
-    ModalBottomSheet(
+    CoverableSheet(
         onDismissRequest = onCancel,
         sheetState = rememberFullSheetState(),
         containerColor = MbWhite,

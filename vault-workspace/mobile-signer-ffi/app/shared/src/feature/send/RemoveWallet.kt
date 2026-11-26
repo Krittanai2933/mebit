@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -17,6 +16,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mebit.app.data.BookSaving
 import com.mebit.app.data.KeySourceLabel
+import com.mebit.app.ui.components.CoverableSheet
 import com.mebit.app.ui.components.DeleteItem
 import com.mebit.app.ui.components.PrimaryCta
 import com.mebit.app.ui.components.SecondaryCta
@@ -113,7 +113,7 @@ internal fun removeVaultBody(m: Int, n: Int) = "เหรียญยังอ�
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ConfirmSheet(tag: String, title: String, body: String, onCancel: () -> Unit, buttons: @Composable ColumnScope.() -> Unit) {
-    ModalBottomSheet(
+    CoverableSheet(
         onDismissRequest = onCancel,
         sheetState = rememberFullSheetState(),
         containerColor = MbWhite,

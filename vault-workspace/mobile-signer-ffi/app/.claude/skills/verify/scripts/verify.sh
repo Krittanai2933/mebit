@@ -6,6 +6,7 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 APP=$(cd "$HERE/../../../.." && pwd) # Kotlin project root: vault-workspace/mobile-signer-ffi/app
 PKG=com.mebit.app
+SCREEN_PIN=1234 # the screen lock start sets on the emulator, which recipes type into the system prompt
 OUT=$APP/build/verify # inside the gitignored build/; "./kotlin clean" removes build output and may remove this too
 STATE=$OUT/android.env
 IOS_STATE=$OUT/ios.env
@@ -157,6 +158,18 @@ cmd_start() {
     sleep 2
   done
 
+  # The app shows only its no-screen-lock block on a phone without a screen lock, and the AVD has none. Set the PIN before the
+  # app's first launch, so it starts on Welcome and its first key is saved. VERIFY_SCREEN_LOCK=0 leaves the emulator without one.
+  local lock=none
+  if [ "${VERIFY_SCREEN_LOCK:-1}" != 0 ]; then
+    adbs shell locksettings set-pin "$SCREEN_PIN" > "$RUN/locksettings.log" 2>&1 \
+      || { cat "$RUN/locksettings.log"; fail "could not set the screen lock PIN. Set VERIFY_SCREEN_LOCK=0 to start without one"; }
+    # With a PIN, a screen that sleeps wakes behind the keyguard and hides the app, so keep it awake for the run.
+    adbs shell svc power stayon true > /dev/null 2>&1
+    adbs shell settings put system screen_off_timeout 1800000 > /dev/null 2>&1
+    lock="pin $SCREEN_PIN"
+  fi
+
   adbs uninstall "$PKG" > /dev/null 2>&1 # empty app data, and no signing-key clash with an older debug build
   ( cd "$APP" && ./kotlin run -m androidApp -d "$SERIAL" ) > "$RUN/run.log" 2>&1 \
     || { tail -20 "$RUN/run.log"; fail "kotlin run failed, full log: $RUN/run.log"; }
@@ -170,6 +183,16 @@ cmd_start() {
     adbs shell am start -n "$PKG/.MainActivity" --es MEBIT_TEST_MODE 1 > /dev/null 2>&1
     for i in 1 2 3 4 5 6 7 8 9 10; do app_resumed && break; sleep 1; done
     app_resumed || fail "$PKG did not come to the front. Run verify.sh start again. What is in front: verify.sh adb shell dumpsys activity activities"
+  fi
+
+  # With a PIN set, the keyguard can come up over the resumed app before stay-awake holds, and the app then counts as resumed while the
+  # lock screen has the focus. Unlock it with the run's PIN.
+  if [ "$lock" != none ] && adbs shell dumpsys window 2> /dev/null | grep -q 'mCurrentFocus=.*NotificationShade'; then
+    adbs shell input keyevent 82 > /dev/null 2>&1
+    adbs shell wm dismiss-keyguard > /dev/null 2>&1
+    adbs shell input text "$SCREEN_PIN" > /dev/null 2>&1
+    adbs shell input keyevent 66 > /dev/null 2>&1
+    for i in 1 2 3 4 5; do adbs shell dumpsys window 2> /dev/null | grep -q 'mCurrentFocus=.*NotificationShade' || break; sleep 1; done
   fi
 
   # Ready means the UI answers and no "isn't responding" dialog is up. A starved guest can still show one. A dialog
@@ -197,7 +220,7 @@ cmd_start() {
   done
 
   meta "$RUN/meta.txt" "apk_sha256=$(sha "$(built_apk)")" \
-    "device=$(adbs shell getprop ro.product.model | tr -d '\r') api=$(adbs shell getprop ro.build.version.sdk | tr -d '\r') avd=$AVD vcpus=$(adbs shell nproc | tr -d '\r') gpu=$gpu"
+    "device=$(adbs shell getprop ro.product.model | tr -d '\r') api=$(adbs shell getprop ro.build.version.sdk | tr -d '\r') avd=$AVD vcpus=$(adbs shell nproc | tr -d '\r') gpu=$gpu" "screen_lock=$lock"
   step start "$SERIAL" "$AVD"
   echo "ready: $SERIAL runs $PKG. Evidence goes to $RUN"
 }
@@ -567,7 +590,8 @@ usage: verify.sh COMMAND [ARGS]
 SELECTOR is [text|desc|id][~]:VALUE, default text; "~" means contains. Example: tap "text~:Click me"
 On iOS text and desc both match the accessibility label, and id matches the accessibility identifier.
 Env (Android start): VERIFY_AVD, VERIFY_PORT, VERIFY_CORES, VERIFY_GPU (default swiftshader_indirect),
-  VERIFY_EMU_WINDOW=1 (show emulator window; drops -no-window).
+  VERIFY_EMU_WINDOW=1 (show emulator window; drops -no-window),
+  VERIFY_SCREEN_LOCK=0 (no screen lock, so the app shows its block screen; default: PIN 1234 before the first launch).
 A physical iPhone: VERIFY_IOS_DEVICE=<udid> VERIFY_IOS_TEAM=<team id> [VERIFY_IOS_BUNDLE_ID=<id>] verify.sh ios-start
   (ios-stop removes the app from the phone, and the developer must then be trusted again; VERIFY_IOS_KEEP_APP=1 keeps it)
 EOF

@@ -23,6 +23,6 @@ internal interface Pairings {
 /** The name a credential is kept under, `safe7.<fingerprint>`, or null for anything but 8 hex, so no outside text ever names a file. */
 internal fun pairingName(fingerprint: String): String? = fingerprint.lowercase().takeIf { Regex("[0-9a-f]{8}").matches(it) }?.let { "safe7.$it" }
 
-/** This platform's store, or null where it has none, and then a Safe 7 pairs with a code at every connect. */
+/** This platform's store for Safe 7 pairing credentials. */
 @Composable
-internal expect fun rememberPairings(): Pairings?
+internal expect fun rememberPairings(): Pairings

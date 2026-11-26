@@ -38,9 +38,6 @@ import kotlinx.coroutines.withContext
 /** The one Keystore alias of the wallet's key pair. Nothing ever lists aliases. */
 private const val ALIAS = "com.mebit.app.wallet"
 
-/** The lowest API level that stores: the prompt needs `setAllowedAuthenticators` and the key `setUserAuthenticationParameters`. */
-private const val MIN_API = Build.VERSION_CODES.R
-
 private const val RSA_OAEP = "RSA/ECB/OAEPWithSHA-256AndMGF1Padding"
 
 /** SHA-1 for MGF1, the only MGF1 digest the Keystore accepts below API 34. */
@@ -177,7 +174,7 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
     private fun startEveryRead(): EveryStart {
         val held = Place.all.filter(::walletFileExists)
         val fileExists = held.isNotEmpty()
-        androidReadRefusal(Build.VERSION.SDK_INT, fileExists, if (fileExists) aliasPresent() else false)?.let { refusal ->
+        androidReadRefusal(fileExists, if (fileExists) aliasPresent() else false)?.let { refusal ->
             return EveryStart.Done(
                 when (refusal) {
                     ReadResult.NotFound -> EveryRead.Found(emptyMap())
@@ -215,7 +212,7 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
 
     /** Starts making the key in the background unless a generation is running. Holds [storeLock]. */
     private fun startKey() {
-        if (Build.VERSION.SDK_INT < MIN_API || keyJob?.isDone == false) return
+        if (keyJob?.isDone == false) return
         keyJob = keyMaker.submit(Callable { generateKeyIfMissing() })
     }
 
@@ -231,7 +228,7 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
 
         override fun probe(): StoreProbe = synchronized(storeLock) {
             val fileExists = Place.all.any(::walletFileExists)
-            val probe = androidProbeOutcome(Build.VERSION.SDK_INT, fileExists, if (fileExists) aliasPresent() else false, deviceSecure())
+            val probe = androidProbeOutcome(fileExists, if (fileExists) aliasPresent() else false, deviceSecure())
             if (probe == StoreProbe.Empty) startKey()
             probe
         }
@@ -248,7 +245,7 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
 
         override fun write(bytes: ByteArray, mode: WriteMode): WriteResult = synchronized(storeLock) {
             copy.refuse(mode)?.let { return it } // a stale Replace touches neither the key nor the file
-            androidWriteRefusal(Build.VERSION.SDK_INT, walletFileExists(place), deviceSecure(), mode)?.let { return it }
+            androidWriteRefusal(walletFileExists(place), deviceSecure(), mode)?.let { return it }
             val certificate = try {
                 keyStore().getCertificate(ALIAS)
             } catch (e: Exception) {
@@ -298,7 +295,7 @@ private class KeystoreShelf(private val context: Context) : SecureShelf {
         /** The file, the key and an initialised cipher, or why a read stops before the sheet. */
         private fun startRead(): ReadStart {
             val fileExists = walletFileExists(place)
-            androidReadRefusal(Build.VERSION.SDK_INT, fileExists, if (fileExists) aliasPresent() else false)?.let { return ReadStart.Done(it) }
+            androidReadRefusal(fileExists, if (fileExists) aliasPresent() else false)?.let { return ReadStart.Done(it) }
             val envelope = try {
                 file.readFully()
             } catch (e: IOException) {
@@ -387,12 +384,10 @@ private fun keystoreCode(t: Throwable): Int? {
 }
 
 /**
- * What the probe makes of the facts, in this order: the API level, the wallet file, its key, the screen lock. A file without
- * its key is KeyGone even with no screen lock, because removing the lock deletes the key and keeps the file. [aliasPresent]
+ * A file without its key is KeyGone even with no screen lock, because removing the lock deletes the key and keeps the file. [aliasPresent]
  * is null when the Keystore threw, and is not read without a file.
  */
-internal fun androidProbeOutcome(api: Int, fileExists: Boolean, aliasPresent: Boolean?, deviceSecure: Boolean): StoreProbe = when {
-    api < MIN_API -> StoreProbe.Unavailable(Why.OsTooOld)
+internal fun androidProbeOutcome(fileExists: Boolean, aliasPresent: Boolean?, deviceSecure: Boolean): StoreProbe = when {
     fileExists -> when (aliasPresent) {
         true -> StoreProbe.Present
         false -> StoreProbe.KeyGone
@@ -403,8 +398,7 @@ internal fun androidProbeOutcome(api: Int, fileExists: Boolean, aliasPresent: Bo
 }
 
 /** Why a read stops before the sheet, or null when the file and its key are there. */
-internal fun androidReadRefusal(api: Int, fileExists: Boolean, aliasPresent: Boolean?): ReadResult? = when {
-    api < MIN_API -> ReadResult.Unavailable(Why.OsTooOld)
+internal fun androidReadRefusal(fileExists: Boolean, aliasPresent: Boolean?): ReadResult? = when {
     !fileExists -> ReadResult.NotFound
     aliasPresent == null -> ReadResult.Unavailable(Why.TryLater)
     !aliasPresent -> ReadResult.KeyGone
@@ -438,8 +432,7 @@ internal fun androidUnwrapOutcome(t: Throwable, keystoreCode: Int?): ReadResult 
     if (t is BadPaddingException || keystoreCode == 10) ReadResult.Unreadable else ReadResult.Unavailable(Why.TryLater)
 
 /** Why a write stops before the key is touched, or null to go on. A Create meets any wallet file, readable or not. */
-internal fun androidWriteRefusal(api: Int, fileExists: Boolean, deviceSecure: Boolean, mode: WriteMode): WriteResult? = when {
-    api < MIN_API -> WriteResult.Unavailable(Why.OsTooOld)
+internal fun androidWriteRefusal(fileExists: Boolean, deviceSecure: Boolean, mode: WriteMode): WriteResult? = when {
     mode == WriteMode.Create && fileExists -> WriteResult.AlreadyExists
     !deviceSecure -> WriteResult.Unavailable(Why.NoScreenLock)
     else -> null

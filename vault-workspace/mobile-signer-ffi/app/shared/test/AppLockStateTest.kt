@@ -4,6 +4,7 @@ import com.mebit.app.BiometricResult
 import com.mebit.app.Biometrics
 import com.mebit.app.NanosTimeSource
 import com.mebit.app.SleepCountingTime
+import com.mebit.app.feature.onboarding.scanOpens
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -101,10 +102,28 @@ class AppLockStateTest {
     }
 
     @Test
-    fun aPhoneWithNoLockOfItsOwnIsAskedEvenWithTheLockOff() = runBlocking {
-        // Only an owner check that is not the phone's own, the Spending PIN, can answer here. The phone's own fails closed.
-        val noLock = Scan(BiometricResult.Unavailable("NoScreenLock"), lock = false)
-        assertFalse(state.confirm(noLock, enabled = false, reason = "r"))
-        assertEquals(1, noLock.asked)
+    fun aPhoneWithNoLockSignsNothingWithAppLockOnOrOff() = runBlocking {
+        for (enabled in listOf(false, true)) {
+            val noLock = Scan(BiometricResult.Unavailable("NoScreenLock"), lock = false)
+            assertFalse(state.confirm(noLock, enabled = enabled, reason = "r"), "App Lock enabled=$enabled")
+            assertEquals(1, noLock.asked, "asked even with App Lock off, enabled=$enabled")
+        }
+    }
+
+    @Test
+    fun withNoPhoneLockTheSixtySecondLockStaysLocked() = runBlocking {
+        state.onBackground()
+        clock += 61.seconds
+        state.onForeground(enabled = true)
+        assertTrue(state.locked)
+        val result = Scan(BiometricResult.Unavailable("NoScreenLock"), lock = false).authenticate("ปลดล็อก mebit")
+        if (scanOpens(result, enable = false, allowPasscode = false, readBack = false, savedAfter = SaveState.Saved)) state.unlock()
+        assertTrue(state.locked, "a phone with no lock cannot unlock the 60-second lock")
+    }
+
+    @Test
+    fun theWordsOpenOnlyWhileThePhoneHasItsOwnLock() {
+        assertTrue(state.canShowWords(Scan(BiometricResult.Success, lock = true)))
+        assertFalse(state.canShowWords(Scan(BiometricResult.Success, lock = false)), "a phone whose lock is gone shows no words")
     }
 }

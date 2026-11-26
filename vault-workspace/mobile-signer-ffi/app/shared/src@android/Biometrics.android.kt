@@ -2,7 +2,6 @@ package com.mebit.app
 
 import android.app.KeyguardManager
 import android.content.Context
-import android.os.Build
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
@@ -12,17 +11,11 @@ import androidx.compose.ui.platform.LocalContext
  * framework refuses a cancel button on a biometric-only sheet and a phone with only a PIN would have nothing to answer with.
  */
 private class AndroidBiometrics(private val context: Context) : Biometrics {
-    override suspend fun authenticate(reason: String, allowPasscode: Boolean): BiometricResult {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return BiometricResult.Unavailable("OsTooOld")
-        return androidBiometricOutcome(askOwner(context, reason, crypto = null))
-    }
+    override suspend fun authenticate(reason: String, allowPasscode: Boolean): BiometricResult =
+        androidBiometricOutcome(askOwner(context, reason, crypto = null))
 
-    override fun available(): Boolean =
-        androidOwnerCheck(Build.VERSION.SDK_INT, context.getSystemService(KeyguardManager::class.java).isDeviceSecure)
+    override fun available(): Boolean = context.getSystemService(KeyguardManager::class.java).isDeviceSecure
 }
-
-/** Pure. Whether a phone on [api] has the owner check that [authenticate][Biometrics.authenticate] runs, which needs Android 11 or later and a secure screen lock. */
-internal fun androidOwnerCheck(api: Int, deviceSecure: Boolean): Boolean = api >= Build.VERSION_CODES.R && deviceSecure
 
 /** The sheet needs this Context (the Activity), as the store's read does. */
 @Composable

@@ -18,8 +18,8 @@ class ColdStartTest {
     fun keyGoneStartsBroken() = assertEquals(Cause.KeyGone, assertIs<Boot.Broken>(coldStart(StoreProbe.KeyGone)).cause)
 
     @Test
-    fun noScreenLockOsTooOldAndNotWiredStartOnboarding() {
-        for (why in listOf(Why.NoScreenLock, Why.OsTooOld, Why.NotWired)) {
+    fun noScreenLockAndNotWiredStartOnboarding() {
+        for (why in listOf(Why.NoScreenLock, Why.NotWired)) {
             assertEquals(Boot.Onboarding, coldStart(StoreProbe.Unavailable(why)), "$why")
         }
     }

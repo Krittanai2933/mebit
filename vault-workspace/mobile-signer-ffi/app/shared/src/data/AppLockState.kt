@@ -12,9 +12,9 @@ import kotlin.time.TimeSource
 
 /**
  * When the app asks for the owner again: after it has been in the background for more than a minute, and before it signs a send.
- * Only matters once the user turned the lock on, or where the check is not the phone's own but the Spending PIN ([OwnerCheck]).
- * In memory only: a cold start begins at the wallet gate, which asks for the owner itself when a wallet is saved, and this lock
- * starts unlocked with the nav host that owns it.
+ * Only matters once the user turned the lock on, except that a phone whose own lock is gone signs nothing. In memory only: a cold
+ * start begins at the wallet gate, which asks for the owner itself when a wallet is saved, and this lock starts unlocked with the nav
+ * host that owns it.
  */
 class AppLockState(internal val clock: TimeSource = SleepCountingTime) {
     var locked: Boolean by mutableStateOf(false)
@@ -26,7 +26,7 @@ class AppLockState(internal val clock: TimeSource = SleepCountingTime) {
         leftAt = clock.markNow()
     }
 
-    /** [enabled] is whether this session locks after a minute away ([OwnerCheck.locksWhenAway]). */
+    /** [enabled] is whether the user turned the lock on. */
     fun onForeground(enabled: Boolean) {
         val left = leftAt
         leftAt = null
@@ -38,11 +38,14 @@ class AppLockState(internal val clock: TimeSource = SleepCountingTime) {
     }
 
     /**
-     * Asks for the owner before spending when the user turned the lock on, and always where [biometrics] says the phone's own check
-     * does not guard the session, which makes it the Spending PIN. Fails closed, so anything but a match refuses.
+     * Asks for the owner before spending when the user turned the lock on. A phone whose own lock is gone is asked even with it off,
+     * and its check answers Unavailable, so it signs nothing. Fails closed, so anything but a match refuses.
      */
     suspend fun confirm(biometrics: Biometrics, enabled: Boolean, reason: String): Boolean =
         (!enabled && biometrics.available()) || biometrics.authenticate(reason, allowPasscode = true) == BiometricResult.Success
+
+    /** Whether the 24 words may open once onboarding is over: only while the phone has its own lock. */
+    fun canShowWords(biometrics: Biometrics): Boolean = biometrics.available()
 
     private companion object {
         val GRACE = 60.seconds

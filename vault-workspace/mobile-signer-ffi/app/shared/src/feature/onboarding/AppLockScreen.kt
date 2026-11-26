@@ -45,6 +45,7 @@ import com.mebit.app.resources.face_id
 import com.mebit.app.resources.ic_check
 import com.mebit.app.resources.ic_shield_check
 import com.mebit.app.ui.components.BottomActions
+import com.mebit.app.ui.components.LocalCovered
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbEyebrow
@@ -96,11 +97,12 @@ fun AppLockScreen(
                 biometrics.authenticate(reason = reason, allowPasscode = allowPasscode)
             }
             busy = false
+            if (scanOpens(result, enable, allowPasscode, readBack, session.saved)) {
+                if (enable && result == BiometricResult.Success) session.markAppLockEnabled()
+                onDone()
+                return@launch
+            }
             when (result) {
-                BiometricResult.Success -> {
-                    if (enable) session.markAppLockEnabled()
-                    onDone()
-                }
                 BiometricResult.Failed -> {
                     // iOS reports a failure after two non-matching scans, and locks Face ID out after five.
                     attemptsLeft -= 2
@@ -110,17 +112,21 @@ fun AppLockScreen(
                     attemptsLeft = 0
                     failed = true
                 }
-                BiometricResult.Cancelled -> Unit
-                is BiometricResult.Unavailable ->
-                    // Nothing can secure the app here, or the saved copy just failed its read-back: onboarding goes on without a lock, unlocking does not.
-                    if (goesOnWithoutLock(enable, allowPasscode, readBack, session.saved)) onDone() else unavailable = true
+                // Nothing can secure the app here: unlocking never goes on without the owner.
+                is BiometricResult.Unavailable -> unavailable = true
+                BiometricResult.Success, BiometricResult.Cancelled -> Unit
             }
         }
     }
 
-    // The unlock screen asks for Face ID as soon as it shows.
-    LaunchedEffect(mode) {
-        if (mode == LockMode.Unlock) scan(allowPasscode = false)
+    // The unlock screen asks for Face ID as soon as it shows, and again once the no-screen-lock block lifts, never under it: with no
+    // lock the phone could only answer Unavailable, and that line would still show after the lock is back.
+    val covered = LocalCovered.current
+    LaunchedEffect(mode, covered) {
+        if (mode == LockMode.Unlock && !covered) {
+            unavailable = false
+            scan(allowPasscode = false)
+        }
     }
 
     val passcodeOnly = failed && attemptsLeft <= 0
@@ -158,7 +164,7 @@ fun AppLockScreen(
             )
         },
     ) {
-        Spacer(modifier = Modifier.height(65.dp))
+        Spacer(modifier = Modifier.height(NavyTileTopGap))
         FaceIdTile(failed = failed, words = words)
         Spacer(modifier = Modifier.height(50.dp))
         when {
@@ -176,6 +182,17 @@ fun AppLockScreen(
 
 @Composable
 internal fun FaceIdTile(failed: Boolean, words: LockWords) {
+    NavyTile(tag = "face_id_tile", edge = if (failed) MbEyebrow else null) {
+        val glyph = if (words.faceGlyph) Res.drawable.face_id else Res.drawable.ic_shield_check
+        Image(painterResource(glyph), contentDescription = words.tileLabel, modifier = Modifier.size(64.dp))
+    }
+}
+
+/** The gap above a NavyTile on every screen that shows one. */
+internal val NavyTileTopGap = 65.dp
+
+@Composable
+internal fun NavyTile(tag: String, edge: Color? = null, content: @Composable () -> Unit) {
     val shape = RoundedCornerShape(36.dp)
     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Box(
@@ -184,13 +201,10 @@ internal fun FaceIdTile(failed: Boolean, words: LockWords) {
                 .dropShadow(shape, Shadow(radius = 40.dp, color = MbNavy, spread = (-18).dp, offset = DpOffset(0.dp, 22.dp), alpha = 0.55f))
                 .clip(shape)
                 .background(MbNavy)
-                .then(if (failed) Modifier.border(3.dp, MbEyebrow, shape) else Modifier)
-                .testTag("face_id_tile"),
+                .then(if (edge != null) Modifier.border(3.dp, edge, shape) else Modifier)
+                .testTag(tag),
             contentAlignment = Alignment.Center,
-        ) {
-            val glyph = if (words.faceGlyph) Res.drawable.face_id else Res.drawable.ic_shield_check
-            Image(painterResource(glyph), contentDescription = words.tileLabel, modifier = Modifier.size(64.dp))
-        }
+        ) { content() }
     }
 }
 

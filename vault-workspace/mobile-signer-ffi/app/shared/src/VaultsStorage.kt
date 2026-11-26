@@ -14,6 +14,6 @@ internal interface VaultsStorage {
     fun delete(): Boolean
 }
 
-/** This platform's store for the saved vaults, or null where it has none, which leaves them in memory only. */
+/** This platform's store for the saved vaults. */
 @Composable
-internal expect fun rememberVaultsStorage(): VaultsStorage?
+internal expect fun rememberVaultsStorage(): VaultsStorage

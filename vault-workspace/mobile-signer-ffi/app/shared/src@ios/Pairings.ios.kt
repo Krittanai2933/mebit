@@ -88,7 +88,7 @@ internal object KeychainPairings : Pairings {
 }
 
 @Composable
-internal actual fun rememberPairings(): Pairings? = KeychainPairings
+internal actual fun rememberPairings(): Pairings = KeychainPairings
 
 private fun gone(status: Int) = status == errSecSuccess || status == errSecItemNotFound
 

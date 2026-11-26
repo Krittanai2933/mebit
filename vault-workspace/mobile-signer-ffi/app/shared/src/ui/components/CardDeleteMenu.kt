@@ -44,7 +44,6 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import com.mebit.app.ui.theme.MbBody
@@ -99,7 +98,7 @@ fun CardDeleteMenu(tagSuffix: String, label: String, item: DeleteItem, onDark: B
         if (open) {
             // Penpot starts the menu 4 dp under the 32 dp circle, which is 2 dp above the bottom of this target.
             val overlap = with(LocalDensity.current) { 2.dp.roundToPx() }
-            Popup(popupPositionProvider = remember(overlap) { UnderMore(overlap) }, onDismissRequest = { open = false }, properties = PopupProperties(focusable = true)) {
+            CoverablePopup(popupPositionProvider = remember(overlap) { UnderMore(overlap) }, onDismissRequest = { open = false }, properties = PopupProperties(focusable = true)) {
                 DeleteMenu(tagSuffix, label, item, extra?.let { MenuAction(it.label, it.tag, onClick = { open = false; it.onClick() }, icon = it.icon) }) {
                     open = false
                     onDelete()

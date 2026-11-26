@@ -1,12 +1,10 @@
 package com.mebit.app
 
-import android.app.Activity
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
-import android.os.Build
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -35,12 +33,6 @@ private class AndroidSharer(private val context: Context) : Sharer {
     )
 
     override fun image(png: ByteArray, name: String) = shareFile(context, safeShareName(name) + ".png", png, "image/png")
-}
-
-private fun startChooser(context: Context, intent: Intent) {
-    val chooser = Intent.createChooser(intent, null)
-    if (context !is Activity) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    context.startActivity(chooser)
 }
 
 /** Writes [bytes] as `cacheDir/share/[fileName]`, the one folder the FileProvider serves, and opens the share sheet with that file. */
@@ -174,7 +166,7 @@ private fun displayName(context: Context, uri: Uri): String =
 actual fun ImageBitmap.encodePng(): ByteArray {
     val bitmap = asAndroidBitmap()
     // A captured graphics layer can be a hardware bitmap, which compress cannot read.
-    val hardware = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && bitmap.config == Bitmap.Config.HARDWARE
+    val hardware = bitmap.config == Bitmap.Config.HARDWARE
     val readable = if (hardware) bitmap.copy(Bitmap.Config.ARGB_8888, false) else bitmap
     val out = ByteArrayOutputStream()
     check(readable.compress(Bitmap.CompressFormat.PNG, 100, out)) { "Android could not encode the bitmap as PNG" }

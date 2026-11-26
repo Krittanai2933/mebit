@@ -28,7 +28,7 @@ enum class SaveState { NotSaved, Staged, Saved }
  * plain file beside the key, so a phone that cannot save the key keeps it too. Without a [wallet] the key lives in memory only.
  * With one, each committed change is saved through one write point, and only [forgetSavedWallet] erases the saved copy. The
  * guards outlive it. [newKey] and [restoreKey] make the key, and [forgetScans] drops the core's scan of every wallet, and tests
- * replace them because the host JVM has no native library. [pin] is the session Spending PIN, beside the words and never saved.
+ * replace them because the host JVM has no native library.
  * [place] is this wallet's place on the phone, read only for its name, because [wallet] is already bound to that place.
  * [onPhone] says whether another wallet on the phone holds a fingerprint. [startsLocked] is App Lock as the phone has it when this
  * wallet is added, which its first save carries and [clear] returns to. [others] gives the other wallets' fingerprints, for the clear
@@ -41,7 +41,6 @@ class OnboardingSession(
     private val restoreKey: (List<String>, String, KeyNetwork, UInt) -> SoftwareAccountKey = { w, p, n, a -> restoreSoftwareMultisigKey(w, p, n, a) },
     private val forgetScans: () -> Unit = { hotForgetScanState() },
     private val payments: PendingPayments = PendingPayments(null),
-    val pin: SpendingPin = SpendingPin(),
     private val forgetVaults: () -> Unit = {},
     val place: Place = Place.FIRST,
     private val onPhone: (String) -> Boolean = { false },
@@ -318,7 +317,6 @@ class OnboardingSession(
         notSavedBecause = null
         lastSaveFailed = false
         pendingSave = false
-        pin.clear()
     }
 
     fun markBackupConfirmed() {
@@ -473,7 +471,7 @@ class OnboardingSession(
                     lastSaveFailed = true
                 }
                 // A store that can never keep it here has nothing to retry, and a foreground flush would only encode the record again.
-                pendingSave = r.why != Why.NotWired && r.why != Why.OsTooOld
+                pendingSave = r.why != Why.NotWired
             }
         }
         false

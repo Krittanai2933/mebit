@@ -1,6 +1,5 @@
 package com.mebit.app
 
-import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.AtomicFile
@@ -79,13 +78,10 @@ private class KeystoreVaults(path: File) : VaultsStorage {
     private fun fileExists(): Boolean = file.baseFile.exists() || File(file.baseFile.path + ".bak").exists()
 }
 
-/** Null below API 30, where the wallet store keeps nothing either. */
 @Composable
-internal actual fun rememberVaultsStorage(): VaultsStorage? {
+internal actual fun rememberVaultsStorage(): VaultsStorage {
     val context = LocalContext.current
-    return remember(context) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) null else KeystoreVaults(File(context.noBackupFilesDir, "vaults/book"))
-    }
+    return remember(context) { KeystoreVaults(File(context.noBackupFilesDir, "vaults/book")) }
 }
 
 private fun keyStore(): KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }

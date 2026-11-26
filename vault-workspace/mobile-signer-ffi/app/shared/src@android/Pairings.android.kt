@@ -1,6 +1,5 @@
 package com.mebit.app
 
-import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.AtomicFile
@@ -95,13 +94,10 @@ private class KeystorePairings(private val dir: File) : Pairings {
     private fun exists(file: AtomicFile): Boolean = file.baseFile.exists() || File(file.baseFile.path + ".bak").exists()
 }
 
-/** Null below API 30, where the wallet store and the book keep nothing either. */
 @Composable
-internal actual fun rememberPairings(): Pairings? {
+internal actual fun rememberPairings(): Pairings {
     val context = LocalContext.current
-    return remember(context) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) null else KeystorePairings(File(context.noBackupFilesDir, "pairing"))
-    }
+    return remember(context) { KeystorePairings(File(context.noBackupFilesDir, "pairing")) }
 }
 
 private fun keyStore(): KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }

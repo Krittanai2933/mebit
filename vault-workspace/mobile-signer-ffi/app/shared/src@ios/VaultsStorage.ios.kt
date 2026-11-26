@@ -138,7 +138,7 @@ internal object KeychainVaults : VaultsStorage {
 
 /** The Keychain store of the saved vaults. One per process, so every caller shares its lock. */
 @Composable
-internal actual fun rememberVaultsStorage(): VaultsStorage? = KeychainVaults
+internal actual fun rememberVaultsStorage(): VaultsStorage = KeychainVaults
 
 /** A data-only read of [slot] with [context], the query an iPhone answered with no second sheet: its status, and its text when it has one. */
 private fun readData(slot: Slot, context: LAContext): Pair<Int, String?> = memScoped {

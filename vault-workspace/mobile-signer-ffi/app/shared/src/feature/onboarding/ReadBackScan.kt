@@ -13,6 +13,14 @@ import com.mebit.app.data.UnlockResult
 internal fun goesOnWithoutLock(enable: Boolean, allowPasscode: Boolean, readBack: Boolean, savedAfter: SaveState): Boolean =
     enable && (allowPasscode || (readBack && savedAfter != SaveState.Saved))
 
+/** Pure. Whether the App Lock screen lets the user on after a scan: a match, or an Unavailable that [goesOnWithoutLock] lets through. */
+internal fun scanOpens(result: BiometricResult, enable: Boolean, allowPasscode: Boolean, readBack: Boolean, savedAfter: SaveState): Boolean =
+    when (result) {
+        BiometricResult.Success -> true
+        is BiometricResult.Unavailable -> goesOnWithoutLock(enable, allowPasscode, readBack, savedAfter)
+        BiometricResult.Failed, BiometricResult.LockedOut, BiometricResult.Cancelled -> false
+    }
+
 /**
  * Pure. The App Lock Enable read-back's answer ([com.mebit.app.data.OnboardingSession.proveSavedCopy]) as the scan result the
  * screen already handles. Only a Verified copy turns the lock on. A copy that can never open is Unavailable, so the screen

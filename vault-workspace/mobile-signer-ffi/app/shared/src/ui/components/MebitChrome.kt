@@ -439,7 +439,7 @@ fun BottomActions(
 }
 
 /**
- * For a layer over the whole screen until the user answers it, as the PIN sheet and the 60-second lock are. It takes every tap meant
+ * For a layer over the whole screen until the user answers it, as the 60-second lock is. It takes every tap meant
  * for the screen behind, and screen readers meet it as a dialog, which keeps the screen behind out of their reach without making the
  * layer one button, so its texts read as text and only its own controls as buttons.
  */
