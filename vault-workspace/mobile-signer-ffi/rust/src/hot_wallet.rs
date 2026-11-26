@@ -40,8 +40,8 @@ use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::{All, Message, Secp256k1, SecretKey, ecdsa};
 use bitcoin::transaction::{InputWeightPrediction, predict_weight};
 use bitcoin::{
-    Address, Amount, CompressedPublicKey, Network, OutPoint, PrivateKey, Script, ScriptBuf,
-    Sequence, Transaction, TxIn, TxOut, Txid, Witness, sighash::SighashCache,
+    Address, Amount, BlockHash, CompressedPublicKey, Network, OutPoint, PrivateKey, Script,
+    ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness, sighash::SighashCache,
 };
 
 /// How long after a sync of a wallet ended the next call shares its answer with no request, so the
@@ -4022,6 +4022,9 @@ pub(crate) mod tests {
         /// What `/tx/{txid}/hex` answers for the transactions `fund_raw` made.
         raw: HashMap<String, String>,
         tip: String,
+        /// What `/block-height/{h}` answers where it is not `PROOF`'s block: the best chain's block at that height. A
+        /// height above the tip answers 404.
+        best: HashMap<u64, BlockHash>,
         calls: Mutex<Vec<String>>,
         now: Mutex<SystemTime>,
         pub(crate) store: ScanStore,
@@ -4040,6 +4043,7 @@ pub(crate) mod tests {
                 failing: HashSet::new(),
                 raw: HashMap::new(),
                 tip: TIP.into(),
+                best: HashMap::new(),
                 calls: Mutex::new(Vec::new()),
                 now: Mutex::new(UNIX_EPOCH + Duration::from_secs(1_762_300_000)),
                 store: ScanStore::default(),
@@ -4173,6 +4177,18 @@ pub(crate) mod tests {
                 .expect("a testnet4 Esplora URL");
             if path == "/blocks/tip/height" {
                 return Ok(self.tip.clone());
+            }
+            if let Some(height) = path.strip_prefix("/block-height/") {
+                let height: u64 = height.parse().expect("a height");
+                if height > self.tip.parse().unwrap() {
+                    return Err(MobileSignerError::InvalidPsbtJson(format!(
+                        "esplora get: {url}: status code 404"
+                    )));
+                }
+                let best = self.best.get(&height).copied();
+                return Ok(best
+                    .unwrap_or_else(|| PROOF.header.block_hash())
+                    .to_string());
             }
             if let Some(rest) = path.strip_prefix("/tx/")
                 && self
@@ -11148,6 +11164,112 @@ pub(crate) mod tests {
                 format!("{ESPLORA_TESTNET4}/tx/{}", id('1')),
                 format!("{ESPLORA_TESTNET4}/blocks/tip/height"),
             ]
+        );
+    }
+
+    // testnet4, 26 Nov 2026: a host whose index missed a reorg still listed a payment in the block the reorg took, two
+    // blocks deep, while its best chain held another block at that height and the payment was back in the mempool. The
+    // history said ยืนยัน 2 บล็อก.
+    #[test]
+    fn payments_in_a_block_the_best_chain_lost_read_as_unconfirmed_after_one_look_at_that_height() {
+        let (ext0, int0) = (addr(Chain::External, 0), addr(Chain::Internal, 0));
+        let (funded, paid) = (
+            PROOF.txids[0].to_string(),
+            PROOF.txids.last().unwrap().to_string(),
+        );
+        let lost = in_proof_block(&PROOF.header, 104);
+        let funding = tx_of(
+            &funded,
+            &[spent(SOMEONE, 20_000)],
+            &[txo(&ext0, 10_000)],
+            &lost,
+        );
+        let payment = tx_of(
+            &paid,
+            &[spent(&ext0, 10_000)],
+            &[txo(SOMEONE, 6_000), txo(&int0, 3_000)],
+            &lost,
+        );
+        let mut fake = Fake::new();
+        fake.touch(&ext0);
+        fake.txs.insert(ext0, format!("[{payment},{funding}]"));
+        fake.best.insert(104, BlockHash::all_zeros());
+        assert_eq!(
+            fake.history().unwrap(),
+            [hot(&paid, -7_000, 0, None), hot(&funded, 10_000, 0, None)]
+        );
+        let looks = fake
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|url| url.contains("/block-height/"))
+            .count();
+        assert_eq!(looks, 1);
+    }
+
+    /// The detail of a payment from 0/0 that the host lists in `PROOF`'s block at `height`, with the reads it made.
+    fn detail_in_block(fake: &mut Fake, height: u64) -> (HotTxDetail, Vec<String>) {
+        let ext0 = addr(Chain::External, 0);
+        let status = in_proof_block(&PROOF.header, height);
+        fake.parents.insert(
+            id('1'),
+            full_tx(
+                '1',
+                &[spent(&ext0, 10_000)],
+                &[txo(SOMEONE, 9_000)],
+                &status,
+            ),
+        );
+        let found = detail(fake, &id('1')).unwrap().unwrap();
+        (found, fake.calls.lock().unwrap().clone())
+    }
+
+    #[test]
+    fn a_shallow_block_the_best_chain_holds_keeps_the_payments_confirmations() {
+        let (found, calls) = detail_in_block(&mut Fake::new(), 104);
+        assert_eq!(
+            (
+                found.tx.confirmations,
+                found.tx.block_time,
+                found.block_height
+            ),
+            (2, Some(1_790_000_000), Some(104))
+        );
+        assert_eq!(
+            calls.last().unwrap(),
+            &format!("{ESPLORA_TESTNET4}/block-height/104")
+        );
+    }
+
+    #[test]
+    fn a_detail_in_a_block_the_best_chain_lost_or_never_reached_reads_as_unconfirmed() {
+        let mut lost = Fake::new();
+        lost.best.insert(104, BlockHash::all_zeros());
+        // The tip is 105, so the host's best chain has no block 106.
+        for (mut fake, height) in [(lost, 104), (Fake::new(), 106)] {
+            let (found, _) = detail_in_block(&mut fake, height);
+            assert_eq!(
+                (
+                    found.tx.confirmations,
+                    found.tx.block_time,
+                    found.block_height
+                ),
+                (0, None, None),
+                "{height}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_block_six_deep_is_trusted_without_a_look() {
+        let mut fake = Fake::new();
+        fake.best.insert(100, BlockHash::all_zeros());
+        let (found, calls) = detail_in_block(&mut fake, 100);
+        assert_eq!(found.tx.confirmations, 6);
+        assert!(
+            !calls.iter().any(|url| url.contains("/block-height/")),
+            "{calls:?}"
         );
     }
 
