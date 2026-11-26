@@ -164,6 +164,18 @@ impl ChainScan {
     /// and a reorg that undoes a lower payment whose coin was spent shows only at the next full pass; close them if a
     /// wallet is seen paid past a restore's reach.
     pub(crate) fn issued(&self) -> u32 {
+        self.issued_above(self.frontier())
+    }
+
+    /// `issued` with the index the scan file holds taken as proven, for a receive address picked while no source answers,
+    /// so a wallet used past `GAP` indices is not sent back to an address it used. A file the app wrote is trusted here and
+    /// nowhere else. shortcut: a file edited to name a higher index hands out an address past a restore's reach; keep the
+    /// index somewhere the app can authenticate if the scan folder is ever reachable by another app.
+    pub(crate) fn issued_offline(&self) -> u32 {
+        self.issued_above(self.proof.map_or(0, |proof| proof.index() + 1))
+    }
+
+    fn issued_above(&self, frontier: u32) -> u32 {
         let after_last_use = self
             .seen
             .iter()
@@ -180,8 +192,8 @@ impl ChainScan {
             false => u32::MAX,
         };
         after_last_use
-            .max(self.frontier())
-            .min(self.frontier() + GAP - 1)
+            .max(frontier)
+            .min(frontier + GAP - 1)
             .min(cap)
     }
 }
@@ -280,6 +292,26 @@ fn standing(scan: &ChainScan, at: &Step) -> (u32, u8, usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offline_the_files_index_counts_as_proven_and_the_gap_still_caps_claims() {
+        let used = Seen {
+            used: true,
+            confirmed: true,
+            ..Seen::default()
+        };
+        let file_only = ChainScan {
+            proof: Some(Proof::Stored(30)),
+            seen: Vec::new(),
+        };
+        assert_eq!((file_only.issued(), file_only.issued_offline()), (0, 31));
+        let claims = ChainScan {
+            proof: Some(Proof::Stored(30)),
+            seen: vec![used; 80],
+        };
+        assert_eq!(claims.issued_offline(), 30 + GAP);
+        assert_eq!(ChainScan::default().issued_offline(), 0);
+    }
 
     /// xorshift64, so every random run is a seed that can be run again.
     struct Rng(u64);

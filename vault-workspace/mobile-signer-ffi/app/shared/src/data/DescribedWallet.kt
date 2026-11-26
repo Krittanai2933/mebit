@@ -30,6 +30,7 @@ import com.mebit.ffi.signer.walletDraft
 import com.mebit.ffi.signer.walletFinish
 import com.mebit.ffi.signer.walletHistory
 import com.mebit.ffi.signer.walletSignWithWords
+import com.mebit.ffi.signer.walletOfflineReceiveAddress
 import com.mebit.ffi.signer.walletSnapshot
 import com.mebit.ffi.signer.walletTxDetail
 import kotlinx.coroutines.CancellationException
@@ -92,6 +93,8 @@ internal class DescribedCore(
     val describe: (String, KeyNetwork) -> WalletShape = { d, n -> walletDescribe(d, n) },
     /** A balance from the scan alone, with no coin list: the wallet list's figure and a several-key wallet's detail. */
     val balance: (String, KeyNetwork) -> WalletBalance = { d, n -> walletBalance(d, n) },
+    /** The receive address the scan this phone keeps gives, with no request, for a refresh that could not reach the chain. */
+    val offlineReceive: (String, KeyNetwork) -> String = { d, n -> walletOfflineReceiveAddress(d, n) },
     /** (descriptor, network, psbt, the unsigned txid the user was shown, words, passphrase). */
     val signWithWords: (String, KeyNetwork, String, String, List<String>, String) -> SpendReview =
         { d, n, psbt, txid, words, passphrase -> walletSignWithWords(d, n, psbt, txid, words, passphrase) },
@@ -183,7 +186,7 @@ class DescribedWallet internal constructor(
 
     /**
      * Snapshot, then history, as [SingleSigWallet.bindSession] reads a phone wallet. A wallet with no guard takes the one the phone keeps
-     * under its key, and a history that lists that payment settles it. A failed snapshot leaves receive address 0 and no figures.
+     * under its key, and a history that lists that payment settles it. A failed snapshot leaves no figures and the address the scan this phone keeps gives, receive address 0 when that fails.
      */
     suspend fun refresh(): Unit = refreshLock.withLock {
         withContext(io) {
@@ -211,7 +214,11 @@ class DescribedWallet internal constructor(
                 balanceSats = 0L
                 spendableSats = 0L
                 history = emptyList()
-                receiveAddress = wallet.address
+                receiveAddress = try {
+                    core.offlineReceive(wallet.descriptor, network)
+                } catch (_: Exception) {
+                    wallet.address
+                }
             }
             lastBoundSeconds = nowSeconds()
         }

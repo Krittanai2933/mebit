@@ -21,7 +21,7 @@ import com.mebit.ffi.signer.hotPrepareFeeBump
 import com.mebit.ffi.signer.hotPrepareSendAll
 import com.mebit.ffi.signer.hotPrepareSendAtRate
 import com.mebit.ffi.signer.hotQuoteSend
-import com.mebit.ffi.signer.hotReceiveAddress
+import com.mebit.ffi.signer.hotOfflineReceiveAddress
 import com.mebit.ffi.signer.hotTxDetail
 import com.mebit.ffi.signer.hotTypicalVsize
 import com.mebit.ffi.signer.hotWalletHistory
@@ -35,7 +35,7 @@ import kotlin.time.Clock
  * Single-sig hot wallet surface for Movie Page S*.
  * Live path uses the session's address type + Esplora (hot_* UniFFI). Demo path keeps offline fixtures.
  *
- * [prepareAtRate], [prepareAll], [quoteSend], [postHex], [snapshot], [fetchHistory], [receiveAddressOf], [fetchFeeTiers], [fetchDetail], [bumpAtRate] and [cancelAtRate] are the hot_* calls. Tests pass fakes, so they need no native library or network.
+ * [prepareAtRate], [prepareAll], [quoteSend], [postHex], [snapshot], [fetchHistory], [offlineReceiveAddressOf], [fetchFeeTiers], [fetchDetail], [bumpAtRate] and [cancelAtRate] are the hot_* calls. Tests pass fakes, so they need no native library or network.
  * [nowSeconds] is the phone clock in Unix seconds, which [lastSentAtSeconds] reads when a payment goes out.
  */
 class SingleSigWallet(
@@ -45,7 +45,7 @@ class SingleSigWallet(
     private val snapshot: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType) -> HotWalletSnapshot = ::hotWalletSnapshot,
     private val fetchHistory: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType) -> List<HotTx> = ::hotWalletHistory,
     private val nowSeconds: () -> Long = { Clock.System.now().epochSeconds },
-    private val receiveAddressOf: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType, index: UInt) -> String = ::hotReceiveAddress,
+    private val offlineReceiveAddressOf: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType) -> String = ::hotOfflineReceiveAddress,
     private val fetchFeeTiers: (network: KeyNetwork) -> FeeTiers = ::hotFeeTiers,
     private val fetchDetail: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType, txid: String) -> HotTxDetail? = ::hotTxDetail,
     private val bumpAtRate: (words: List<String>, passphrase: String, network: KeyNetwork, addressType: AddressType, earlierHex: String, feeRateSatVb: ULong) -> PreparedSend = ::hotPrepareFeeBump,
@@ -218,9 +218,9 @@ class SingleSigWallet(
             balanceSats = 0L
             spendableSats = 0L
             history = emptyList()
-            // The address needs only the key, so the wallet keeps its own address, never the demo's, while the chain is out of reach.
+            // The key and the scan this phone keeps give the address, so while the chain is out of reach the wallet shows its own, never the demo's, and not one it already used.
             receiveAddress = try {
-                receiveAddressOf(session.words, session.passphrase, network, session.addressType, 0u)
+                offlineReceiveAddressOf(session.words, session.passphrase, network, session.addressType)
             } catch (_: Exception) {
                 ""
             }

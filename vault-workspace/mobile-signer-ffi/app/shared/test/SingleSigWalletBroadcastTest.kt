@@ -119,7 +119,7 @@ private class FakeHot(val guards: FakePlainFile = FakePlainFile(), val fingerpri
         },
         fetchHistory = { _, _, _, _ -> if (historyFails) throw IllegalStateException("history unreadable") else history },
         nowSeconds = { clock },
-        receiveAddressOf = { _, _, _, _, _ -> "tb1qoffline" },
+        offlineReceiveAddressOf = { _, _, _, _ -> "tb1qoffline" },
         quoteSend = { words, passphrase, network, _, destination, amountSats, feeRateSatVb ->
             quotes += QuoteCall(words, passphrase, network, destination, amountSats, feeRateSatVb)
             quoteResult(amountSats, feeRateSatVb)

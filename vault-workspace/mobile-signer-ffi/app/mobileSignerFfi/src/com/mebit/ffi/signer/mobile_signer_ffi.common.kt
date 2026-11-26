@@ -1715,6 +1715,13 @@ public expect fun `hotFeeTiers`(`network`: KeyNetwork): FeeTiers
 public expect fun `hotForgetScanState`()
 
 /**
+ * The receive address for a Receive screen while no host answers, with no request: the one the last sync of this
+ * wallet handed out, else the one its scan file gives, else receive address 0 for a wallet this phone never scanned.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `hotOfflineReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType): kotlin.String
+
+/**
  * Scan, then sign a cancel of `earlier_hex`, the signed payment the app's guard keeps, and post
  * nothing. It spends exactly that payment's inputs in its order and pays them back to this wallet in
  * one output, to its change address when it had change and else to the next unused one. The fee follows the rules of
@@ -1950,6 +1957,12 @@ public expect fun `walletFinish`(`descriptor`: kotlin.String, `network`: KeyNetw
  */
 @Throws(MobileSignerException::class)
 public expect fun `walletHistory`(`descriptor`: kotlin.String, `network`: KeyNetwork): List<HotTx>
+
+/**
+ * What `hot_offline_receive_address` answers, for the wallet `descriptor` describes.
+ */
+@Throws(MobileSignerException::class)
+public expect fun `walletOfflineReceiveAddress`(`descriptor`: kotlin.String, `network`: KeyNetwork): kotlin.String
 
 /**
  * The text as `ur:bytes` parts, uppercased so a QR uses its alphanumeric mode. Only the plain

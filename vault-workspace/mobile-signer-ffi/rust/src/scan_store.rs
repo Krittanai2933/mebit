@@ -4,7 +4,8 @@
 //! ended. It holds no key, address, amount or txid, so nothing in it points at a payment, and the chain and the words
 //! give each of them back. A file that cannot be read, names another wallet, comes from another build or holds what
 //! no scan writes is ignored, which costs requests and never coins. A file that parses is still outside data, so its
-//! indices back nothing until a source proves them used again. The rules of a scan are in `crate::scan`.
+//! indices back nothing until a source proves them used again, except the receive address picked while no source
+//! answers (`ChainScan::issued_offline`, docs/04-open-items.md item 116). The rules of a scan are in `crate::scan`.
 
 use std::collections::HashMap;
 use std::fs;
@@ -52,6 +53,9 @@ pub(crate) struct Entry {
     pub(crate) round: Option<[usize; 2]>,
     /// What the last sync found, while a call may still share it.
     pub(crate) last: Option<Last>,
+    /// The receive index the last sync that answered handed out. A failed sync can clear `seen` for a full pass, and this keeps
+    /// the address it would have lost.
+    pub(crate) handed_out: Option<u32>,
 }
 
 /// The answer of a wallet's last sync, which no file holds.

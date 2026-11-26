@@ -445,6 +445,7 @@ fn sync_scan(
         status: pass?,
     };
     entry.last = Some(last.clone());
+    entry.handed_out = Some(entry.scan.chains[Chain::External as usize].issued());
     Ok(Synced {
         scan: entry.scan.clone(),
         balances: entry.balances.clone(),
@@ -851,6 +852,51 @@ pub fn wallet_snapshot(
         &SystemTime::now,
         &SCAN_STORE,
     )
+}
+
+/// The receive address for a Receive screen while no host answers, with no request: the one the last sync of this
+/// wallet handed out, else the one its scan file gives, else receive address 0 for a wallet this phone never scanned.
+#[uniffi::export]
+pub fn hot_offline_receive_address(
+    mnemonic_words: Vec<String>,
+    passphrase: String,
+    network: KeyNetwork,
+    address_type: AddressType,
+) -> Result<String, MobileSignerError> {
+    let account = Account::new(
+        &mnemonic_words,
+        &passphrase,
+        network_of(network),
+        address_type,
+    )?;
+    offline_receive(&account, &SCAN_STORE)
+}
+
+/// What `hot_offline_receive_address` answers, for the wallet `descriptor` describes.
+#[uniffi::export]
+pub fn wallet_offline_receive_address(
+    descriptor: String,
+    network: KeyNetwork,
+) -> Result<String, MobileSignerError> {
+    check_network(network)?;
+    offline_receive(&Described::parse_on(&descriptor, network)?, &SCAN_STORE)
+}
+
+/// The receive address `wallet` would get from `store` alone. Waits for a sync of the wallet in progress, whose lock
+/// it takes.
+fn offline_receive(
+    wallet: &dyn AddressSource,
+    store: &ScanStore,
+) -> Result<String, MobileSignerError> {
+    let held = store.wallet(&wallet.id());
+    let index = {
+        let entry = held.lock().unwrap_or_else(PoisonError::into_inner);
+        let from_scan = entry.scan.chains[Chain::External as usize].issued_offline();
+        entry
+            .handed_out
+            .map_or(from_scan, |shown| shown.max(from_scan))
+    };
+    Ok(wallet.address(Chain::External, index)?.to_string())
 }
 
 /// `snapshot_from` for the wallet `descriptor` describes.
@@ -4508,6 +4554,104 @@ pub(crate) mod tests {
             receive_and_balance(fake.snapshot("").unwrap()),
             (addr(Chain::External, 1), 1_000)
         );
+    }
+
+    #[test]
+    fn a_receive_still_in_the_mempool_moves_the_receive_address_on() {
+        let mut fake = Fake::new();
+        fake.fund_unconfirmed(&addr(Chain::External, 0), 1_000, '1');
+        assert_eq!(
+            fake.snapshot("").unwrap().receive_address,
+            addr(Chain::External, 1)
+        );
+    }
+
+    #[test]
+    fn an_address_whose_coin_was_spent_is_never_handed_out_again() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 1_000, '1');
+        assert_eq!(
+            fake.snapshot("").unwrap().receive_address,
+            addr(Chain::External, 1)
+        );
+        fake.touch(&addr(Chain::External, 0));
+        fake.utxos.remove(&addr(Chain::External, 0));
+        assert_eq!(
+            fake.snapshot("").unwrap().receive_address,
+            addr(Chain::External, 1)
+        );
+        // A full pass asks every index again and still finds index 0 used.
+        fake.tick(Duration::from_secs(7 * 60 * 60));
+        assert_eq!(
+            fake.snapshot("").unwrap().receive_address,
+            addr(Chain::External, 1)
+        );
+    }
+
+    fn abandon_account() -> Account {
+        Account::new(
+            &abandon_about(),
+            "",
+            Network::Testnet4,
+            AddressType::NativeSegwit,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn offline_a_wallet_never_scanned_gets_receive_address_0() {
+        let fake = Fake::new();
+        assert_eq!(
+            offline_receive(&abandon_account(), &fake.store).unwrap(),
+            addr(Chain::External, 0)
+        );
+    }
+
+    #[test]
+    fn offline_a_failed_full_pass_keeps_the_address_the_last_sync_handed_out() {
+        let mut fake = Fake::new();
+        fake.fund(&addr(Chain::External, 0), 1_000, '1');
+        fake.fund_unconfirmed(&addr(Chain::External, 1), 2_000, '2');
+        assert_eq!(
+            fake.snapshot("").unwrap().receive_address,
+            addr(Chain::External, 2)
+        );
+        fake.tick(Duration::from_secs(7 * 60 * 60));
+        fake.failing.insert(addr(Chain::External, 0));
+        assert!(fake.snapshot("").is_err());
+        let account = abandon_account();
+        let entry = fake.store.wallet(&account.id());
+        assert!(
+            entry.lock().unwrap().scan.chains[0].seen.is_empty(),
+            "the full pass cleared what it knew before it failed"
+        );
+        assert_eq!(
+            offline_receive(&account, &fake.store).unwrap(),
+            addr(Chain::External, 2)
+        );
+    }
+
+    #[test]
+    fn offline_after_a_restart_the_scan_file_gives_the_address_past_the_gap() {
+        let mut fake = Fake::new();
+        for i in 0..=30 {
+            fake.touch(&addr(Chain::External, i));
+        }
+        let folder = Folder::new("offline-restart");
+        let store = ScanStore::default();
+        store.use_dir(folder.0.clone());
+        assert_eq!(
+            fake.snapshot_in(&store).unwrap().receive_address,
+            addr(Chain::External, 31)
+        );
+        let restarted = ScanStore::default();
+        restarted.use_dir(folder.0.clone());
+        let before = fake.requests();
+        assert_eq!(
+            offline_receive(&abandon_account(), &restarted).unwrap(),
+            addr(Chain::External, 31)
+        );
+        assert_eq!(fake.requests(), before, "no request");
     }
 
     #[test]

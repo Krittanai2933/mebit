@@ -245,6 +245,8 @@ RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_fee_tiers(RustBuffer network, Un
 void uniffi_mobile_signer_ffi_fn_func_hot_forget_scan_state(UniffiRustCallStatus *_Nonnull out_status
     
 );
+RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_offline_receive_address(RustBuffer mnemonicWords, RustBuffer passphrase, RustBuffer network, RustBuffer addressType, UniffiRustCallStatus *_Nonnull out_status
+);
 RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_prepare_cancel(RustBuffer mnemonicWords, RustBuffer passphrase, RustBuffer network, RustBuffer addressType, RustBuffer earlierHex, int64_t feeRateSatVb, UniffiRustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_hot_prepare_fee_bump(RustBuffer mnemonicWords, RustBuffer passphrase, RustBuffer network, RustBuffer addressType, RustBuffer earlierHex, int64_t feeRateSatVb, UniffiRustCallStatus *_Nonnull out_status
@@ -295,6 +297,8 @@ RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_file_read(RustBuffer text, Ru
 RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_finish(RustBuffer descriptor, RustBuffer network, RustBuffer psbt, RustBuffer unsignedTxid, UniffiRustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_history(RustBuffer descriptor, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_offline_receive_address(RustBuffer descriptor, RustBuffer network, UniffiRustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_mobile_signer_ffi_fn_func_wallet_qr_parts(RustBuffer text, UniffiRustCallStatus *_Nonnull out_status
 );
@@ -466,6 +470,9 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_hot_fee_tiers(void
 int16_t uniffi_mobile_signer_ffi_checksum_func_hot_forget_scan_state(void
     
 );
+int16_t uniffi_mobile_signer_ffi_checksum_func_hot_offline_receive_address(void
+    
+);
 int16_t uniffi_mobile_signer_ffi_checksum_func_hot_prepare_cancel(void
     
 );
@@ -539,6 +546,9 @@ int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_finish(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_history(void
+    
+);
+int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_offline_receive_address(void
     
 );
 int16_t uniffi_mobile_signer_ffi_checksum_func_wallet_qr_parts(void
