@@ -465,6 +465,9 @@ mod tests {
     }
 
     impl Transport for Answers {
+        fn canonical(&self) -> &'static str {
+            crate::chain::ESPLORA_TESTNET4
+        }
         fn get(&self, url: &str) -> Result<String, MobileSignerError> {
             self.asked.lock().unwrap().push(url.to_string());
             if self.lost.contains(url) {

@@ -3000,6 +3000,9 @@ pub(crate) mod tests {
     struct Reads<'a>(&'a (dyn Fn(&str) -> Result<String, MobileSignerError> + Sync));
 
     impl Transport for Reads<'_> {
+        fn canonical(&self) -> &'static str {
+            crate::chain::ESPLORA_TESTNET4
+        }
         fn get(&self, url: &str) -> Result<String, MobileSignerError> {
             (self.0)(url)
         }
@@ -3014,6 +3017,9 @@ pub(crate) mod tests {
     struct Refusing(&'static str);
 
     impl Transport for Refusing {
+        fn canonical(&self) -> &'static str {
+            crate::chain::ESPLORA_TESTNET4
+        }
         fn get(&self, _: &str) -> Result<String, MobileSignerError> {
             Err(MobileSignerError::InvalidPsbtJson(self.0.into()))
         }
@@ -3036,6 +3042,9 @@ pub(crate) mod tests {
     }
 
     impl Transport for Posts<'_> {
+        fn canonical(&self) -> &'static str {
+            crate::chain::ESPLORA_TESTNET4
+        }
         fn get(&self, url: &str) -> Result<String, MobileSignerError> {
             unreachable!("a test that only posts asked for {url}")
         }
@@ -7683,6 +7692,9 @@ pub(crate) mod tests {
     );
 
     impl Transport for RunBy<'_> {
+        fn canonical(&self) -> &'static str {
+            crate::chain::ESPLORA_TESTNET4
+        }
         fn get(&self, url: &str) -> Result<String, MobileSignerError> {
             (self.1)(url)
         }
@@ -8383,6 +8395,9 @@ pub(crate) mod tests {
     }
 
     impl Transport for OneHost<'_> {
+        fn canonical(&self) -> &'static str {
+            crate::chain::ESPLORA_TESTNET4
+        }
         fn get(&self, url: &str) -> Result<String, MobileSignerError> {
             get_forgetting(
                 &|| {
@@ -8712,6 +8727,9 @@ pub(crate) mod tests {
     }
 
     impl Transport for World<'_> {
+        fn canonical(&self) -> &'static str {
+            crate::chain::ESPLORA_TESTNET4
+        }
         fn get(&self, url: &str) -> Result<String, MobileSignerError> {
             let at = *self.at.lock().unwrap();
             let index = pick_host(
@@ -12484,6 +12502,9 @@ pub(crate) mod tests {
     }
 
     impl Transport for Hosts<'_> {
+        fn canonical(&self) -> &'static str {
+            crate::chain::ESPLORA_TESTNET4
+        }
         fn get(&self, url: &str) -> Result<String, MobileSignerError> {
             let at = *self.at.lock().unwrap();
             (self.hosts[at])(url)

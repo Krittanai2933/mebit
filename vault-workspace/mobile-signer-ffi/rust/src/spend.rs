@@ -2081,6 +2081,9 @@ pub(crate) mod tests {
             first: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
         }
         impl Transport for Slow<'_> {
+            fn canonical(&self) -> &'static str {
+                crate::chain::ESPLORA_TESTNET4
+            }
             fn get(&self, url: &str) -> Result<String, MobileSignerError> {
                 let first = self.first.lock().unwrap().take();
                 if let Some((inside, release)) = first {
