@@ -16,6 +16,17 @@ class KeyringVerificationTest {
         assertNull(store.lastError)
     }
 
+    // The test-mode Jade and Safe 7 are mock keys too, with no words behind them.
+    @Test
+    fun theHardwareMockMakesNothingOnMainnet() {
+        val store = KeyringStore(book = SavedVaults(null, com.mebit.ffi.signer.KeyNetwork.MAIN, owners = { null }))
+        for (source in listOf(KeySourceLabel.Jade, KeySourceLabel.TrezorSafe7)) {
+            store.startHardwareMock(source)
+            assertNull(store.pending, "$source")
+            assertNull(store.lastError, "$source")
+        }
+    }
+
     private fun staged(fingerprint: String = "abcd0123"): KeyringStore = KeyringStore().also {
         assertTrue(it.startMebitOtherFromPaste("$fingerprint\n$tpubA\nm/48'/1'/0'/2'"))
     }

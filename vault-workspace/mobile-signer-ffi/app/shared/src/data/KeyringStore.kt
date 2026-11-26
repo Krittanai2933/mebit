@@ -167,10 +167,14 @@ class KeyringStore internal constructor(
         }
     }
 
-    /** Demo HW enrollment without live BLE — real account key, HW label. */
+    /** Demo HW enrollment without live BLE — real account key, HW label. Testnet only, as [startMebitOtherMock]: the key has no words behind it. */
     fun startHardwareMock(source: KeySourceLabel) {
         clearError()
         require(source == KeySourceLabel.Jade || source == KeySourceLabel.TrezorSafe7)
+        if (network != KeyNetwork.TEST) {
+            pending = null
+            return
+        }
         try {
             val account = (keys.size + if (source == KeySourceLabel.Jade) 31 else 47).toUInt()
             val key = generateSoftwareMultisigKey("", network, account)
