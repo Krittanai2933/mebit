@@ -11,6 +11,7 @@ import com.mebit.app.WriteMode
 import com.mebit.app.data.ANY_VERSION
 import com.mebit.app.data.Cause
 import com.mebit.app.data.Claim
+import com.mebit.app.data.FakePairings
 import com.mebit.app.data.FakePlainFile
 import com.mebit.app.data.FakeSecureStore
 import com.mebit.app.data.failedErase
@@ -22,6 +23,7 @@ import com.mebit.app.data.PUBLIC_WORDS_24
 import com.mebit.app.data.SaveResult
 import com.mebit.app.data.SaveState
 import com.mebit.app.data.SavedWallet
+import com.mebit.app.data.FakeVaultsStorage
 import com.mebit.app.data.SingleSigWallet.UnconfirmedSend
 import com.mebit.app.data.StartNotice
 import com.mebit.app.data.TEST_CHECK
@@ -362,15 +364,44 @@ class WalletGateStateTest {
     }
 
     @Test
+    fun onlyAGateThatStartsAtWelcomeForgetsItsBookAndPairings() {
+        for (s in startCases()) {
+            val phone = NetworkPhone(FakeSecureStore(probe = s.probe, marker = s.marker, erase = s.erase))
+            val welcome = s.boot == Boot.Onboarding
+            assertEquals(s.boot, phone.gate.boot, s.case)
+            assertEquals(if (welcome) 1 else 0, phone.book.deletes, "the book's deletes, ${s.case}")
+            assertEquals(if (welcome) 1 else 0, phone.pairings.deletesAll, "the pairings' deletes, ${s.case}")
+        }
+    }
+
+    @Test
+    fun anEmptyMainnetAtBootTouchesNothingOfTestnets(): Unit = runBlocking {
+        val pending = UnconfirmedSend(TEST_TXID, SENT_AT)
+        val test = NetworkPhone(savedPhone(), FakeVaultsStorage("MV2 testnet book"))
+        test.pairings.write(TEST_CHECK, byteArrayOf(1, 2, 3))
+        assertEquals(Claim.Written, PendingPayments(test.guards).claim(TEST_CHECK, pending))
+        test.lastUsed.write("1")
+        val before = test.snapshot()
+
+        // Mainnet boots on stores of its own, wired as WalletGate wires one network, and starts at Welcome.
+        val main = NetworkPhone(FakeSecureStore())
+        assertEquals(Boot.Onboarding, main.gate.boot)
+        assertEquals(1, main.book.deletes, "mainnet's own book")
+        assertEquals(1, main.pairings.deletesAll, "mainnet's own pairings")
+        main.wallets.at(Place.FIRST).session.restoreFromWords(PUBLIC_WORDS_24)
+        assertEquals(Claim.Written, PendingPayments(main.guards).claim(TEST_CHECK, pending), "the same words' guard on mainnet is not testnet's")
+
+        assertEquals(before, test.snapshot(), "testnet's stores after mainnet booted and saved")
+        val reopened = NetworkPhone(test.store, test.book, test.pairings, test.guards, test.lastUsed)
+        assertEquals(Boot.Locked, reopened.gate.boot)
+        reopened.gate.unlock("test")
+        assertIs<Boot.Open>(reopened.gate.boot, "testnet unlocks as before")
+        assertEquals(before, test.snapshot(), "testnet's stores after its own unlock")
+    }
+
+    @Test
     fun aFreshInstallStartsOnboardingAndAnOrphanIsWipedWithItsNotice() {
-        val starts = listOf(
-            Start("a fresh install", Marker.Absent, StoreProbe.Empty, Boot.Onboarding, null),
-            Start("an orphan from a deleted install", Marker.Absent, StoreProbe.Present, Boot.Onboarding, StartNotice.OrphanWiped),
-            Start("a wallet the OS removed", Marker.Kept, StoreProbe.Empty, Boot.Onboarding, StartNotice.WalletVanished),
-            Start("a wallet kept from an earlier launch", Marker.Kept, StoreProbe.Present, Boot.Locked, null),
-            Start("an orphan whose wipe failed", Marker.Absent, StoreProbe.Present, Boot.Locked, null, failedErase(Why.TryLater)),
-        )
-        for (s in starts) {
+        for (s in startCases()) {
             val app = AppLaunch(FakeSecureStore(probe = s.probe, marker = s.marker, erase = s.erase))
             assertEquals(s.boot, app.gate.boot, s.case)
             assertEquals(s.notice, app.gate.notice, s.case)
@@ -476,6 +507,48 @@ private fun savedPhone(record: WalletRecord = testRecord()): FakeSecureStore {
     store.writes.clear()
     store.markerWrites.clear()
     return store
+}
+
+private fun startCases() = listOf(
+    Start("a fresh install", Marker.Absent, StoreProbe.Empty, Boot.Onboarding, null),
+    Start("an orphan from a deleted install", Marker.Absent, StoreProbe.Present, Boot.Onboarding, StartNotice.OrphanWiped),
+    Start("a wallet the OS removed", Marker.Kept, StoreProbe.Empty, Boot.Onboarding, StartNotice.WalletVanished),
+    Start("a wallet kept from an earlier launch", Marker.Kept, StoreProbe.Present, Boot.Locked, null),
+    Start("an orphan whose wipe failed", Marker.Absent, StoreProbe.Present, Boot.Locked, null, failedErase(Why.TryLater)),
+)
+
+/**
+ * One network's stores and gate, wired as WalletGate wires them: its wallet shelf, book, pairings, guard file and last-used file.
+ * Two of these are two networks, which share nothing.
+ */
+private class NetworkPhone(
+    val store: FakeSecureStore,
+    val book: FakeVaultsStorage = FakeVaultsStorage(),
+    val pairings: FakePairings = FakePairings(),
+    val guards: FakePlainFile = FakePlainFile(),
+    val lastUsed: FakePlainFile = FakePlainFile(),
+) {
+    val wallets = Wallets(
+        OnePlaceShelf(store),
+        payments = PendingPayments(guards),
+        lastUsed = lastUsed,
+        forgetBook = {
+            book.delete()
+            pairings.deleteAll()
+        },
+        forgetScans = {},
+        restoreKey = Keys().restoreKey,
+    )
+    val gate = WalletGateState(wallets)
+
+    /** Everything this network holds, as text, so two snapshots compare. The deletes and writes are counted because a rewrite of equal bytes is a change too. */
+    fun snapshot(): List<Any?> = runBlocking {
+        listOf(
+            (store.read("snapshot") as? ReadResult.Bytes)?.bytes?.toList(), store.writes.size, store.erases, store.probe, store.marker,
+            book.text, book.writes, book.deletes, pairings.kept.mapValues { it.value.toList() }, pairings.deletesAll,
+            guards.text, guards.writes, lastUsed.text, lastUsed.writes,
+        )
+    }
 }
 
 /** One launch of the app on a phone, wired as WalletGate will wire it, with one wallet under both the session and the gate. */

@@ -4,6 +4,7 @@ package com.mebit.app
 
 import androidx.compose.runtime.Composable
 import cnames.structs.__CFData
+import com.mebit.ffi.signer.KeyNetwork
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.MemScope
@@ -50,19 +51,22 @@ import platform.Security.kSecMatchLimitOne
 import platform.Security.kSecReturnData
 import platform.Security.kSecValueData
 
-/** Its own service, so neither the wallet's erase nor the book's touches a credential, and one delete of the service wipes them all. */
+/** Testnet's service, its own, so neither the wallet's erase nor the book's touches a credential, and one delete of the service wipes them all. */
 private const val SERVICE = "com.mebit.app.pairing"
+
+/** [network]'s service: mainnet's own, so a delete-all of one never reaches the other's credentials. */
+internal fun pairingService(network: KeyNetwork): String = network.alias(SERVICE)
 
 /**
  * One generic password per credential, account [pairingName]: readable while the phone has a passcode, with no user check, because the
  * Safe 7 itself asks to allow each connect. ThisDeviceOnly and never synchronizable, so no backup or other device ever holds one.
  */
-internal object KeychainPairings : Pairings {
+internal class KeychainPairings(private val service: String) : Pairings {
     override fun read(fingerprint: String): ByteArray? {
         val account = pairingName(fingerprint) ?: return null
         return memScoped {
             val out = alloc<CFTypeRefVar>()
-            val status = SecItemCopyMatching(query(account, kSecReturnData to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne), out.ptr)
+            val status = SecItemCopyMatching(query(service, account, kSecReturnData to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne), out.ptr)
             val data = owned(out.value)?.reinterpret<__CFData>()
             if (status != errSecSuccess || data == null) null else CFDataGetBytePtr(data)?.readBytes(CFDataGetLength(data).toInt())
         }
@@ -71,39 +75,42 @@ internal object KeychainPairings : Pairings {
     override fun write(fingerprint: String, credential: ByteArray): Boolean {
         val account = pairingName(fingerprint) ?: return false
         if (credential.isEmpty()) return false // pinning needs an element, and no pairing is empty
-        var added = add(account, credential)
+        var added = add(service, account, credential)
         if (added == errSecDuplicateItem) {
-            memScoped { SecItemDelete(query(account)) }
-            added = add(account, credential)
+            memScoped { SecItemDelete(query(service, account)) }
+            added = add(service, account, credential)
         }
         return added == errSecSuccess
     }
 
     override fun delete(fingerprint: String): Boolean {
         val account = pairingName(fingerprint) ?: return false
-        return gone(memScoped { SecItemDelete(query(account)) })
+        return gone(memScoped { SecItemDelete(query(service, account)) })
     }
 
-    override fun deleteAll(): Boolean = gone(memScoped { SecItemDelete(query(null)) })
+    override fun deleteAll(): Boolean = gone(memScoped { SecItemDelete(query(service, null)) })
 }
 
+/** One per network and process. */
+private val keychainPairings: Map<KeyNetwork, KeychainPairings> = listOf(KeyNetwork.TEST, KeyNetwork.MAIN).associateWith { KeychainPairings(pairingService(it)) }
+
 @Composable
-internal actual fun rememberPairings(): Pairings = KeychainPairings
+internal actual fun rememberPairings(network: KeyNetwork): Pairings = keychainPairings.getValue(network)
 
 private fun gone(status: Int) = status == errSecSuccess || status == errSecItemNotFound
 
-private fun add(account: String, bytes: ByteArray): Int = bytes.usePinned { pinned ->
+private fun add(service: String, account: String, bytes: ByteArray): Int = bytes.usePinned { pinned ->
     memScoped {
         val data = owned(CFDataCreateWithBytesNoCopy(null, pinned.addressOf(0).reinterpret(), bytes.size.toLong(), kCFAllocatorNull))
-        SecItemAdd(query(account, kSecAttrAccessible to kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, kSecValueData to data), null)
+        SecItemAdd(query(service, account, kSecAttrAccessible to kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, kSecValueData to data), null)
     }
 }
 
 /** A query with what every query carries (generic password, the service, never synchronizable), [account] when one is named, and [extra]. */
-private fun MemScope.query(account: String?, vararg extra: Pair<CFStringRef?, CFTypeRef?>): CFDictionaryRef? {
+private fun MemScope.query(service: String, account: String?, vararg extra: Pair<CFStringRef?, CFTypeRef?>): CFDictionaryRef? {
     val query = owned(CFDictionaryCreateMutable(null, 0, kCFTypeDictionaryKeyCallBacks.ptr, kCFTypeDictionaryValueCallBacks.ptr))
     CFDictionaryAddValue(query, kSecClass, kSecClassGenericPassword)
-    CFDictionaryAddValue(query, kSecAttrService, cfString(SERVICE))
+    CFDictionaryAddValue(query, kSecAttrService, cfString(service))
     CFDictionaryAddValue(query, kSecAttrSynchronizable, kCFBooleanFalse)
     if (account != null) CFDictionaryAddValue(query, kSecAttrAccount, cfString(account))
     extra.forEach { (key, value) -> CFDictionaryAddValue(query, key, value) }

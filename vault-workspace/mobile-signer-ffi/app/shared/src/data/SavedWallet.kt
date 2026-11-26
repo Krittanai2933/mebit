@@ -156,7 +156,8 @@ class SavedWallet internal constructor(private val store: SecureStore) {
         }
     }
 
-    private companion object {
+    internal companion object {
+        /** The networks whose records this build reads and saves. [openableNetwork] keeps the gate off any other. */
         val NETWORKS = setOf(KeyNetwork.TEST)
     }
 }

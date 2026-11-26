@@ -15,6 +15,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mebit.app.Place
 import com.mebit.app.SystemBack
+import com.mebit.app.data.NetworkSettings
+import com.mebit.app.data.openableNetwork
 import com.mebit.app.data.NodeSettings
 import com.mebit.app.data.UnitSettings
 import com.mebit.app.data.PendingPayments
@@ -32,6 +34,7 @@ import com.mebit.app.rememberSecureShelf
 import com.mebit.app.rememberVaultsStorage
 import com.mebit.app.ui.components.LocalCovered
 import com.mebit.app.ui.components.coversScreen
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.hotUseStateDir
 import kotlinx.coroutines.delay
 import kotlin.time.Duration.Companion.seconds
@@ -91,15 +94,18 @@ private val SAVE_RETRY_WAITS = listOf(0, 1, 2, 4, 8, 16).map { it.seconds }
 
 @Composable
 private fun OpenGate(lock: LockGate) {
+    // The app folder is testnet's scan folder on purpose: the network choice lives in it, so it cannot depend on that choice. btc-unit stays in it too.
+    val appDir = rememberScanStateDir(KeyNetwork.TEST)
+    val network = remember(appDir) { openableNetwork(NetworkSettings(appDir?.let { plainFile("$it/network") }).also { it.restore() }.current) }
     // Before any screen asks the core about a wallet, so its first sync after a restart reads the scan file.
-    val scanDir = rememberScanStateDir()
+    val scanDir = rememberScanStateDir(network)
     remember(scanDir) { scanDir?.let(::hotUseStateDir) }
     // Also before any chain read: the node the user chose in Settings is in force from the first request.
     val nodeSettings = remember(scanDir) { NodeSettings(scanDir?.let { plainFile("$it/node-choice") }).also { it.restore() } }
-    val unitSettings = remember(scanDir) { UnitSettings(scanDir?.let { plainFile("$it/btc-unit") }).also { it.restore() } }
-    val storage = rememberVaultsStorage()
-    val shelf = rememberSecureShelf()
-    val pairings = rememberPairings()
+    val unitSettings = remember(appDir) { UnitSettings(appDir?.let { plainFile("$it/btc-unit") }).also { it.restore() } }
+    val storage = rememberVaultsStorage(network)
+    val shelf = rememberSecureShelf(network)
+    val pairings = rememberPairings(network)
     // The pay-twice guard files, one-key and several-key, and the last-used wallet sit beside the scan files. Built together, because
     // each asks the other: the book is saved for the wallets' keys, and a wallet's clear of a damaged guard file names the book's wallets.
     val (wallets, vaults) = remember(shelf, scanDir, storage, pairings) {
@@ -120,13 +126,6 @@ private fun OpenGate(lock: LockGate) {
         wallets to book
     }
     val gate = remember(wallets) { WalletGateState(wallets) }
-    // Welcome means this phone holds no wallet, so what the stores hold is nobody's now, as after a reinstall, which a Keychain item survives.
-    remember(gate) {
-        if (gate.boot == Boot.Onboarding) {
-            storage.delete()
-            pairings.deleteAll()
-        }
-    }
 
     // A failed save is tried again when the app comes back, for example once the user has set a passcode, and when the lock comes
     // back after Covered marked every saved wallet ([Wallets.lockRead]). Keyed on the lock this composition read, never on one read

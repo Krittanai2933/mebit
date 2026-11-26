@@ -3,6 +3,7 @@ package com.mebit.app
 import android.hardware.biometrics.BiometricPrompt
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import com.mebit.app.data.ANY_VERSION
+import com.mebit.ffi.signer.KeyNetwork
 import java.security.InvalidAlgorithmParameterException
 import java.security.InvalidKeyException
 import java.security.KeyStoreException
@@ -24,6 +25,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -318,6 +320,35 @@ class KeystoreMappingTest {
         assertEquals("wallet.2", walletFileName(Place.parse(2)!!))
         assertEquals("wallet.10", walletFileName(Place.parse(10)!!))
         assertEquals(Place.COUNT, Place.all.map(::walletFileName).toSet().size, "two places share a file")
+    }
+
+    @Test
+    fun testnetStorageIsWhereItAlwaysWas() {
+        assertEquals((1..10).map { if (it == 1) "wallet" else "wallet.$it" }, Place.all.map { walletPath(KeyNetwork.TEST, it) })
+        assertEquals("com.mebit.app.wallet", walletAlias(KeyNetwork.TEST))
+        assertEquals("vaults/book", vaultsPath(KeyNetwork.TEST))
+        assertEquals("mebit_vaults_v1", vaultsAlias(KeyNetwork.TEST))
+        assertEquals("pairing", pairingPath(KeyNetwork.TEST))
+        assertEquals("mebit_pairing_v1", pairingAlias(KeyNetwork.TEST))
+    }
+
+    @Test
+    fun mainnetStorageSitsUnderMainAndUnderAliasesOfItsOwn() {
+        val testPaths = Place.all.map { walletPath(KeyNetwork.TEST, it) } + vaultsPath(KeyNetwork.TEST)
+        val mainPaths = Place.all.map { walletPath(KeyNetwork.MAIN, it) } + vaultsPath(KeyNetwork.MAIN)
+        assertEquals(Place.COUNT + 1, mainPaths.toSet().size)
+        mainPaths.forEach { assertTrue(it.startsWith("main/"), it) }
+        assertTrue(mainPaths.none { it in testPaths }, "a mainnet path equals a testnet one")
+        assertEquals("main/wallet", walletPath(KeyNetwork.MAIN, Place.FIRST))
+        assertEquals("main/vaults/book", vaultsPath(KeyNetwork.MAIN))
+        assertNotEquals(walletAlias(KeyNetwork.TEST), walletAlias(KeyNetwork.MAIN))
+        assertNotEquals(vaultsAlias(KeyNetwork.TEST), vaultsAlias(KeyNetwork.MAIN))
+        assertEquals("com.mebit.app.wallet.main", walletAlias(KeyNetwork.MAIN))
+        assertEquals("mebit_vaults_v1.main", vaultsAlias(KeyNetwork.MAIN))
+        assertEquals("main/pairing", pairingPath(KeyNetwork.MAIN))
+        assertNotEquals(pairingAlias(KeyNetwork.TEST), pairingAlias(KeyNetwork.MAIN))
+        assertEquals("mebit_pairing_v1.main", pairingAlias(KeyNetwork.MAIN))
+        assertTrue(!pairingPath(KeyNetwork.MAIN).startsWith(pairingPath(KeyNetwork.TEST) + "/"), "mainnet pairings under testnet's folder, which an older Forget empties")
     }
 
     @Test

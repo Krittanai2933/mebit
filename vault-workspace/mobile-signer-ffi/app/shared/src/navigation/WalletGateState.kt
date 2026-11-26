@@ -12,7 +12,8 @@ import com.mebit.app.data.Wallets
 /**
  * The cold-start gate as plain state with no UI. It holds where the app starts and the two ways off the unlock screen,
  * [unlock] and [forget]. Making one runs this process's cold start ([Wallets.start]), which may erase wallets a
- * deleted install left behind and writes the marker, so make one per process.
+ * deleted install left behind and writes the marker, so make one per process. A gate that starts at Welcome also deletes this
+ * network's book and pairings: with no wallet of this network here, they are nobody's.
  */
 class WalletGateState internal constructor(private val wallets: Wallets) {
     /** The probe [boot] starts from and the notice, read without a prompt. */
@@ -28,6 +29,12 @@ class WalletGateState internal constructor(private val wallets: Wallets) {
 
     /** A one-time sentence for Welcome after the start erased or lost a wallet. */
     val notice: StartNotice? = started.notice
+
+    init {
+        // Welcome means this phone holds no wallet, so what the stores hold is nobody's now, as after a reinstall, which a Keychain item survives.
+        // Only this network's book and pairings: the other network's stores are never given to this gate.
+        if (boot == Boot.Onboarding) wallets.forgetBook()
+    }
 
     /** An unlock or a forget is running. They share it, so a second tap, or a Forget while the OS sheet is up, does nothing. */
     private var busy = false

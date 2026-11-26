@@ -4,6 +4,7 @@ package com.mebit.app
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import com.mebit.ffi.signer.KeyNetwork
 import kotlinx.cinterop.ExperimentalForeignApi
 import platform.Foundation.NSApplicationSupportDirectory
 import platform.Foundation.NSFileManager
@@ -13,13 +14,13 @@ import platform.Foundation.NSURLIsExcludedFromBackupKey
 import platform.Foundation.NSUserDomainMask
 
 /**
- * Application Support/mebit/scan, marked to stay out of iCloud and computer backups, so a restored phone starts its scans
+ * Application Support/mebit/scan (testnet) or mebit/main/scan, marked to stay out of iCloud and computer backups, so a restored phone starts its scans
  * over from the chain and carries no guard of this one. Null when the folder cannot be made or marked: the core then keeps
  * scans in memory only, and no pay-twice guard can be kept, so no payment posts.
  */
 @Composable
-internal actual fun rememberScanStateDir(): String? = remember {
-    val dir = (NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, true).first() as String) + "/mebit/scan"
+internal actual fun rememberScanStateDir(network: KeyNetwork): String? = remember(network) {
+    val dir = (NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, true).first() as String) + "/mebit/" + scanFolder(network)
     val made = NSFileManager.defaultManager.createDirectoryAtPath(dir, withIntermediateDirectories = true, attributes = null, error = null)
     dir.takeIf { made && NSURL.fileURLWithPath(dir).setResourceValue(true, forKey = NSURLIsExcludedFromBackupKey, error = null) }
 }

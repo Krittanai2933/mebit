@@ -1,6 +1,7 @@
 package com.mebit.app
 
 import androidx.compose.runtime.Composable
+import com.mebit.ffi.signer.KeyNetwork
 
 /** Why this phone cannot hold or release a wallet right now. A closed set, so no message can ever carry data. */
 enum class Why { NoScreenLock, NotWired, TryLater, Other }
@@ -167,6 +168,6 @@ internal interface SecureShelf {
     fun eraseEvery(): Boolean
 }
 
-/** This platform's shelf. Composable because the Android one needs a Context. */
+/** This platform's shelf of [network]'s wallets, apart from the other network's. Composable because the Android one needs a Context. */
 @Composable
-internal expect fun rememberSecureShelf(): SecureShelf
+internal expect fun rememberSecureShelf(network: KeyNetwork): SecureShelf

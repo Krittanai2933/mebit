@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import cnames.structs.__CFData
 import cnames.structs.__CFDictionary
 import kotlinx.cinterop.CPointer
+import com.mebit.ffi.signer.KeyNetwork
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.MemScope
 import kotlinx.cinterop.addressOf
@@ -64,14 +65,17 @@ import platform.Security.kSecReturnData
 import platform.Security.kSecUseAuthenticationContext
 import platform.Security.kSecValueData
 
-/** Never the wallet's service, because the wallet's probe lists everything under that one and its erase deletes it. */
+/** Testnet's service, never the wallet's, because the wallet's probe lists everything under that one and its erase deletes it. */
 private const val SERVICE = "com.mebit.app.vaults"
+
+/** [network]'s service for the book: mainnet's own, so a delete of one never reaches the other, and an older build's never matches it. */
+internal fun vaultsService(network: KeyNetwork): String = network.alias(SERVICE)
 
 /** The account of this slot's copy of the book. */
 private val Slot.book: String get() = if (this == Slot.A) "book.a" else "book.b"
 
 /** The saved vaults in the Keychain, kept as the wallet is: add then delete across two named accounts, never SecItemUpdate and never a listing, for the reasons in `KeychainShelf`. */
-internal object KeychainVaults : VaultsStorage {
+internal class KeychainVaults(private val service: String) : VaultsStorage {
     private val lock = NSLock()
 
     /** The context the wallet's owner check just passed, which is what lets a read show no second sheet. */
@@ -89,7 +93,7 @@ internal object KeychainVaults : VaultsStorage {
 
     override fun read(): String? = locked {
         val context = passed ?: return@locked if (emptied) "" else null
-        val answers = Slot.entries.associateWith { readData(it, context) }
+        val answers = Slot.entries.associateWith { readData(service, it, context) }
         if (answers.values.any { (status, _) -> status != errSecSuccess && status != errSecItemNotFound }) return@locked null
         passed = null
         val held = answers.entries.mapNotNull { (slot, answer) -> answer.second?.let { slot to it } }.toMap()
@@ -97,7 +101,7 @@ internal object KeychainVaults : VaultsStorage {
         current = when (held.size) {
             0 -> null
             1 -> held.keys.single()
-            else -> pickNewest(Slot.entries.associateWith { creationDate(it, context) }).also { delete(it.other) }
+            else -> pickNewest(Slot.entries.associateWith { creationDate(service, it, context) }).also { delete(service, it.other) }
         }
         current?.let { held.getValue(it) }.orEmpty()
     }
@@ -105,13 +109,13 @@ internal object KeychainVaults : VaultsStorage {
     override fun write(text: String): Boolean = locked {
         val slot = current?.other ?: Slot.A
         val bytes = text.encodeToByteArray()
-        var added = add(slot, bytes)
+        var added = add(service, slot, bytes)
         if (added == errSecDuplicateItem) {
-            delete(slot)
-            added = add(slot, bytes)
+            delete(service, slot)
+            added = add(service, slot, bytes)
         }
         if (added == errSecSuccess) {
-            delete(slot.other)
+            delete(service, slot.other)
             current = slot
             emptied = false
         }
@@ -119,7 +123,7 @@ internal object KeychainVaults : VaultsStorage {
     }
 
     override fun delete(): Boolean = locked {
-        val statuses = Slot.entries.map { delete(it) }
+        val statuses = Slot.entries.map { delete(service, it) }
         passed = null
         current = null
         emptied = statuses.all { it == errSecSuccess || it == errSecItemNotFound }
@@ -136,15 +140,18 @@ internal object KeychainVaults : VaultsStorage {
     }
 }
 
-/** The Keychain store of the saved vaults. One per process, so every caller shares its lock. */
+/** One per network and process, so every caller of a network shares its lock. The wallet shelf hands its owner check to its own network's book. */
+internal val keychainVaults: Map<KeyNetwork, KeychainVaults> = listOf(KeyNetwork.TEST, KeyNetwork.MAIN).associateWith { KeychainVaults(vaultsService(it)) }
+
+/** The Keychain store of [network]'s saved vaults. */
 @Composable
-internal actual fun rememberVaultsStorage(): VaultsStorage = KeychainVaults
+internal actual fun rememberVaultsStorage(network: KeyNetwork): VaultsStorage = keychainVaults.getValue(network)
 
 /** A data-only read of [slot] with [context], the query an iPhone answered with no second sheet: its status, and its text when it has one. */
-private fun readData(slot: Slot, context: LAContext): Pair<Int, String?> = memScoped {
+private fun readData(service: String, slot: Slot, context: LAContext): Pair<Int, String?> = memScoped {
     val out = alloc<CFTypeRefVar>()
     val status = SecItemCopyMatching(
-        query(slot.book, kSecReturnData to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne, kSecUseAuthenticationContext to owned(CFBridgingRetain(context))),
+        query(service, slot.book, kSecReturnData to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne, kSecUseAuthenticationContext to owned(CFBridgingRetain(context))),
         out.ptr,
     )
     val data = owned(out.value)?.reinterpret<__CFData>()
@@ -152,10 +159,10 @@ private fun readData(slot: Slot, context: LAContext): Pair<Int, String?> = memSc
 }
 
 /** When [slot]'s item was added, in seconds from 1 Jan 2001, by an attributes-only read with [context], or null if unreadable. */
-private fun creationDate(slot: Slot, context: LAContext): Double? = memScoped {
+private fun creationDate(service: String, slot: Slot, context: LAContext): Double? = memScoped {
     val out = alloc<CFTypeRefVar>()
     SecItemCopyMatching(
-        query(slot.book, kSecReturnAttributes to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne, kSecUseAuthenticationContext to owned(CFBridgingRetain(context))),
+        query(service, slot.book, kSecReturnAttributes to kCFBooleanTrue, kSecMatchLimit to kSecMatchLimitOne, kSecUseAuthenticationContext to owned(CFBridgingRetain(context))),
         out.ptr,
     )
     val item = owned(out.value)?.reinterpret<__CFDictionary>() ?: return@memScoped null
@@ -163,25 +170,25 @@ private fun creationDate(slot: Slot, context: LAContext): Double? = memScoped {
 }
 
 /** Adds [bytes] as [slot]'s item under the access control, the wallet's. */
-private fun add(slot: Slot, bytes: ByteArray): Int {
+private fun add(service: String, slot: Slot, bytes: ByteArray): Int {
     if (bytes.isEmpty()) return errSecParam // pinning needs an element, and an empty book is never written
     return bytes.usePinned { pinned ->
         memScoped {
             val access = owned(SecAccessControlCreateWithFlags(null, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, kSecAccessControlUserPresence, null))
                 ?: return@memScoped errSecParam
             val data = owned(CFDataCreateWithBytesNoCopy(null, pinned.addressOf(0).reinterpret(), bytes.size.toLong(), kCFAllocatorNull))
-            SecItemAdd(query(slot.book, kSecAttrAccessControl to access, kSecValueData to data), null)
+            SecItemAdd(query(service, slot.book, kSecAttrAccessControl to access, kSecValueData to data), null)
         }
     }
 }
 
-private fun delete(slot: Slot): Int = memScoped { SecItemDelete(query(slot.book)) }
+private fun delete(service: String, slot: Slot): Int = memScoped { SecItemDelete(query(service, slot.book)) }
 
 /** A query with what every query carries (generic password, the service, never synchronizable), [account], and [extra]. */
-private fun MemScope.query(account: String, vararg extra: Pair<CFStringRef?, CFTypeRef?>): CFDictionaryRef? {
+private fun MemScope.query(service: String, account: String, vararg extra: Pair<CFStringRef?, CFTypeRef?>): CFDictionaryRef? {
     val query = owned(CFDictionaryCreateMutable(null, 0, kCFTypeDictionaryKeyCallBacks.ptr, kCFTypeDictionaryValueCallBacks.ptr))
     CFDictionaryAddValue(query, kSecClass, kSecClassGenericPassword)
-    CFDictionaryAddValue(query, kSecAttrService, cfString(SERVICE))
+    CFDictionaryAddValue(query, kSecAttrService, cfString(service))
     CFDictionaryAddValue(query, kSecAttrSynchronizable, kCFBooleanFalse)
     CFDictionaryAddValue(query, kSecAttrAccount, cfString(account))
     extra.forEach { (key, value) -> CFDictionaryAddValue(query, key, value) }
