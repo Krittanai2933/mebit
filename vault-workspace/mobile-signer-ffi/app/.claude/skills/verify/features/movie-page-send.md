@@ -4,7 +4,7 @@ Single-sig send checks the typed address and amount against the spendable balanc
 
 ## Sub-features
 
-- `mp-s1-home` shows the single-sig balance and the last four transactions, every amount in compact BTC.
+- `mp-s1-home` shows the single-sig balance and the last four transactions, every amount in compact BTC. Its X at the logo's right (`id:cta_vault_close`, read as ปิด) and Android Back open `id:screen_vaults`, as 3.7's do.
 - `mp-s1-pull` reloads Home's balance and transactions when the page is pulled down.
 - `mp-s2-backup-gate` blocks receive until backup confirmed.
 - `mp-s3-receive` shows the wallet's address as a QR with copy and share, for a live wallet.

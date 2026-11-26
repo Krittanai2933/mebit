@@ -290,7 +290,7 @@ private fun OptionChips(chips: List<String>, trailing: String?) {
 fun HwChip(label: String) {
     Box(
         modifier = Modifier
-            .height(24.dp)
+            .heightIn(min = 24.dp)
             .clip(RoundedCornerShape(99.dp))
             .background(MbChip)
             .padding(horizontal = 10.dp),

@@ -105,7 +105,8 @@ fun S2ReceiveBackupGateScreen(
 ) {
     LaunchedEffect(session.backupConfirmed) { if (session.backupConfirmed) onBackedUp() }
     Box(modifier = Modifier.fillMaxSize().testTag("screen_send/s2")) {
-        SingleSigHome(wallet, session, quotes, onReceive = {}, onSend = {}, onHistory = {}, onOpenTx = {}, onOpenCatalog = {}, tag = "s2_home_behind")
+        // The scrim covers the home's X, so only Android Back reaches its onClose, and Back then closes the sheet as ยกเลิก does.
+        SingleSigHome(wallet, session, quotes, onReceive = {}, onSend = {}, onHistory = {}, onOpenTx = {}, onOpenCatalog = {}, onClose = onBack ?: {}, tag = "s2_home_behind")
         // The scrim swallows every tap, and a tap on it closes the sheet like the cancel link does.
         Box(
             modifier = Modifier
