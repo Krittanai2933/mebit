@@ -1,10 +1,56 @@
 package com.mebit.app.feature.send
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import com.mebit.app.data.amountText
 import com.mebit.app.data.BtcUnit
 import com.mebit.app.data.FiatQuote
 import com.mebit.app.data.bahtText
 import com.mebit.app.data.formatBtcCompact
+
+/**
+ * Pure. How many characters open [address] before what is its own: a bech32 address's network, its "1" and its version (bc1q, tb1p,
+ * bcrt1q), or a base58 address's version character.
+ */
+internal fun addressPrefixLength(address: String): Int {
+    val network = listOf("bcrt1", "bc1", "tb1").firstOrNull { address.lowercase().startsWith(it) }
+    return minOf(if (network != null) network.length + 1 else 1, address.length)
+}
+
+/** Pure. The places in [address] that Penpot 5.2 and 5.3.2 pick out: the first four characters after its prefix and the last six, the ends a person compares first. */
+internal fun addressAccents(address: String): Set<Int> {
+    val start = addressPrefixLength(address)
+    return ((start until minOf(start + 4, address.length)) + (maxOf(start, address.length - 6) until address.length)).toSet()
+}
+
+/**
+ * Pure. How many groups of four go on each line so [address] takes the fewest lines of at most [maxPerLine] groups, shared evenly: 16
+ * groups at most 6 a line read 6, 6, 4 and 11 read 6, 5, never with one group left alone on the last line.
+ */
+internal fun groupsPerLine(address: String, maxPerLine: Int): Int {
+    val groups = (address.length + 3) / 4
+    val most = maxPerLine.coerceAtLeast(1)
+    if (groups == 0) return most
+    val lines = (groups + most - 1) / most
+    return (groups + lines - 1) / lines
+}
+
+/** Pure. [address] in groups of four, [groupsPerLine] a line. */
+internal fun addressLines(address: String, maxPerLine: Int): String =
+    address.chunked(4).chunked(groupsPerLine(address, maxPerLine)).joinToString("\n") { it.joinToString(" ") }
+
+/** [addressLines] with the [addressAccents] in [accent] and the rest in [ink]. */
+internal fun accentedAddress(address: String, ink: Color, accent: Color, maxPerLine: Int): AnnotatedString = buildAnnotatedString {
+    val accents = addressAccents(address)
+    val perLine = groupsPerLine(address, maxPerLine)
+    address.forEachIndexed { i, c ->
+        if (i > 0 && i % 4 == 0) append(if (i % (4 * perLine) == 0) '\n' else ' ')
+        withStyle(SpanStyle(color = if (i in accents) accent else ink)) { append(c) }
+    }
+}
 
 /** [sats] as the baht line under an amount, such as `≈ ฿18,010`. Null when there is no price to give it, and the screen hides the line. */
 internal fun fiatLine(sats: Long, quote: FiatQuote?): String? = bahtText(sats, quote)?.let { "≈ $it" }
