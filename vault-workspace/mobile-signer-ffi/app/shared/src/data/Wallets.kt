@@ -306,12 +306,16 @@ class Wallets internal constructor(
     /** Some listed wallet holds words the phone has not kept, so leaving this network or adding a wallet would lose or mix them. */
     fun wordsOnlyInMemory(): Boolean = listed.any { it.session.saved != SaveState.Saved }
 
-    /** What stops a switch of network for the listed wallets' sessions. Their [OnboardingSession.notSavedBecause] tells a phone that cannot hold a wallet from the rest. */
+    /**
+     * What stops a switch of network for the listed wallets' sessions. Their [OnboardingSession.notSavedBecause] tells a phone that cannot hold
+     * a wallet from the rest. A save still owed ([savesPending]) holds the switch too, as after the lock went away: the switch would drop the
+     * words that save needs.
+     */
     fun switchHold(): SwitchHold {
         val unsaved = listed.filter { it.session.saved != SaveState.Saved }
         return when {
             unsaved.any { it.session.notSavedBecause == Why.NoScreenLock } -> SwitchHold.PhoneCannotHold
-            unsaved.isNotEmpty() || listed.any { it.session.lastSaveFailed } -> SwitchHold.Unsaved
+            unsaved.isNotEmpty() || listed.any { it.session.lastSaveFailed } || savesPending -> SwitchHold.Unsaved
             else -> SwitchHold.Clear
         }
     }

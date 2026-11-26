@@ -636,6 +636,20 @@ class WalletsTest {
         assertEquals(SwitchHold.Unsaved, wallets.switchHold(), "a failed Replace still loses its change when the words are dropped")
     }
 
+    // The lock went away, so the saved copy is sealed to a dead key and the wallet owes a save, though it is still Saved and no save has
+    // failed yet. A switch now would drop the words that save needs, so it waits until the save lands.
+    @Test
+    fun aSwitchIsHeldWhileASaveIsOwed(): Unit = runBlocking {
+        val phone = ShelfPhone().saved(P1, 1)
+        val wallets = phone.unlocked()
+        wallets.lockRead(lockPresent = false)
+        assertEquals(SaveState.Saved, wallets.at(P1).session.saved)
+        assertFalse(wallets.at(P1).session.lastSaveFailed, "a save failed")
+        assertEquals(SwitchHold.Unsaved, wallets.switchHold(), "a switch while the copy waits to be saved again")
+        assertFalse(wallets.lockRead(lockPresent = true), "a save still owed once the lock is back")
+        assertEquals(SwitchHold.Clear, wallets.switchHold(), "the save landed")
+    }
+
     @Test
     fun noWordsAreOnlyInMemoryOnceTheyAreSavedOrThereAreNone(): Unit = runBlocking {
         assertEquals(false, ShelfPhone().launch().wordsOnlyInMemory(), "no wallet")

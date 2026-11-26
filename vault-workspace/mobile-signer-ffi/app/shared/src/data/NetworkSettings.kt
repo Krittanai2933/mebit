@@ -63,7 +63,7 @@ enum class SwitchHold { Clear, PhoneCannotHold, Unsaved }
 
 /**
  * Pure. Why the network cannot change now, or null. A switch drops every wallet's words from memory, so it waits while some are
- * only in memory or a wallet's last save failed ([hold], [Wallets.switchHold]), or the book's last save failed. Only a phone that
+ * only in memory, a wallet's last save failed or a save is still owed ([hold], [Wallets.switchHold]), or the book's last save failed. Only a phone that
  * cannot hold a wallet is told to set a screen lock. Awaiting design review, no board.
  */
 internal fun networkRefusal(hold: SwitchHold, book: VaultsHealth): String? = when {
