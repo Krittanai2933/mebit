@@ -75,6 +75,7 @@ import com.mebit.app.ui.theme.MbBody
 import com.mebit.app.ui.theme.MbBorder
 import com.mebit.app.ui.theme.MbBtcOrange
 import com.mebit.app.ui.theme.MbEyebrow
+import com.mebit.app.ui.theme.MbChip
 import com.mebit.app.ui.theme.MbIconWash
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
@@ -92,10 +93,6 @@ private val ShareCardFill = Color(0xFFF6F8FA)
 private val ShareTileFill = Color(0xFFEAF1F5)
 private val SheetHandle = Color(0xFFD7DEE5)
 
-/**
- * Penpot 4.2: tapping รับ before the backup shows the home dimmed behind a sheet. Backed up, there is
- * nothing to ask, so it goes straight on to the address.
- */
 @Composable
 fun S2ReceiveBackupGateScreen(
     wallet: SingleSigWallet,
@@ -128,7 +125,7 @@ fun S2ReceiveBackupGateScreen(
         ) {
             Box(modifier = Modifier.padding(top = 10.dp).align(Alignment.CenterHorizontally).size(width = 40.dp, height = 5.dp).background(Grabber, CircleShape))
             Spacer(modifier = Modifier.height(21.dp))
-            Box(modifier = Modifier.size(56.dp).clip(RoundedCornerShape(18.dp)).background(MbIconWash), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.size(56.dp).clip(RoundedCornerShape(18.dp)).background(MbChip), contentAlignment = Alignment.Center) {
                 Box(modifier = Modifier.size(width = 22.dp, height = 26.dp).border(2.dp, AddressGoldInk, RoundedCornerShape(4.dp)))
             }
             Spacer(modifier = Modifier.height(16.dp))
