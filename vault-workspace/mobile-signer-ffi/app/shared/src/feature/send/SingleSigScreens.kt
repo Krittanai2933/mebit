@@ -38,6 +38,7 @@ import com.mebit.app.data.FeeQuestion
 import com.mebit.app.data.feeQuestion
 import com.mebit.app.data.rememberFiatQuote
 import com.mebit.app.ui.theme.amountFontFamily
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.PreparedSend
 import com.mebit.app.ui.components.MebitScreen
 import com.mebit.app.ui.components.PrimaryCta
@@ -463,6 +464,7 @@ fun S6SentScreen(
             destination = draft.destination,
             walletName = walletName,
             node = node,
+            network = KeyNetwork.TEST,
             quotes = quotes,
             onHome = onHome,
             onOpenCatalog = onOpenCatalog,

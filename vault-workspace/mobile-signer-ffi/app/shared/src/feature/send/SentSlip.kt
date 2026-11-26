@@ -81,6 +81,7 @@ import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWarmTint
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.app.ui.theme.amountFontFamily
+import com.mebit.ffi.signer.KeyNetwork
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
@@ -93,7 +94,7 @@ private val SlipRule = Color(0xFFC9CFD8)
 /**
  * Penpot 5.9.2 Sent · wallet · slip mood, which every sent screen draws: the warm card of [txid] from [walletName] to the whole
  * [destination], its date line (only once [sentAtSeconds] is set, after a send in this run), the amount with its baht (only with a
- * price), the fee at the picked rate, and a QR of the txid's page on the explorer of [node], the node the user set. Under it the
+ * price), the fee at the picked rate, and a QR of the txid's page on [network] at the explorer of [node], the node the user set. Under it the
  * "แชร์สลิป" button that shares the card as a picture, and the link home. The tags are S6's on every screen, which [tag] tells apart.
  */
 @Composable
@@ -107,6 +108,7 @@ fun SentSlip(
     destination: String,
     walletName: String,
     node: NodeSetting,
+    network: KeyNetwork,
     quotes: QuoteCache,
     onHome: () -> Unit,
     onOpenCatalog: () -> Unit,
@@ -122,7 +124,7 @@ fun SentSlip(
             // The bottom padding is the debug link's height (about 24 dp of Thai text at 11 sp) plus 8 dp, so the link home sits clear of it when the column ends at the screen bottom.
             modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 12.dp, bottom = 32.dp),
         ) {
-            Slip(txid, sentAtSeconds, amountSats, feeSats, rateSatVb, destination, quote, walletName, node, card)
+            Slip(txid, sentAtSeconds, amountSats, feeSats, rateSatVb, destination, quote, walletName, node, network, card)
             Spacer(modifier = Modifier.height(29.dp))
             Box(
                 modifier = Modifier
@@ -172,6 +174,7 @@ private fun Slip(
     quote: FiatQuote?,
     walletName: String,
     node: NodeSetting,
+    network: KeyNetwork,
     layer: GraphicsLayer,
 ) {
     val shape = RoundedCornerShape(18.dp)
@@ -273,7 +276,7 @@ private fun Slip(
             Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 // The tile is the QR's quiet zone too: its four light modules on each side fill the board's white margin.
                 Box(Modifier.size(68.dp).clip(RoundedCornerShape(8.dp)).background(MbWhite)) {
-                    if (txid.isNotEmpty()) QrCode(node.txPageUrl(txid), Modifier.fillMaxSize().testTag("slip_qr"), dark = MbNavy)
+                    if (txid.isNotEmpty()) QrCode(node.txPageUrl(txid, network), Modifier.fillMaxSize().testTag("slip_qr"), dark = MbNavy)
                 }
                 Spacer(modifier = Modifier.width(16.dp))
                 Column {
