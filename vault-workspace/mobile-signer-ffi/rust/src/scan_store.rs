@@ -446,6 +446,22 @@ pub(crate) mod tests {
         );
     }
 
+    // The mentor's note on PR #91, seen on an Android emulator on 26 Nov 2026: a testnet wallet's sync still ran when
+    // the app switched to mainnet, and its save put the testnet scan in mainnet's folder.
+    #[test]
+    fn a_wallet_opened_under_one_folder_saves_there_after_another_is_named() {
+        let (opened_under, named_later) = (Folder::new("opened-under"), Folder::new("named-later"));
+        let store = ScanStore::default();
+        store.use_dir(opened_under.0.clone());
+        let entry = store.wallet(&ID);
+        store.use_dir(named_later.0.clone());
+        store.save(&ID, &entry, &scan());
+        assert_eq!(
+            (opened_under.files(), named_later.files()),
+            (vec![file_name(&ID)], vec![])
+        );
+    }
+
     #[test]
     fn forget_removes_every_scan_file_and_a_sync_that_ends_after_it_writes_nothing() {
         let folder = Folder::new("forget");
