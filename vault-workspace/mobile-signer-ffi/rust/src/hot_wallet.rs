@@ -7487,7 +7487,7 @@ pub(crate) mod tests {
         let fake = three_used();
         fake.snapshot("").unwrap();
         assert_eq!(fake.requests(), 54 + 4);
-        let hosts = Mutex::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
+        let hosts = HostChoice::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
         let lost = get_forgetting(&|| classify(Err(timed_out())), &|_| {}, &hosts, &|| {
             fake.store.mark_stale()
         });
@@ -8015,7 +8015,7 @@ pub(crate) mod tests {
                 &SPECS,
                 &probe,
                 t0,
-                &Mutex::new(None),
+                &HostChoice::default(),
                 &[],
                 &Limits::default(),
             )
@@ -8030,7 +8030,7 @@ pub(crate) mod tests {
         assert!(!limited(&probed(404)));
         let probe = Probe::new(&[(HOSTS[1], Err("down"))]);
         let _ = attempt_unless_limited(HOSTS[0], &|| Err(throttled()), &probe.limits, &|| t0);
-        let mixed = probe.pick(t0 + half, &Mutex::new(None)).unwrap_err();
+        let mixed = probe.pick(t0 + half, &HostChoice::default()).unwrap_err();
         assert!(limited(&mixed));
         assert_eq!(
             text(mixed),
@@ -8228,7 +8228,7 @@ pub(crate) mod tests {
             }
             fake.fund(&at(Chain::External, 149), 60_000, 'a');
             fake.fund(&at(Chain::Internal, 99), 40_000, 'b');
-            let hosts = Mutex::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
+            let hosts = HostChoice::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
             let attempts = AtomicUsize::new(0);
             let esplora = |url: &str| {
                 get_forgetting(
@@ -8353,7 +8353,7 @@ pub(crate) mod tests {
             ("two timeouts", vec![stalled(), stalled()], true),
         ];
         for (case, script, forgotten) in cases {
-            let hosts = Mutex::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
+            let hosts = HostChoice::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
             let fake = Fake::new();
             fake.snapshot("").unwrap();
             let script = Mutex::new(VecDeque::from(script));
@@ -8394,7 +8394,7 @@ pub(crate) mod tests {
                     )
                 },
                 self.sleep,
-                &Mutex::new(None),
+                &HostChoice::default(),
                 &|| {},
             )
         }
@@ -8577,7 +8577,7 @@ pub(crate) mod tests {
     #[test]
     fn a_loss_is_forgotten_once_whatever_the_attempt_wrapper_sees() {
         let through = |script: Vec<Result<String, GetError>>| {
-            let hosts = Mutex::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
+            let hosts = HostChoice::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
             let limits = Limits::default();
             let script = Mutex::new(VecDeque::from(script));
             let attempts = Cell::new(0);
@@ -8688,7 +8688,7 @@ pub(crate) mod tests {
                     (HOSTS[0], Ok(TESTNET4_GENESIS)),
                     (HOSTS[1], Ok(TESTNET4_GENESIS)),
                 ]),
-                choice: Mutex::new(None),
+                choice: HostChoice::default(),
                 answer,
                 at: Mutex::new(Instant::now()),
                 requests: Mutex::new(Vec::new()),
@@ -8828,7 +8828,7 @@ pub(crate) mod tests {
         for host in HOSTS {
             let _ = attempt_unless_limited(host, &|| Err(throttled()), &probe.limits, &|| t0);
         }
-        let cache = Mutex::new(None);
+        let cache = HostChoice::default();
         let message = no_host_message(probe.pick(t0, &cache));
         assert!(
             message.starts_with("esplora get: no testnet4 host is reachable ("),
@@ -8863,7 +8863,7 @@ pub(crate) mod tests {
             }
         };
         let limits = Limits::default();
-        let cache = Mutex::new(None);
+        let cache = HostChoice::default();
         let t0 = Instant::now();
         let pick = |after: u64| {
             let at = t0 + Duration::from_secs(after);
@@ -8918,7 +8918,7 @@ pub(crate) mod tests {
             &SPECS,
             &probe,
             Instant::now(),
-            &Mutex::new(None),
+            &HostChoice::default(),
             &[],
             &limits,
         ));
@@ -8942,7 +8942,7 @@ pub(crate) mod tests {
             }
         };
         let start = Instant::now();
-        let picked = pick_host(&SPECS, &probe, start, &Mutex::new(None), &[], &limits);
+        let picked = pick_host(&SPECS, &probe, start, &HostChoice::default(), &[], &limits);
         assert_eq!(picked.unwrap(), 1);
         let answered = answered.get().expect("the first host was probed");
         let after = |secs| answered + Duration::from_secs(secs);
@@ -8964,7 +8964,7 @@ pub(crate) mod tests {
             Err(throttled_after(1))
         };
         let limits = Limits::default();
-        let cache = Mutex::new(None);
+        let cache = HostChoice::default();
         for _ in 0..2 {
             no_host_message(pick_host(
                 &SPECS,
@@ -8999,7 +8999,7 @@ pub(crate) mod tests {
             &SPECS,
             &probe,
             t0,
-            &Mutex::new(None),
+            &HostChoice::default(),
             &[0],
             &limits,
         ));
@@ -9012,7 +9012,7 @@ pub(crate) mod tests {
             &SPECS,
             &probe,
             t0 + LIMIT_DEFAULT,
-            &Mutex::new(None),
+            &HostChoice::default(),
             &[0],
             &limits,
         );
@@ -9054,7 +9054,7 @@ pub(crate) mod tests {
     }
 
     fn chosen(cache: &HostChoice) -> Option<&'static str> {
-        match &*cache.lock().unwrap() {
+        match &cache.verdict() {
             Some(HostVerdict::Chosen(base, _)) => Some(*base),
             _ => None,
         }
@@ -9100,7 +9100,7 @@ pub(crate) mod tests {
                 operator,
             };
             let probe_timeout = host.probe_timeout();
-            let cache = Mutex::new(None);
+            let cache = HostChoice::default();
             let start = Instant::now();
             let result = pick_host(
                 &[host],
@@ -9115,7 +9115,7 @@ pub(crate) mod tests {
             assert!(message.contains("timed out"), "{message}");
             assert!(
                 took < probe_timeout + Duration::from_secs(4),
-                "the probe held the host lock for {took:?} against a limit of {probe_timeout:?}"
+                "the probe held the probe lock for {took:?} against a limit of {probe_timeout:?}"
             );
         }
     }
@@ -9138,7 +9138,7 @@ pub(crate) mod tests {
                 Ok(TESTNET4_GENESIS.to_string())
             }
         };
-        let cache = Mutex::new(None);
+        let cache = HostChoice::default();
         let hosts = hosts_with(Some(OWN_NODE_FIXTURE));
         let picked = pick_host(
             &hosts,
@@ -9168,7 +9168,7 @@ pub(crate) mod tests {
         let whole = Duration::from_secs(2);
         let agent = agent(CONNECT_TIMEOUT, IO_TIMEOUT, whole);
         let host = dripping_host(Duration::from_secs(1), 10);
-        let cache = Mutex::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
+        let cache = HostChoice::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
         let fake = Fake::new();
         fake.snapshot("").unwrap();
         let start = Instant::now();
@@ -9185,7 +9185,7 @@ pub(crate) mod tests {
     fn after_a_failed_round_ten_callers_inside_five_seconds_probe_nothing_and_the_next_round_probes_again()
      {
         let probe = Probe::new(&[(HOSTS[0], Err("timed out")), (HOSTS[1], Err("down"))]);
-        let cache = Mutex::new(None);
+        let cache = HostChoice::default();
         let t0 = Instant::now();
         let first = no_host_message(probe.pick(t0, &cache));
         assert_eq!(probe.asked().len(), 2);
@@ -9201,16 +9201,13 @@ pub(crate) mod tests {
     #[test]
     fn a_host_that_comes_back_after_the_failure_window_is_chosen_and_the_failure_is_forgotten() {
         let down = Probe::new(&[(HOSTS[0], Err("down")), (HOSTS[1], Err("down"))]);
-        let cache = Mutex::new(None);
+        let cache = HostChoice::default();
         let t0 = Instant::now();
         no_host_message(down.pick(t0, &cache));
         let up = Probe::new(&[(HOSTS[0], Ok(TESTNET4_GENESIS))]);
         let later = t0 + PROBE_FAILURE_TTL;
         assert_eq!(up.pick(later, &cache).unwrap(), 0);
-        assert_eq!(
-            *cache.lock().unwrap(),
-            Some(HostVerdict::Chosen(HOSTS[0], later))
-        );
+        assert_eq!(cache.verdict(), Some(HostVerdict::Chosen(HOSTS[0], later)));
         assert_eq!(up.pick(later + Duration::from_secs(1), &cache).unwrap(), 0);
         assert_eq!(up.asked().len(), 1, "the old failure plays no part");
     }
@@ -9263,14 +9260,11 @@ pub(crate) mod tests {
             (HOSTS[0], Ok(TESTNET4_GENESIS)),
             (HOSTS[1], Ok(TESTNET4_GENESIS)),
         ]);
-        let cache = Mutex::new(None);
+        let cache = HostChoice::default();
         let now = Instant::now();
         assert_eq!(probe.pick(now, &cache).unwrap(), 0);
         assert_eq!(probe.asked(), vec![HOSTS[0]]);
-        assert_eq!(
-            *cache.lock().unwrap(),
-            Some(HostVerdict::Chosen(HOSTS[0], now))
-        );
+        assert_eq!(cache.verdict(), Some(HostVerdict::Chosen(HOSTS[0], now)));
     }
 
     #[test]
@@ -9279,7 +9273,7 @@ pub(crate) mod tests {
             (HOSTS[0], Err("timed out")),
             (HOSTS[1], Ok(TESTNET4_GENESIS)),
         ]);
-        let cache = Mutex::new(None);
+        let cache = HostChoice::default();
         assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1);
         assert_eq!(probe.asked(), HOSTS);
     }
@@ -9296,7 +9290,7 @@ pub(crate) mod tests {
         ];
         for body in wrong {
             let probe = Probe::new(&[(HOSTS[0], Ok(body)), (HOSTS[1], Ok(TESTNET4_GENESIS))]);
-            let cache = Mutex::new(None);
+            let cache = HostChoice::default();
             assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1, "{body:?}");
             assert_eq!(chosen(&cache), Some(HOSTS[1]), "{body:?}");
         }
@@ -9305,7 +9299,7 @@ pub(crate) mod tests {
     #[test]
     fn a_host_on_another_chain_is_never_used_even_when_it_is_the_only_one() {
         let probe = Probe::new(&[(HOSTS[0], Ok(TESTNET3_GENESIS))]);
-        let cache = Mutex::new(None);
+        let cache = HostChoice::default();
         let result = pick_host(
             &SPECS[..1],
             &|h| probe.run(h.base),
@@ -9332,7 +9326,7 @@ pub(crate) mod tests {
             (HOSTS[0], Err("tls handshake hung")),
             (HOSTS[1], Ok(MAINNET_GENESIS)),
         ]);
-        let cache = Mutex::new(None);
+        let cache = HostChoice::default();
         let message = no_host_message(probe.pick(Instant::now(), &cache));
         assert!(
             message.starts_with("esplora get: no testnet4 host is reachable"),
@@ -9346,7 +9340,7 @@ pub(crate) mod tests {
     #[test]
     fn a_verified_host_is_reused_for_ten_minutes_then_probed_again() {
         let probe = Probe::new(&[(HOSTS[0], Ok(TESTNET4_GENESIS))]);
-        let cache = Mutex::new(None);
+        let cache = HostChoice::default();
         let t0 = Instant::now();
         assert_eq!(probe.pick(t0, &cache).unwrap(), 0);
         let under = t0 + HOST_TRUST - Duration::from_secs(1);
@@ -9355,16 +9349,13 @@ pub(crate) mod tests {
         let over = t0 + HOST_TRUST;
         assert_eq!(probe.pick(over, &cache).unwrap(), 0);
         assert_eq!(probe.asked().len(), 2, "one probe after the window");
-        assert_eq!(
-            *cache.lock().unwrap(),
-            Some(HostVerdict::Chosen(HOSTS[0], over))
-        );
+        assert_eq!(cache.verdict(), Some(HostVerdict::Chosen(HOSTS[0], over)));
     }
 
     #[test]
     fn a_cached_host_is_reused_without_probing_even_when_it_would_now_fail() {
         let probe = Probe::new(&[(HOSTS[1], Err("down"))]);
-        let cache = Mutex::new(Some(HostVerdict::Chosen(HOSTS[1], Instant::now())));
+        let cache = HostChoice::new(Some(HostVerdict::Chosen(HOSTS[1], Instant::now())));
         assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1);
         assert!(probe.asked().is_empty());
     }
@@ -9372,7 +9363,7 @@ pub(crate) mod tests {
     #[test]
     fn a_transport_failure_forgets_the_host_and_marks_the_scans_stale_but_a_status_or_a_bad_body_does_not()
      {
-        let cached = || Mutex::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
+        let cached = || HostChoice::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
         let scanned = || {
             let fake = Fake::new();
             fake.snapshot("").unwrap();
@@ -9428,7 +9419,7 @@ pub(crate) mod tests {
             (HOSTS[0], Err("timed out")),
             (HOSTS[1], Ok(TESTNET4_GENESIS)),
         ]);
-        let cache = Mutex::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
+        let cache = HostChoice::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
         forget_host_if_unreachable(&classify(Err(timed_out())), &cache, &|| {});
         assert_eq!(probe.pick(Instant::now(), &cache).unwrap(), 1);
         assert_eq!(probe.asked(), HOSTS);
@@ -10871,7 +10862,7 @@ pub(crate) mod tests {
     #[test]
     fn a_transport_failure_while_fetching_fees_forgets_the_host_and_marks_the_scans_stale_and_still_answers()
      {
-        let hosts = Mutex::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
+        let hosts = HostChoice::new(Some(HostVerdict::Chosen(HOSTS[0], Instant::now())));
         let fake = Fake::new();
         fake.snapshot("").unwrap();
         let get = |_: &str| {
@@ -11625,7 +11616,7 @@ pub(crate) mod tests {
             get_forgetting(
                 &|| classify(AGENT.get(&url).call()),
                 &|_| {},
-                &Mutex::new(None),
+                &HostChoice::default(),
                 &|| {},
             )
         };
@@ -11851,7 +11842,7 @@ pub(crate) mod tests {
             }),
             _ => classify(Err(timed_out())),
         };
-        let chosen = Mutex::new(None);
+        let chosen = HostChoice::default();
         let limits = Limits::default();
         let esplora = |url: &str| -> Result<String, MobileSignerError> {
             let index = pick_host(

@@ -849,17 +849,8 @@ impl Http {
     /// The host to read from, probing the list when none is cached, never one this source skipped.
     fn host(&self) -> Result<&'static HostSpec, MobileSignerError> {
         let skipped = self.skips().skipped.clone();
-        let net = net_of(self.network);
-        let hosts = net.current_hosts();
-        let index = pick_host_on(
-            self.network,
-            hosts,
-            &probe_genesis,
-            Instant::now(),
-            &net.chosen,
-            &skipped,
-            &net.limits,
-        )?;
+        let (hosts, picked) = pick_current(self.network, &skipped);
+        let index = picked?;
         self.skips().last = Some(index);
         Ok(&hosts[index])
     }
@@ -913,17 +904,7 @@ impl Transport for Http {
             }
             skips.skipped.clone()
         };
-        let net = net_of(self.network);
-        pick_host_on(
-            self.network,
-            net.current_hosts(),
-            &probe_genesis,
-            Instant::now(),
-            &net.chosen,
-            &skipped,
-            &net.limits,
-        )
-        .is_ok()
+        pick_current(self.network, &skipped).1.is_ok()
     }
 
     fn canonical(&self) -> &'static str {
@@ -1042,7 +1023,7 @@ static TEST_NET: NetState = NetState {
             hosts_with_on(KeyNetwork::Test, OWN_NODE).into_boxed_slice(),
         ))
     }),
-    chosen: Mutex::new(None),
+    chosen: HostChoice::new(None),
     limits: Mutex::new(Vec::new()),
 };
 static MAIN_NET: NetState = NetState {
@@ -1051,7 +1032,7 @@ static MAIN_NET: NetState = NetState {
             hosts_with_on(KeyNetwork::Main, OWN_NODE).into_boxed_slice(),
         ))
     }),
-    chosen: Mutex::new(None),
+    chosen: HostChoice::new(None),
     limits: Mutex::new(Vec::new()),
 };
 
@@ -1060,6 +1041,28 @@ pub(crate) fn net_of(network: KeyNetwork) -> &'static NetState {
         KeyNetwork::Test => &TEST_NET,
         KeyNetwork::Main => &MAIN_NET,
     }
+}
+
+/// A pick over the hosts `network` uses now, and those hosts, which the index points into. The
+/// generation is read before the list, so the pick can store a verdict only about this list.
+fn pick_current(
+    network: KeyNetwork,
+    skipped: &[usize],
+) -> (&'static [HostSpec], Result<usize, MobileSignerError>) {
+    let net = net_of(network);
+    let generation = net.chosen.generation();
+    let hosts = net.current_hosts();
+    let picked = pick_host_on(
+        network,
+        hosts,
+        &probe_genesis,
+        Instant::now(),
+        &net.chosen,
+        generation,
+        skipped,
+        &net.limits,
+    );
+    (hosts, picked)
 }
 
 /// The hosts in use, in the order they are tried. Auto until `chain_use_node` says otherwise. A choice
@@ -1163,6 +1166,8 @@ pub(crate) fn hosts_for_on(
 }
 
 /// Sets `list` to `choice` and drops the trusted host in `cache`, so the next request probes the new list.
+/// It moves the generation on too, so a round begun on the old list stores no verdict. It never
+/// waits for that round, because the node page calls it on the main thread.
 #[cfg(test)]
 pub(crate) fn switch_hosts(
     choice: &NodeChoice,
@@ -1180,7 +1185,10 @@ pub(crate) fn switch_hosts_on(
 ) -> Result<(), MobileSignerError> {
     let hosts: &'static [HostSpec] = Box::leak(hosts_for_on(network, choice)?.into_boxed_slice());
     *list.lock().unwrap_or_else(|p| p.into_inner()) = hosts;
-    *cache.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    // After the list, so a pick that read the new generation goes over the new list.
+    let mut state = cache.state();
+    state.0 = None;
+    state.1 += 1;
     Ok(())
 }
 
@@ -1221,17 +1229,7 @@ pub fn chain_check_node(base: String, network: KeyNetwork) -> NodeCheck {
 /// up to a few seconds.
 #[uniffi::export]
 pub fn chain_node_status(network: KeyNetwork) -> NodeStatus {
-    let net = net_of(network);
-    let hosts = net.current_hosts();
-    let picked = pick_host_on(
-        network,
-        hosts,
-        &probe_genesis,
-        Instant::now(),
-        &net.chosen,
-        &[],
-        &net.limits,
-    );
+    let (hosts, picked) = pick_current(network, &[]);
     let index = picked.as_ref().copied().unwrap_or(0);
     NodeStatus {
         host: host_name(hosts[index].base),
@@ -1272,13 +1270,13 @@ pub(crate) const TESTNET4_GENESIS: &str =
 /// How long a host that passed the genesis check is used before it is probed again.
 pub(crate) const HOST_TRUST: Duration = Duration::from_secs(10 * 60);
 /// The whole probe of a public host, DNS to the last body byte. The per-read limit alone let a host
-/// that sent one byte every 3 s hold the host lock for 30 s.
+/// that sent one byte every 3 s hold the probe lock for 30 s.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 /// The own node answers in under 100 ms when Tailscale is up and not at all when it is down, so a
 /// phone off the tailnet loses at most this once per `HOST_TRUST` before the public hosts.
 const OWN_NODE_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long a round in which no host passed is answered from memory, so callers that queued on the
-/// host lock during that round do not each probe every host again.
+/// probe lock during that round do not each probe every host again.
 pub(crate) const PROBE_FAILURE_TTL: Duration = Duration::from_secs(5);
 
 // Esplora connects in well under a second. Past 10 s on a weak phone network the host is not answering.
@@ -1305,14 +1303,54 @@ pub(crate) static AGENT: LazyLock<ureq::Agent> =
 
 /// What the last probe round decided: the host in use, by its base, and when it passed the genesis
 /// check, or that no host passed, when, and the error that says so. A base, not a position in the
-/// list: a pick that began on a list `chain_use_node` then replaced can finish after the swap, and
-/// its verdict must not vouch for whichever host of the new list sits at the same position.
+/// list: a pick that began on a list `chain_use_node` then replaced can read a verdict about the new
+/// list, and must not take it for whichever host of its own list sits at the same position.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum HostVerdict {
     Chosen(&'static str, Instant),
     NoneReachable(Instant, String),
 }
-pub(crate) type HostChoice = Mutex<Option<HostVerdict>>;
+
+/// One network's host choice. `verdict` holds the last round's verdict and the generation, which
+/// each switch of the host list moves on. Nothing holds it across I/O, so a switch or a forget never
+/// waits on a probe. `probing` is held across a round's probes, so a pick that finds no verdict to
+/// use waits for the round in flight and reads its verdict instead of probing too, because
+/// blockstream.info limits this app's requests.
+pub(crate) struct HostChoice {
+    verdict: Mutex<(Option<HostVerdict>, u64)>,
+    probing: Mutex<()>,
+}
+
+impl HostChoice {
+    pub(crate) const fn new(verdict: Option<HostVerdict>) -> Self {
+        HostChoice {
+            verdict: Mutex::new((verdict, 0)),
+            probing: Mutex::new(()),
+        }
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, (Option<HostVerdict>, u64)> {
+        self.verdict
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Read it before the host list a pick goes over, and pass both to `pick_host_on`.
+    pub(crate) fn generation(&self) -> u64 {
+        self.state().1
+    }
+
+    #[cfg(test)]
+    pub(crate) fn verdict(&self) -> Option<HostVerdict> {
+        self.state().0.clone()
+    }
+}
+
+impl Default for HostChoice {
+    fn default() -> Self {
+        Self::new(None)
+    }
+}
 
 /// The hosts that answered 429, each with when its latest limit ends. One entry per host, so it never
 /// grows past the host list. An entry stays after its limit ends, because `pick_host` reads it as the
@@ -1476,23 +1514,47 @@ pub(crate) fn pick_host(
     skipped: &[usize],
     limits: &Limits,
 ) -> Result<usize, MobileSignerError> {
-    pick_host_on(KeyNetwork::Test, hosts, probe, now, cache, skipped, limits)
+    let generation = cache.generation();
+    pick_host_on(
+        KeyNetwork::Test,
+        hosts,
+        probe,
+        now,
+        cache,
+        generation,
+        skipped,
+        limits,
+    )
 }
 
 /// `pick_host` for the chain of `network`: its genesis hash is the one a host must answer.
+/// `generation` is `cache`'s, read before `hosts`. A switch since then may have replaced `hosts`.
+/// The pick then stores no verdict. When its turn to probe comes, it fails without probing, unless
+/// the verdict it finds already stands for `hosts`. So the picks queued behind a round never probe
+/// the old list one after another.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn pick_host_on(
     network: KeyNetwork,
     hosts: &[HostSpec],
     probe: &dyn Fn(&HostSpec) -> Result<String, GetError>,
     now: Instant,
     cache: &HostChoice,
+    generation: u64,
     skipped: &[usize],
     limits: &Limits,
 ) -> Result<usize, MobileSignerError> {
     let (genesis, name) = genesis_of(network);
-    let mut verdict = cache
+    let _round = cache
+        .probing
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (verdict, current) = cache.state().clone();
+    let store = |found: HostVerdict| {
+        let mut state = cache.state();
+        if state.1 == generation {
+            state.0 = Some(found);
+        }
+    };
     // One copy of the table per pick, so a pick never sees two states of it.
     let ends: Vec<Option<Instant>> = {
         let table = limits.lock().unwrap_or_else(|p| p.into_inner());
@@ -1515,14 +1577,14 @@ pub(crate) fn pick_host_on(
             .any(|end| end.is_some_and(|end| at < end && end <= now))
     };
     // The cached host counts only where this list has it.
-    let cached = match &*verdict {
+    let cached = match &verdict {
         Some(HostVerdict::Chosen(base, verified)) => hosts
             .iter()
             .position(|host| host.base == *base)
             .map(|index| (index, *verified)),
         _ => None,
     };
-    match (&*verdict, cached) {
+    match (&verdict, cached) {
         (_, Some((index, verified)))
             if age(&verified) < HOST_TRUST
                 && !skipped.contains(&index)
@@ -1538,6 +1600,11 @@ pub(crate) fn pick_host_on(
         }
         _ => {}
     }
+    if current != generation {
+        return Err(MobileSignerError::InvalidPsbtJson(format!(
+            "esplora get: the node changed while this request waited, so no {name} host was asked"
+        )));
+    }
     let mut failures = Vec::with_capacity(hosts.len());
     let began = Instant::now();
     for (index, host) in hosts.iter().enumerate() {
@@ -1551,7 +1618,7 @@ pub(crate) fn pick_host_on(
         }
         match probe(host) {
             Ok(body) if body.trim() == genesis => {
-                *verdict = Some(HostVerdict::Chosen(host.base, now));
+                store(HostVerdict::Chosen(host.base, now));
                 return Ok(index);
             }
             Ok(body) => {
@@ -1571,7 +1638,7 @@ pub(crate) fn pick_host_on(
         "esplora get: no {name} host is reachable ({})",
         failures.join("; ")
     );
-    *verdict = Some(HostVerdict::NoneReachable(now, error.clone()));
+    store(HostVerdict::NoneReachable(now, error.clone()));
     Err(MobileSignerError::InvalidPsbtJson(error))
 }
 
@@ -1584,9 +1651,7 @@ pub(crate) fn forget_host_if_unreachable(
     lost: &dyn Fn(),
 ) {
     if matches!(got, Err(GetError::Unreachable(_) | GetError::TimedOut(_))) {
-        *cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        cache.state().0 = None;
         lost();
     }
 }
@@ -1776,7 +1841,7 @@ mod node_choice_tests {
         let old = [spec("https://a.example/api"), spec("https://b.example/api")];
         let new = [spec("https://c.example/api")];
         let limits = Limits::default();
-        let cache: HostChoice = Mutex::new(None);
+        let cache = HostChoice::default();
         let now = Instant::now();
         // A pick that began on the old list finishes after the swap, leaving its second host cached.
         let first_down = |host: &HostSpec| -> Result<String, GetError> {
@@ -1814,18 +1879,18 @@ mod node_choice_tests {
     fn switching_sets_the_list_and_drops_the_trusted_host() {
         let list: HostList = Mutex::new(&[]);
         let cached = "https://cached.example/api";
-        let cache: HostChoice = Mutex::new(Some(HostVerdict::Chosen(cached, Instant::now())));
+        let cache = HostChoice::new(Some(HostVerdict::Chosen(cached, Instant::now())));
         switch_hosts(&NodeChoice::MempoolSpace, &list, &cache).unwrap();
         assert_eq!(list.lock().unwrap()[0].operator, Operator::MempoolSpace);
-        assert_eq!(*cache.lock().unwrap(), None);
+        assert_eq!(cache.verdict(), None);
         // A refused choice changes nothing.
-        *cache.lock().unwrap() = Some(HostVerdict::Chosen(cached, Instant::now()));
+        cache.state().0 = Some(HostVerdict::Chosen(cached, Instant::now()));
         let bad = NodeChoice::Own {
             base: "http://n.org".into(),
         };
         assert!(switch_hosts(&bad, &list, &cache).is_err());
         assert_eq!(list.lock().unwrap().len(), 1);
-        assert!(cache.lock().unwrap().is_some());
+        assert!(cache.verdict().is_some());
     }
 
     fn main_bases(choice: &NodeChoice) -> Vec<&'static str> {
@@ -1941,7 +2006,8 @@ mod node_choice_tests {
                 &hosts,
                 &says(genesis),
                 Instant::now(),
-                &Mutex::new(None),
+                &HostChoice::default(),
+                0,
                 &[],
                 &Limits::default(),
             )
@@ -2020,19 +2086,151 @@ mod node_choice_tests {
         assert_eq!(list.lock().unwrap()[0].operator, Operator::MempoolSpace);
     }
 
+    // A failure planted by the old list's round would answer the new list from memory for
+    // `PROBE_FAILURE_TTL`, and a pass would spare the new list its probe.
+    #[test]
+    fn a_round_begun_before_a_switch_leaves_no_verdict_and_the_next_pick_probes_the_new_list() {
+        let cases = [
+            (Err("down"), NodeChoice::MempoolSpace),
+            (Ok(TESTNET4_GENESIS), NodeChoice::Blockstream),
+        ];
+        for (answer, choice) in cases {
+            let list: HostList = Mutex::new(&[]);
+            let cache = HostChoice::default();
+            let (took, old) = while_a_probe_hangs(&cache, answer, || {
+                switch_hosts(&choice, &list, &cache).unwrap();
+            });
+            assert!(took.is_some(), "{answer:?}: the switch waited on the probe");
+            assert_eq!(
+                old.is_ok(),
+                answer.is_ok(),
+                "the round answers its own pick"
+            );
+            let new = *list.lock().unwrap();
+            let asked = Mutex::new(Vec::new());
+            let probe = |host: &HostSpec| -> Result<String, GetError> {
+                asked.lock().unwrap().push(host.base);
+                Ok(TESTNET4_GENESIS.into())
+            };
+            let picked = pick_host(new, &probe, Instant::now(), &cache, &[], &Limits::default());
+            assert_eq!(picked.unwrap(), 0, "{answer:?}");
+            assert_eq!(*asked.lock().unwrap(), [new[0].base], "{answer:?}");
+        }
+    }
+
+    #[test]
+    fn two_picks_with_no_verdict_probe_once() {
+        let cache = HostChoice::default();
+        let limits = Limits::default();
+        let probes = std::sync::atomic::AtomicUsize::new(0);
+        let (entered, in_probe) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let released = Mutex::new(released);
+        let probe = |_: &HostSpec| -> Result<String, GetError> {
+            probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            entered.send(()).unwrap();
+            let _ = released.lock().unwrap().recv();
+            Ok(TESTNET4_GENESIS.into())
+        };
+        let pick = || {
+            let one = &PUBLIC_TESTNET4_HOSTS[..1];
+            pick_host(one, &probe, Instant::now(), &cache, &[], &limits)
+        };
+        std::thread::scope(|s| {
+            let first = s.spawn(pick);
+            in_probe.recv().unwrap();
+            let second = s.spawn(pick);
+            // Time for the second pick to start a probe of its own, were it not to wait.
+            let _ = in_probe.recv_timeout(Duration::from_millis(200));
+            drop(release);
+            assert_eq!(first.join().unwrap().unwrap(), 0);
+            assert_eq!(second.join().unwrap().unwrap(), 0);
+        });
+        assert_eq!(
+            probes.into_inner(),
+            1,
+            "the second pick waited for the round"
+        );
+    }
+
+    // Up to `WINDOW` GETs queue behind one round. Were each to probe the old list in turn after a
+    // switch, the new list would wait behind all of them, and blockstream.info would count each probe.
+    #[test]
+    fn picks_queued_behind_a_round_over_a_replaced_list_fail_without_probing_it() {
+        let list: HostList = Mutex::new(&[]);
+        let cache = HostChoice::default();
+        let limits = Limits::default();
+        let probes = std::sync::atomic::AtomicUsize::new(0);
+        let (entered, in_probe) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let released = Mutex::new(released);
+        let probe = |_: &HostSpec| -> Result<String, GetError> {
+            probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            entered.send(()).unwrap();
+            let _ = released.lock().unwrap().recv();
+            Err(GetError::TimedOut("timed out".into()))
+        };
+        let old = &PUBLIC_TESTNET4_HOSTS[..1];
+        // The generation first, then a pick over the list it goes with, as `pick_current` does.
+        let pick = |ready: std::sync::mpsc::Sender<()>| {
+            let generation = cache.generation();
+            let _ = ready.send(());
+            pick_host_on(
+                KeyNetwork::Test,
+                old,
+                &probe,
+                Instant::now(),
+                &cache,
+                generation,
+                &[],
+                &limits,
+            )
+        };
+        std::thread::scope(|s| {
+            let (ready, all_read) = std::sync::mpsc::channel();
+            let first = s.spawn({
+                let ready = ready.clone();
+                move || pick(ready)
+            });
+            in_probe.recv().unwrap();
+            let queued: Vec<_> = (0..3)
+                .map(|_| {
+                    let ready = ready.clone();
+                    s.spawn(move || pick(ready))
+                })
+                .collect();
+            for _ in 0..4 {
+                all_read.recv().unwrap();
+            }
+            switch_hosts(&NodeChoice::MempoolSpace, &list, &cache).unwrap();
+            drop(release);
+            assert!(first.join().unwrap().is_err(), "its own round timed out");
+            for pick in queued {
+                match pick.join().unwrap() {
+                    Err(MobileSignerError::InvalidPsbtJson(m)) => assert!(
+                        m.starts_with("esplora get: ") && m.contains("the node changed"),
+                        "{m}"
+                    ),
+                    other => panic!("expected the node changed, got {other:?}"),
+                }
+            }
+        });
+        assert_eq!(probes.into_inner(), 1, "only the round in flight probed");
+        assert_eq!(cache.verdict(), None, "the round's failure was not kept");
+    }
+
     #[test]
     fn a_switch_on_one_network_leaves_the_other_hosts_trust_and_limits_alone() {
         let main = net_of(KeyNetwork::Main);
         let test = net_of(KeyNetwork::Test);
         assert!(!std::ptr::eq(main, test));
         let before = test.current_hosts();
-        *test.chosen.lock().unwrap() =
-            Some(HostVerdict::Chosen("https://t.example", Instant::now()));
+        test.chosen.state().0 = Some(HostVerdict::Chosen("https://t.example", Instant::now()));
         chain_use_node(NodeChoice::Blockstream, KeyNetwork::Main).unwrap();
         assert_eq!(main.current_hosts(), [PUBLIC_MAINNET_HOSTS[0]]);
         assert_eq!(test.current_hosts(), before);
-        assert!(test.chosen.lock().unwrap().is_some());
-        *test.chosen.lock().unwrap() = None;
+        assert!(test.chosen.verdict().is_some());
+        test.chosen.state().0 = None;
         chain_use_node(NodeChoice::Auto, KeyNetwork::Main).unwrap();
         assert_eq!(main.current_hosts(), PUBLIC_MAINNET_HOSTS);
     }
