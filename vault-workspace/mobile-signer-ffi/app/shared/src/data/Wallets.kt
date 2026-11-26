@@ -470,6 +470,27 @@ class Wallets internal constructor(
         withContext(Dispatchers.Default) { readVault(vault, withHistory = true, force = force) }
     }
 
+    /**
+     * [vault]'s Receive address by its scan, with no request: the next unused one the last read handed out, else the one the scan file
+     * gives, else the address 0 the book holds. It waits for a read of the vault in progress, so call it off the main thread.
+     */
+    fun vaultReceiveAddress(vault: CreatedVault): String =
+        try {
+            vaultCore.lastReceive(descriptorIn(vault.bsms), network)
+        } catch (_: Exception) {
+            vault.address
+        }
+
+    /** [vaultReceiveAddress] after a read by [readVault]'s rules, so a payment since the last read moves it on. Blocks on the network. */
+    suspend fun readVaultReceiveAddress(vault: CreatedVault): String =
+        withContext(Dispatchers.Default) {
+            readVault(vault)
+            vaultReceiveAddress(vault)
+        }
+
+    /** Whether [vault]'s last read this run failed, so its Receive address is the one an earlier read handed out. */
+    fun vaultReadFailed(vault: CreatedVault): Boolean = vaultReads[vault.address]?.let { it.snapshot == null } == true
+
     /** One transaction of [vault] in full, for the detail screen (3.7.2, 3.7.3). It blocks on the network, so the caller picks the thread. */
     fun vaultTxDetail(vault: CreatedVault, txid: String): TxDetailLoad.Done =
         detailLoad { vaultCore.detail(descriptorIn(vault.bsms), network, txid) }

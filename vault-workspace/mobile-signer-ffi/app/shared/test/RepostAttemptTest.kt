@@ -296,7 +296,7 @@ private class LostAnswer {
         snapshot = { _, _, _, _ -> HotWalletSnapshot("tb1qreceive", 1_000_000uL, 1_000_000uL, KeyNetwork.TEST, HotScan.COMPLETE) },
         fetchHistory = { _, _, _, _ -> emptyList() },
         nowSeconds = { 1_792_740_720L },
-        receiveAddressOf = { _, _, _, _, _ -> "tb1qoffline" },
+        lastReceiveAddressOf = { _, _, _, _ -> "tb1qoffline" },
     )
     val draft = SendDraft().apply {
         destination = "tb1qthepayee"

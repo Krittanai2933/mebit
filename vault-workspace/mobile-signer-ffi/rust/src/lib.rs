@@ -934,6 +934,14 @@ mod tests {
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_wallet_snapshot(),
             ),
             (
+                "func_hot_last_receive_address",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_last_receive_address(),
+            ),
+            (
+                "func_wallet_last_receive_address",
+                hot_wallet::uniffi_mobile_signer_ffi_checksum_func_wallet_last_receive_address(),
+            ),
+            (
                 "func_hot_fee_tiers",
                 hot_wallet::uniffi_mobile_signer_ffi_checksum_func_hot_fee_tiers(),
             ),

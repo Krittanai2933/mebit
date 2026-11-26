@@ -38,7 +38,7 @@ private data class Shown(
 
 private fun SingleSigWallet.shown() = Shown(mode, balanceSats, receiveAddress, history, lastError, live, balanceKnown, addressIsReal)
 
-private data class Derivation(val words: List<String>, val passphrase: String, val network: KeyNetwork, val index: UInt)
+private data class Derivation(val words: List<String>, val passphrase: String, val network: KeyNetwork)
 
 /** Fakes for the hot_* calls a bind makes. A test swaps a result to change what the next bind gets. Nothing here may send. */
 private class FakeChain {
@@ -51,8 +51,8 @@ private class FakeChain {
         postHex = { _, _, _ -> fail("post ran") },
         snapshot = { _, _, _, _ -> snapshotResult() },
         fetchHistory = { _, _, _, _ -> historyResult() },
-        receiveAddressOf = { words, passphrase, network, _, index ->
-            derivations += Derivation(words, passphrase, network, index)
+        lastReceiveAddressOf = { words, passphrase, network, _ ->
+            derivations += Derivation(words, passphrase, network)
             offlineResult()
         },
     )
@@ -134,7 +134,7 @@ class SingleSigWalletStateTest {
             Shown(WalletMode.Unavailable, 0L, OFFLINE_ADDRESS, emptyList(), UNREACHABLE_SHOWN, live = false, balanceKnown = false, addressIsReal = true),
             chain.wallet.shown(),
         )
-        assertEquals(listOf(Derivation(KEY_WORDS, KEY_PASSPHRASE, KeyNetwork.TEST, 0u)), chain.derivations, "the key's first receive address, the one the snapshot watches")
+        assertEquals(listOf(Derivation(KEY_WORDS, KEY_PASSPHRASE, KeyNetwork.TEST)), chain.derivations, "the offline address of this key, from the scan the phone keeps")
     }
 
     @Test

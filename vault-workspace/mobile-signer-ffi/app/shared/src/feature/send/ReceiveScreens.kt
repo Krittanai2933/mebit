@@ -167,15 +167,21 @@ fun S3ReceiveScreen(
     tag = tag,
     address = wallet.receiveAddress,
     addressIsReal = wallet.addressIsReal,
+    fromLastSync = wallet.mode == SingleSigWallet.WalletMode.Unavailable && wallet.addressIsReal,
     onSend = onSend,
     onBack = onBack,
     onOpenCatalog = onOpenCatalog,
 )
 
-/** Penpot 4.3.1 Receive for one vault: its QR and address. A vault has one address today, so the board's fresh-address line is left out, and a vault with a stand-in key gets no QR, as the demo wallet gets none. */
+/**
+ * Penpot 4.3.1 Receive for one vault: the QR and text of [address], its next unused receive address, null until the scan gave one. The board's
+ * fresh-address line is left out, and a vault with a stand-in key gets no QR, as the demo wallet gets none.
+ */
 @Composable
 fun VaultReceiveScreen(
     vault: CreatedVault?,
+    address: String?,
+    fromLastSync: Boolean,
     onSend: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
@@ -189,8 +195,9 @@ fun VaultReceiveScreen(
     ReceiveLayout(
         eyebrow = "RECEIVE · ${vault.name}",
         tag = "screen_vaults/receive",
-        address = vault.address,
-        addressIsReal = !vault.hasMockKey,
+        address = address.orEmpty(),
+        addressIsReal = !vault.hasMockKey && address != null,
+        fromLastSync = fromLastSync && address != null,
         onSend = onSend,
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
@@ -203,6 +210,8 @@ private fun ReceiveLayout(
     tag: String,
     address: String,
     addressIsReal: Boolean,
+    // No host answered, so the address is the one the last sync handed out, which someone may have paid since.
+    fromLastSync: Boolean = false,
     onSend: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
@@ -275,6 +284,17 @@ private fun ReceiveLayout(
             ) {
                 ReceiveAddress(address)
             }
+        }
+        if (fromLastSync) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                "ออฟไลน์ · ที่อยู่นี้มาจากการซิงก์ครั้งล่าสุด อาจมีคนโอนเข้ามาแล้ว ต่อเน็ตแล้วรีเฟรชก่อนแชร์",
+                color = MbEyebrow,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().testTag("offline_address_note"),
+            )
         }
         Spacer(modifier = Modifier.height(14.dp))
         Row(

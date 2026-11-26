@@ -38,6 +38,7 @@ private class Rig {
     var snapshot: () -> HotWalletSnapshot = { HotWalletSnapshot("tb1qnextunused", 50_000uL, 40_000uL, KeyNetwork.TEST, HotScan.COMPLETE) }
     var history: List<HotTx> = emptyList()
     var post: () -> HotSendResult = { HotSendResult(SIGNED_TXID) }
+    var offline: () -> String = { "tb1qofflinescan" }
     var now = 1_000L
     val device = FakeDeviceLink(sign = { _, psbt, _ -> review("$psbt+signed", signed = listOf(PUBLIC_FINGERPRINT)) })
     val core = DescribedCore(
@@ -46,6 +47,7 @@ private class Rig {
             snapshot()
         },
         history = { _, _ -> history },
+        lastReceive = { _, _ -> offline() },
         draft = { _, _, to, sats, rate ->
             calls += "draft $to $sats $rate"
             review("unsigned")
@@ -113,7 +115,7 @@ class DescribedWalletTest {
     }
 
     @Test
-    fun aRefreshReadsTheWalletByItsDescriptorAndAFailedOneKeepsReceiveAddress0(): Unit = runBlocking {
+    fun aRefreshReadsTheWalletByItsDescriptorAndAFailedOneShowsTheAddressTheScanGives(): Unit = runBlocking {
         val rig = Rig()
         val chain = rig.chain
         assertEquals(WalletMode.Demo, chain.mode, "no refresh has ended")
@@ -135,9 +137,13 @@ class DescribedWalletTest {
         assertEquals(WalletMode.Unavailable, chain.mode)
         assertFalse(chain.balanceKnown)
         assertEquals(0L, chain.balanceSats)
-        assertEquals(PUBLIC_JADE_WALLET.address, chain.receiveAddress, "receive address 0, which the book checked against the key")
+        assertEquals("tb1qofflinescan", chain.receiveAddress, "the address the scan this phone keeps gives, not receive address 0")
         assertNotNull(chain.lastError)
         assertEquals("snapshot: esplora: unreachable", chain.lastFailure)
+
+        rig.offline = { throw IllegalStateException("no scan") }
+        chain.refresh()
+        assertEquals(PUBLIC_JADE_WALLET.address, chain.receiveAddress, "receive address 0, which the book checked against the key, when the scan gives none")
     }
 
     @Test
