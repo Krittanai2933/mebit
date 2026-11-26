@@ -45,13 +45,23 @@ internal fun NodeSetting.toChoice(): NodeChoice = when (this) {
 
 /**
  * The explorer page of [txid] on this node, which the slip's QR opens. Auto names blockstream.info, the first public host it tries: the
- * build's own node, which Auto may try first, is private, and a slip is shared with people who cannot reach it.
+ * build's own node, which Auto may try first, is private, and a slip is shared with people who cannot reach it. An own node on Tailscale
+ * names blockstream.info too, for the same reason.
  */
 fun NodeSetting.txPageUrl(txid: String): String = when (this) {
     NodeSetting.Auto, NodeSetting.Blockstream -> "https://blockstream.info/testnet4/tx/$txid"
     NodeSetting.MempoolSpace -> "https://mempool.space/testnet4/tx/$txid"
-    // shortcut: assumes the node serves its explorer's web pages beside its /api, as Esplora and mempool do; an API-only node gives a dead link. Add a page URL to the setting when one shows up.
-    is NodeSetting.Own -> base.trimEnd('/').removeSuffix("/api") + "/tx/$txid"
+    is NodeSetting.Own ->
+        if (onTailnet(base)) NodeSetting.Blockstream.txPageUrl(txid)
+        // shortcut: assumes the node serves its explorer's web pages beside its /api, as Esplora and mempool do; an API-only node gives a dead link. Add a page URL to the setting when one shows up.
+        else base.trimEnd('/').removeSuffix("/api") + "/tx/$txid"
+}
+
+/** A host only the user's own tailnet reaches: 100.64.0.0/10 or `*.ts.net`, the Tailscale addresses the core lets an own node use. */
+private fun onTailnet(base: String): Boolean {
+    val host = base.substringAfter("://").substringBefore('/').substringBefore(':').lowercase()
+    val octets = host.split('.').map { it.toIntOrNull() }
+    return host.endsWith(".ts.net") || (octets.size == 4 && octets[0] == 100 && (octets[1] ?: -1) in 64..127)
 }
 
 /** The node setting and its file. [file] is null where the phone has no place for it, and then a choice lasts until the app closes. */
