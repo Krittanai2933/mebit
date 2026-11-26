@@ -174,7 +174,6 @@ import com.mebit.app.ui.components.coversScreen
 import com.mebit.app.ui.components.rememberFullSheetState
 import com.mebit.app.ui.theme.MbPage
 import com.mebit.ffi.signer.HotTx
-import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.WalletFileRead
 import com.mebit.ffi.signer.walletFileRead
 import com.mebit.ffi.signer.FoundWallet
@@ -945,6 +944,7 @@ internal fun MebitNavHost(
                         walletName = session.walletName,
                         variant = "default",
                         node = nodeSettings.current,
+                        network = session.network,
                         onHome = { land(stackAfterSlipHome(backStack, MovieRoute.S1HomeSingleSig)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -956,6 +956,7 @@ internal fun MebitNavHost(
                         walletName = session.walletName,
                         variant = "slip",
                         node = nodeSettings.current,
+                        network = session.network,
                         onHome = { land(stackAfterSlipHome(backStack, MovieRoute.S1HomeSingleSig)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -967,6 +968,7 @@ internal fun MebitNavHost(
                         walletName = session.walletName,
                         variant = "block",
                         node = nodeSettings.current,
+                        network = session.network,
                         onHome = { land(stackAfterSlipHome(backStack, MovieRoute.S1HomeSingleSig)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -978,6 +980,7 @@ internal fun MebitNavHost(
                         walletName = session.walletName,
                         variant = "poster",
                         node = nodeSettings.current,
+                        network = session.network,
                         onHome = { land(stackAfterSlipHome(backStack, MovieRoute.S1HomeSingleSig)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -1160,7 +1163,7 @@ internal fun MebitNavHost(
                             destination = draft.destination,
                             walletName = w.name,
                             node = nodeSettings.current,
-                            network = KeyNetwork.TEST,
+                            network = w.network,
                             quotes = quotes,
                             onHome = { land(stackAfterSlipHome(backStack, MovieRoute.HardwareHome)) },
                             onOpenCatalog = openCatalog,

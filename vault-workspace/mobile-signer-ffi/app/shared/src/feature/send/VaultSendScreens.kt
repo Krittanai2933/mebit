@@ -83,7 +83,6 @@ import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.app.ui.theme.amountFontFamily
-import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.isValidAddress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -586,7 +585,7 @@ fun VaultSentScreen(send: VaultSend?, quotes: QuoteCache, node: NodeSetting, onH
         destination = sent.payment.destination,
         walletName = send.vault.name,
         node = node,
-        network = KeyNetwork.TEST,
+        network = send.network,
         quotes = quotes,
         onHome = onHome,
         onOpenCatalog = onOpenCatalog,
