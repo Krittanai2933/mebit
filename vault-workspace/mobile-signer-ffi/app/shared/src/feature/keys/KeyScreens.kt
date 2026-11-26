@@ -66,6 +66,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -281,7 +282,7 @@ fun VerifyKeyScreen(
                 Text(deviceLine, color = MbSlate, fontSize = 11.sp, fontWeight = FontWeight.Light, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("verify_key_source"))
             }
             Spacer(Modifier.width(8.dp))
-            Box(Modifier.height(24.dp).clip(CircleShape).background(MbGreenWash).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.heightIn(min = 24.dp).clip(CircleShape).background(MbGreenWash).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
                 Text("✓ อ่านกุญแจแล้ว", color = MbSuccess, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, lineHeight = 14.sp)
             }
         }

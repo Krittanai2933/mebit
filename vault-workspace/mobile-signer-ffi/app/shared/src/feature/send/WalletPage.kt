@@ -34,10 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -61,7 +58,6 @@ import com.mebit.app.ui.theme.MbDisabledFill
 import com.mebit.app.ui.theme.MbNavy
 import com.mebit.app.ui.theme.MbNavyInk
 import com.mebit.app.ui.theme.MbPage
-import com.mebit.app.ui.theme.MbProgress
 import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.app.ui.theme.amountFontFamily
@@ -78,8 +74,6 @@ internal enum class WalletBoard(
     val eyebrowAlpha: Float,
     /** The outlined pill's border white: 4.1 at 28%, 3.7 at 20%. */
     val outlineAlpha: Float,
-    /** 3.7's faint ring at the navy block's right. */
-    val ring: Boolean,
     /** A key's number badge. */
     val keyBadge: Color,
     /** 4.1.1's one key row is 63 dp with its content in the top 53. 3.7.1's rows are 48 dp, 3 dp under the divider and 12 dp over the card's edge. */
@@ -90,8 +84,8 @@ internal enum class WalletBoard(
     /** The key list's bottom over a footer. 3.7.1's backup row puts its divider 8 dp under the last key. Home's เปลี่ยน PIN link, on no board, sits as with no footer. */
     val keyListOverFooter: Dp,
 ) {
-    Home(eyebrowAlpha = 1f, outlineAlpha = 0.28f, ring = false, keyBadge = MbChip, keyRowHeight = 63.dp, keyRowBottom = 10.dp, keyListTop = 0.dp, keyListBottom = 0.dp, keyListOverFooter = 0.dp),
-    Detail(eyebrowAlpha = 0.72f, outlineAlpha = 0.20f, ring = true, keyBadge = MbDisabledFill, keyRowHeight = 48.dp, keyRowBottom = 0.dp, keyListTop = 3.dp, keyListBottom = 12.dp, keyListOverFooter = 8.dp),
+    Home(eyebrowAlpha = 1f, outlineAlpha = 0.28f, keyBadge = MbChip, keyRowHeight = 63.dp, keyRowBottom = 10.dp, keyListTop = 0.dp, keyListBottom = 0.dp, keyListOverFooter = 0.dp),
+    Detail(eyebrowAlpha = 0.72f, outlineAlpha = 0.20f, keyBadge = MbDisabledFill, keyRowHeight = 48.dp, keyRowBottom = 0.dp, keyListTop = 3.dp, keyListBottom = 12.dp, keyListOverFooter = 8.dp),
 }
 
 /**
@@ -100,14 +94,9 @@ internal enum class WalletBoard(
  */
 internal data class KeyRowText(val name: String, val line: String, val lineTag: String, val logo: KeySourceLabel? = null)
 
-/**
- * The page under 4.1 and 3.7: the page ground tagged [tag], the navy block 350 dp tall that scrolls away with the content, [board]'s ring on
- * it, the status bar's navy strip once the block has scrolled up, and the debug link. [modifier] goes last on the outer box, where Home's pull sits.
- */
 @Composable
 internal fun WalletPage(
     tag: String,
-    board: WalletBoard,
     onOpenCatalog: () -> Unit,
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
@@ -120,12 +109,6 @@ internal fun WalletPage(
                 // After the scroll, so the navy block is part of the content and scrolls away with it.
                 .drawBehind {
                     drawRect(MbNavy, size = size.copy(height = 350.dp.toPx()))
-                    if (board.ring) {
-                        // 3.7 draws a 230 dp circle at x 300 and y 124 of a 402 dp screen, cut off by the navy block's end.
-                        clipRect(bottom = 350.dp.toPx()) {
-                            drawCircle(MbProgress.copy(alpha = 0.14f), radius = 115.dp.toPx(), center = Offset(size.width + 13.dp.toPx(), 239.dp.toPx()), style = Stroke(1.dp.toPx()))
-                        }
-                    }
                 }
                 .safeDrawingPadding()
                 .padding(horizontal = 20.dp)
@@ -138,11 +121,6 @@ internal fun WalletPage(
     }
 }
 
-/**
- * The navy block's content from the logo to the two pills, at the spacing 4.1 and 3.7 share. [goldLine] fills the 17 dp line under the
- * balance, which keeps its room when empty so nothing below it moves. [demo] adds Home's small marker after the balance. [onClose] draws
- * 3.7's X at the logo's right.
- */
 @Composable
 internal fun WalletHero(
     board: WalletBoard,
@@ -195,25 +173,23 @@ internal fun WalletHero(
     }
 }
 
-/**
- * 3.7's close X: the 18 dp X with its right edge at the content's and its top 6 dp below the logo's, read as one button "ปิด", in a 48 dp
- * target centred on it.
- */
 @Composable
 private fun BoxScope.CloseButton(onClose: () -> Unit) {
     SystemBack(onClose)
+    val target = 48.dp
+    val icon = 18.dp
     Box(
         modifier = Modifier
             .align(Alignment.TopEnd)
-            // requiredSize centres the 48 dp target on the 26 dp header, 11 dp above its top, so this puts its centre on the X's.
-            .offset(x = 15.dp, y = 2.dp)
-            .requiredSize(48.dp)
+            // requiredSize centres the 48 dp target on the 26 dp header.
+            .offset(x = (target - icon) / 2)
+            .requiredSize(target)
             .clickable(role = Role.Button, onClick = onClose)
             .semantics { contentDescription = "ปิด" }
             .testTag("cta_vault_close"),
         contentAlignment = Alignment.Center,
     ) {
-        Image(painterResource(Res.drawable.ic_close), contentDescription = null, modifier = Modifier.size(18.dp))
+        Image(painterResource(Res.drawable.ic_close), contentDescription = null, modifier = Modifier.size(icon))
     }
 }
 

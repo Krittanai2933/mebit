@@ -90,14 +90,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 
-/**
- * Penpot 4.1 Home · single-sig. Left out: the settings gear and
- * the key-details link (no screens behind them yet), and the names in the transaction rows (the wallet knows no
- * counterparty, so a row says only รับ or ส่งออก).
- * A key whose balance could not be fetched shows a dash and a retry line in place of a number, and a key whose
- * first fetch is still running shows a dash and "กำลังดึงยอด…". The page scrolls, the navy block with it, and the transactions scroll
- * inside a box four and a half rows tall. A drag scrolls the box, then the page, before it can pull. The pull follows Organize 3.6.3 and 3.6.4 in place of Material's indicator.
- */
 @Composable
 fun S1HomeSingleSigScreen(
     wallet: SingleSigWallet,
@@ -108,7 +100,8 @@ fun S1HomeSingleSigScreen(
     onHistory: () -> Unit,
     onOpenTx: (HotTx) -> Unit,
     onOpenCatalog: () -> Unit,
-) = SingleSigHome(wallet, session, quotes, onReceive, onSend, onHistory, onOpenTx, onOpenCatalog, tag = "screen_send/s1")
+    onClose: () -> Unit,
+) = SingleSigHome(wallet, session, quotes, onReceive, onSend, onHistory, onOpenTx, onOpenCatalog, onClose, tag = "screen_send/s1")
 
 /** The phone wallet's home, so the backup gate can show it dimmed behind its sheet under a tag of its own. */
 @Composable
@@ -121,6 +114,7 @@ internal fun SingleSigHome(
     onHistory: () -> Unit,
     onOpenTx: (HotTx) -> Unit,
     onOpenCatalog: () -> Unit,
+    onClose: () -> Unit,
     tag: String,
 ) = OneKeyHome(
     wallet = wallet,
@@ -136,6 +130,7 @@ internal fun SingleSigHome(
     onHistory = onHistory,
     onOpenTx = onOpenTx,
     onOpenCatalog = onOpenCatalog,
+    onClose = onClose,
     tag = tag,
 ) {
     var keyDetails by remember { mutableStateOf(false) }
@@ -150,11 +145,6 @@ internal fun SingleSigHome(
     NotSavedNotice(session, Modifier.padding(top = 12.dp))
 }
 
-/**
- * Penpot 4.1.5 Home of a one-key hardware wallet, and 4.1.5.1 with its key details open: the phone wallet's home over [wallet], with the
- * key on the device in the key card and no upgrade card, since a Jade wallet's upgrade would add a Jade to a Jade wallet. [keyName] is
- * the Keyring's name of its key ([com.mebit.app.data.hardwareKeyName]).
- */
 @Composable
 fun HardwareHomeScreen(
     wallet: DescribedWallet,
@@ -165,6 +155,7 @@ fun HardwareHomeScreen(
     onHistory: () -> Unit,
     onOpenTx: (HotTx) -> Unit,
     onOpenCatalog: () -> Unit,
+    onClose: () -> Unit,
 ) {
     val hw = wallet.wallet
     OneKeyHome(
@@ -180,6 +171,7 @@ fun HardwareHomeScreen(
         onHistory = onHistory,
         onOpenTx = onOpenTx,
         onOpenCatalog = onOpenCatalog,
+        onClose = onClose,
         tag = "screen_hw/home",
     ) {
         var keyDetails by remember { mutableStateOf(false) }
@@ -220,6 +212,7 @@ private fun OneKeyHome(
     onHistory: () -> Unit,
     onOpenTx: (HotTx) -> Unit,
     onOpenCatalog: () -> Unit,
+    onClose: () -> Unit,
     tag: String,
     keyCard: @Composable ColumnScope.() -> Unit,
 ) {
@@ -254,7 +247,6 @@ private fun OneKeyHome(
     val open by remember { derivedStateOf { pull.distanceFraction > 0f } }
     WalletPage(
         tag = tag,
-        board = WalletBoard.Home,
         onOpenCatalog = onOpenCatalog,
         modifier = Modifier.pullToRefresh(
             isRefreshing = pulled,
@@ -276,6 +268,7 @@ private fun OneKeyHome(
             sendTag = "cta_s1_send",
             onSend = onSend,
             demo = wallet.mode == WalletMode.Demo && !loading,
+            onClose = onClose,
         ) {
             // The board's baht line sits here, and so do the fetch note, the scan's calm line and the retry.
             val scanLine = homeScanLine(wallet.mode, wallet.scan)
