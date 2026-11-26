@@ -7,11 +7,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
+import com.mebit.app.ui.components.BottomActions
+import com.mebit.app.ui.theme.MbBtcOrange
+import com.mebit.app.ui.theme.MbPage
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -21,7 +22,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,8 +30,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -67,7 +65,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -97,19 +94,6 @@ import org.jetbrains.compose.resources.painterResource
 
 /** Longest key name Confirm Key takes, so a pasted paragraph cannot stretch the keyring rows. */
 private const val KEY_NAME_MAX = 40
-
-/** The grey Penpot 2.4.1 gives the "ไม่ตรง" link, which the theme has no token for. */
-private val MismatchInk = Color(0xFF545454)
-
-@Composable
-private fun NameChip(label: String, onPick: () -> Unit) {
-    Box(
-        Modifier.height(24.dp).clip(CircleShape).background(MbChip).clickable(role = Role.Button, onClick = onPick).padding(horizontal = 10.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(label, color = MbMuted, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, lineHeight = 14.sp)
-    }
-}
 
 /** Penpot 2.2: one list of four cards in the board's order. The first and last add a wallet, the other two a key for a Vault. [line] says why a refused wallet add did not start. */
 @Composable
@@ -222,8 +206,9 @@ fun PairMebitOtherScreen(
 }
 
 /**
- * Penpot 2.4.1 Confirm Key, one tap. With [save] it is the last step of a one-key wallet (Wallet Created comes next): the tap saves the
- * wallet of the key a device just read, under the name typed here, and [save] answers null once it is saved, or the line that says why not.
+ * Penpot 2.4 Save Key, and 2.4.1 when a one-key wallet's key came from Key Source. The card of where the key came from, its name, which
+ * the user may change, and its fingerprint. With [save] it is the last step of a one-key wallet (Wallet Created comes next): the tap saves
+ * the wallet of the key a device just read, under the name typed here, and [save] answers null once it is saved, or the line that says why not.
  */
 @Composable
 fun VerifyKeyScreen(
@@ -241,134 +226,122 @@ fun VerifyKeyScreen(
     val scope = rememberCoroutineScope()
     var saving by remember { mutableStateOf(false) }
     var saveLine by remember(pending) { mutableStateOf<String?>(null) }
-    val nameFocus = remember { FocusRequester() }
-    val keyboard = LocalSoftwareKeyboardController.current
+    val saveKey: () -> Unit = {
+        when {
+            pending == null -> Unit
+            // A key the book could not save stays here, with the book's line under the cards.
+            save == null -> if (store.confirmFingerprint(pending.fingerprint, label)) onMatched() else if (store.lastMismatch) onMismatch(pending.source)
+            // One save at a time, so a double tap cannot save two wallets.
+            !saving -> scope.launch {
+                saving = true
+                try {
+                    saveLine = save(label.trim().ifEmpty { pending.label })
+                } finally {
+                    saving = false
+                }
+                if (saveLine == null) onMatched()
+            }
+        }
+    }
     MebitScreen(
-        eyebrow = "VERIFY KEY",
-        title = null,
+        eyebrow = if (pending == null || pending.source.isHardware()) "NEW KEY · HARDWARE" else "NEW KEY · MEBIT",
+        title = "บันทึกกุญแจ",
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,
         tag = tag,
+        bottom = pending?.let { p ->
+            {
+                BottomActions("บันทึกกุญแจ", "cta_verify_match", saveKey, "ยกเลิก (ไม่บันทึก)", "cta_verify_mismatch", {
+                    store.discardPending()
+                    onReconnect(p.source)
+                }, enabled = !saving)
+            }
+        },
     ) {
         if (pending == null) {
-            Text("ไม่มีกุญแจรอยืนยัน · กลับไปเพิ่มกุญแจ", color = MaterialTheme.colorScheme.error)
+            Text("ไม่มีกุญแจรอบันทึก · กลับไปเพิ่มกุญแจ", color = MaterialTheme.colorScheme.error)
             return@MebitScreen
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(34.dp).background(MbSuccess, CircleShape).clearAndSetSemantics {},
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("✓", color = MbWhite, fontSize = 20.sp)
-            }
-            Spacer(Modifier.width(14.dp))
-            Text("ยืนยัน fingerprint", color = MbNavyInk, fontSize = 28.sp, fontWeight = FontWeight.Medium, modifier = Modifier.testTag("title"))
-        }
-        Spacer(Modifier.height(21.dp))
-        val hardware = pending.source == KeySourceLabel.Jade || pending.source == KeySourceLabel.TrezorSafe7
-        val source = when (pending.source) {
-            KeySourceLabel.ThisDevice -> "mebit · เครื่องนี้"
-            KeySourceLabel.MebitOther -> "mebit · เครื่องอื่น"
-            KeySourceLabel.Jade, KeySourceLabel.TrezorSafe7 -> hardwareName(pending.source)
-        } + when {
-            pending.isMock -> " · จำลอง"
-            hardware -> " · Bluetooth"
-            else -> ""
-        }
-        Column(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(MbWhite)
-                .border(1.dp, MbBorder, RoundedCornerShape(24.dp)).padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 32.dp),
+        // MebitScreen starts content 54 dp under the title's top and the board starts the device card 58 dp under it.
+        Spacer(Modifier.height(4.dp))
+        val (deviceName, deviceLine) = keyArrival(pending.source, pending.isMock)
+        Row(
+            Modifier.fillMaxWidth().height(72.dp).clip(RoundedCornerShape(20.dp)).background(MbWhite).border(1.dp, MbBorder, RoundedCornerShape(20.dp)).padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("ชื่อกุญแจ (ตั้งเองได้)", color = MbSlate, fontSize = 10.5.sp, lineHeight = 14.sp)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                BasicTextField(
-                    value = label,
-                    onValueChange = { label = it.take(KEY_NAME_MAX) },
-                    singleLine = true,
-                    textStyle = TextStyle(color = MbNavyInk, fontSize = 18.sp, fontWeight = FontWeight.SemiBold),
-                    modifier = Modifier.weight(1f).focusRequester(nameFocus).semantics { contentDescription = "ชื่อกุญแจ" }.testTag("verify_key_name"),
-                )
-                TextButton(
-                    onClick = { nameFocus.requestFocus(); keyboard?.show() },
-                    modifier = Modifier.heightIn(min = 48.dp).testTag("verify_edit_name"),
-                ) {
-                    Text("แก้ไข", color = MbNavy, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                }
+            Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(MbChip), contentAlignment = Alignment.Center) {
+                KeyLogo(pending.source, 22.dp)
             }
-            Box(Modifier.fillMaxWidth().height(1.dp).background(MbNavy))
-            Spacer(Modifier.height(12.dp))
-            // Penpot 2.4.1: the first chip is the name the key arrived with, two fit on the first row.
-            val suggestions = listOf(pending.label, "กุญแจบ้าน", "กุญแจสำรอง ตู้เซฟ").distinct()
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    suggestions.take(2).forEach { suggestion -> NameChip(suggestion) { label = suggestion } }
-                }
-                suggestions.drop(2).forEach { suggestion -> NameChip(suggestion) { label = suggestion } }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(deviceName, color = MbNavyInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, lineHeight = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(deviceLine, color = MbSlate, fontSize = 11.sp, fontWeight = FontWeight.Light, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("verify_key_source"))
             }
-            Spacer(Modifier.height(7.dp))
-            Box(Modifier.fillMaxWidth().height(1.dp).background(MbBorder))
-            Spacer(Modifier.height(15.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("แหล่งที่มา", color = MbSlate, fontSize = 12.5.sp, lineHeight = 16.sp)
-                // The board ends both values 20 dp inside the card's edge.
-                Text(source, color = MbNavyInk, fontSize = 12.5.sp, lineHeight = 16.sp, modifier = Modifier.padding(end = 20.dp).testTag("verify_key_source"))
+            Spacer(Modifier.width(8.dp))
+            Box(Modifier.height(24.dp).clip(CircleShape).background(MbGreenWash).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+                Text("✓ อ่านกุญแจแล้ว", color = MbSuccess, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, lineHeight = 14.sp)
             }
-            Spacer(Modifier.height(12.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Fingerprint", color = MbSlate, fontSize = 12.5.sp, lineHeight = 16.sp)
-                Text(
-                    fingerprintGroups(pending.fingerprint),
-                    color = MbNavyInk,
-                    fontSize = 13.sp,
-                    lineHeight = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(end = 20.dp).testTag("expected_fp"),
-                )
-            }
-            Spacer(Modifier.height(16.dp))
-            Text(
-                "เทียบ fingerprint กับที่แสดงบน${if (hardware && !pending.isMock) "อุปกรณ์" else "แหล่งกุญแจ"}ให้ตรงกันก่อนกดยืนยัน",
-                color = MbMuted,
-                fontSize = 11.sp,
-                lineHeight = 16.sp,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(RoundedCornerShape(14.dp)).background(MbChip).padding(14.dp),
+        }
+        Spacer(Modifier.height(16.dp))
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(MbWhite).border(1.dp, MbBorder, RoundedCornerShape(24.dp)).padding(20.dp),
+        ) {
+            Text("ชื่อกุญแจ (ตั้งเองได้)", color = MbSlate, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 14.sp)
+            Spacer(Modifier.height(9.dp))
+            BasicTextField(
+                value = label,
+                onValueChange = { label = it.take(KEY_NAME_MAX) },
+                singleLine = true,
+                textStyle = TextStyle(color = MbNavyInk, fontSize = 16.sp, fontWeight = FontWeight.SemiBold),
+                cursorBrush = SolidColor(MbBtcOrange),
+                modifier = Modifier.fillMaxWidth().semantics { contentDescription = "ชื่อกุญแจ" }.testTag("verify_key_name"),
+                decorationBox = { field ->
+                    Box(
+                        Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(14.dp)).background(MbPage).border(1.dp, MbBorder, RoundedCornerShape(14.dp)).padding(horizontal = 16.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) { field() }
+                },
             )
         }
-        Spacer(Modifier.height(22.dp))
-        PrimaryCta(if (hardware && !pending.isMock) "ตรงกับที่อุปกรณ์แสดง" else "ตรงกับที่แหล่งกุญแจแสดง", "cta_verify_match", {
-            when {
-                // A key the book could not save stays here, with the book's line under the buttons.
-                save == null -> if (store.confirmFingerprint(pending.fingerprint, label)) onMatched() else if (store.lastMismatch) onMismatch(pending.source)
-                // One save at a time, so a double tap cannot save two wallets.
-                !saving -> scope.launch {
-                    saving = true
-                    try {
-                        saveLine = save(label.trim().ifEmpty { pending.label })
-                    } finally {
-                        saving = false
-                    }
-                    if (saveLine == null) onMatched()
-                }
+        Spacer(Modifier.height(16.dp))
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(MbWhite).border(1.dp, MbBorder, RoundedCornerShape(20.dp))
+                .padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 20.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Fingerprint", color = MbBody, fontSize = 12.5.sp, fontWeight = FontWeight.Light, lineHeight = 17.sp)
+                Text(fingerprintGroups(pending.fingerprint), color = MbNavyInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, lineHeight = 19.sp, modifier = Modifier.testTag("expected_fp"))
             }
-        }, enabled = !saving)
+            Spacer(Modifier.height(10.dp))
+            Text("รหัสประจำกุญแจนี้ ใช้จำกุญแจในไฟล์ BSMS และแอปอื่น", color = MbSlate, fontSize = 11.sp, fontWeight = FontWeight.Light, lineHeight = 15.sp)
+        }
         saveLine?.let {
             Spacer(Modifier.height(12.dp))
             Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("verify_save_failed"))
-        }
-        TextButton(
-            onClick = {
-                store.discardPending()
-                onReconnect(pending.source)
-            },
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("cta_verify_mismatch"),
-        ) {
-            Text("ไม่ตรง · กลับไปเชื่อมต่อ (ไม่บันทึก)", color = MismatchInk, fontSize = 13.sp, fontWeight = FontWeight.Medium)
         }
         store.lastError?.let {
             Spacer(Modifier.height(12.dp))
             Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("error"))
         }
     }
+}
+
+private fun KeySourceLabel.isHardware() = this == KeySourceLabel.Jade || this == KeySourceLabel.TrezorSafe7
+
+/** Save Key's device card for a key from [source]: the name of where it came from, and how it came. */
+internal fun keyArrival(source: KeySourceLabel, isMock: Boolean): Pair<String, String> {
+    val name = when (source) {
+        KeySourceLabel.ThisDevice -> "mebit · เครื่องนี้"
+        KeySourceLabel.MebitOther -> "mebit · เครื่องอื่น"
+        KeySourceLabel.Jade, KeySourceLabel.TrezorSafe7 -> hardwareName(source)
+    }
+    val line = when {
+        isMock -> "จำลอง · ไม่ได้เชื่อมต่ออุปกรณ์จริง"
+        source.isHardware() -> "เชื่อมต่อผ่าน Bluetooth"
+        source == KeySourceLabel.MebitOther -> "นำเข้าจาก xpub หรือ BSMS"
+        else -> "สร้างบนเครื่องนี้"
+    }
+    return name to line
 }
 
 /**

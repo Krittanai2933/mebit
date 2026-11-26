@@ -14,7 +14,7 @@ A user opens Add Key from the keyring's +, picks one of four cards, confirms a k
 
 - Catalog → ADD KEY, or the Keys tab → the + on the title row (`id:cta_keyring_add`).
 - Hardware → จำลองรุ่นอื่น (Unsupported) → T13.
-- Confirm Key → ไม่ตรง · กลับไปเชื่อมต่อ (ไม่บันทึก) → back to the connect screen, or to the pairing screen for a key from another mebit. T14 opens only from the catalog row VERIFY KEY · Fingerprint ไม่ตรง.
+- Save Key (2.4) → ยกเลิก (ไม่บันทึก) → back to the connect screen, or to the pairing screen for a key from another mebit. T14 opens only from the catalog row VERIFY KEY · Fingerprint ไม่ตรง.
 
 ## Driving it with verify.sh
 
@@ -34,7 +34,7 @@ Preconditions:
 
 ## Gotchas
 
-- Confirm Key is one tap. `id:cta_verify_match` saves the staged key under the name in `id:verify_key_name`, and there is no typed check (docs/04 item 41). The link `id:cta_verify_mismatch` discards the key.
+- Save Key is one tap. `id:cta_verify_match` saves the staged key under the name in `id:verify_key_name`, and there is no typed check (docs/04 item 41). The link `id:cta_verify_mismatch` discards the key.
 - The demo buttons `id:cta_hw_demo_jade`, `id:cta_hw_demo_trezor` and `id:cta_hw_unsupported` sit below the first screen of the hardware screen. The first `ios-tap` only scrolls them into view, so tap again.
 - Pair another mebit by pasting three lines (fingerprint, xpub, path) or BSMS 1.0 into `id:pair_paste`, then `id:cta_pair_paste`. `id:cta_pair_demo` still stages a fixture key when the run has no paste. No QR. docs/04 item 26.
 - The paste takes only a BIP48 Native SegWit multisig key: a tpub at `m/48'/1'/N'/2'` whose own depth and child number match that path. Anything else, such as a BIP44, 49, 84 or 86 path, a ypub, zpub, upub or vpub, a Nested `1'` ending or a mainnet key, stages nothing and shows a Thai line in `id:error` that starts ใช้กุญแจนี้สร้าง Wallet แบบ Multisig (Native SegWit) ไม่ได้ and names the reason.

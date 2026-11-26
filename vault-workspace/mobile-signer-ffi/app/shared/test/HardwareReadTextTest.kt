@@ -73,4 +73,12 @@ class HardwareReadTextTest {
         // After the last dot lands all three rest until the next cycle.
         listOf(0.71f, 0.8f, 0.99f).forEach { t -> (0..2).forEach { i -> assertEquals(0f, dotHop(t, i), "dot $i at $t") } }
     }
+
+    @Test
+    fun saveKeyNamesWhereTheKeyCameFromAndHow() {
+        assertEquals("Jade" to "เชื่อมต่อผ่าน Bluetooth", keyArrival(KeySourceLabel.Jade, isMock = false), "board 2.4")
+        assertEquals("Trezor Safe 7" to "เชื่อมต่อผ่าน Bluetooth", keyArrival(KeySourceLabel.TrezorSafe7, isMock = false))
+        assertEquals("mebit · เครื่องอื่น" to "นำเข้าจาก xpub หรือ BSMS", keyArrival(KeySourceLabel.MebitOther, isMock = false))
+        assertEquals("Jade" to "จำลอง · ไม่ได้เชื่อมต่ออุปกรณ์จริง", keyArrival(KeySourceLabel.Jade, isMock = true))
+    }
 }
