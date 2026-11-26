@@ -1738,13 +1738,13 @@ internal object UniffiLib {
     ): Unit = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_forget_scan_state(
         uniffiCallStatus,
     )
-    fun uniffi_mobile_signer_ffi_fn_func_hot_offline_receive_address(
+    fun uniffi_mobile_signer_ffi_fn_func_hot_last_receive_address(
         `mnemonicWords`: RustBufferByValue,
         `passphrase`: RustBufferByValue,
         `network`: RustBufferByValue,
         `addressType`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
-    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_offline_receive_address(
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_hot_last_receive_address(
         `mnemonicWords`,
         `passphrase`,
         `network`,
@@ -2042,11 +2042,11 @@ internal object UniffiLib {
         `network`,
         uniffiCallStatus,
     )
-    fun uniffi_mobile_signer_ffi_fn_func_wallet_offline_receive_address(
+    fun uniffi_mobile_signer_ffi_fn_func_wallet_last_receive_address(
         `descriptor`: RustBufferByValue,
         `network`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
-    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_wallet_offline_receive_address(
+    ): RustBufferByValue = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_fn_func_wallet_last_receive_address(
         `descriptor`,
         `network`,
         uniffiCallStatus,
@@ -2522,8 +2522,8 @@ internal object UniffiLib {
     fun uniffi_mobile_signer_ffi_checksum_func_hot_forget_scan_state(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_forget_scan_state(
     )
-    fun uniffi_mobile_signer_ffi_checksum_func_hot_offline_receive_address(
-    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_offline_receive_address(
+    fun uniffi_mobile_signer_ffi_checksum_func_hot_last_receive_address(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_last_receive_address(
     )
     fun uniffi_mobile_signer_ffi_checksum_func_hot_prepare_cancel(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_hot_prepare_cancel(
@@ -2600,8 +2600,8 @@ internal object UniffiLib {
     fun uniffi_mobile_signer_ffi_checksum_func_wallet_history(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_wallet_history(
     )
-    fun uniffi_mobile_signer_ffi_checksum_func_wallet_offline_receive_address(
-    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_wallet_offline_receive_address(
+    fun uniffi_mobile_signer_ffi_checksum_func_wallet_last_receive_address(
+    ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_wallet_last_receive_address(
     )
     fun uniffi_mobile_signer_ffi_checksum_func_wallet_qr_parts(
     ): Short = mobile_signer_ffi.cinterop.uniffi_mobile_signer_ffi_checksum_func_wallet_qr_parts(
@@ -5827,13 +5827,13 @@ public actual fun `hotForgetScanState`() {
 }
 
 /**
- * The receive address for a Receive screen while no host answers, with no request: the one the last sync of this
- * wallet handed out, else the one its scan file gives, else receive address 0 for a wallet this phone never scanned.
+ * The receive address the last sync of this wallet handed out, with no request, else the one its scan file gives, else
+ * receive address 0 for a wallet this phone never scanned. For a Receive screen after a read, or while no host answers.
  */
 @Throws(MobileSignerException::class)
-public actual fun `hotOfflineReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType): kotlin.String {
+public actual fun `hotLastReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType): kotlin.String {
     return FfiConverterString.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
-        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_offline_receive_address(
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_last_receive_address(
             FfiConverterSequenceString.lower(`mnemonicWords`),
             FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
@@ -6322,12 +6322,12 @@ public actual fun `walletHistory`(`descriptor`: kotlin.String, `network`: KeyNet
 }
 
 /**
- * What `hot_offline_receive_address` answers, for the wallet `descriptor` describes.
+ * What `hot_last_receive_address` answers, for the wallet `descriptor` describes.
  */
 @Throws(MobileSignerException::class)
-public actual fun `walletOfflineReceiveAddress`(`descriptor`: kotlin.String, `network`: KeyNetwork): kotlin.String {
+public actual fun `walletLastReceiveAddress`(`descriptor`: kotlin.String, `network`: KeyNetwork): kotlin.String {
     return FfiConverterString.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
-        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_offline_receive_address(
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_last_receive_address(
             FfiConverterString.lower(`descriptor`),
             FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,

@@ -854,10 +854,10 @@ pub fn wallet_snapshot(
     )
 }
 
-/// The receive address for a Receive screen while no host answers, with no request: the one the last sync of this
-/// wallet handed out, else the one its scan file gives, else receive address 0 for a wallet this phone never scanned.
+/// The receive address the last sync of this wallet handed out, with no request, else the one its scan file gives, else
+/// receive address 0 for a wallet this phone never scanned. For a Receive screen after a read, or while no host answers.
 #[uniffi::export]
-pub fn hot_offline_receive_address(
+pub fn hot_last_receive_address(
     mnemonic_words: Vec<String>,
     passphrase: String,
     network: KeyNetwork,
@@ -869,22 +869,22 @@ pub fn hot_offline_receive_address(
         network_of(network),
         address_type,
     )?;
-    offline_receive(&account, &SCAN_STORE)
+    last_receive(&account, &SCAN_STORE)
 }
 
-/// What `hot_offline_receive_address` answers, for the wallet `descriptor` describes.
+/// What `hot_last_receive_address` answers, for the wallet `descriptor` describes.
 #[uniffi::export]
-pub fn wallet_offline_receive_address(
+pub fn wallet_last_receive_address(
     descriptor: String,
     network: KeyNetwork,
 ) -> Result<String, MobileSignerError> {
     check_network(network)?;
-    offline_receive(&Described::parse_on(&descriptor, network)?, &SCAN_STORE)
+    last_receive(&Described::parse_on(&descriptor, network)?, &SCAN_STORE)
 }
 
 /// The receive address `wallet` would get from `store` alone. Waits for a sync of the wallet in progress, whose lock
 /// it takes.
-fn offline_receive(
+fn last_receive(
     wallet: &dyn AddressSource,
     store: &ScanStore,
 ) -> Result<String, MobileSignerError> {
@@ -917,8 +917,8 @@ pub(crate) fn described_snapshot(
 }
 
 /// A wallet's balance as one sync of both its chains found it, for the wallet list and a several-key wallet's detail. Not
-/// `HotWalletSnapshot`: no spendable figure, which needs a coin list, and no receive address, since a several-key wallet's
-/// Receive screen shows the address 0 its book holds.
+/// `HotWalletSnapshot`: no spendable figure, which needs a coin list, and no receive address, which
+/// `wallet_last_receive_address` gives from the same sync.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct WalletBalance {
     /// Confirmed plus mempool over every address of both chains the scan counts. Before `scan` is `Complete`, only what
@@ -4602,7 +4602,7 @@ pub(crate) mod tests {
     fn offline_a_wallet_never_scanned_gets_receive_address_0() {
         let fake = Fake::new();
         assert_eq!(
-            offline_receive(&abandon_account(), &fake.store).unwrap(),
+            last_receive(&abandon_account(), &fake.store).unwrap(),
             addr(Chain::External, 0)
         );
     }
@@ -4626,7 +4626,7 @@ pub(crate) mod tests {
             "the full pass cleared what it knew before it failed"
         );
         assert_eq!(
-            offline_receive(&account, &fake.store).unwrap(),
+            last_receive(&account, &fake.store).unwrap(),
             addr(Chain::External, 2)
         );
     }
@@ -4648,7 +4648,7 @@ pub(crate) mod tests {
         restarted.use_dir(folder.0.clone());
         let before = fake.requests();
         assert_eq!(
-            offline_receive(&abandon_account(), &restarted).unwrap(),
+            last_receive(&abandon_account(), &restarted).unwrap(),
             addr(Chain::External, 31)
         );
         assert_eq!(fake.requests(), before, "no request");
@@ -13744,6 +13744,32 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert!(coin_lists() > 0, "a snapshot asks the coin lists");
+    }
+
+    // A several-key wallet's Receive address moves on as a one-key wallet's does, once its balance read saw index 0 used.
+    #[test]
+    fn a_several_key_wallets_receive_address_after_a_read_is_the_next_unused() {
+        use crate::script::tests::{WithMulti, at, fund_multi, two_of_three};
+        let descriptor = two_of_three();
+        let mut fake = Fake::new();
+        let wallet = Described::parse_on(&descriptor, KeyNetwork::Test).unwrap();
+        assert_eq!(
+            last_receive(&wallet, &fake.store).unwrap(),
+            at(&descriptor, Chain::External, 0).to_string()
+        );
+        fund_multi(&mut fake, &at(&descriptor, Chain::External, 0), 50_000, '1');
+        described_balance(
+            &EsploraSource(&WithMulti(&fake)),
+            &descriptor,
+            KeyNetwork::Test,
+            &|| fake.now(),
+            &fake.store,
+        )
+        .unwrap();
+        assert_eq!(
+            last_receive(&wallet, &fake.store).unwrap(),
+            at(&descriptor, Chain::External, 1).to_string()
+        );
     }
 
     // A several-key wallet nobody paid costs GAP reads per chain, as a one-key wallet does, and its balance, spendable

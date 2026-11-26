@@ -173,10 +173,15 @@ fun S3ReceiveScreen(
     onOpenCatalog = onOpenCatalog,
 )
 
-/** Penpot 4.3.1 Receive for one vault: its QR and address. A vault has one address today, so the board's fresh-address line is left out, and a vault with a stand-in key gets no QR, as the demo wallet gets none. */
+/**
+ * Penpot 4.3.1 Receive for one vault: the QR and text of [address], its next unused receive address, null until the scan gave one. The board's
+ * fresh-address line is left out, and a vault with a stand-in key gets no QR, as the demo wallet gets none.
+ */
 @Composable
 fun VaultReceiveScreen(
     vault: CreatedVault?,
+    address: String?,
+    fromLastSync: Boolean,
     onSend: () -> Unit,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
@@ -190,8 +195,9 @@ fun VaultReceiveScreen(
     ReceiveLayout(
         eyebrow = "RECEIVE · ${vault.name}",
         tag = "screen_vaults/receive",
-        address = vault.address,
-        addressIsReal = !vault.hasMockKey,
+        address = address.orEmpty(),
+        addressIsReal = !vault.hasMockKey && address != null,
+        fromLastSync = fromLastSync && address != null,
         onSend = onSend,
         onBack = onBack,
         onOpenCatalog = onOpenCatalog,

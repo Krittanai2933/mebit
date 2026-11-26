@@ -51,7 +51,7 @@ private class FakeChain {
         postHex = { _, _, _ -> fail("post ran") },
         snapshot = { _, _, _, _ -> snapshotResult() },
         fetchHistory = { _, _, _, _ -> historyResult() },
-        offlineReceiveAddressOf = { words, passphrase, network, _ ->
+        lastReceiveAddressOf = { words, passphrase, network, _ ->
             derivations += Derivation(words, passphrase, network)
             offlineResult()
         },

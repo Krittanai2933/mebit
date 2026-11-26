@@ -841,8 +841,8 @@ public data class SpendReview (
 
 /**
  * A wallet's balance as one sync of both its chains found it, for the wallet list and a several-key wallet's detail. Not
- * `HotWalletSnapshot`: no spendable figure, which needs a coin list, and no receive address, since a several-key wallet's
- * Receive screen shows the address 0 its book holds.
+ * `HotWalletSnapshot`: no spendable figure, which needs a coin list, and no receive address, which
+ * `wallet_last_receive_address` gives from the same sync.
  */
 
 public data class WalletBalance (
@@ -1715,11 +1715,11 @@ public expect fun `hotFeeTiers`(`network`: KeyNetwork): FeeTiers
 public expect fun `hotForgetScanState`()
 
 /**
- * The receive address for a Receive screen while no host answers, with no request: the one the last sync of this
- * wallet handed out, else the one its scan file gives, else receive address 0 for a wallet this phone never scanned.
+ * The receive address the last sync of this wallet handed out, with no request, else the one its scan file gives, else
+ * receive address 0 for a wallet this phone never scanned. For a Receive screen after a read, or while no host answers.
  */
 @Throws(MobileSignerException::class)
-public expect fun `hotOfflineReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType): kotlin.String
+public expect fun `hotLastReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType): kotlin.String
 
 /**
  * Scan, then sign a cancel of `earlier_hex`, the signed payment the app's guard keeps, and post
@@ -1959,10 +1959,10 @@ public expect fun `walletFinish`(`descriptor`: kotlin.String, `network`: KeyNetw
 public expect fun `walletHistory`(`descriptor`: kotlin.String, `network`: KeyNetwork): List<HotTx>
 
 /**
- * What `hot_offline_receive_address` answers, for the wallet `descriptor` describes.
+ * What `hot_last_receive_address` answers, for the wallet `descriptor` describes.
  */
 @Throws(MobileSignerException::class)
-public expect fun `walletOfflineReceiveAddress`(`descriptor`: kotlin.String, `network`: KeyNetwork): kotlin.String
+public expect fun `walletLastReceiveAddress`(`descriptor`: kotlin.String, `network`: KeyNetwork): kotlin.String
 
 /**
  * The text as `ur:bytes` parts, uppercased so a QR uses its alphanumeric mode. Only the plain

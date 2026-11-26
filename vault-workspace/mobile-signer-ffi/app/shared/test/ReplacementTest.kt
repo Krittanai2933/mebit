@@ -592,7 +592,7 @@ private class Guarded(val guards: FakePlainFile = FakePlainFile()) {
             history
         },
         nowSeconds = { clock },
-        offlineReceiveAddressOf = { _, _, _, _ -> "tb1qoffline" },
+        lastReceiveAddressOf = { _, _, _, _ -> "tb1qoffline" },
         bumpAtRate = { _, _, _, _, hex, _ ->
             core += Replacement.FeeBump to hex
             sign(Replacement.FeeBump)

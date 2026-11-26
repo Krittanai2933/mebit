@@ -30,7 +30,7 @@ import com.mebit.ffi.signer.walletDraft
 import com.mebit.ffi.signer.walletFinish
 import com.mebit.ffi.signer.walletHistory
 import com.mebit.ffi.signer.walletSignWithWords
-import com.mebit.ffi.signer.walletOfflineReceiveAddress
+import com.mebit.ffi.signer.walletLastReceiveAddress
 import com.mebit.ffi.signer.walletSnapshot
 import com.mebit.ffi.signer.walletTxDetail
 import kotlinx.coroutines.CancellationException
@@ -94,7 +94,7 @@ internal class DescribedCore(
     /** A balance from the scan alone, with no coin list: the wallet list's figure and a several-key wallet's detail. */
     val balance: (String, KeyNetwork) -> WalletBalance = { d, n -> walletBalance(d, n) },
     /** The receive address the scan this phone keeps gives, with no request, for a refresh that could not reach the chain. */
-    val offlineReceive: (String, KeyNetwork) -> String = { d, n -> walletOfflineReceiveAddress(d, n) },
+    val lastReceive: (String, KeyNetwork) -> String = { d, n -> walletLastReceiveAddress(d, n) },
     /** (descriptor, network, psbt, the unsigned txid the user was shown, words, passphrase). */
     val signWithWords: (String, KeyNetwork, String, String, List<String>, String) -> SpendReview =
         { d, n, psbt, txid, words, passphrase -> walletSignWithWords(d, n, psbt, txid, words, passphrase) },
@@ -215,7 +215,7 @@ class DescribedWallet internal constructor(
                 spendableSats = 0L
                 history = emptyList()
                 receiveAddress = try {
-                    core.offlineReceive(wallet.descriptor, network)
+                    core.lastReceive(wallet.descriptor, network)
                 } catch (_: Exception) {
                     wallet.address
                 }

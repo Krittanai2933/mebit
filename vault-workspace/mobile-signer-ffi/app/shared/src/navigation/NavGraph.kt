@@ -26,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -1201,12 +1202,23 @@ internal fun MebitNavHost(
                             tag = "screen_hw/tx",
                         )
                     } ?: NoWallet(current.route, onBack, openCatalog)
-                    MovieRoute.VaultReceive -> VaultReceiveScreen(
-                        vault = vaultDraft.selectedVault(),
-                        onSend = { startVaultSend(vaultDraft.selectedVault()) },
-                        onBack = onBack,
-                        onOpenCatalog = openCatalog,
-                    )
+                    MovieRoute.VaultReceive -> {
+                        val vault = vaultDraft.selectedVault()
+                        // The address the last read handed out at once, then the one a read now gives, so the screen never waits on the network to show one.
+                        val address by produceState<String?>(null, vault) {
+                            if (vault == null) return@produceState
+                            value = withContext(Dispatchers.Default) { wallets.vaultReceiveAddress(vault) }
+                            value = wallets.readVaultReceiveAddress(vault)
+                        }
+                        VaultReceiveScreen(
+                            vault = vault,
+                            address = address,
+                            fromLastSync = vault != null && wallets.vaultReadFailed(vault),
+                            onSend = { startVaultSend(vaultDraft.selectedVault()) },
+                            onBack = onBack,
+                            onOpenCatalog = openCatalog,
+                        )
+                    }
                 } }
             }
             if (bar != null && !barHidden) {

@@ -47,7 +47,7 @@ private class Rig {
             snapshot()
         },
         history = { _, _ -> history },
-        offlineReceive = { _, _ -> offline() },
+        lastReceive = { _, _ -> offline() },
         draft = { _, _, to, sats, rate ->
             calls += "draft $to $sats $rate"
             review("unsigned")

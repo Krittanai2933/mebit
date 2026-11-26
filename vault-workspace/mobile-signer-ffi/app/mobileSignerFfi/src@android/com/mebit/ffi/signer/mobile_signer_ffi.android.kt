@@ -1251,7 +1251,7 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_hot_forget_scan_state() != 8205.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_hot_offline_receive_address() != 43675.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_hot_last_receive_address() != 13572.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_hot_prepare_cancel() != 21487.toShort()) {
@@ -1329,7 +1329,7 @@ internal object IntegrityCheckingUniffiLib : Library {
         if (uniffi_mobile_signer_ffi_checksum_func_wallet_history() != 18833.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
-        if (uniffi_mobile_signer_ffi_checksum_func_wallet_offline_receive_address() != 22863.toShort()) {
+        if (uniffi_mobile_signer_ffi_checksum_func_wallet_last_receive_address() != 26566.toShort()) {
             throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
         }
         if (uniffi_mobile_signer_ffi_checksum_func_wallet_qr_parts() != 36703.toShort()) {
@@ -1435,7 +1435,7 @@ internal object IntegrityCheckingUniffiLib : Library {
     external fun uniffi_mobile_signer_ffi_checksum_func_hot_forget_scan_state(
     ): Short
     @JvmStatic
-    external fun uniffi_mobile_signer_ffi_checksum_func_hot_offline_receive_address(
+    external fun uniffi_mobile_signer_ffi_checksum_func_hot_last_receive_address(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_hot_prepare_cancel(
@@ -1513,7 +1513,7 @@ internal object IntegrityCheckingUniffiLib : Library {
     external fun uniffi_mobile_signer_ffi_checksum_func_wallet_history(
     ): Short
     @JvmStatic
-    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_offline_receive_address(
+    external fun uniffi_mobile_signer_ffi_checksum_func_wallet_last_receive_address(
     ): Short
     @JvmStatic
     external fun uniffi_mobile_signer_ffi_checksum_func_wallet_qr_parts(
@@ -1786,7 +1786,7 @@ internal object UniffiLib : Library {
         uniffiCallStatus: UniffiRustCallStatus,
     ): Unit
     @JvmStatic
-    external fun uniffi_mobile_signer_ffi_fn_func_hot_offline_receive_address(
+    external fun uniffi_mobile_signer_ffi_fn_func_hot_last_receive_address(
         `mnemonicWords`: RustBufferByValue,
         `passphrase`: RustBufferByValue,
         `network`: RustBufferByValue,
@@ -1977,7 +1977,7 @@ internal object UniffiLib : Library {
         uniffiCallStatus: UniffiRustCallStatus,
     ): RustBufferByValue
     @JvmStatic
-    external fun uniffi_mobile_signer_ffi_fn_func_wallet_offline_receive_address(
+    external fun uniffi_mobile_signer_ffi_fn_func_wallet_last_receive_address(
         `descriptor`: RustBufferByValue,
         `network`: RustBufferByValue,
         uniffiCallStatus: UniffiRustCallStatus,
@@ -5440,13 +5440,13 @@ public actual fun `hotForgetScanState`() {
 }
 
 /**
- * The receive address for a Receive screen while no host answers, with no request: the one the last sync of this
- * wallet handed out, else the one its scan file gives, else receive address 0 for a wallet this phone never scanned.
+ * The receive address the last sync of this wallet handed out, with no request, else the one its scan file gives, else
+ * receive address 0 for a wallet this phone never scanned. For a Receive screen after a read, or while no host answers.
  */
 @Throws(MobileSignerException::class)
-public actual fun `hotOfflineReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType): kotlin.String {
+public actual fun `hotLastReceiveAddress`(`mnemonicWords`: List<kotlin.String>, `passphrase`: kotlin.String, `network`: KeyNetwork, `addressType`: AddressType): kotlin.String {
     return FfiConverterString.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
-        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_offline_receive_address(
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_hot_last_receive_address(
             FfiConverterSequenceString.lower(`mnemonicWords`),
             FfiConverterString.lower(`passphrase`),
             FfiConverterTypeKeyNetwork.lower(`network`),
@@ -5935,12 +5935,12 @@ public actual fun `walletHistory`(`descriptor`: kotlin.String, `network`: KeyNet
 }
 
 /**
- * What `hot_offline_receive_address` answers, for the wallet `descriptor` describes.
+ * What `hot_last_receive_address` answers, for the wallet `descriptor` describes.
  */
 @Throws(MobileSignerException::class)
-public actual fun `walletOfflineReceiveAddress`(`descriptor`: kotlin.String, `network`: KeyNetwork): kotlin.String {
+public actual fun `walletLastReceiveAddress`(`descriptor`: kotlin.String, `network`: KeyNetwork): kotlin.String {
     return FfiConverterString.lift(uniffiRustCallWithError(MobileSignerExceptionErrorHandler) { uniffiRustCallStatus ->
-        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_offline_receive_address(
+        UniffiLib.uniffi_mobile_signer_ffi_fn_func_wallet_last_receive_address(
             FfiConverterString.lower(`descriptor`),
             FfiConverterTypeKeyNetwork.lower(`network`),
             uniffiRustCallStatus,
