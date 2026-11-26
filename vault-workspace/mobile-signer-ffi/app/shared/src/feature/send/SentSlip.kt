@@ -122,10 +122,10 @@ fun SentSlip(
         Column(
             // Scrolls so the share button and the link home cannot fall off a screen shorter than the card plus both buttons (open item 48).
             // The bottom padding is the debug link's height (about 24 dp of Thai text at 11 sp) plus 8 dp, so the link home sits clear of it when the column ends at the screen bottom.
-            modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 12.dp, bottom = 32.dp),
+            modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 32.dp),
         ) {
             Slip(txid, sentAtSeconds, amountSats, feeSats, rateSatVb, destination, quote, walletName, node, network, card)
-            Spacer(modifier = Modifier.height(29.dp))
+            Spacer(modifier = Modifier.height(16.dp))
             Box(
                 modifier = Modifier
                     .padding(horizontal = 4.dp)
@@ -191,7 +191,7 @@ private fun Slip(
             .background(Brush.linearGradient(0f to MbWhite, 0.55f to MbWarmTint, 1f to MbIconWash)),
     ) {
         Watermark(Modifier.align(Alignment.TopCenter).padding(top = 172.dp))
-        Column(modifier = Modifier.padding(horizontal = 22.dp).padding(top = 22.dp, bottom = 20.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 22.dp).padding(top = 18.dp, bottom = 16.dp)) {
             Row(verticalAlignment = Alignment.Top) {
                 Box(Modifier.padding(top = 6.dp).size(40.dp).background(MbSuccess, CircleShape), contentAlignment = Alignment.Center) {
                     Canvas(Modifier.size(24.dp)) {
@@ -207,12 +207,13 @@ private fun Slip(
                 Column(Modifier.weight(1f)) {
                     Text("ส่งสำเร็จ", color = MbNavy, fontSize = 22.sp, fontWeight = FontWeight.Medium, lineHeight = 28.sp)
                     if (sentAtSeconds > 0) {
-                        Text(formatThaiDateTime(sentAtSeconds), color = MbBody, fontSize = 17.sp, lineHeight = 22.sp, modifier = Modifier.padding(top = 4.dp).testTag("slip_date"))
+                        // One line beside the logo: a 393 pt iPhone leaves the date about 163 dp, where 17 sp wraps the "น.".
+                        ShrinkText(formatThaiDateTime(sentAtSeconds), color = MbBody, fontSize = 17.sp, lineHeight = 22.sp, modifier = Modifier.padding(top = 4.dp).testTag("slip_date"))
                     }
                 }
                 Image(painterResource(Res.drawable.mebit_logo_slip), contentDescription = "mebit", modifier = Modifier.padding(top = 10.dp).size(width = 100.dp, height = 24.dp))
             }
-            SlipRule(top = 22.dp, bottom = 18.dp)
+            SlipRule(top = 16.dp, bottom = 14.dp)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(48.dp).background(MbNavy, CircleShape).border(3.dp, MbWhite, CircleShape), contentAlignment = Alignment.Center) {
                     Image(painterResource(Res.drawable.ic_slip_wallet), contentDescription = null, modifier = Modifier.size(24.dp))
@@ -223,7 +224,7 @@ private fun Slip(
                     Text("กระเป๋าใน mebit", color = MbBody, fontSize = 16.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 4.dp))
                 }
             }
-            Box(Modifier.padding(vertical = 18.dp).width(48.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.padding(vertical = 10.dp).width(48.dp), contentAlignment = Alignment.Center) {
                 Canvas(Modifier.size(24.dp)) {
                     val stroke = 2.dp.toPx()
                     val tip = Offset(12.dp.toPx(), 19.dp.toPx())
@@ -242,7 +243,7 @@ private fun Slip(
                     Text("ที่อยู่ปลายทาง", color = MbBody, fontSize = 16.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 4.dp))
                 }
             }
-            Spacer(modifier = Modifier.height(40.dp))
+            Spacer(modifier = Modifier.height(20.dp))
             Text("จำนวน:", color = MbBody, fontSize = 17.sp, lineHeight = 21.sp)
             Box(Modifier.fillMaxWidth().padding(top = 6.dp), contentAlignment = Alignment.CenterEnd) {
                 val unit = LocalBtcUnit.current
@@ -273,7 +274,7 @@ private fun Slip(
                 modifier = Modifier.fillMaxWidth().padding(top = 10.dp).testTag("slip_fee"),
             )
             SlipRule(top = 4.dp, bottom = 14.dp)
-            Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 // The tile is the QR's quiet zone too: its four light modules on each side fill the board's white margin.
                 Box(Modifier.size(68.dp).clip(RoundedCornerShape(8.dp)).background(MbWhite)) {
                     if (txid.isNotEmpty()) QrCode(node.txPageUrl(txid, network), Modifier.fillMaxSize().testTag("slip_qr"), dark = MbNavy)
@@ -290,7 +291,7 @@ private fun Slip(
                 fontSize = 12.sp,
                 lineHeight = 15.sp,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
             )
         }
     }

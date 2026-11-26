@@ -264,8 +264,8 @@ private fun ReceiveLayout(
                         Text("แชร์", color = MbNavy, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
-                // 40 dp, not the 38 under the single 54 dp button: this row is 2 dp shorter and the board puts its top at y 732.
-                Spacer(modifier = Modifier.height(40.dp))
+                // 24 dp, as under the sign pages' buttons, so the page fits an 852 pt iPhone with a 62-character address.
+                Spacer(modifier = Modifier.height(24.dp))
             } else {
                 PrimaryCta(label = copyLabel, tag = "cta_s3_copy", onClick = copy, enabled = address.isNotEmpty())
                 Spacer(modifier = Modifier.height(38.dp))
@@ -273,7 +273,7 @@ private fun ReceiveLayout(
         },
     ) {
         ReceiveSendSwitch(sendSelected = false, onReceive = {}, onSend = onSend)
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
         if (addressIsReal) {
             ReceiveCard(address, Modifier.fillMaxWidth())
         } else {
@@ -296,7 +296,7 @@ private fun ReceiveLayout(
                 modifier = Modifier.fillMaxWidth().testTag("offline_address_note"),
             )
         }
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(10.dp))
         Row(
             modifier = Modifier.fillMaxWidth().height(64.dp).clip(RoundedCornerShape(16.dp)).background(MbIconWash).padding(horizontal = 16.dp).testTag("network_warning"),
             verticalAlignment = Alignment.CenterVertically,
@@ -389,7 +389,8 @@ private fun ReceiveAddress(address: String) {
 
 /**
  * Penpot 4.9's receive card: the navy band with the mebit logo, the Bitcoin badge, the QR, the call to scan, the whole address and
- * the network footer, with the board's sizes for its 362 dp width. 4.9.2 shares the same card as a picture ([SharePicture]).
+ * the network footer, with the board's sizes for its 362 dp width and its gaps tightened so Receive fits an 852 pt iPhone. 4.9.2
+ * shares the same card as a picture ([SharePicture]).
  */
 @Composable
 private fun ReceiveCard(address: String, modifier: Modifier = Modifier) {
@@ -397,7 +398,7 @@ private fun ReceiveCard(address: String, modifier: Modifier = Modifier) {
         Box(modifier = Modifier.fillMaxWidth().height(64.dp).background(SlipNavy), contentAlignment = Alignment.Center) {
             Image(painterResource(Res.drawable.mebit_logo_on_navy), contentDescription = null, modifier = Modifier.size(width = 129.dp, height = 34.dp))
         }
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
         Row(
             modifier = Modifier.height(28.dp).background(SharePictureBadge, RoundedCornerShape(14.dp)).padding(start = 8.dp, end = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -408,13 +409,13 @@ private fun ReceiveCard(address: String, modifier: Modifier = Modifier) {
             Spacer(modifier = Modifier.width(6.dp))
             Text("Bitcoin", color = SlipNavy, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
         QrCode(
             text = address,
             modifier = Modifier.size(160.dp).semantics { contentDescription = "QR ของที่อยู่รับเงิน" }.testTag("ss_receive_qr"),
             dark = MbNavy,
         )
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
         Text(
             text = "สแกน QR เพื่อส่ง Bitcoin",
             color = AddressGoldInk,
@@ -423,7 +424,7 @@ private fun ReceiveCard(address: String, modifier: Modifier = Modifier) {
             lineHeight = 23.sp,
             textAlign = TextAlign.Center,
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = groupedFull(address, SlipNavy),
             fontSize = 16.sp,
@@ -432,9 +433,9 @@ private fun ReceiveCard(address: String, modifier: Modifier = Modifier) {
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 28.dp).testTag("ss_receive_address"),
         )
-        Spacer(modifier = Modifier.height(18.dp))
+        Spacer(modifier = Modifier.height(14.dp))
         Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(MbNavy))
-        Row(modifier = Modifier.fillMaxWidth().height(54.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+        Row(modifier = Modifier.fillMaxWidth().height(44.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(Res.drawable.mebit_logo_on_light), contentDescription = null, modifier = Modifier.size(width = 69.dp, height = 18.dp))
             Spacer(modifier = Modifier.width(10.dp))
             Text("Bitcoin network only | รับเฉพาะเครือข่าย Bitcoin", color = SlipMuted, fontSize = 11.5.sp, fontWeight = FontWeight.Medium, lineHeight = 15.5.sp)
