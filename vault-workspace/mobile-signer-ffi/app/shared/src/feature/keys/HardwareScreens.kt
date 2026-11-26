@@ -1,5 +1,10 @@
 package com.mebit.app.feature.keys
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -84,6 +89,9 @@ import com.mebit.ffi.signer.WalletKind
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import androidx.compose.ui.graphics.graphicsLayer
+import kotlin.math.PI
+import kotlin.math.sin
 
 private val DeviceRowFill = Color(0xFFFFF8EF)
 private val RadarOff = Color(0xFFC9CED6)
@@ -205,6 +213,7 @@ fun HardwareWalletScreen(
     val bluetoothOff = problem == ScanProblem.BluetoothOff
     // A scan that found nothing and failed cannot say Bluetooth is on, or that the room is empty.
     val unavailable = bluetoothOff || problem is ScanProblem.PermissionDenied || (problem is ScanProblem.Failed && found.isEmpty())
+    val searchingNow = (searching || busy) && !unavailable
     val demoDisabled = store.hardwareBusy
     val safe7Connecting = connecting?.kind == WalletKind.TREZOR_SAFE7
     val card = when {
@@ -228,7 +237,7 @@ fun HardwareWalletScreen(
                 busy -> StatusPill("กำลังเชื่อมต่อ…", "hw_busy", warn = false)
                 bluetoothOff -> StatusPill("Bluetooth ปิดอยู่ · เปิดเพื่อค้นหา", "hw_status", warn = true)
                 unavailable -> StatusPill("Bluetooth · ค้นหาไม่ได้", "hw_status", warn = true)
-                searching -> StatusPill("Bluetooth เปิดอยู่ · กำลังค้นหา…", "hw_status", warn = false)
+                searching -> StatusPill("Bluetooth เปิดอยู่ · กำลังค้นหา", "hw_status", warn = false, dots = true)
                 found.isEmpty() -> StatusPill("Bluetooth เปิดอยู่ · ไม่พบอุปกรณ์", "hw_status", warn = false)
                 else -> StatusPill("Bluetooth เปิดอยู่ · พบ ${found.size} เครื่อง", "hw_status", warn = false)
             }
@@ -246,7 +255,9 @@ fun HardwareWalletScreen(
             CardTop(
                 card = card ?: Safe7Card.Radar,
                 instruction = readInstruction(read, bluetoothOff, card),
-                radarCore = if (unavailable) RadarOff else MbBtcOrange,
+                // Orange with waves only while the phone reaches for a device; grey and still otherwise, so it never looks busy when it is not.
+                radarCore = if (searchingNow) MbBtcOrange else RadarOff,
+                rings = if (searchingNow) RadarRings.Waves else RadarRings.None,
                 code = store.pairingCode,
                 onCode = { store.pairingCode = it },
             )
@@ -369,6 +380,7 @@ fun T13UnsupportedModelScreen(
                     "พบอุปกรณ์ที่ไม่รองรับ — mebit รองรับเฉพาะ Jade และ Trezor Safe 7 ผ่าน Bluetooth"
                 },
                 radarCore = MbBtcOrange,
+                rings = RadarRings.Still,
                 code = "",
                 onCode = {},
             )
@@ -404,23 +416,44 @@ fun T13UnsupportedModelScreen(
 }
 
 @Composable
-private fun StatusPill(text: String, tag: String, warn: Boolean) {
+private fun StatusPill(text: String, tag: String, warn: Boolean, dots: Boolean = false) {
+    val color = if (warn) MbEyebrow else MbNavy
     Row(
         Modifier.widthIn(min = 223.dp).height(34.dp).clip(CircleShape).background(if (warn) MbIconWash else MbChip).padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         BluetoothGlyph(MbNavy, 1.8.dp, 8.dp, 14.dp)
         Spacer(Modifier.width(8.dp))
-        Text(
-            text,
-            color = if (warn) MbEyebrow else MbNavy,
-            fontSize = 12.5.sp,
-            fontWeight = FontWeight.SemiBold,
-            lineHeight = 18.sp,
-            maxLines = 1,
-            modifier = Modifier.testTag(tag),
-        )
+        Text(text, color = color, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 18.sp, maxLines = 1, modifier = Modifier.testTag(tag))
+        if (dots) {
+            // Half the radar's 2.4 s, so the dots hop twice to each wave.
+            val turn = rememberInfiniteTransition().animateFloat(0f, 1f, infiniteRepeatable(tween(1_200, easing = LinearEasing)))
+            repeat(3) { i ->
+                Text(
+                    ".",
+                    color = color,
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    lineHeight = 18.sp,
+                    // Read in the layer, so a frame moves the dot without composing the pill again.
+                    modifier = Modifier.graphicsLayer {
+                        val hop = dotHop(turn.value, i)
+                        translationY = -4.dp.toPx() * hop
+                        alpha = 0.35f + 0.65f * hop
+                    },
+                )
+            }
+        }
     }
+}
+
+/**
+ * How high dot [i] of the searching pill is at [turn] of its cycle, from 0 at rest to 1 at the top. Every dot hops at one pace for 40% of
+ * the cycle, 0.15 of a cycle after the dot before it, so the three hop in a row and then all rest.
+ */
+internal fun dotHop(turn: Float, i: Int): Float {
+    val p = ((turn - i * 0.15f) % 1f + 1f) % 1f
+    return if (p < 0.4f) sin(PI.toFloat() * p / 0.4f) else 0f
 }
 
 /** The card every board of the hardware screen shares: [CardTop], then the rows. */
@@ -439,7 +472,7 @@ private fun ScanCard(content: @Composable ColumnScope.() -> Unit) {
  * and its two lines, or 2.3.4's and 2.3.6's code field under the instruction, which 2.3.6 heads in orange.
  */
 @Composable
-private fun CardTop(card: Safe7Card, instruction: String, radarCore: Color, code: String, onCode: (String) -> Unit) {
+private fun CardTop(card: Safe7Card, instruction: String, radarCore: Color, rings: RadarRings, code: String, onCode: (String) -> Unit) {
     Column(Modifier.fillMaxWidth().height(191.dp)) {
         if (card != Safe7Card.Remembered) {
             // The board gives the instruction a slot that holds two lines, so what is under it stays put for one.
@@ -448,7 +481,7 @@ private fun CardTop(card: Safe7Card, instruction: String, radarCore: Color, code
             }
         }
         when (card) {
-            Safe7Card.Radar -> Radar(radarCore)
+            Safe7Card.Radar -> Radar(radarCore, rings)
             Safe7Card.Remembered -> Column(Modifier.fillMaxWidth().testTag("hw_pairing_kept"), horizontalAlignment = Alignment.CenterHorizontally) {
                 Spacer(Modifier.height(31.dp))
                 Box(Modifier.size(46.dp).background(MbSuccess, CircleShape), contentAlignment = Alignment.Center) {
@@ -525,15 +558,27 @@ private fun Tick(modifier: Modifier) {
     }
 }
 
+/** The rings around the radar's core: the board's still ones, waves while the phone searches or connects, or none while it does neither. */
+internal enum class RadarRings { Still, Waves, None }
+
 @Composable
-private fun Radar(core: Color) {
+private fun Radar(core: Color, rings: RadarRings) {
+    val wave = if (rings == RadarRings.Waves) rememberInfiniteTransition().animateFloat(0f, 1f, infiniteRepeatable(tween(2_400, easing = LinearEasing))) else null
     Box(
         Modifier.fillMaxWidth().height(124.dp).clip(RoundedCornerShape(18.dp)).background(MbNavy),
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.matchParentSize()) {
-            listOf(90.dp to 0.08f, 60.dp to 0.12f, 32.dp to 0.2f).forEach { (radius, alpha) ->
-                drawCircle(MbWhite.copy(alpha = alpha), radius.toPx(), style = Stroke(1.5.dp.toPx()))
+            val stroke = Stroke(1.5.dp.toPx())
+            when {
+                wave != null -> repeat(3) { i ->
+                    // Three rings leave the core a third of a turn apart, growing past the board's outer ring as they fade.
+                    val p = (wave.value + i / 3f) % 1f
+                    drawCircle(MbWhite.copy(alpha = 0.3f * (1f - p)), (20.dp + 80.dp * p).toPx(), style = stroke)
+                }
+                rings == RadarRings.Still -> listOf(90.dp to 0.08f, 60.dp to 0.12f, 32.dp to 0.2f).forEach { (radius, alpha) ->
+                    drawCircle(MbWhite.copy(alpha = alpha), radius.toPx(), style = stroke)
+                }
             }
         }
         Box(Modifier.size(40.dp).background(core, CircleShape), contentAlignment = Alignment.Center) {
