@@ -641,7 +641,7 @@ internal fun FingerprintSheet(session: OnboardingSession, copy: FingerprintCopy,
                     letterSpacing = 2.sp,
                     modifier = Modifier.testTag("fingerprint"),
                 )
-                Text(hotAccountPath(session.addressType, KeyNetwork.TEST), color = MbSlate, fontSize = 12.sp)
+                Text(hotAccountPath(session.addressType, session.network), color = MbSlate, fontSize = 12.sp)
             }
             Spacer(modifier = Modifier.height(12.dp))
             Text(

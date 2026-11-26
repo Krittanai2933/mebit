@@ -1,5 +1,6 @@
 package com.mebit.app.data
 
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.app.EveryRead
 import com.mebit.app.Place
 import com.mebit.app.ReadResult
@@ -30,6 +31,8 @@ private fun check(words: List<String>): String = words.joinToString(" ").hashCod
 
 /** Places over [FakeShelf] whose one-place read runs [androidReadRefusal] first, as KeystorePlace.read does, so a place with no file answers NotFound before any sheet. */
 private class AndroidLikeShelf(val inner: FakeShelf) : SecureShelf {
+    override val network get() = inner.network
+
     override fun store(place: Place): SecureStore = object : SecureStore by inner.store(place) {
         override suspend fun read(reason: String): ReadResult {
             androidReadRefusal(inner.places.getValue(place).probe == StoreProbe.Present, aliasPresent = true)?.let { return it }
@@ -56,7 +59,7 @@ class WalletRemovalAndroidTest {
             newChain = { SingleSigWallet(snapshot = { _, _, n, _ -> HotWalletSnapshot("tb1q", 0uL, 0uL, n, HotScan.COMPLETE) }, fetchHistory = { _, _, _, _ -> emptyList() }) },
         )
         assertIs<Every.Open>(wallets.unlockEvery("test"))
-        val book = SavedVaults(FakeVaultsStorage(), owners = { wallets.vaultOwners() }, deriveAddress = { _, _ -> "addr" }).apply { sync() }
+        val book = SavedVaults(FakeVaultsStorage(), KeyNetwork.TEST, owners = { wallets.vaultOwners() }, deriveAddress = { _, _ -> "addr" }).apply { sync() }
         val w = wallets.beginAdd()!!
         fake.places.getValue(w.place).write = WriteResult.Unavailable(Why.Other) // KeystorePlace.write: an IOException from AtomicFile
         w.session.generateThisDevice() // Key Created shows these words next
@@ -76,7 +79,7 @@ class WalletRemovalAndroidTest {
         )
         wallets.beginAdd()!!.session.generateThisDevice()
         assertNull(wallets.vaultOwners(), "no wallet is saved")
-        val book = SavedVaults(FakeVaultsStorage(), owners = { wallets.vaultOwners() }, deriveAddress = { _, _ -> "addr" }).apply { sync() }
+        val book = SavedVaults(FakeVaultsStorage(), KeyNetwork.TEST, owners = { wallets.vaultOwners() }, deriveAddress = { _, _ -> "addr" }).apply { sync() }
         assertEquals(DeleteItem.Blocked("ลบไม่ได้ · Wallet นี้ยังไม่ได้บันทึกในเครื่อง"), vaultDeleteItem(book.saving))
     }
 }

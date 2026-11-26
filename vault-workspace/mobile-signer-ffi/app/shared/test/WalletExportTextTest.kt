@@ -19,13 +19,13 @@ class WalletExportTextTest {
     @Test
     fun theRecordIsAskedForTheStoredDescriptorOnLineTwo() {
         val asked = mutableListOf<Pair<String, KeyNetwork>>()
-        val text = bsmsRecordOf(vault) { d, n -> asked += d to n; "record" }
+        val text = bsmsRecordOf(vault, KeyNetwork.TEST) { d, n -> asked += d to n; "record" }
         assertEquals("record", text)
         assertEquals(listOf("wsh(sortedmulti(2,A,B,C))" to KeyNetwork.TEST), asked)
     }
 
     @Test
     fun aRefusalIsNullSoNothingIsExported() {
-        assertNull(bsmsRecordOf(vault) { _, _ -> error("refused") })
+        assertNull(bsmsRecordOf(vault, KeyNetwork.TEST) { _, _ -> error("refused") })
     }
 }

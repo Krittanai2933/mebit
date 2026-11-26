@@ -8,6 +8,7 @@ import com.mebit.app.feature.vault.hardwareCreatedSubtitle
 import com.mebit.app.feature.vault.hardwareTypeNote
 import com.mebit.app.feature.vault.oneKeyNote
 import com.mebit.ffi.signer.AddressType
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.WalletKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -35,8 +36,8 @@ class HardwareReadTextTest {
 
     @Test
     fun eachBoardHasItsOwnInstructionAndSteps() {
-        val jadeRead = DeviceRead.OneKey(jade, AddressType.NATIVE_SEGWIT)
-        val safe7Read = DeviceRead.OneKey(safe7, AddressType.TAPROOT)
+        val jadeRead = DeviceRead.OneKey(jade, AddressType.NATIVE_SEGWIT, KeyNetwork.TEST)
+        val safe7Read = DeviceRead.OneKey(safe7, AddressType.TAPROOT, KeyNetwork.TEST)
         assertEquals("เปิด Jade แล้ววางไว้ใกล้มือถือ จากนั้นใส่ PIN บน Jade (มือถือต้องต่ออินเทอร์เน็ต)", readInstruction(jadeRead, bluetoothOff = false, card = null), "2.3.3")
         assertEquals(listOf("ค้นหาอุปกรณ์ผ่าน Bluetooth", "ใส่ PIN บน Jade", "อ่านกุญแจ Native SegWit (m/84'/1'/0')"), readSteps(jadeRead, null), "2.3.3")
         assertEquals("อ่านกุญแจ Taproot (m/86'/1'/0')", readSteps(jadeRead.copy(type = AddressType.TAPROOT), null).last())
@@ -55,7 +56,7 @@ class HardwareReadTextTest {
         assertEquals("Jade จะเป็นกุญแจเดียวของกระเป๋านี้ ทุกครั้งที่ส่งต้องกดยืนยันบน Jade", oneKeyNote(jade), "3.2.2")
         assertEquals("Trezor จะเป็นกุญแจเดียวของกระเป๋านี้ ทุกครั้งที่ส่งต้องกดยืนยันบน Trezor", oneKeyNote(safe7), "3.2.3")
         assertEquals("ตัวเลือกนี้กำหนดรูปแบบที่อยู่ของกระเป๋านี้ ขั้นถัดไป mebit จะอ่านกุญแจของแบบนี้จาก Jade", hardwareTypeNote(jade), "3.3.2")
-        val created = HardwareWallet("hw_1", "กระเป๋า Jade", WalletKind.JADE, AddressType.NATIVE_SEGWIT, "73c5da0a", "tpub", "tb1q6rz28mcfaxtmd6v789l9rrlrusdprr9pqcpvkl")
+        val created = HardwareWallet("hw_1", "กระเป๋า Jade", WalletKind.JADE, AddressType.NATIVE_SEGWIT, "73c5da0a", "tpub", "tb1q6rz28mcfaxtmd6v789l9rrlrusdprr9pqcpvkl", network = KeyNetwork.TEST)
         assertEquals("Native SegWit · tb1q…pvkl (ที่อยู่แรก) · กุญแจอยู่บน Jade", hardwareCreatedSubtitle(created), "3.5.2")
         assertEquals("Taproot · tb1q…pvkl (ที่อยู่แรก) · กุญแจอยู่บน Trezor", hardwareCreatedSubtitle(created.copy(kind = WalletKind.TREZOR_SAFE7, addressType = AddressType.TAPROOT)))
     }

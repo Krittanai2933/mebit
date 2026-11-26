@@ -70,7 +70,7 @@ class HardwareWallets internal constructor(
     private val scan: suspend (WalletKind) -> List<FoundWallet> = { scanWallets(it) },
 ) {
     /** Reads a device's key for a new wallet ([oneKeyPath]) and reaches the device of a saved one. */
-    internal val link = HardwareLink(pairings, openLink)
+    internal val link = HardwareLink(pairings, book.network, openLink)
 
     /** By descriptor, so a wallet saved again under a removed one's id never takes that one's state. */
     private val chains = mutableMapOf<String, DescribedWallet>()
@@ -126,10 +126,10 @@ class HardwareWallets internal constructor(
     suspend fun add(kind: WalletKind, type: AddressType, key: HwAccountKey, phones: List<PhoneWallet>?): HardwareAdd = withContext(Dispatchers.Default) {
         if (phones == null) return@withContext HardwareAdd.Unopened
         // An account xpub does not say its path, so the core reads a key from another path too, and the device could never sign for it.
-        if (key.derivationPath != oneKeyPath(type)) return@withContext HardwareAdd.Unreadable("the key was read at ${key.derivationPath}, not ${oneKeyPath(type)}")
-        val unnamed = HardwareWallet("", "", kind, type, key.masterFingerprint.lowercase(), key.xpub, address = "")
+        if (key.derivationPath != oneKeyPath(type, book.network)) return@withContext HardwareAdd.Unreadable("the key was read at ${key.derivationPath}, not ${oneKeyPath(type, book.network)}")
+        val unnamed = HardwareWallet("", "", kind, type, key.masterFingerprint.lowercase(), key.xpub, address = "", network = book.network)
         val shape = try {
-            describe(unnamed.descriptor, KeyNetwork.TEST)
+            describe(unnamed.descriptor, book.network)
         } catch (e: Exception) {
             return@withContext HardwareAdd.Unreadable(e.message ?: e.toString())
         }
@@ -186,7 +186,7 @@ internal fun hardwareWalletName(kind: WalletKind, saved: List<HardwareWallet>): 
 }
 
 /**
- * A one-key wallet whose key lives on a Jade or a Safe 7: testnet account 0 of [addressType], watch-only on the phone, its payments
+ * A one-key wallet whose key lives on a Jade or a Safe 7: account 0 of [addressType] on [network], watch-only on the phone, its payments
  * signed on the device. The descriptor is derived from the key and never stored, so it can never disagree with the type or the key.
  */
 data class HardwareWallet(
@@ -199,18 +199,20 @@ data class HardwareWallet(
     val addressType: AddressType,
     /** The key's master fingerprint, 8 lowercase hex. */
     val fingerprint: String,
-    /** The account key at [path], a tpub. */
+    /** The account key at [path]: a tpub on testnet, an xpub on mainnet. */
     val xpub: String,
     /** Receive address 0, a check value: the book refuses a stored copy whose descriptor no longer derives it. */
     val address: String,
     /** The send in progress, a base64 PSBT, "" for none. The several-key phase fills it; a one-key send is held in memory only. */
     val pending: String = "",
+    /** The network of the book that holds this wallet, set by whoever builds it from the book ([SavedVaults.network]), never read off [xpub]'s prefix. */
+    val network: KeyNetwork,
 ) {
     /** The path the device derives [xpub] at. */
-    val path: String get() = oneKeyPath(addressType)
+    val path: String get() = oneKeyPath(addressType, network)
 
     /** What every wallet_* call takes. */
-    val descriptor: String get() = oneKeyDescriptor(addressType, fingerprint, xpub)
+    val descriptor: String get() = oneKeyDescriptor(addressType, network, fingerprint, xpub)
 
     /**
      * This wallet's key in the pay-twice guard file: the first 8 hex of the descriptor's SHA-256, the shape a phone wallet's
@@ -230,17 +232,20 @@ internal fun hardwareKeyName(wallet: HardwareWallet, keys: List<SavedKey>): Stri
         ?: defaultKeyLabel(source, isMock = false)
 }
 
-/** BIP-44, 49, 84 or 86 on testnet, account 0: the path the phone wallet of [type] derives from, as hot_account_path prints it. */
-internal fun oneKeyPath(type: AddressType): String = "m/" + when (type) {
+/** BIP-44, 49, 84 or 86 under [network]'s coin type, account 0: the path the phone wallet of [type] derives from, as hot_account_path prints it. */
+internal fun oneKeyPath(type: AddressType, network: KeyNetwork): String = "m/" + when (type) {
     AddressType.LEGACY -> 44
     AddressType.NESTED_SEGWIT -> 49
     AddressType.NATIVE_SEGWIT -> 84
     AddressType.TAPROOT -> 86
-} + "'/1'/0'"
+} + "'/${coinType(network)}'/0'"
+
+/** BIP-44's coin type: 0 on mainnet, 1 on every test network. The core's account_path does the same. */
+internal fun coinType(network: KeyNetwork): Int = if (network == KeyNetwork.MAIN) 0 else 1
 
 /** Pure. `pkh(...)`, `sh(wpkh(...))`, `wpkh(...)` or `tr(...)` over `[fingerprint/path]xpub`, the shapes wallet_describe reads. */
-internal fun oneKeyDescriptor(type: AddressType, fingerprint: String, xpub: String): String {
-    val key = "[$fingerprint/${oneKeyPath(type).removePrefix("m/")}]$xpub"
+internal fun oneKeyDescriptor(type: AddressType, network: KeyNetwork, fingerprint: String, xpub: String): String {
+    val key = "[$fingerprint/${oneKeyPath(type, network).removePrefix("m/")}]$xpub"
     return when (type) {
         AddressType.LEGACY -> "pkh($key)"
         AddressType.NESTED_SEGWIT -> "sh(wpkh($key))"

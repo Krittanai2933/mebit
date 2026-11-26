@@ -85,6 +85,7 @@ import com.mebit.app.ui.theme.MbWarmTint
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.FoundWallet
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.WalletKind
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -107,7 +108,7 @@ sealed interface DeviceRead {
     data object AddKey : DeviceRead
 
     /** The key of [key]'s device at [type]'s account path, for a one-key wallet. Only that device's kind is looked for, and only that key is taken. */
-    data class OneKey(val key: SavedKey, val type: AddressType) : DeviceRead {
+    data class OneKey(val key: SavedKey, val type: AddressType, val network: KeyNetwork) : DeviceRead {
         val kind: WalletKind get() = hardwareKind(key.source)
     }
 }
@@ -149,7 +150,7 @@ internal fun readSteps(read: DeviceRead, card: Safe7Card?): List<String> = when 
     read is DeviceRead.OneKey && read.kind == WalletKind.JADE -> listOf(
         "ค้นหาอุปกรณ์ผ่าน Bluetooth",
         "ใส่ PIN บน Jade",
-        "อ่านกุญแจ ${AddressTypeRows.first { it.type == read.type }.label} (${oneKeyPath(read.type)})",
+        "อ่านกุญแจ ${AddressTypeRows.first { it.type == read.type }.label} (${oneKeyPath(read.type, read.network)})",
     )
     card == Safe7Card.Remembered -> listOf("ค้นหาอุปกรณ์ผ่าน Bluetooth", "กด Allow บนหน้าจอ Trezor", "อ่านกุญแจสาธารณะ (xpub)")
     else -> DefaultSteps
@@ -189,7 +190,7 @@ fun HardwareWalletScreen(
             try {
                 // Connecting ends a scan that is still looking, so the two never run at once.
                 scanJob?.cancelAndJoin()
-                val result = if (oneKey == null) store.enrollHardware(wallet) else store.enrollHardware(wallet, oneKeyPath(oneKey.type), expect = oneKey.key)
+                val result = if (oneKey == null) store.enrollHardware(wallet) else store.enrollHardware(wallet, oneKeyPath(oneKey.type, oneKey.network), expect = oneKey.key)
                 when (result) {
                     EnrollResult.Enrolled -> onEnrolled()
                     EnrollResult.UnsupportedModel -> onUnsupported(null)

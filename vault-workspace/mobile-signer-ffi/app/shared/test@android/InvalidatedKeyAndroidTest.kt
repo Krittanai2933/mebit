@@ -53,6 +53,7 @@ private fun check(words: List<String>): String = words.joinToString(" ").hashCod
  * ([remade]) and answers TryLater, as the background generation does, and the next write seals.
  */
 private class Api30Shelf(val inner: FakeShelf) : SecureShelf {
+    override val network get() = inner.network
     var failure: Throwable? = null
     var remade = 0
         private set

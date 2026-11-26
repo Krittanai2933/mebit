@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import com.mebit.app.data.NodeSetting
 import com.mebit.app.data.BtcUnit
 import com.mebit.app.data.NodeSettings
+import com.mebit.app.data.passes
 import com.mebit.app.data.UnitSettings
 import com.mebit.app.feature.vault.PickRow
 import com.mebit.app.ui.components.IssueBanner
@@ -63,7 +64,6 @@ import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.app.navigation.MovieRoute
-import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.NodeCheck
 import com.mebit.ffi.signer.NodeStatus
 import com.mebit.ffi.signer.chainCheckNode
@@ -109,7 +109,7 @@ fun SettingsScreen(
     var status by remember { mutableStateOf<NodeStatus?>(null) }
     LaunchedEffect(node.current) {
         status = null
-        status = withContext(Dispatchers.IO) { chainNodeStatus(KeyNetwork.TEST) }
+        status = withContext(Dispatchers.IO) { chainNodeStatus(node.network) }
     }
     MebitScreen(
         eyebrow = MovieRoute.Settings.eyebrow,
@@ -260,9 +260,9 @@ fun NodeScreen(
                 val asked = typed
                 testing = true
                 scope.launch {
-                    val result = withContext(Dispatchers.IO) { chainCheckNode(asked, KeyNetwork.TEST) }
+                    val result = withContext(Dispatchers.IO) { chainCheckNode(asked, node.network) }
                     found = result
-                    tested = if (result == NodeCheck.Testnet4) asked else null
+                    tested = if (result.passes(node.network)) asked else null
                     testing = false
                 }
             },

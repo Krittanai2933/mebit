@@ -46,7 +46,6 @@ import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.ffi.signer.AddressType
-import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.WalletKind
 
 /** Confirm Key's line when a one-key wallet could not be saved, in the words of Penpot T18's title. */
@@ -154,7 +153,7 @@ fun HardwareAddressTypeScreen(
                 if (i > 0) Spacer(modifier = Modifier.height(8.dp))
                 RadioRow(
                     label = row.label,
-                    detail = row.detail(KeyNetwork.TEST),
+                    detail = row.detail(draft.network),
                     badge = if (row.type == AddressType.NATIVE_SEGWIT) DEFAULT_BADGE else null,
                     selected = row.type == draft.addressType,
                     enabled = true,

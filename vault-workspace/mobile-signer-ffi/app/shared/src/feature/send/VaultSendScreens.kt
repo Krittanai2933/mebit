@@ -83,7 +83,6 @@ import com.mebit.app.ui.theme.MbSlate
 import com.mebit.app.ui.theme.MbSuccess
 import com.mebit.app.ui.theme.MbWhite
 import com.mebit.app.ui.theme.amountFontFamily
-import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.isValidAddress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -130,18 +129,18 @@ fun VaultSendScreen(
         loading = false
     }
     val spendable = send.spendableSats
-    val addressOk = if (draft.destination.isEmpty()) null else isValidAddress(draft.destination, KeyNetwork.TEST)
+    val addressOk = if (draft.destination.isEmpty()) null else isValidAddress(draft.destination, send.network)
     val issue = if (loading) {
         SendIssue.InvalidAddress.takeIf { addressOk == false }
     } else {
         sendIssue(addressOk, draft.amountSats, draft.feeSats, spendable ?: 0L, spendable != null, send.guard != null)
     }
-    val enter = { text: String -> draft.enterDestination(text) { isValidAddress(it, KeyNetwork.TEST) } }
+    val enter = { text: String -> draft.enterDestination(text) { isValidAddress(it, send.network) } }
     val cameraAvailable = rememberCameraAvailable()
     var scanning by remember { mutableStateOf(false) }
     if (scanning) {
         QrScanSheet(
-            accepts = { acceptsScan(it) { address -> isValidAddress(address, KeyNetwork.TEST) } },
+            accepts = { acceptsScan(it) { address -> isValidAddress(address, send.network) } },
             onAddress = { scanned ->
                 scanning = false
                 enter(scanned)
@@ -586,7 +585,7 @@ fun VaultSentScreen(send: VaultSend?, quotes: QuoteCache, node: NodeSetting, onH
         destination = sent.payment.destination,
         walletName = send.vault.name,
         node = node,
-        network = KeyNetwork.TEST,
+        network = send.network,
         quotes = quotes,
         onHome = onHome,
         onOpenCatalog = onOpenCatalog,

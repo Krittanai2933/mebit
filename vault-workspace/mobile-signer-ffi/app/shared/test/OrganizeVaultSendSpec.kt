@@ -1,5 +1,6 @@
 package com.mebit.app.data
 
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.FoundWallet
 import com.mebit.ffi.signer.HotSendResult
 import com.mebit.ffi.signer.PreparedSend
@@ -126,6 +127,7 @@ class OrganizeVaultSendSpec {
         val send = VaultSend(
             vault = vault,
             guards = PendingPayments(FakePlainFile()),
+            network = KeyNetwork.TEST,
             nowSeconds = { 0L },
             worker = EmptyCoroutineContext,
             core = DescribedCore(
@@ -158,7 +160,7 @@ class OrganizeVaultSendSpec {
                     HotSendResult(txid)
                 },
             ),
-            link = HardwareLink(pairings = null) { device(it.id.removePrefix("key").toInt()) },
+            link = HardwareLink(pairings = null, network = KeyNetwork.TEST) { device(it.id.removePrefix("key").toInt()) },
         )
 
         /** Key [key]'s device, reached: it holds that key, and while it waits for its confirm the user does [meanwhile]. Its answer is the model's. */

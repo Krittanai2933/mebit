@@ -116,6 +116,9 @@ class Wallets internal constructor(
     /** The book's Jade and Trezor wallets, whose key and address type no phone wallet may take. */
     private val bookHardware: () -> List<HardwareWallet> = { emptyList() },
 ) {
+    /** The network of this phone's shelf, which every wallet and read here follows. */
+    val network: KeyNetwork get() = shelf.network
+
     private val saved = mutableMapOf<Place, SavedWallet>()
 
     private fun savedAt(place: Place) = saved.getOrPut(place) { SavedWallet(shelf.store(place)) }
@@ -448,7 +451,7 @@ class Wallets internal constructor(
 
     /** One transaction of [vault] in full, for the detail screen (3.7.2, 3.7.3). It blocks on the network, so the caller picks the thread. */
     fun vaultTxDetail(vault: CreatedVault, txid: String): TxDetailLoad.Done =
-        detailLoad { vaultCore.detail(descriptorIn(vault.bsms), KeyNetwork.TEST, txid) }
+        detailLoad { vaultCore.detail(descriptorIn(vault.bsms), network, txid) }
 
     /**
      * For a list on screen. One wallet at a time, never in parallel, the one-key wallets first, then [vaults] in book order. Skips a wallet
@@ -481,13 +484,13 @@ class Wallets internal constructor(
         val descriptor = descriptorIn(vault.bsms)
         // A mainnet vault, a malformed BSMS and a lost host all leave the figure unknown, never guessed.
         val snapshot = try {
-            vaultCore.balance(descriptor, KeyNetwork.TEST)
+            vaultCore.balance(descriptor, network)
         } catch (_: Exception) {
             null
         }
         val history = if (withHistory && snapshot?.scan == HotScan.COMPLETE) {
             try {
-                Result.success(vaultCore.history(descriptor, KeyNetwork.TEST))
+                Result.success(vaultCore.history(descriptor, network))
             } catch (e: Exception) {
                 Result.failure(e)
             }

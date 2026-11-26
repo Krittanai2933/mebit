@@ -88,11 +88,13 @@ sealed interface VaultBusy {
 class VaultSend internal constructor(
     val vault: CreatedVault,
     private val guards: PendingPayments,
+    /** The network of the book that holds [vault]: every read, signature and post of this send is on it. */
+    val network: KeyNetwork,
     private val nowSeconds: () -> Long = { Clock.System.now().epochSeconds },
     private val worker: CoroutineContext = Dispatchers.Default,
     private val core: DescribedCore = DescribedCore(),
     /** The one way to a Jade or a Safe 7: [HardwareWallets.link], which is the fake device's in a debug build launched with it. */
-    private val link: HardwareLink = HardwareLink(pairings = null),
+    private val link: HardwareLink = HardwareLink(pairings = null, network),
 ) {
     private val descriptor = descriptorIn(vault.bsms)
 
@@ -105,16 +107,16 @@ class VaultSend internal constructor(
      * Rust's reading of BSMS line 2. Throws for a wallet the core cannot read, and for one it reads as another than the book's: another m,
      * other fingerprints or another order of them, or another receive address 0. So the guard, made from that address, the rows, made from
      * those fingerprints, and every Rust call name one wallet, and a device is read at the account path the descriptor gives its key
-     * (m/48'/1'/a'/2'), the one Rust checks the device against.
+     * (m/48'/c'/a'/2', c the network's coin type), the one Rust checks the device against.
      */
-    private val shape: WalletShape = core.describe(descriptor, KeyNetwork.TEST).also { shape ->
+    private val shape: WalletShape = core.describe(descriptor, network).also { shape ->
         require(shape.needed.toInt() == vault.m && shape.keys.map { it.fingerprint.uppercase() } == fingerprints && shape.firstAddress == vault.address) {
             "the core reads another wallet than the book's"
         }
     }
 
     /** What a Jade registers for this wallet before it first signs, for 5.3.2.0's card, or null for a wallet it does not register. */
-    fun jadeRegistration(): com.mebit.ffi.signer.JadeRegistration? = com.mebit.ffi.signer.jadeWalletRegistration(descriptor, KeyNetwork.TEST)
+    fun jadeRegistration(): com.mebit.ffi.signer.JadeRegistration? = com.mebit.ffi.signer.jadeWalletRegistration(descriptor, network)
 
     /** The account path key [index] is read at, the same one Rust checks the device against. */
     fun derivationOf(index: Int): String = shape.keys[index].path
@@ -172,12 +174,12 @@ class VaultSend internal constructor(
     fun load(): LiveFeeTiers {
         guard = guards.of(guardKey)
         spendableSats = try {
-            core.snapshot(descriptor, KeyNetwork.TEST).takeIf { it.scan == HotScan.COMPLETE }?.spendableSats?.toLong()
+            core.snapshot(descriptor, network).takeIf { it.scan == HotScan.COMPLETE }?.spendableSats?.toLong()
         } catch (e: Exception) {
             null
         }
         return try {
-            LiveFeeTiers.of(core.feeTiers(KeyNetwork.TEST))
+            LiveFeeTiers.of(core.feeTiers(network))
         } catch (e: Exception) {
             LiveFeeTiers.DEFAULT
         }
@@ -197,7 +199,7 @@ class VaultSend internal constructor(
         busy = VaultBusy.Preparing
         try {
             val amount = request.amountSats.toULong().takeUnless { request.sendAll }
-            val review = core.draft(descriptor, KeyNetwork.TEST, request.destination, amount, request.rateSatVb.toULong())
+            val review = core.draft(descriptor, network, request.destination, amount, request.rateSatVb.toULong())
             state = VaultSendState.Collecting(VaultPayment(review, request.destination))
             signedAt = emptyMap()
             true
@@ -220,7 +222,7 @@ class VaultSend internal constructor(
         if (!confirm()) return fail(OWNER_NOT_CONFIRMED)
         return try {
             collect(signer) { held ->
-                withContext(worker) { core.signWithWords(descriptor, KeyNetwork.TEST, held.review.psbt, held.txid, signer.words, signer.passphrase) }
+                withContext(worker) { core.signWithWords(descriptor, network, held.review.psbt, held.txid, signer.words, signer.passphrase) }
             }
         } catch (e: CancellationException) {
             throw e
@@ -303,7 +305,7 @@ class VaultSend internal constructor(
         if (held == null || !readyToBroadcast()) return@synchronized fail(NOT_ENOUGH_SIGNATURES)
         busy = VaultBusy.Posting
         try {
-            val ready = core.finish(descriptor, KeyNetwork.TEST, held.review.psbt, held.txid)
+            val ready = core.finish(descriptor, network, held.review.psbt, held.txid)
             if (ready.txid != held.txid) return@synchronized fail(PAYMENT_CHANGED)
             val pending = UnconfirmedSend(ready.txid, nowSeconds(), ready.hex.takeIf { txidOf(it) == ready.txid })
             when (val claim = guards.claim(guardKey, pending)) {
@@ -361,7 +363,7 @@ class VaultSend internal constructor(
         (state as? VaultSendState.Collecting)?.takeIf { !it.stale && needsKey(index) }?.payment
 
     private fun firstPost(held: VaultPayment, pending: UnconfirmedSend, hex: String): Boolean = try {
-        core.postHex(KeyNetwork.TEST, hex, pending.txid)
+        core.postHex(network, hex, pending.txid)
         out(held, pending)
     } catch (e: MobileSignerException.BroadcastUnknown) {
         unknown(pending)
@@ -408,7 +410,7 @@ class VaultSend internal constructor(
 
     /** Posts [hex], whose txid is [txid], and says how it ended, as [SingleSigWallet.repost] reads the core's answers. */
     private fun posted(hex: String, txid: String): Repost = try {
-        core.postHex(KeyNetwork.TEST, hex, txid)
+        core.postHex(network, hex, txid)
         Repost.Out
     } catch (e: MobileSignerException.BroadcastUnknown) {
         Repost.Unknown

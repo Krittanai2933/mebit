@@ -4,6 +4,7 @@ import com.mebit.ffi.signer.AddressType
 import com.mebit.ffi.signer.BleException
 import com.mebit.ffi.signer.FoundWallet
 import com.mebit.ffi.signer.HwAccountKey
+import com.mebit.ffi.signer.WalletShape
 import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.WalletKind
 import com.mebit.ffi.signer.hotAccountPath
@@ -35,19 +36,50 @@ class HardwareWalletsTest {
     fun everyAddressTypeIsADescriptorTheCoreReadsAsThePhoneWalletOfThatPhrase() {
         for (type in AddressType.entries) {
             val account = PUBLIC_ACCOUNTS.getValue(type)
-            val wallet = PUBLIC_JADE_WALLET.copy(addressType = type, xpub = account.tpub, address = account.receive0)
+            val wallet = PUBLIC_JADE_WALLET.copy(addressType = type, xpub = account.xpub, address = account.receive0)
             assertEquals(hotAccountPath(type, KeyNetwork.TEST), wallet.path, "$type: the path the phone wallet derives from")
             val shape = walletDescribe(wallet.descriptor, KeyNetwork.TEST)
             assertEquals(1u, shape.needed.toUInt(), "$type")
-            assertEquals(listOf(Triple(PUBLIC_FINGERPRINT, wallet.path, account.tpub)), shape.keys.map { Triple(it.fingerprint, it.path, it.xpub) }, "$type")
+            assertEquals(listOf(Triple(PUBLIC_FINGERPRINT, wallet.path, account.xpub)), shape.keys.map { Triple(it.fingerprint, it.path, it.xpub) }, "$type")
             assertEquals(account.receive0, shape.firstAddress, "$type")
             assertEquals(hotReceiveAddress(PUBLIC_WORDS_12, "", KeyNetwork.TEST, type, 0u), shape.firstAddress, "$type: the same addresses as the phone wallet of the phrase")
         }
     }
 
+    // Native: reads the core's own paths and the first address of the mainnet fixture's xpub.
+    @Test
+    fun theKotlinPathsAreTheCoresOnBothNetworks() {
+        for (network in KeyNetwork.entries) {
+            for (type in AddressType.entries) assertEquals(hotAccountPath(type, network), oneKeyPath(type, network), "$type on $network")
+        }
+        // The fixture xpub was derived outside the app. Its first address is the published BIP-84 vector's, and the core derives the same address from the words.
+        val main = PUBLIC_MAIN_ACCOUNTS.getValue(AddressType.NATIVE_SEGWIT)
+        val descriptor = oneKeyDescriptor(AddressType.NATIVE_SEGWIT, KeyNetwork.MAIN, PUBLIC_FINGERPRINT, main.xpub)
+        assertEquals("bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu", walletDescribe(descriptor, KeyNetwork.MAIN).firstAddress)
+        assertEquals(main.receive0, hotReceiveAddress(PUBLIC_WORDS_12, "", KeyNetwork.MAIN, AddressType.NATIVE_SEGWIT, 0u))
+    }
+
+    @Test
+    fun aWalletTakesTheNetworkOfItsBookAndAKeyReadAtTheOtherCoinTypeIsRefused(): Unit = runBlocking {
+        val main = SavedVaults(null, KeyNetwork.MAIN, owners = { null })
+        val described = mutableListOf<KeyNetwork>()
+        val hardware = HardwareWallets(main, describe = { _, n ->
+            described += n
+            WalletShape(1u, emptyList(), PUBLIC_MAIN_ACCOUNTS.getValue(AddressType.NATIVE_SEGWIT).receive0, 0uL)
+        })
+        val atTestnet = HwAccountKey("xpub", PUBLIC_FINGERPRINT, oneKeyPath(AddressType.NATIVE_SEGWIT, KeyNetwork.TEST))
+        assertIs<HardwareAdd.Unreadable>(hardware.add(WalletKind.JADE, AddressType.NATIVE_SEGWIT, atTestnet, emptyList()), "m/84'/1'/0' is not mainnet's path")
+        val atMainnet = HwAccountKey("xpub", PUBLIC_FINGERPRINT, "m/84'/0'/0'")
+        val wallet = assertIs<HardwareAdd.Added>(hardware.add(WalletKind.JADE, AddressType.NATIVE_SEGWIT, atMainnet, emptyList())).wallet
+        assertEquals(KeyNetwork.MAIN, wallet.network)
+        assertEquals("m/84'/0'/0'", wallet.path)
+        assertEquals(listOf(KeyNetwork.MAIN), described, "the core reads it as mainnet")
+        assertEquals(listOf(wallet), main.current.hardware)
+    }
+
     @Test
     fun eachWalletOfOneKeyHasItsOwnGuardKey() {
-        val wallets = AddressType.entries.map { PUBLIC_JADE_WALLET.copy(addressType = it, xpub = PUBLIC_ACCOUNTS.getValue(it).tpub) }
+        val wallets = AddressType.entries.map { PUBLIC_JADE_WALLET.copy(addressType = it, xpub = PUBLIC_ACCOUNTS.getValue(it).xpub) }
         val keys = wallets.map { it.guardKey }
         assertTrue(keys.all { Regex("[0-9a-f]{8}").matches(it) }, "the shape a phone wallet's line has: $keys")
         assertEquals(keys.size, keys.toSet().size, "four address types, four guards")
@@ -59,7 +91,7 @@ class HardwareWalletsTest {
         val book = SavedVaults.memoryOnly()
         val added = assertIs<HardwareAdd.Added>(HardwareWallets(book).add(WalletKind.JADE, AddressType.NATIVE_SEGWIT, key(AddressType.NATIVE_SEGWIT), phones = emptyList()))
         assertEquals(
-            HardwareWallet("hw_1", "กระเป๋า Jade", WalletKind.JADE, AddressType.NATIVE_SEGWIT, PUBLIC_FINGERPRINT, PUBLIC_ACCOUNTS.getValue(AddressType.NATIVE_SEGWIT).tpub, PUBLIC_ACCOUNTS.getValue(AddressType.NATIVE_SEGWIT).receive0),
+            HardwareWallet("hw_1", "กระเป๋า Jade", WalletKind.JADE, AddressType.NATIVE_SEGWIT, PUBLIC_FINGERPRINT, PUBLIC_ACCOUNTS.getValue(AddressType.NATIVE_SEGWIT).xpub, PUBLIC_ACCOUNTS.getValue(AddressType.NATIVE_SEGWIT).receive0, network = KeyNetwork.TEST),
             added.wallet,
         )
         assertEquals(listOf(added.wallet), book.current.hardware)
@@ -119,7 +151,7 @@ class HardwareWalletsTest {
         )
         assertEquals(VaultBook(), book.current)
 
-        val unread = SavedVaults(FakeVaultsStorage().apply { unreadable = true }, owners = { VaultOwners(listOf(TEST_CHECK), everyPlaceOpened = true) })
+        val unread = SavedVaults(FakeVaultsStorage().apply { unreadable = true }, KeyNetwork.TEST, owners = { VaultOwners(listOf(TEST_CHECK), everyPlaceOpened = true) })
         assertEquals(HardwareAdd.NotSaved, HardwareWallets(unread).add(WalletKind.JADE, AddressType.NATIVE_SEGWIT, key(AddressType.NATIVE_SEGWIT), emptyList()))
         assertEquals(VaultBook(), unread.current)
     }
@@ -132,7 +164,7 @@ class HardwareWalletsTest {
             id = "hw_2",
             kind = WalletKind.TREZOR_SAFE7,
             addressType = AddressType.TAPROOT,
-            xpub = PUBLIC_ACCOUNTS.getValue(AddressType.TAPROOT).tpub,
+            xpub = PUBLIC_ACCOUNTS.getValue(AddressType.TAPROOT).xpub,
             address = PUBLIC_ACCOUNTS.getValue(AddressType.TAPROOT).receive0,
         )
         book.edit { it.copy(hardware = listOf(PUBLIC_JADE_WALLET, taproot)) }
@@ -166,9 +198,9 @@ class HardwareWalletsTest {
         assertEquals(listOf(PUBLIC_JADE_WALLET), damaged.current.hardware)
     }
 
-    private fun savedBook(storage: FakeVaultsStorage) = SavedVaults(storage, owners = { VaultOwners(listOf(TEST_CHECK), everyPlaceOpened = true) }).apply { sync() }
+    private fun savedBook(storage: FakeVaultsStorage) = SavedVaults(storage, KeyNetwork.TEST, owners = { VaultOwners(listOf(TEST_CHECK), everyPlaceOpened = true) }).apply { sync() }
 
-    private fun key(type: AddressType) = HwAccountKey(PUBLIC_ACCOUNTS.getValue(type).tpub, PUBLIC_FINGERPRINT, oneKeyPath(type))
+    private fun key(type: AddressType) = HwAccountKey(PUBLIC_ACCOUNTS.getValue(type).xpub, PUBLIC_FINGERPRINT, oneKeyPath(type, KeyNetwork.TEST))
 
     private suspend fun HardwareWallets.added(type: AddressType) = assertIs<HardwareAdd.Added>(add(WalletKind.JADE, type, key(type), emptyList())).wallet
 }

@@ -129,6 +129,9 @@ sealed interface EraseResult {
  * - [erase] is idempotent and the only thing that deletes, and it advances the copy whatever it answers.
  */
 internal interface SecureStore {
+    /** The network whose wallets this store holds. */
+    val network: KeyNetwork
+
     /** Never prompts. */
     fun probe(): StoreProbe
 
@@ -159,6 +162,8 @@ internal sealed interface EveryRead {
  * name no other wallet.
  */
 internal interface SecureShelf {
+    val network: KeyNetwork
+
     fun store(place: Place): SecureStore
 
     /** One OS sheet at most on a healthy phone, then every place. Never holds a lock while the sheet is up. Every Bytes array belongs to the caller, which zeroes it. */

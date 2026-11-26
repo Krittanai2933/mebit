@@ -421,7 +421,7 @@ fun ReviewScreen(
     var descriptorOpen by remember { mutableStateOf(false) }
     val address = remember(ready?.descriptor) { ready?.let { draft.firstAddress(it) } }
     // The box shows the BIP-389 form with its checksum, for reading only. The stored line stays as it is.
-    val descriptor = remember(ready?.descriptor) { ready?.let { r -> runCatching { walletDescriptorText(r.descriptor, KeyNetwork.TEST) }.getOrNull() } }
+    val descriptor = remember(ready?.descriptor) { ready?.let { r -> runCatching { walletDescriptorText(r.descriptor, draft.network) }.getOrNull() } }
     MebitScreen(
         eyebrow = MovieRoute.Review.eyebrow,
         title = MovieRoute.Review.titleTh,
@@ -581,6 +581,7 @@ private fun DescriptorBox(descriptor: String?) {
 @Composable
 fun VaultCreatedScreen(
     vault: CreatedVault?,
+    network: KeyNetwork,
     onOpenWallets: () -> Unit,
     onOpenCatalog: () -> Unit,
 ) {
@@ -607,8 +608,8 @@ fun VaultCreatedScreen(
         Column(Modifier.offset(y = 258.dp).padding(horizontal = 20.dp)) {
             BackupCard(
                 enabled = vault != null,
-                onSave = { vault?.let { v -> bsmsRecordOf(v)?.let { export.save(bsmsFileName(v.name), it) } ?: run { line = BSMS_EXPORT_FAILED } } },
-                onShare = { vault?.let { v -> bsmsRecordOf(v)?.let { export.share(bsmsFileName(v.name), it) } ?: run { line = BSMS_EXPORT_FAILED } } },
+                onSave = { vault?.let { v -> bsmsRecordOf(v, network)?.let { export.save(bsmsFileName(v.name), it) } ?: run { line = BSMS_EXPORT_FAILED } } },
+                onShare = { vault?.let { v -> bsmsRecordOf(v, network)?.let { export.share(bsmsFileName(v.name), it) } ?: run { line = BSMS_EXPORT_FAILED } } },
             )
             line?.let {
                 Spacer(modifier = Modifier.height(12.dp))

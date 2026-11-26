@@ -88,6 +88,9 @@ sealed interface SaveResult {
 
 /** One place's saved wallet, bound to its store at construction so its session cannot reach another wallet's bytes. The only code that touches [SecureStore], so the rules below live in one place. */
 class SavedWallet internal constructor(private val store: SecureStore) {
+    /** The network of the store's wallets, so a session built on this wallet makes and reads keys on it. */
+    val network: KeyNetwork get() = store.network
+
     /** May show the OS owner check. The record exists in memory only inside the returned Opened, and the bytes read are zeroed. */
     suspend fun open(reason: String): UnlockResult = decoded(store.read(reason)).also {
         // A wallet its owner has opened is theirs whatever the marker said, so a later launch must never take it for an orphan. Best effort.
@@ -98,7 +101,7 @@ class SavedWallet internal constructor(private val store: SecureStore) {
     internal fun decoded(r: ReadResult): UnlockResult = when (r) {
         is ReadResult.Bytes -> try {
             when (val d = RecordCodec.decode(r.bytes)) {
-                is Decoded.Ok -> if (d.record.network in NETWORKS) UnlockResult.Opened(d.record, r.version, d.oldGuard) else UnlockResult.Broken(Cause.UnsupportedNetwork)
+                is Decoded.Ok -> if (d.record.network == store.network) UnlockResult.Opened(d.record, r.version, d.oldGuard) else UnlockResult.Broken(Cause.UnsupportedNetwork)
                 Decoded.Newer -> UnlockResult.Broken(Cause.NewerVersion) // never overwritten: a newer app wrote it
                 Decoded.Corrupt -> UnlockResult.Broken(Cause.Corrupt)
             }
@@ -119,7 +122,7 @@ class SavedWallet internal constructor(private val store: SecureStore) {
      * A record the codec cannot write back exactly is NotSaved(Other). The encoded bytes are zeroed once the store has them.
      */
     fun save(record: WalletRecord, mode: WriteMode): SaveResult {
-        if (record.network !in NETWORKS) return SaveResult.NotSaved(Why.Other) // testnet only until the security review
+        if (record.network != store.network) return SaveResult.NotSaved(Why.Other) // a store keeps its own network's wallets only
         val bytes = try {
             RecordCodec.encode(record)
         } catch (e: Exception) {
@@ -158,7 +161,7 @@ class SavedWallet internal constructor(private val store: SecureStore) {
 
     internal companion object {
         /** The networks whose records this build reads and saves. [openableNetwork] keeps the gate off any other. */
-        val NETWORKS = setOf(KeyNetwork.TEST)
+        val NETWORKS = setOf(KeyNetwork.TEST, KeyNetwork.MAIN)
     }
 }
 

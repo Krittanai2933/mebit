@@ -236,7 +236,7 @@ private fun ReplacementControls(
         Spacer(modifier = Modifier.height(12.dp))
         LinkRow(label, kind.copy.tag) {
             repost.startReplacement(scope, kind, pending.txid, { confirmReplacement(kind) }) {
-                if (wallet.prepareReplacement(session, kind, wallet.feeTiers().fast)) null else wallet.lastError ?: "เตรียมรายการใหม่ไม่สำเร็จ ลองใหม่ภายหลัง"
+                if (wallet.prepareReplacement(session, kind, wallet.feeTiers(session.network).fast)) null else wallet.lastError ?: "เตรียมรายการใหม่ไม่สำเร็จ ลองใหม่ภายหลัง"
             }
         }
     }

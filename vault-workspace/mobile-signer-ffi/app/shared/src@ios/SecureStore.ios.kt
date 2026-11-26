@@ -145,7 +145,7 @@ private const val EVALUATE_BEFORE_READ = true
  *
  * One instance and one lock per network and process. Logs nothing.
  */
-private class KeychainShelf(network: KeyNetwork, private val vaults: KeychainVaults) : SecureShelf {
+private class KeychainShelf(override val network: KeyNetwork, private val vaults: KeychainVaults) : SecureShelf {
     private val service = walletService(network)
 
     /**
@@ -229,6 +229,7 @@ private class KeychainShelf(network: KeyNetwork, private val vaults: KeychainVau
     }
 
     private inner class KeychainPlace(private val place: Place) : SecureStore {
+        override val network get() = this@KeychainShelf.network
         override fun probe(): StoreProbe {
             val unlocked = protectedDataAvailable()
             return locked { silentProbe(service, unlocked) }

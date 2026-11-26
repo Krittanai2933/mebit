@@ -33,6 +33,7 @@ internal class FakeSecureStore(
     private val failWrite: Int = 0,
     /** Which marker writes, counting from 1, do not take effect: nothing is recorded and the marker keeps its value. */
     private val failMarker: Set<Int> = emptySet(),
+    override val network: KeyNetwork = KeyNetwork.TEST,
 ) : SecureStore {
     /** One write call: its mode, a copy of the bytes, and the array the caller handed over. */
     class Write(val mode: WriteMode, val bytes: ByteArray, val handed: ByteArray)
@@ -91,6 +92,8 @@ internal class FakeSecureStore(
 
 /** A phone with one place, so a test of one wallet's rules reads as it always did. [readEvery] goes through [store]'s read, so a test can still count sheets. */
 internal class OnePlaceShelf(private val store: SecureStore) : SecureShelf {
+    override val network get() = store.network
+
     override fun store(place: Place): SecureStore = if (place == Place.FIRST) store else error("one place only")
 
     override suspend fun readEvery(reason: String): EveryRead = when (val r = store.read(reason)) {
@@ -106,8 +109,8 @@ internal class OnePlaceShelf(private val store: SecureStore) : SecureShelf {
  * Several places over [FakeSecureStore]s that share one probe and one marker, as a real phone does. [places] holds each place's bytes,
  * and a test scripts a damaged place through its `read`. [sheets] counts the owner checks, and [refuse] makes the next one answer it.
  */
-internal class FakeShelf(var marker: Marker = Marker.Kept) : SecureShelf {
-    val places: Map<Place, FakeSecureStore> = Place.all.associateWith { FakeSecureStore() }
+internal class FakeShelf(var marker: Marker = Marker.Kept, override val network: KeyNetwork = KeyNetwork.TEST) : SecureShelf {
+    val places: Map<Place, FakeSecureStore> = Place.all.associateWith { FakeSecureStore(network = network) }
     var sheets = 0
         private set
     var refuse: ReadResult? = null

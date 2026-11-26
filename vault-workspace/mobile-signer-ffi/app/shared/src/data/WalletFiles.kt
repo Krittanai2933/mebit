@@ -8,9 +8,9 @@ import com.mebit.ffi.signer.walletBsmsRecord
 internal fun descriptorFileName(walletName: String): String = safeShareName(walletName) + "-descriptor.txt"
 
 /** The BIP-129 record of [vault], or null when the core refuses its descriptor. [record] is injected so tests need no core. */
-internal fun bsmsRecordOf(vault: CreatedVault, record: (String, KeyNetwork) -> String = { d, n -> walletBsmsRecord(d, n) }): String? =
+internal fun bsmsRecordOf(vault: CreatedVault, network: KeyNetwork, record: (String, KeyNetwork) -> String = { d, n -> walletBsmsRecord(d, n) }): String? =
     try {
-        record(descriptorIn(vault.bsms), KeyNetwork.TEST)
+        record(descriptorIn(vault.bsms), network)
     } catch (e: Exception) {
         null
     }

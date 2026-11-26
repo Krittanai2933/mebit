@@ -75,6 +75,9 @@ class VaultSendTest {
         var signs = 0
         var finishes = 0
         val posts = mutableListOf<String>()
+
+        /** The network of every core call, in order. */
+        val networks = mutableListOf<KeyNetwork>()
         var shape: (CreatedVault) -> WalletShape = { v -> WalletShape(v.m.toUByte(), v.keyFingerprints.map { WalletKey(it.lowercase(), "m/48'/1'/0'/2'", "tpub") }, v.address, 201uL) }
         var draft: (destination: String) -> SpendReview = { review(payments = listOf(SpendOutput(it.lowercase(), 600_000uL))) }
         var sign: (held: SpendReview, fingerprint: String) -> SpendReview = { held, fingerprint -> held.signedBy(fingerprint) }
@@ -101,46 +104,56 @@ class VaultSendTest {
             answer(sign(held, vault.keyFingerprints[key].lowercase()))
         }
 
-        fun send(guards: PendingPayments = PendingPayments(FakePlainFile()), now: Long = 1_000L, vault: CreatedVault = this@VaultSendTest.vault) = VaultSend(
+        fun send(guards: PendingPayments = PendingPayments(FakePlainFile()), now: Long = 1_000L, vault: CreatedVault = this@VaultSendTest.vault, network: KeyNetwork = KeyNetwork.TEST) = VaultSend(
             vault,
             guards,
+            network,
             nowSeconds = { now },
             worker = EmptyCoroutineContext,
             core = DescribedCore(
-                describe = { d, _ ->
+                describe = { d, n ->
+                    networks += n
                     named(d)
                     shape(vault)
                 },
-                snapshot = { d, _ ->
+                snapshot = { d, n ->
+                    networks += n
                     named(d)
                     snapshot
                 },
-                feeTiers = { FeeTiers(3uL, 7uL, 12uL, true) },
-                draft = { d, _, destination, amount, _ ->
+                feeTiers = { n ->
+                    networks += n
+                    FeeTiers(3uL, 7uL, 12uL, true)
+                },
+                draft = { d, n, destination, amount, _ ->
+                    networks += n
                     named(d)
                     prepares += destination to amount
                     answer(draft(destination))
                 },
-                signWithWords = { d, _, psbt, shownTxid, words, _ ->
+                signWithWords = { d, n, psbt, shownTxid, words, _ ->
+                    networks += n
                     named(d)
                     signs++
                     val held = answered.getValue(psbt)
                     assertEquals(held.unsignedTxid, shownTxid, "the txid 5.2 showed")
                     answer(sign(held, vault.keyFingerprints[words.single().removePrefix("key").toInt()].lowercase()))
                 },
-                finish = { d, _, psbt, shownTxid ->
+                finish = { d, n, psbt, shownTxid ->
+                    networks += n
                     named(d)
                     finishes++
                     val held = answered.getValue(psbt)
                     assertEquals(held.unsignedTxid, shownTxid, "the txid 5.2 showed")
                     finish(held)
                 },
-                postHex = { _, _, txid ->
+                postHex = { n, _, txid ->
+                    networks += n
                     posts += txid
                     post(txid)
                 },
             ),
-            link = HardwareLink(pairings = null) { inRange(it) },
+            link = HardwareLink(pairings = null, network = network) { inRange(it) },
         )
     }
 
@@ -150,14 +163,26 @@ class VaultSendTest {
     /** Row [key]'s signer when a Jade holds that key. */
     private fun jade(key: Int) = KeySigner.Device(key, WalletKind.JADE)
 
-    private fun signed(rust: Rust, guards: PendingPayments = PendingPayments(FakePlainFile())): VaultSend = runBlocking {
-        val send = rust.send(guards)
+    private fun signed(rust: Rust, guards: PendingPayments = PendingPayments(FakePlainFile()), network: KeyNetwork = KeyNetwork.TEST): VaultSend = runBlocking {
+        val send = rust.send(guards, network = network)
         send.draft.destination = "tb1qdestination"
         send.draft.setAmountInSats(600_000)
         assertTrue(send.prepare())
         assertTrue(send.sign(phone(0)) { true })
         assertTrue(send.sign(phone(2)) { true })
         send
+    }
+
+    @Test
+    fun everyCallIsOnTheSendsNetwork() {
+        for (network in listOf(KeyNetwork.TEST, KeyNetwork.MAIN)) {
+            val rust = Rust()
+            val send = signed(rust, network = network)
+            send.load()
+            assertTrue(send.broadcast())
+            assertEquals(setOf(network), rust.networks.toSet(), "describe, tiers, draft, sign, finish and post on $network")
+            assertTrue(rust.networks.size >= 5, rust.networks.toString())
+        }
     }
 
     @Test

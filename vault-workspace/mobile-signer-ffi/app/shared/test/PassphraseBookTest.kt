@@ -1,5 +1,6 @@
 package com.mebit.app.data
 
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.app.Place
 import com.mebit.app.VaultsStorage
 import com.mebit.app.Why
@@ -95,7 +96,7 @@ private class SetupPhone(anyTime: Boolean) {
         else -> PASSPHRASE_KEY
     }
 
-    private fun book(wallets: Wallets) = SavedVaults(store, owners = { wallets.vaultOwners() }, deriveAddress = { _, _ -> "addr" })
+    private fun book(wallets: Wallets) = SavedVaults(store, KeyNetwork.TEST, owners = { wallets.vaultOwners() }, deriveAddress = { _, _ -> "addr" })
 
     /** Welcome, two hardware keys and a 2-of-2 with no phone wallet yet, then Add Key, This device. NavGraph syncs on each new owner. */
     fun firstPhoneWallet(): Pair<OpenWallet, SavedVaults> {
@@ -131,7 +132,7 @@ private fun phones() = listOf(SetupPhone(anyTime = false), SetupPhone(anyTime = 
 
 /** The stored text of [BOOK] as the wallet [owner] saved it. */
 private fun bookSavedFor(owner: String): String = BookStore(anyTime = true).also { store ->
-    SavedVaults(store, owners = { VaultOwners(listOf(owner), everyPlaceOpened = true) }, deriveAddress = { _, _ -> "addr" }).edit { BOOK }
+    SavedVaults(store, KeyNetwork.TEST, owners = { VaultOwners(listOf(owner), everyPlaceOpened = true) }, deriveAddress = { _, _ -> "addr" }).edit { BOOK }
 }.text
 
 class PassphraseBookTest {

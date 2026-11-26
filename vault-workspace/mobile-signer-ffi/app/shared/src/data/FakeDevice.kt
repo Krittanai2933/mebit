@@ -28,8 +28,8 @@ internal val PUBLIC_WORDS_12: List<String> = List(11) { "abandon" } + "about"
 /** The master fingerprint of [PUBLIC_WORDS_12] with no passphrase. */
 internal const val PUBLIC_FINGERPRINT = "73c5da0a"
 
-/** One account of [PUBLIC_WORDS_12] as a hardware wallet reads it: the tpub at the type's testnet account path, and receive address 0. */
-internal class PublicAccount(val tpub: String, val receive0: String)
+/** One account of [PUBLIC_WORDS_12] as a hardware wallet reads it: the key at the type's account path (a tpub on testnet, an xpub on mainnet), and receive address 0. */
+internal class PublicAccount(val xpub: String, val receive0: String)
 
 /**
  * [PUBLIC_WORDS_12]'s accounts at m/44', 49', 84' and 86' /1'/0', derived outside this app with rust-bitcoin 0.32 and bip39 2.2. The 84'
@@ -51,6 +51,19 @@ internal val PUBLIC_ACCOUNTS: Map<AddressType, PublicAccount> = mapOf(
     AddressType.TAPROOT to PublicAccount(
         "tpubDDfvzhdVV4unsoKt5aE6dcsNsfeWbTgmLZPi8LQDYU2xixrYemMfWJ3BaVneH3u7DBQePdTwhpybaKRU95pi6PMUtLPBJLVQRpzEnjfjZzX",
         "tb1p8wpt9v4frpf3tkn0srd97pksgsxc5hs52lafxwru9kgeephvs7rqlqt9zj",
+    ),
+)
+
+/**
+ * [PUBLIC_WORDS_12]'s mainnet Native SegWit account at m/84'/0'/0': the published BIP-84 test vector's xpub and first address. Derived outside
+ * this app (BIP-39 seed, BIP-32 hardened path, serialised with the mainnet version bytes), and the same derivation gives [PUBLIC_ACCOUNTS]'s
+ * tpub for coin type 1', which equals the one there. A test reads this xpub's first address through the core. The fake device holds no other
+ * mainnet type, as the phone wallet offers only Native SegWit there.
+ */
+internal val PUBLIC_MAIN_ACCOUNTS: Map<AddressType, PublicAccount> = mapOf(
+    AddressType.NATIVE_SEGWIT to PublicAccount(
+        "xpub6CatWdiZiodmUeTDp8LT5or8nmbKNcuyvz7WyksVFkKB4RHwCD3XyuvPEbvqAQY3rAPshWcMLoP2fMFMKHPJ4ZeZXYVUhLv1VMrjPC7PW6V",
+        "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu",
     ),
 )
 
@@ -113,7 +126,11 @@ internal class FakeDevice(script: List<FakeBehaviour> = emptyList(), private val
     fun open(found: FoundWallet): DeviceLink = Link(found.kind)
 
     private inner class Link(private val kind: WalletKind) : DeviceLink {
+        /** The network [connect] was asked for, which every key and signature after it is on. The app always connects first, a test that signs on a bare link gets testnet. */
+        private var network: KeyNetwork = KeyNetwork.TEST
+
         override suspend fun connect(codes: PairingCodes, pairing: ByteArray?, network: KeyNetwork): ByteArray? {
+            this.network = network
             if (kind == WalletKind.JADE) return null
             val known = paired
             if (pairing != null && known != null && pairing.contentEquals(known)) return null
@@ -124,9 +141,10 @@ internal class FakeDevice(script: List<FakeBehaviour> = emptyList(), private val
         override suspend fun unlock() {}
 
         override suspend fun accountXpub(derivationPath: String): HwAccountKey {
-            val xpub = PUBLIC_ACCOUNTS.entries.firstOrNull { oneKeyPath(it.key) == derivationPath }?.value?.tpub
-                ?: if (derivationPath == TESTNET_MULTISIG_ACCOUNT) {
-                    withContext(Dispatchers.Default) { restoreSoftwareMultisigKey(PUBLIC_WORDS_12, "", KeyNetwork.TEST, 0u).xpub }
+            val accounts = if (network == KeyNetwork.MAIN) PUBLIC_MAIN_ACCOUNTS else PUBLIC_ACCOUNTS
+            val xpub = accounts.entries.firstOrNull { oneKeyPath(it.key, network) == derivationPath }?.value?.xpub
+                ?: if (derivationPath == multisigAccount(network)) {
+                    withContext(Dispatchers.Default) { restoreSoftwareMultisigKey(PUBLIC_WORDS_12, "", network, 0u).xpub }
                 } else {
                     throw BleException.Refused("the fake device reads no key at $derivationPath")
                 }
@@ -136,7 +154,7 @@ internal class FakeDevice(script: List<FakeBehaviour> = emptyList(), private val
         override suspend fun signWalletPsbt(descriptor: String, psbtBase64: String, unsignedTxid: String, steps: SignSteps): SpendReview {
             val behaviour = script.removeFirstOrNull() ?: FakeBehaviour.Sign
             if (behaviour == FakeBehaviour.Slow) pause(15_000)
-            val name = if (kind == WalletKind.JADE) withContext(Dispatchers.Default) { jadeWalletRegistration(descriptor, KeyNetwork.TEST) }?.name else null
+            val name = if (kind == WalletKind.JADE) withContext(Dispatchers.Default) { jadeWalletRegistration(descriptor, network) }?.name else null
             if (name != null && (name !in registered || behaviour == FakeBehaviour.RegistrationDeclined)) {
                 steps.registering()
                 pause(3_000)
@@ -149,8 +167,8 @@ internal class FakeDevice(script: List<FakeBehaviour> = emptyList(), private val
             return when (behaviour) {
                 FakeBehaviour.Decline -> throw BleException.Refused("declined on the device")
                 FakeBehaviour.Drop -> throw BleException.Disconnected("the fake link dropped")
-                FakeBehaviour.WrongAnswer -> withContext(Dispatchers.Default) { walletReview(descriptor, KeyNetwork.TEST, psbtBase64) }
-                else -> withContext(Dispatchers.Default) { walletSignWithWords(descriptor, KeyNetwork.TEST, psbtBase64, unsignedTxid, PUBLIC_WORDS_12, "") }
+                FakeBehaviour.WrongAnswer -> withContext(Dispatchers.Default) { walletReview(descriptor, network, psbtBase64) }
+                else -> withContext(Dispatchers.Default) { walletSignWithWords(descriptor, network, psbtBase64, unsignedTxid, PUBLIC_WORDS_12, "") }
             }
         }
 

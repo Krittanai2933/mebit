@@ -59,10 +59,59 @@ private class Rig {
             post()
         },
     )
-    val chain = DescribedWallet(PUBLIC_JADE_WALLET, PendingPayments(guards), HardwareLink(null) { device }, { listOf(TEST_CHECK) }, core, { now })
+    val chain = DescribedWallet(PUBLIC_JADE_WALLET, PendingPayments(guards), HardwareLink(null, KeyNetwork.TEST) { device }, { listOf(TEST_CHECK) }, core, { now })
 }
 
 class DescribedWalletTest {
+    @Test
+    fun aWalletReadsAndPaysOnTheNetworkOfItsBook(): Unit = runBlocking {
+        val seen = mutableListOf<Pair<String, KeyNetwork>>()
+        val core = DescribedCore(
+            snapshot = { _, n ->
+                seen += "snapshot" to n
+                HotWalletSnapshot("bc1qnext", 50_000uL, 40_000uL, n, HotScan.COMPLETE)
+            },
+            history = { _, n ->
+                seen += "history" to n
+                emptyList()
+            },
+            detail = { _, n, _ ->
+                seen += "detail" to n
+                null
+            },
+            draft = { _, n, _, _, _ ->
+                seen += "draft" to n
+                review("unsigned")
+            },
+            finish = { _, n, _, _ ->
+                seen += "finish" to n
+                PreparedSend(SIGNED_TXID, SIGNED_HEX, 500uL, 10_000uL)
+            },
+            feeTiers = { n ->
+                seen += "feeTiers" to n
+                error("the bridge failed")
+            },
+            postHex = { n, _, _ ->
+                seen += "post" to n
+                HotSendResult(SIGNED_TXID)
+            },
+        )
+        val device = FakeDeviceLink(sign = { _, psbt, _ -> review("$psbt+signed", signed = listOf(PUBLIC_FINGERPRINT)) })
+        val wallet = PUBLIC_JADE_WALLET.copy(network = KeyNetwork.MAIN)
+        val chain = DescribedWallet(wallet, PendingPayments(FakePlainFile()), HardwareLink(null, KeyNetwork.MAIN) { device }, { emptyList() }, core, { 1_000L })
+        assertTrue("[73c5da0a/84'/0'/0']" in wallet.descriptor, "the descriptor's path is under mainnet's coin type")
+        chain.refresh()
+        chain.detail("txid")
+        chain.feeTiers()
+        assertTrue(chain.draft("bc1qdestination", 10_000, 2))
+        assertTrue(chain.sign(JADE_FOUND, NO_CODES, NO_STEPS))
+        assertTrue(chain.post())
+        assertEquals(KeyNetwork.MAIN, device.connectedOn)
+        assertEquals(setOf("snapshot", "history", "detail", "feeTiers", "draft", "finish", "post"), seen.map { it.first }.toSet())
+        assertEquals(setOf(KeyNetwork.MAIN), seen.map { it.second }.toSet(), "every call of a mainnet wallet is on mainnet")
+        assertTrue("accountXpub m/84'/0'/0'" in device.calls, device.calls.toString())
+    }
+
     @Test
     fun aRefreshReadsTheWalletByItsDescriptorAndAFailedOneKeepsReceiveAddress0(): Unit = runBlocking {
         val rig = Rig()
@@ -252,7 +301,7 @@ class DescribedWalletTest {
     @Test
     fun eachHardwareWalletHasOneChainAndAListRefreshStopsAtAScanThatContinues(): Unit = runBlocking {
         val book = SavedVaults.memoryOnly()
-        val second = PUBLIC_JADE_WALLET.copy(id = "hw_2", addressType = AddressType.TAPROOT, xpub = PUBLIC_ACCOUNTS.getValue(AddressType.TAPROOT).tpub)
+        val second = PUBLIC_JADE_WALLET.copy(id = "hw_2", addressType = AddressType.TAPROOT, xpub = PUBLIC_ACCOUNTS.getValue(AddressType.TAPROOT).xpub)
         book.edit { it.copy(hardware = listOf(PUBLIC_JADE_WALLET, second)) }
         val read = mutableListOf<String>()
         var scan = HotScan.CONTINUING

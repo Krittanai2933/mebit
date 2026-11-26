@@ -1,5 +1,6 @@
 package com.mebit.app.data
 
+import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.app.Marker
 import com.mebit.app.Place
 import com.mebit.app.PlainFile
@@ -26,6 +27,7 @@ import com.mebit.ffi.signer.HwAccountKey
 import com.mebit.ffi.signer.SoftwareAccountKey
 import com.mebit.ffi.signer.WalletBalance
 import com.mebit.ffi.signer.WalletKind
+import com.mebit.ffi.signer.hotReceiveAddress
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -175,6 +177,19 @@ private class ShelfPhone {
 }
 
 class WalletsTest {
+    // Native: the real key derivation. The public phrase's first address is the BIP-84 vector's on mainnet and its testnet form on testnet.
+    @Test
+    fun aMainnetImportOfThePublicWordsReceivesAtBip84sFirstAddress() {
+        for ((network, address) in listOf(KeyNetwork.MAIN to "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu", KeyNetwork.TEST to "tb1q6rz28mcfaxtmd6v789l9rrlrusdprr9pqcpvkl")) {
+            val store = FakeSecureStore(network = network)
+            val session = Wallets(OnePlaceShelf(store)).at(Place.FIRST).session
+            session.restoreFromWords(PUBLIC_WORDS_12)
+            assertEquals(SaveState.Saved, session.saved, "saved on $network")
+            assertEquals(network, assertIs<UnlockResult.Opened>(SavedWallet(store).openNow()).record.network, "the record's network")
+            assertEquals(address, hotReceiveAddress(session.words, session.passphrase, session.network, session.addressType, 0u), "receive 0 on $network")
+        }
+    }
+
     @Test
     fun aVersion1RecordAtPlaceOneOpensWithOneOwnerCheckAndIsNeverRewritten(): Unit = runBlocking {
         val phone = ShelfPhone()
@@ -566,7 +581,7 @@ class WalletsTest {
         val wallets = phone.unlocked()
         val storage = FakeVaultsStorage()
         val type = AddressType.NATIVE_SEGWIT
-        val key = HwAccountKey(PUBLIC_ACCOUNTS.getValue(type).tpub, PUBLIC_FINGERPRINT, oneKeyPath(type))
+        val key = HwAccountKey(PUBLIC_ACCOUNTS.getValue(type).xpub, PUBLIC_FINGERPRINT, oneKeyPath(type, KeyNetwork.TEST))
 
         val added = HardwareWallets(book(storage, wallets).apply { sync() }).add(WalletKind.JADE, type, key, wallets.phoneWallets())
         assertEquals(HardwareAdd.Unopened, added, "refused as a phone add is then")
@@ -1418,7 +1433,7 @@ class WalletsTest {
         assertTrue(phone.place(w.place).writes.isEmpty(), "and nothing is saved, so no second guard can cover those addresses")
 
         val taproot = PUBLIC_ACCOUNTS.getValue(AddressType.TAPROOT)
-        phone.bookHardware = listOf(PUBLIC_JADE_WALLET.copy(addressType = AddressType.TAPROOT, xpub = taproot.tpub, address = taproot.receive0))
+        phone.bookHardware = listOf(PUBLIC_JADE_WALLET.copy(addressType = AddressType.TAPROOT, xpub = taproot.xpub, address = taproot.receive0))
         w.session.restoreFromWords(PUBLIC_WORDS_12)
         assertNull(w.session.lastError, "with the Jade wallet in Taproot, Native SegWit has other addresses")
         assertEquals(PUBLIC_JADE_WALLET.name, w.session.takenBy(AddressType.TAPROOT))
@@ -1429,7 +1444,7 @@ class WalletsTest {
     }
 
     private fun book(storage: FakeVaultsStorage, wallets: Wallets) =
-        SavedVaults(storage, owners = { wallets.vaultOwners() }, deriveAddress = { _, _ -> "addr" })
+        SavedVaults(storage, KeyNetwork.TEST, owners = { wallets.vaultOwners() }, deriveAddress = { _, _ -> "addr" })
 
     private fun vaultUsing(fingerprint: String) =
         CreatedVault("v1", "Vault 1", 1, 1, CustodyPolicy.PersonalCustody, "addr", "x\nwsh(sortedmulti(1,tpub))", listOf(fingerprint), hasMockKey = true)

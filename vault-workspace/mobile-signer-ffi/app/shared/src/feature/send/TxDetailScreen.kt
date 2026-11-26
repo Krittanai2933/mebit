@@ -90,6 +90,7 @@ fun S8TxDetailScreen(
     tx: HotTx,
     detail: suspend (txid: String) -> TxDetailLoad.Done,
     walletName: String,
+    network: KeyNetwork,
     quotes: QuoteCache,
     onBack: (() -> Unit)?,
     onOpenCatalog: () -> Unit,
@@ -101,7 +102,7 @@ fun S8TxDetailScreen(
         load = TxDetailLoad.Loading
         load = detail(tx.txid)
     }
-    val view = txDetailView(tx, load, rememberFiatQuote(quotes), KeyNetwork.TEST, unit = LocalBtcUnit.current)
+    val view = txDetailView(tx, load, rememberFiatQuote(quotes), network, unit = LocalBtcUnit.current)
     val debugBuild = rememberIsDebugBuild()
     val copier = rememberCopier()
     var technical by remember { mutableStateOf(false) }

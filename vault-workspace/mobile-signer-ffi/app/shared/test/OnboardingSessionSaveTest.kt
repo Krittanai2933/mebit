@@ -645,13 +645,24 @@ class OnboardingSessionSaveTest {
             generateThisDevice(TEST_PASSPHRASE)
             markAppLockEnabled()
         }
-        // The saved wallet refuses MAIN, so a MAIN key that writes nothing proves the record carries the session's network.
-        val store = FakeSecureStore()
-        session(store).generateThisDevice(network = KeyNetwork.MAIN)
-        assertTrue(store.writes.isEmpty(), "a MAIN key was saved")
-        val loaded = session(FakeSecureStore())
+        // A session on a MAIN store saves a MAIN record, which is what the store hands back.
+        val store = FakeSecureStore(network = KeyNetwork.MAIN)
+        session(store).generateThisDevice()
+        assertEquals(KeyNetwork.MAIN, assertIs<UnlockResult.Opened>(SavedWallet(store).openNow(), "the MAIN key was saved").record.network)
+        val loaded = session(FakeSecureStore(network = KeyNetwork.MAIN))
         assertTrue(loaded.install(testRecord(network = KeyNetwork.MAIN), ANY_VERSION), "install MAIN")
         assertEquals(KeyNetwork.MAIN, loaded.network, "network after install")
+    }
+
+    @Test
+    fun aSessionInstallsOnlyARecordOfItsStoresNetwork() {
+        val test = session(FakeSecureStore())
+        assertFalse(test.install(testRecord(network = KeyNetwork.MAIN), ANY_VERSION), "a MAIN record on a TEST store")
+        assertEquals(emptyList(), test.words, "nothing of it was installed")
+        val main = session(FakeSecureStore(network = KeyNetwork.MAIN))
+        assertFalse(main.install(testRecord(network = KeyNetwork.TEST), ANY_VERSION), "a TEST record on a MAIN store")
+        assertEquals(emptyList(), main.words)
+        assertTrue(test.install(testRecord(network = KeyNetwork.TEST), ANY_VERSION), "a TEST record on a TEST store")
     }
 
     @Test

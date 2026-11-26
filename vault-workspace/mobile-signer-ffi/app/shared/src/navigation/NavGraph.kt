@@ -174,7 +174,6 @@ import com.mebit.app.ui.components.coversScreen
 import com.mebit.app.ui.components.rememberFullSheetState
 import com.mebit.app.ui.theme.MbPage
 import com.mebit.ffi.signer.HotTx
-import com.mebit.ffi.signer.KeyNetwork
 import com.mebit.ffi.signer.WalletFileRead
 import com.mebit.ffi.signer.walletFileRead
 import com.mebit.ffi.signer.FoundWallet
@@ -204,9 +203,9 @@ internal fun MebitNavHost(
     wallets: Wallets,
     start: Stop,
     startNotice: StartNotice? = null,
-    vaults: SavedVaults = remember { SavedVaults.memoryOnly() },
+    vaults: SavedVaults,
     pairings: Pairings? = null,
-    nodeSettings: NodeSettings = remember { NodeSettings(null) },
+    nodeSettings: NodeSettings,
     unitSettings: UnitSettings = remember { UnitSettings(null) },
 ) {
     val backStack = remember { mutableStateListOf(start) }
@@ -356,7 +355,7 @@ internal fun MebitNavHost(
 
     // A wallet the core cannot read makes no send, and 5.1 says so.
     fun startVaultSend(vault: CreatedVault?) {
-        vaultSend = vault?.let { runCatching { VaultSend(it, wallets.vaultPayments, link = hardware.link) }.getOrNull() }
+        vaultSend = vault?.let { runCatching { VaultSend(it, wallets.vaultPayments, vaults.network, link = hardware.link) }.getOrNull() }
         navigate(MovieRoute.M1SendVault)
     }
 
@@ -632,7 +631,7 @@ internal fun MebitNavHost(
                         } else {
                             HardwareWalletScreen(
                                 store = keyring,
-                                read = DeviceRead.OneKey(device, createDraft.addressType),
+                                read = DeviceRead.OneKey(device, createDraft.addressType, vaults.network),
                                 onEnrolled = { navigate(MovieRoute.HardwareConfirmKey) },
                                 onUnsupported = { model ->
                                     unsupportedModel = model
@@ -695,6 +694,7 @@ internal fun MebitNavHost(
                     )
                     MovieRoute.VaultCreated -> VaultCreatedScreen(
                         vault = vaultDraft.selectedVault(),
+                        network = vaults.network,
                         onOpenWallets = { navigate(MovieRoute.VaultList) },
                         onOpenCatalog = openCatalog,
                     )
@@ -739,7 +739,7 @@ internal fun MebitNavHost(
                                     FilePick.Cancelled -> Unit
                                     is FilePick.Refused -> importProblem = UNREADABLE_FILE
                                     is FilePick.Picked -> scope.launch {
-                                        val read = withContext(Dispatchers.Default) { runCatching { walletFileRead(pick.text, KeyNetwork.TEST) }.getOrNull() }
+                                        val read = withContext(Dispatchers.Default) { runCatching { walletFileRead(pick.text, vaults.network) }.getOrNull() }
                                         if (read is WalletFileRead.Read) {
                                             importLine = null
                                             importing = ImportPending(pick.name, read.wallet)
@@ -795,6 +795,7 @@ internal fun MebitNavHost(
                             // IO, as the one-key detail's: a back cannot stop this blocking call.
                             detail = { txid -> withContext(Dispatchers.IO) { wallets.vaultTxDetail(vault, txid) } },
                             walletName = vault.name,
+                            network = vaults.network,
                             quotes = quotes,
                             onBack = onBack,
                             onOpenCatalog = openCatalog,
@@ -803,6 +804,7 @@ internal fun MebitNavHost(
                     } ?: NoWallet(current.route, onBack, openCatalog)
                     MovieRoute.WalletExport -> WalletExportScreen(
                         vault = vaultDraft.selectedVault(),
+                        network = vaults.network,
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
                     )
@@ -889,6 +891,7 @@ internal fun MebitNavHost(
                         // IO, not Default, because a back cannot stop this blocking call and a few of them on a dead network would hold Default's one thread per core.
                         detail = { txid -> withContext(Dispatchers.IO) { singleSig.detail(session, txid) } },
                         walletName = session.walletName,
+                        network = session.network,
                         quotes = quotes,
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -941,6 +944,7 @@ internal fun MebitNavHost(
                         walletName = session.walletName,
                         variant = "default",
                         node = nodeSettings.current,
+                        network = session.network,
                         onHome = { land(stackAfterSlipHome(backStack, MovieRoute.S1HomeSingleSig)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -952,6 +956,7 @@ internal fun MebitNavHost(
                         walletName = session.walletName,
                         variant = "slip",
                         node = nodeSettings.current,
+                        network = session.network,
                         onHome = { land(stackAfterSlipHome(backStack, MovieRoute.S1HomeSingleSig)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -963,6 +968,7 @@ internal fun MebitNavHost(
                         walletName = session.walletName,
                         variant = "block",
                         node = nodeSettings.current,
+                        network = session.network,
                         onHome = { land(stackAfterSlipHome(backStack, MovieRoute.S1HomeSingleSig)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -974,6 +980,7 @@ internal fun MebitNavHost(
                         walletName = session.walletName,
                         variant = "poster",
                         node = nodeSettings.current,
+                        network = session.network,
                         onHome = { land(stackAfterSlipHome(backStack, MovieRoute.S1HomeSingleSig)) },
                         onBack = onBack,
                         onOpenCatalog = openCatalog,
@@ -1156,7 +1163,7 @@ internal fun MebitNavHost(
                             destination = draft.destination,
                             walletName = w.name,
                             node = nodeSettings.current,
-                            network = KeyNetwork.TEST,
+                            network = w.network,
                             quotes = quotes,
                             onHome = { land(stackAfterSlipHome(backStack, MovieRoute.HardwareHome)) },
                             onOpenCatalog = openCatalog,
@@ -1176,6 +1183,7 @@ internal fun MebitNavHost(
                             tx = openedTx,
                             detail = { txid -> hardware.chain(w).detail(txid) },
                             walletName = w.name,
+                            network = w.network,
                             quotes = quotes,
                             onBack = onBack,
                             onOpenCatalog = openCatalog,

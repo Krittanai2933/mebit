@@ -4,6 +4,7 @@ import com.mebit.app.PlainFile
 import com.mebit.app.encodeQr
 import com.mebit.app.feature.settings.typedBase
 import com.mebit.ffi.signer.KeyNetwork
+import com.mebit.ffi.signer.NodeCheck
 import com.mebit.ffi.signer.NodeChoice
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -52,19 +53,26 @@ class NodeSettingsTest {
     fun aChoiceIsKeptAndPutOnTheCoreAndRestoredAtStart() {
         val file = MemoryFile()
         val used = mutableListOf<NodeChoice>()
-        val settings = NodeSettings(file) { used += it }
+        val settings = NodeSettings(file, KeyNetwork.TEST) { used += it }
         assertEquals(true, settings.choose(NodeSetting.MempoolSpace))
         assertEquals(listOf<NodeChoice>(NodeChoice.MempoolSpace), used)
-        val after = NodeSettings(file) { used += it }
+        val after = NodeSettings(file, KeyNetwork.TEST) { used += it }
         after.restore()
         assertEquals(NodeSetting.MempoolSpace, after.current)
         assertEquals(NodeChoice.MempoolSpace, used.last())
     }
 
     @Test
+    fun aNodePassesOnlyOnItsOwnNetwork() {
+        assertEquals(listOf(true, false, false, false), listOf(NodeCheck.Testnet4, NodeCheck.Mainnet, NodeCheck.OtherChain, NodeCheck.BadUrl).map { it.passes(KeyNetwork.TEST) })
+        assertEquals(listOf(false, true, false, false), listOf(NodeCheck.Testnet4, NodeCheck.Mainnet, NodeCheck.OtherChain, NodeCheck.BadUrl).map { it.passes(KeyNetwork.MAIN) })
+        assertEquals(false, NodeCheck.Unreachable("down").passes(KeyNetwork.MAIN))
+    }
+
+    @Test
     fun aChoiceTheCoreRefusesChangesNothing() {
         val file = MemoryFile("auto")
-        val settings = NodeSettings(file) { throw IllegalStateException("refused") }
+        val settings = NodeSettings(file, KeyNetwork.TEST) { throw IllegalStateException("refused") }
         assertEquals(false, settings.choose(NodeSetting.Own("http://n.org")))
         assertEquals(NodeSetting.Auto, settings.current)
         assertEquals("auto", file.text)

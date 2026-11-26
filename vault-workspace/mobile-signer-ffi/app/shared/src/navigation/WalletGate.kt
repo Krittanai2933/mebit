@@ -101,7 +101,7 @@ private fun OpenGate(lock: LockGate) {
     val scanDir = rememberScanStateDir(network)
     remember(scanDir) { scanDir?.let(::hotUseStateDir) }
     // Also before any chain read: the node the user chose in Settings is in force from the first request.
-    val nodeSettings = remember(scanDir) { NodeSettings(scanDir?.let { plainFile("$it/node-choice") }).also { it.restore() } }
+    val nodeSettings = remember(scanDir) { NodeSettings(scanDir?.let { plainFile("$it/node-choice") }, network).also { it.restore() } }
     val unitSettings = remember(appDir) { UnitSettings(appDir?.let { plainFile("$it/btc-unit") }).also { it.restore() } }
     val storage = rememberVaultsStorage(network)
     val shelf = rememberSecureShelf(network)
@@ -122,7 +122,7 @@ private fun OpenGate(lock: LockGate) {
             bookGuardKeys = { book.guardKeys() },
             bookHardware = { book.current.hardware },
         )
-        book = SavedVaults(storage, owners = { wallets.vaultOwners() })
+        book = SavedVaults(storage, network, owners = { wallets.vaultOwners() })
         wallets to book
     }
     val gate = remember(wallets) { WalletGateState(wallets) }
