@@ -24,8 +24,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::address_type::AddressType;
 use crate::chain::{
-    ChainSource, EsploraSource, Http, Operator, Summary, TxView, Txo, Utxo, WINDOW, check_network,
-    history_error, throttled, tx_error,
+    ChainSource, Confirmed, EsploraSource, Http, Operator, Summary, TxView, Txo, Utxo, WINDOW,
+    check_network, history_error, throttled, tx_error,
 };
 use crate::proof::{Anchor, NotProven, prove_use, verify};
 use crate::scan::{ChainScan, Event, GAP, Proof, ScanStatus, Seen, Step, step};
@@ -1094,7 +1094,7 @@ pub(crate) fn history_by<K: Owner>(
 
 /// The latest transactions of the `used` addresses, each once and read against `own`, every address the wallet counts:
 /// the mempool first, then confirmed transactions newest first. No request when nothing is used, else one page per used
-/// address and the tip. The tail a one-key wallet and a several-key wallet share, so both net and order by one rule.
+/// address, the tip and `forget_lost_blocks`'s looks. The tail a one-key wallet and a several-key wallet share, so both net and order by one rule.
 fn history_over(
     source: &dyn ChainSource,
     used: &[&Address],
@@ -1103,9 +1103,52 @@ fn history_over(
     if used.is_empty() {
         return Ok(Vec::new());
     }
-    let (pages, tip) = source.history(used)?;
+    let (mut pages, tip) = source.history(used)?;
+    forget_lost_blocks(source, pages.iter_mut().flatten(), tip)?;
     let own: Vec<&str> = own.iter().map(String::as_str).collect();
     merge_history(&pages, tip, &own)
+}
+
+/// How many confirmations a block needs before the source's word that it holds a transaction is believed without a look.
+const BELIEVED_DEPTH: u64 = 6;
+
+/// Forgets the block of each of `txs` that sits fewer than `BELIEVED_DEPTH` blocks deep at `tip` when the source's best
+/// chain has another block at that height, or none. A reorg took that block, and a host whose index missed the reorg
+/// still names it (testnet4, 26 Nov 2026), so the transaction reads as unconfirmed, as it is. One read per distinct
+/// height, and none when every block is deeper. A block the source gave no id for is believed.
+fn forget_lost_blocks<'a>(
+    source: &dyn ChainSource,
+    txs: impl IntoIterator<Item = &'a mut TxView>,
+    tip: u64,
+) -> Result<(), MobileSignerError> {
+    let shallow = |block: &Confirmed| {
+        block.block_hash.is_some() && tip.saturating_sub(block.height) + 1 < BELIEVED_DEPTH
+    };
+    let txs: Vec<&mut TxView> = txs
+        .into_iter()
+        .filter(|tx| tx.confirmed.as_ref().is_some_and(shallow))
+        .collect();
+    let mut heights: Vec<u64> = txs
+        .iter()
+        .filter_map(|tx| Some(tx.confirmed.as_ref()?.height))
+        .collect();
+    heights.sort_unstable();
+    heights.dedup();
+    let best: HashMap<u64, Option<BlockHash>> = heights
+        .iter()
+        .copied()
+        .zip(source.best_blocks(&heights)?)
+        .collect();
+    for tx in txs {
+        if tx
+            .confirmed
+            .as_ref()
+            .is_some_and(|block| best[&block.height] != block.block_hash)
+        {
+            tx.confirmed = None;
+        }
+    }
+    Ok(())
 }
 
 fn merge_history(
@@ -1276,16 +1319,17 @@ fn detail_of(
     detail_by(source, &account, &txid, store)
 }
 
-/// `detail_of` once the txid and the wallet are known: `/tx/{txid}`, then the tip.
+/// `detail_of` once the txid and the wallet are known: `/tx/{txid}`, then the tip, then `forget_lost_blocks`'s look.
 pub(crate) fn detail_by(
     source: &dyn ChainSource,
     addresses: &dyn AddressSource,
     txid: &Txid,
     store: &ScanStore,
 ) -> Result<Option<HotTxDetail>, MobileSignerError> {
-    let Some((tx, tip)) = source.tx(txid)? else {
+    let Some((mut tx, tip)) = source.tx(txid)? else {
         return Ok(None);
     };
+    forget_lost_blocks(source, [&mut tx], tip)?;
     hot_detail(&tx, tip, txid, &own_addresses(addresses, store)?).map(Some)
 }
 

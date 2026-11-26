@@ -30,6 +30,8 @@ pub(crate) trait ChainSource {
     -> Result<(Vec<Vec<TxView>>, u64), MobileSignerError>;
     /// `txid` and the tip height, read after it, or None when the source does not know `txid`.
     fn tx(&self, txid: &Txid) -> Result<Option<(TxView, u64)>, MobileSignerError>;
+    /// The block at each height on the source's best chain, in the order asked, or None for a height above its tip.
+    fn best_blocks(&self, heights: &[u64]) -> Result<Vec<Option<BlockHash>>, MobileSignerError>;
     /// The addresses whose coins each transaction spends.
     fn spends_from(&self, txids: &[Txid]) -> Result<Vec<Vec<String>>, MobileSignerError>;
     /// Each address's unspent coins. No outpoint is listed twice across them.
@@ -219,6 +221,24 @@ impl ChainSource for EsploraSource<'_> {
             .0
             .get(&format!("{}/blocks/tip/height", self.0.canonical()))?;
         read_tx(&body, &tip, txid).map(Some)
+    }
+
+    // One at a time, since a history asks for a few heights at most.
+    fn best_blocks(&self, heights: &[u64]) -> Result<Vec<Option<BlockHash>>, MobileSignerError> {
+        heights
+            .iter()
+            .map(|height| {
+                let path = format!("/block-height/{height}");
+                match self.0.get(&format!("{}{path}", self.0.canonical())) {
+                    Err(e) if answered_404(&e, &path) => Ok(None),
+                    answer => answer?.trim().parse().map(Some).map_err(|e| {
+                        MobileSignerError::InvalidPsbtJson(format!(
+                            "esplora block: height {height}: the answer is not a block id: {e}"
+                        ))
+                    }),
+                }
+            })
+            .collect()
     }
 
     fn spends_from(&self, txids: &[Txid]) -> Result<Vec<Vec<String>>, MobileSignerError> {
